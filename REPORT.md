@@ -982,12 +982,12 @@ the expensive way.
   passing the documented type quietly produces empty names rather than throwing.
 - **Measured, not inferred:** constructing both ways in the running app and reading the names back
   gives `''` for the instance form and `'LEGS_RUN'` for the JSON form.
-- **What makes it expensive to diagnose:** the engine has a good diagnostic for exactly this
-  failure. `ClipListPlayer#report_missing` warns once per name, with the model's real clip list
-  beside it -- a genuinely well-designed message. It never fires here, because the name is `''`
-  and... it does fire, but for a name that is empty, so the console line reads as noise rather than
-  as the answer. Everything downstream looks correct: the model loads, the skins are there, the
-  clip list has the right length.
+- **What makes it expensive to diagnose:** the engine has a genuinely good diagnostic for the
+  general case -- `ClipListPlayer#report_missing` warns once per name and prints the model's real
+  clip list beside it, which is the right message. Here it fires for a name that is the empty
+  string, so the line reads as noise rather than as the answer, and everything else looks correct:
+  the model loads, both skins are there, the clip list has the right length, and every clip in it
+  is a real `AnimationClip`.
 - **Workaround:** pass JSON and read the constructed clips back out.
 
   ```js
