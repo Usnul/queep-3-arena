@@ -49,7 +49,33 @@ Ranked by how much they would cost the next person, not by how much they cost me
    (GAP-012). This is worth an engine-side option because every character controller built on
    `shape_cast` will need it and most will diagnose it as their own bug.
 
-4. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
+4. **The navigation mesh is genuinely good and there is no way to get a level into it.**
+   `NavigationMesh` builds a walkable surface with agent radius, height, step and climb angle,
+   and `find_path` returns the exact any-angle geodesic across it -- Polyanya, turning at corners,
+   correct on folded surfaces. What it needs is a *manifold* mesh, and nothing in the package
+   turns arbitrary geometry into one; that step is Recast's voxelise-and-rebuild, and the builder
+   begins after it. A Quake III level offers brushes (closed convex solids that abut without
+   shared edges) and render surfaces (split per material and per leaf, duplicated at every seam),
+   and neither is manifold. Measured, as the fraction of spawn-point pairs `find_path` can
+   connect: 5% from brushes on `oa_dm1`, 0% from render surfaces, and welding does not help --
+   which is the diagnostic, because the edges genuinely do not correspond rather than
+   nearly-coinciding. The port ships a hand-rolled waypoint graph that routes 85% instead
+   (GAP-016). This is the largest "the engine has it and I could not use it" on the list, and it
+   is the one worth fixing, because the hard half of navigation is already written.
+
+5. **Two APIs silently accept a wrong-but-plausible call and do nothing, and both cost an hour
+   each.** `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
+   `ColliderObserverSystem` the consumer must also register. Register only the first and every
+   body is real, present in the broadphase, and completely intangible -- 537 static bodies and
+   `fraction === 1` for a sweep from a metre above a floor to 128 m below it, with nothing in the
+   console (GAP-014). Separately, `new Animation({ clips })` documents its parameter as
+   `List<AnimationClip>` and in fact forwards to `fromJSON`, so passing the documented type builds
+   clips whose names are the empty string: the model loads, both skins are there, the list is the
+   right length, and nothing ever plays (GAP-015). Neither is a hard problem to fix -- a `@see`, a
+   first-use warning, or accepting both forms -- and both are the kind of failure where every
+   diagnostic you reach for reports success.
+
+6. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
    is literally named "used for light map", and there is a whole `shade/renderer/lightmap/`
    subsystem — but it is a *baker*, and no material has a lightmap slot. Every level format
    that predates real-time GI ships baked lighting and none of it can come in. This is also the
@@ -57,59 +83,63 @@ Ranked by how much they would cost the next person, not by how much they cost me
    walls show full detail, but the floors read as flat grey, because what is missing is not
    brightness but spatial variation in brightness (GAP-006).
 
-5. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
+7. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
    dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
    not register against geometry count. That matters more than a benchmark: q3map2 strips every
    `light` entity from a compiled BSP (measured: zero across six maps), so with lightmaps
    unavailable, reconstructing the lighting as dynamic lights was not a showcase choice — it
    was the only remaining route to a lit level. It worked with no tuning.
 
-6. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+8. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
    main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
    concurrent executor and a worker pool. A real level is several times that size (GAP-008).
 
-7. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
+9. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
    `LabelView` rejects a call its own implementation explicitly supports, `Engine`'s constructor
    options are typed as one of their own fields' types, and `entityManager` is `any`. Consumers
    are forced into `skipLibCheck: true`, which disables checking of every *other* dependency
    they have (GAP-001).
 
-8. **`/samples` contains no runnable engine sample.** The published package ships
+10. **`/samples` contains no runnable engine sample.** The published package ships
    `samples/generation/**` and nothing else — procedural-generation fixtures. Nothing boots the
    engine, loads a model, or draws a frame, and `exports` has no `./samples/*` entry so the
    folder cannot be imported even though it is shipped. `EngineHarness` turns out to be the
    real worked example; finding that took reading a directory listing (GAP-002).
 
-9. **A scene with no environment map renders black, silently.** Shade assumes global
+11. **A scene with no environment map renders black, silently.** Shade assumes global
    illumination and `make_default_environment` documents this well — but you only read that
    docblock if you already suspect the environment. `EngineHarness.buildBasics` sets one up for
    you, so this bites exactly when you stop using the all-or-nothing helper, which is the moment
    you stop being a beginner. A first-frame warning would remove it entirely.
 
-10. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
+12. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
    documented — inside the docblock of a function consumers never call. A hand-built view
    quaternion assuming -Z points the camera exactly backwards, which in a closed level presents
    as *a dark scene* rather than a reversed one. I diagnosed it as a lighting problem first.
 
-11. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
-    correctly does not have.** Of 309 distinct `trap_*` syscalls, 205 belong to subsystems this
-    port deletes outright; of the 104 that remain, 75 map onto an existing meep facility, 19 are
+13. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+    correctly does not have.** Of 309 distinct `trap_*` syscalls, 203 belong to subsystems this
+    port deletes outright; of the 106 that remain, 77 map onto an existing meep facility, 19 are
     deliberately ported, 9 worked around, 1 a genuine gap. Worth stating plainly before the gap
     register below makes things look worse than they are.
 
 ### What this port did not use, and why
 
-One large meep subsystem was evaluated and deliberately not used. The decision is about this
-port's constraints rather than the subsystem's quality, and a maintainer reading the gap
-register should not mistake it for a complaint.
+Two meep subsystems were evaluated and not used, for opposite reasons, and a maintainer reading
+the gap register should not mistake either for a complaint.
+
+- **`FirstPersonPlayerController`**, for player movement. Its own `DESIGN.md` states its goals as
+  "feel alive" and "be configurable"; Q3's movement is neither tuned nor configurable -- it is a
+  fixed set of float operations players spent 25 years learning to exploit. This is a
+  *positioning* finding, not a defect (GAP-009).
+- **`NavigationMesh`**, for bots. Not a positioning finding: it is the right tool and it is
+  better than what replaced it. There is simply no path from a Q3 level to its input (GAP-016),
+  and that is measured rather than assumed -- `npm run navmesh-probe` reproduces the numbers.
 
 The physics engine *is* used, for player movement, on the maintainer's instruction and against
-an initial recommendation not to. That reversal is documented in D-029 and its results are
-section 5.4; the short version is that it works, the remaining divergence is sub-unit at the
-median, and getting there surfaced GAP-012, which is the most broadly applicable finding in this
-report.
-
-- **`FirstPersonPlayerController`**, for player movement. Its own `DESIGN.md`
+an initial recommendation not to. That reversal is documented in D-029 and its results are in
+section 5; the short version is that it works, the remaining divergence is sub-unit at the
+median, and getting there surfaced GAP-012. Its own `DESIGN.md`
   states its goals as "feel alive" and "be configurable"; Q3's movement is neither tuned nor
   configurable, it is a fixed set of float operations players spent 25 years learning to
   exploit. See GAP-009 — which is a *positioning* finding, not a defect.
@@ -119,17 +149,22 @@ report.
 | phase | status |
 |---|---|
 | 0 — setup | complete; `tsc --noEmit` clean, engine rendering |
-| 1 — asset pipeline | complete; 6 maps convert and render, 137–253 FPS |
+| 1 — asset pipeline | complete; 6 maps, 76 props, 15 characters, 58 sounds |
 | 2 — collision and movement | complete; ported `cm_trace` **bit-exact**, shipping backend is meep physics tuned against it (D-029) |
-| 3 — game simulation | weapons, damage, targets, effects; items and movers not done |
-| 4 — presentation | particles, decals, lights, HUD done; audio and player models not done |
-| 5 — bots | not started |
+| 3 — game simulation | weapons, damage, items, movers, triggers, jump pads, teleporters |
+| 4 — presentation | particles, decals, lights, HUD, characters, positional audio |
+| 5 — bots | behaviour trees on a floor-sampled navigation graph; they route, fight and pick up |
 | 6 — report | this document, written continuously |
 
-Phases 3–5 are partial and the gaps are listed honestly in `DECISIONS.md`. The brief said a
-half-finished demo with an excellent report is a success and the reverse is a failure, so effort
-went to the report and to phase 2, which is the one place the brief called fidelity
-non-negotiable.
+What is *not* done is listed per phase in `DECISIONS.md` rather than summarised away: patch
+collision (D-017), capsule traces (D-018), the weapon state machine (D-022), mover crush and
+shootable doors (D-041), smooth skin weights and character LOD (D-045), and the bots' missing
+half — no jumping to reach anything, no aim prediction, no bot-versus-bot target selection
+(D-055).
+
+The brief said a half-finished demo with an excellent report is a success and the reverse is a
+failure. Effort went to the report throughout, and to phase 2, which is the one place the brief
+called fidelity non-negotiable.
 
 ---
 
@@ -171,123 +206,123 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 
 | status | count | meaning |
 |---|---:|---|
-| `mapped` | 75 | a meep facility does the job |
+| `mapped` | 77 | a meep facility does the job |
 | `ported` | 19 | reimplemented faithfully in TypeScript; deliberately *not* mapped onto meep |
 | `workaround` | 9 | meep has no direct facility; solved outside the engine |
 | `GAP` | 1 | no reasonable answer; see gap register |
-| `not needed` | 205 | the whole subsystem is out of scope (netcode, botlib, CD keys, cinematics) |
+| `not needed` | 203 | the whole subsystem is out of scope (netcode, botlib, CD keys, cinematics) |
 
 | Q3 syscall | uses | modules | disposition | meep facility | notes |
 |---|---:|---|---|---|---|
-| `trap_AAS_AlternativeRouteGoals` | 10 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_AreaInfo` | 5 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_AreaReachability` | 21 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_AreaTravelTimeToGoalArea` | 16 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_BBoxAreas` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_EnableRoutingArea` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_EntityInfo` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_FloatForBSPEpairKey` | 6 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_Initialized` | 10 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_IntForBSPEpairKey` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_NextBSPEntity` | 12 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PointAreaNum` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PointContents` | 8 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PointReachabilityAreaIndex` | 4 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PredictClientMovement` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PredictRoute` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PresenceTypeBoundingBox` | 5 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_Swimming` | 5 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_Time` | 3 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_TraceAreas` | 7 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_ValueForBSPEpairKey` | 16 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_VectorForBSPEpairKey` | 4 | game | not needed | meep navmesh (Polyanya) + BVH | AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AlternativeRouteGoals` | 10 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AreaInfo` | 5 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AreaReachability` | 21 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AreaTravelTimeToGoalArea` | 16 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_BBoxAreas` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_EnableRoutingArea` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_EntityInfo` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_FloatForBSPEpairKey` | 6 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_Initialized` | 10 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_IntForBSPEpairKey` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_NextBSPEntity` | 12 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PointAreaNum` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PointContents` | 8 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PointReachabilityAreaIndex` | 4 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PredictClientMovement` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PredictRoute` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PresenceTypeBoundingBox` | 5 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_Swimming` | 5 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_Time` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_TraceAreas` | 7 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_ValueForBSPEpairKey` | 16 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_VectorForBSPEpairKey` | 4 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
 | `trap_AddCommand` | 31 | cgame | mapped | own console command table |  |
 | `trap_AdjustAreaPortalState` | 4 | game | not needed | - | As above. |
 | `trap_AreasConnected` | 2 | game | not needed | - | Areaportal state only mattered for PVS-driven network scope. |
 | `trap_Argc` | 34 | cgame, game, q3_ui, ui | mapped | own console tokenizer |  |
 | `trap_Args` | 7 | cgame, game | mapped | own console tokenizer |  |
 | `trap_Argv` | 51 | cgame, game, q3_ui, ui | mapped | own console tokenizer |  |
-| `trap_BotAddAvoidSpot` | 5 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotAllocChatState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotAllocGoalState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotAllocMoveState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotAllocWeaponState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotAllocateClient` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotAvoidGoalTime` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotChatLength` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotChooseBestFightWeapon` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotChooseLTGItem` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotChooseNBGItem` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotDumpAvoidGoals` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotDumpGoalStack` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotEmptyGoalStack` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotEnterChat` | 103 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFindMatch` | 10 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeCharacter` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeChatState` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeClient` | 5 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeGoalState` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeItemWeights` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeMoveState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotFreeWeaponState` | 5 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetChatMessage` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetLevelItemGoal` | 12 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetMapLocationGoal` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetNextCampSpotGoal` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetSecondGoal` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetServerCommand` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetSnapshotEntity` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetTopGoal` | 16 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGetWeaponInfo` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotGoalName` | 24 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotInitLevelItems` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotInitMoveState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotInitialChat` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotInterbreedGoalFuzzyLogic` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotItemGoalInVisButNotVisible` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibDefine` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibLoadMap` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibSetup` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibShutdown` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibStartFrame` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibTest` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibUpdateEntity` | 9 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibVarGet` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLibVarSet` | 26 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLoadCharacter` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLoadChatFile` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLoadItemWeights` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotLoadWeaponWeights` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotMatchVariable` | 60 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotMoveInDirection` | 10 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotMoveToGoal` | 9 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotMovementViewTarget` | 8 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotMutateGoalFuzzyLogic` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotNextConsoleMessage` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotNumConsoleMessages` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotNumInitialChats` | 32 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotPopGoal` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotPredictVisiblePosition` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotPushGoal` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotQueueConsoleMessage` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotReachabilityArea` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotRemoveConsoleMessage` | 7 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotRemoveFromAvoidGoals` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotReplaceSynonyms` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotReplyChat` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotResetAvoidGoals` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotResetAvoidReach` | 20 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotResetGoalState` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotResetLastAvoidReach` | 11 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotResetMoveState` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotResetWeaponState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotSaveGoalFuzzyLogic` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotSetAvoidGoalTime` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotSetChatGender` | 8 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotSetChatName` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotTouchingGoal` | 18 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotUpdateEntityItems` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
-| `trap_BotUserCommand` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAddAvoidSpot` | 5 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAllocChatState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAllocGoalState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAllocMoveState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAllocWeaponState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAllocateClient` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotAvoidGoalTime` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotChatLength` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotChooseBestFightWeapon` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotChooseLTGItem` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotChooseNBGItem` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotDumpAvoidGoals` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotDumpGoalStack` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotEmptyGoalStack` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotEnterChat` | 103 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFindMatch` | 10 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeCharacter` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeChatState` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeClient` | 5 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeGoalState` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeItemWeights` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeMoveState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotFreeWeaponState` | 5 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetChatMessage` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetLevelItemGoal` | 12 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetMapLocationGoal` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetNextCampSpotGoal` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetSecondGoal` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetServerCommand` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetSnapshotEntity` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetTopGoal` | 16 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGetWeaponInfo` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotGoalName` | 24 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotInitLevelItems` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotInitMoveState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotInitialChat` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotInterbreedGoalFuzzyLogic` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotItemGoalInVisButNotVisible` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibDefine` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibLoadMap` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibSetup` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibShutdown` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibStartFrame` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibTest` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibUpdateEntity` | 9 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibVarGet` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLibVarSet` | 26 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLoadCharacter` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLoadChatFile` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLoadItemWeights` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotLoadWeaponWeights` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotMatchVariable` | 60 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotMoveInDirection` | 10 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotMoveToGoal` | 9 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotMovementViewTarget` | 8 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotMutateGoalFuzzyLogic` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotNextConsoleMessage` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotNumConsoleMessages` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotNumInitialChats` | 32 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotPopGoal` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotPredictVisiblePosition` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotPushGoal` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotQueueConsoleMessage` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotReachabilityArea` | 2 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotRemoveConsoleMessage` | 7 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotRemoveFromAvoidGoals` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotReplaceSynonyms` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotReplyChat` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotResetAvoidGoals` | 6 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotResetAvoidReach` | 20 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotResetGoalState` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotResetLastAvoidReach` | 11 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotResetMoveState` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotResetWeaponState` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotSaveGoalFuzzyLogic` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotSetAvoidGoalTime` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotSetChatGender` | 8 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotSetChatName` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotTouchingGoal` | 18 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotUpdateEntityItems` | 3 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
+| `trap_BotUserCommand` | 4 | game | not needed | meep behaviour trees + blackboard | botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree. _(classified by prefix `trap_Bot`)_ |
 | `trap_CIN_DrawCinematic` | 7 | cgame, ui | not needed | - | RoQ cinematic playback. Cut. _(classified by prefix `trap_CIN_`)_ |
 | `trap_CIN_PlayCinematic` | 13 | cgame, ui | not needed | - | RoQ cinematic playback. Cut. _(classified by prefix `trap_CIN_`)_ |
 | `trap_CIN_RunCinematic` | 10 | cgame, ui | not needed | - | RoQ cinematic playback. Cut. _(classified by prefix `trap_CIN_`)_ |
@@ -300,7 +335,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_CM_BoxTrace` | 10 | cgame | ported | - | Same clipmap, client side. |
 | `trap_CM_CapsuleTrace` | 1 | cgame | ported | - |  |
 | `trap_CM_InlineModel` | 5 | cgame | ported | - |  |
-| `trap_CM_LerpTag` | 7 | q3_ui, ui | not needed | as above |  |
+| `trap_CM_LerpTag` | 7 | q3_ui, ui | mapped | glTF node hierarchy + animation channels | MD3 tags become animated nodes in the converted glTF: tag_torso is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player. |
 | `trap_CM_LoadMap` | 3 | cgame | ported | - | cm_load.c ported: brushes, leafs, patch collision. Separate from the render-side BSP conversion. |
 | `trap_CM_MarkFragments` | 3 | cgame | not needed | DecalSystem3 (GPU decals) | Q3 clips world triangles on the CPU to build mark polygons. Replaced by meep GPU decals per brief section 2. |
 | `trap_CM_NumInlineModels` | 3 | cgame | ported | - |  |
@@ -431,12 +466,12 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_R_DrawStretchPic` | 48 | cgame, q3_ui, ui | mapped | meep UI views | The entire Q3 HUD and menu draw model is this one call. Becomes retained UI views. |
 | `trap_R_GetViewPosition` | 3 | cgame | mapped | camera Transform |  |
 | `trap_R_LFX_ParticleEffect` | 24 | cgame | mapped | ParticleEmitterSystem3 / Particular | OA LFX particle extension, replaced outright. |
-| `trap_R_LerpTag` | 6 | cgame | not needed | skeletal animation + attachment sockets | MD3 tag hierarchy replaced per brief section 2. |
+| `trap_R_LerpTag` | 6 | cgame | mapped | glTF node hierarchy + animation channels | MD3 tags become animated nodes in the converted glTF: tag_torso is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player. |
 | `trap_R_LightForPoint` | 3 | cgame | GAP | nothing directly | Q3 samples the BSP lightgrid to shade dynamic models. See gap register. |
 | `trap_R_LoadWorldMap` | 3 | cgame | mapped | offline BSP to scene bundle plus runtime load |  |
 | `trap_R_ModelBounds` | 11 | cgame, ui | mapped | AABB3 from scene bundle |  |
 | `trap_R_RegisterFont` | 10 | cgame, ui | mapped | engine/asset/loaders/font + UI text |  |
-| `trap_R_RegisterModel` | 124 | cgame, q3_ui, ui | mapped | AssetManager + GLTFSceneBundleAssetLoader | MD3 converted to glTF offline, loaded through meep glTF path. |
+| `trap_R_RegisterModel` | 124 | cgame, q3_ui, ui | mapped | AssetManager + GLTFSceneBundleAssetLoader | MD3 converted to glTF offline. Player models need a skeleton inferred from the vertex-morph frames first (D-042); meep has no morph-target path. |
 | `trap_R_RegisterShader` | 117 | cgame | mapped | StandardShadeMaterial | Offline .shader to PBR conversion per brief section 2. |
 | `trap_R_RegisterShaderNoMip` | 464 | cgame, q3_ui, ui | mapped | meep UI image | 464 call sites, almost all 2D HUD/menu icons. |
 | `trap_R_RegisterSkin` | 22 | cgame, q3_ui, ui | mapped | material swap on ShadedGeometry | Q3 .skin maps surface name to shader; becomes a material table applied per primitive entity. |
@@ -458,10 +493,10 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_S_AddRealLoopingSound` | 3 | cgame | mapped | looping sound emitter |  |
 | `trap_S_ClearLoopingSounds` | 5 | cgame | not needed | retained emitters | Immediate-mode artifact. |
 | `trap_S_RegisterSound` | 218 | cgame, q3_ui, ui | mapped | SoundAssetLoader |  |
-| `trap_S_Respatialize` | 3 | cgame | mapped | SoundListener component |  |
+| `trap_S_Respatialize` | 3 | cgame | mapped | SoundListener on the camera entity | AudioEmitterSystem forwards the listener pose from the component each frame. |
 | `trap_S_StartBackgroundTrack` | 8 | cgame, ui | mapped | music bus / streaming source |  |
-| `trap_S_StartLocalSound` | 71 | cgame, q3_ui, ui | mapped | 2D sound event |  |
-| `trap_S_StartSound` | 77 | cgame | mapped | sound emitter component | Positional one-shot. |
+| `trap_S_StartLocalSound` | 71 | cgame, q3_ui, ui | mapped | sopra playOneShot, is3D false | Pickups and feedback tones, played dry. |
+| `trap_S_StartSound` | 77 | cgame | mapped | sopra playOneShot | Positional one-shot. Played straight through the sopra engine rather than as an AudioEmitter component: only looping events take the spatially-managed path, and a machinegun would mean an entity built and destroyed ten times a second. |
 | `trap_S_StopBackgroundTrack` | 6 | cgame, ui | mapped | music bus |  |
 | `trap_S_StopLoopingSound` | 3 | cgame | mapped | stop/remove emitter |  |
 | `trap_S_UpdateEntityPosition` | 4 | cgame | mapped | Transform on emitter entity |  |
@@ -469,7 +504,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_SendClientCommand` | 19 | cgame | not needed | direct call |  |
 | `trap_SendConsoleCommand` | 57 | cgame, game | mapped | own console |  |
 | `trap_SendServerCommand` | 169 | game | not needed | direct call / meep Signal | 169 call sites collapse to direct calls; the ones that matter carry HUD, scoreboard and print payloads. |
-| `trap_SetBrushModel` | 13 | game | ported | - | Binds an entity to BSP submodel *N; drives door/plat collision. |
+| `trap_SetBrushModel` | 13 | game | ported | kinematic RigidBody per submodel brush | Binds an entity to BSP submodel *N. On the physics backend the submodel becomes KinematicVelocity bodies; on the clipmap backend, entityClip.ts is SV_ClipMoveToEntities reduced to translation. |
 | `trap_SetCDKey` | 5 | q3_ui, ui | not needed | - |  |
 | `trap_SetConfigstring` | 53 | game | mapped | ECS singleton components | Configstrings are a replication cache; locally they are just game state. |
 | `trap_SetPbClStatus` | 4 | q3_ui, ui | not needed | - | PunkBuster. |
@@ -1000,6 +1035,60 @@ the expensive way.
 - **Cost:** ~40 minutes, most of it spent believing the *model* had not loaded.
 - **Evidence:** `src/client/Characters.ts` `clipJson`. Recorded during the character phase.
 
+### GAP-016: The navmesh is good, and there is no way to get a level into it
+
+- **Severity:** high for anyone with existing level geometry, which is most people with a level.
+- **What exists:** `NavigationMesh` is a real facility and a good one. It builds a walkable
+  surface from a `BinaryTopology` with agent radius, height, step height, step distance and climb
+  angle, and `find_path` returns the exact any-angle geodesic across it -- Polyanya, turning at
+  obstacle corners, subdivided at face boundaries, intrinsic to the surface so it is correct on
+  folded and sloped meshes. It is better than what this port ended up building, in every respect
+  except the one that decides the matter.
+- **What is missing:** the builder wants a **manifold** surface -- triangles sharing vertices
+  along shared edges, so adjacency is a topological fact rather than a geometric coincidence.
+  Nothing in the package turns arbitrary geometry into one. That step is voxelise-and-rebuild
+  (Recast's rasterise / region / contour / polygonise), and `navmesh_build_topology` begins
+  *after* it.
+- **Why that is fatal here:** a Quake III level offers two representations and neither is
+  manifold.
+  - **Brushes** are closed convex polyhedra with their own vertices. Two floor brushes that abut
+    share a plane and a line segment, not endpoints, so the topology sees two islands and every
+    doorway is a cliff.
+  - **Render surfaces** are split per material *and* per BSP leaf, with duplicated vertices at
+    every seam -- more numerous than the brush boundaries, so it is worse rather than better.
+- **Measured**, by `npm run navmesh-probe`, as the fraction of ordered spawn-point pairs
+  `find_path` can connect:
+
+  | source | `oa_dm1` | `aggressor` |
+  |---|---|---|
+  | brush hulls | 2/42 (5%) | 30/72 (42%) |
+  | brush hulls, welded to 1 unit | 2/42 (5%) | 26/72 (36%) |
+  | render surfaces | 0/42 (0%) | 0/72 (0%) |
+
+  Welding does not help, which is the diagnostic: the problem is not near-coincident vertices, it
+  is that the edges genuinely do not correspond. `aggressor` does better than `oa_dm1` because it
+  is flatter and more of its brushes happen to align.
+- **Workaround:** a floor-sampled waypoint graph with A*, built by tracing the same collision the
+  player moves through (`src/game/Waypoints.ts`, D-051). It routes 85% of item-to-item pairs on
+  `oa_dm1` and 95% on `aggressor` -- better than the navmesh manages here, and much worse than
+  what the navmesh would manage given a mesh it could use. Paths turn at grid nodes rather than at
+  corners, so bots take visibly polygonal routes.
+- **What would fix it:** a Recast-equivalent front end -- voxelise a triangle soup against the
+  agent's dimensions and emit the manifold surface `navmesh_build_topology` already knows what to
+  do with. The hard half of navigation is already written; what is missing is the half that turns
+  a level into its input. Failing that, saying so in the navmesh docs would save the next person
+  the two hours it took to find out empirically.
+- **A second, smaller defect in the same API:** the generated `.d.ts` types
+  `NavigationMesh.build`'s *options object* as `BinaryTopology`. The JSDoc puts
+  `@param {BinaryTopology} source` on a destructured parameter and the generator hoists that
+  type onto the whole object, so the documented call does not typecheck and `source` is reported
+  as an unknown property of the type it is a property of. `navmesh_build_topology` has it too.
+  Same family as GAP-001; one cast each.
+- **Cost:** ~2 hours, and worth it: the alternative was shipping a hand-rolled waypoint graph
+  while a better facility sat unused in the package, with no evidence either way.
+- **Evidence:** `tools/navmesh-probe.ts`, which reproduces the table above in one command.
+  Recorded during the bot phase.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
@@ -1075,6 +1164,39 @@ Observations that are not gaps — the facility exists and works — but cost ti
   docblock as having no effect, with the workaround spelled out. It cost me nothing because the
   answer was where I looked. Whatever process produced that comment should be applied to the
   `DESIGN.md` header above.
+
+### Added during phases 3-5
+
+- **Required registrations are discoverable only by reading the class you did not know to
+  open.** Three times now: `ColliderObserverSystem` (GAP-014), the `x-meep/image-bitmap` loader
+  that the glTF loader's *own dependencies* need, and `MeshSystem3`'s `load` callback. Each is
+  documented where it lives and referenced from nowhere the consumer is already looking. The
+  image-loader one is the mildest and the most instructive: the error arrives from inside
+  `tiny-gltf`, once per texture, as an unhandled rejection naming a type the application never
+  mentioned. Sixteen identical lines that do not name the model, the material or the file.
+
+- **`BodyKind.KinematicPosition`'s docblock is the best thing I read in the package.** It says
+  the kind is reserved and not implemented, explains precisely how it misbehaves ("pose-driven
+  movers currently present to the solver as stationary walls that teleport"), explains *why* it
+  is deferred rather than broken (deriving velocity from transform deltas would make a spawn snap
+  read as an enormous velocity), and says what to use instead. That is four things most "TODO"
+  comments do not say, and it turned a potential afternoon into a two-minute decision.
+
+- **`ShadedGeometryFlags.DeferredBoundsUpdate` documents a trade rather than a feature.** It
+  gives the rule for when to set it (a transform written more than once between reads), the rule
+  for when not to (written exactly once), and the measured numbers on both sides -- 20-25% off a
+  frame in one direction, 10-20% worse in the other. Bobbing items and moving doors set it on
+  that basis rather than on a guess.
+
+- **`ClipListPlayer` warns once per missing clip name and prints the model's real clip list
+  beside it.** The right diagnostic, in the right place, at the right frequency. It is worth
+  naming because GAP-015 makes it fire with an empty name, which is the one case where a good
+  message does not help -- fixing the API would let this message do its job.
+
+- **The engine's own docblocks argue with themselves productively.** `AudioEmitterSystem`'s
+  explains why only looping events take the spatially-managed path, which is exactly the fact
+  that decided this port plays one-shots through sopra directly. Reading it saved a design
+  mistake that would have shown up as entity churn at ten allocations a second.
 
 ---
 
@@ -1202,6 +1324,37 @@ were building the three-way measurement harness. The harness is why the other fo
 enough — without a bit-exact control, "close enough" is a matter of opinion and the corner bug
 in particular would have been indistinguishable from a movement-code bug.
 
+### Phases 3b-5 — items, movers, characters, audio, bots
+
+Same host. Load-time figures are from `oa_dm1`, which is a small map; `am_thornish` is the large
+one and is called out where it differs.
+
+| stage | cost | note |
+|---|---|---|
+| static bodies from brushes | 8-22 ms | 529 bodies on `oa_dm1` |
+| items: place and build | 36-88 ms | 31 pickups, 55 drawn pieces, meshlets built lazily |
+| movers | <1 ms | 6 brush entities, 6 kinematic bodies |
+| navigation graph | 214 ms | 766 nodes, 1,957 links, 205 drops -- built through the *physics* trace, which is why it is not the 25 ms the clipmap takes |
+| characters | ~40 ms each, async | 15 models, 3 to 10 mesh nodes each; fetched and built off the critical path |
+| sound bank | one fetch | 77 names over 58 files, 3.3 MB |
+
+Per frame, measured by driving the simulation directly:
+
+| | cost |
+|---|---|
+| 6 bots: perception, tree, `Pmove`, character placement | 1.3-1.8 ms |
+| of which planning, when it runs | one BFS plus one A* per bot, at most every 0.25 s |
+
+The bot cost is worth two notes. It started at 3.7 ms a frame for *six stationary bots*, all of
+it A* failing to route to the same unreachable item every frame -- a reachability pass before
+scoring fixed the behaviour and the cost together. And the planning rate limit is not a tuning
+knob for performance so much as a correctness one: the planning branch is the tree's fallback, so
+it runs on every frame a bot has nothing else to do.
+
+The character pipeline is offline and worth recording for anyone estimating similar work: 15
+characters, 30 rigged parts, 5.8 seconds total, including the skinning decomposition (k-means over
+vertex trajectories, then Kabsch per cluster per frame, then reassign, six passes).
+
 ### Asset pipeline, for scale
 
 Not meep's numbers, but they establish what the engine was fed. 4,370 files flattened from 8
@@ -1287,6 +1440,38 @@ Specific things that would be a loss to regress.
   `Transform`, each independently removable on its own timer. No effect system, no particle
   manager, no registration step. That is the ECS claim in the README actually paying off on a
   concrete task.
+
+### Added during phases 3-5
+
+- **The glTF loader took everything a hand-written exporter threw at it.** Two skins, 64 joints,
+  25 clips, 3,000 animation channels, `JOINTS_0` as unsigned short, external `.bin` and external
+  PNGs -- loaded first time, with no tolerance-tuning and no format quirks to work around. That
+  is not a small thing: a loader that accepts the specification rather than a subset of it is
+  what made an offline character pipeline possible at all, and it is the single facility this
+  port leaned on hardest.
+
+- **Behaviour trees are exactly the size they should be.** `SelectorBehavior`,
+  `SequenceBehavior`, `ConditionBehavior`, `ActionBehavior` and a `Behavior` base with
+  `initialize` / `tick` / `finalize`. Six imports and two subclasses replaced botlib's
+  `ainode_t` function-pointer state machine, and the resulting tree is three lines that read in
+  priority order. The one sharp edge is that a finished tree must be restarted by the driver
+  (D-052), which is true of every behaviour tree and is not written down here.
+
+- **Clustered lighting, again, at a different scale.** 147 dynamic lights was the phase-1
+  headline; adding items, movers, characters and their effects on top changed nothing about the
+  frame budget. The thing about a facility that scales is that it stops being interesting, which
+  is the compliment.
+
+- **`shape_cast` and `overlap_shape` are the right two primitives.** Between them they answered
+  every collision question this port asks -- swept contact, resting contact, "am I inside
+  something", "what else is touching me" -- for the player, for bots, for item placement and for
+  navigation-graph construction. GAP-012 is about what `shape_cast` *reports*, not about what it
+  can do.
+
+- **The physics broadphase tracks kinematic transforms without being asked.** Doors are
+  `KinematicVelocity` bodies whose transforms are written directly, and `shape_cast` finds them
+  where they are on the frame they are there. That collapsed Q3's entire `SV_ClipMoveToEntities`
+  loop -- world trace, then every solid entity by hand -- into one query.
 
 ---
 

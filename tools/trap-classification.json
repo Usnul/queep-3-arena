@@ -1,170 +1,765 @@
 {
   "$comment": "Q3/OA trap_ syscall -> meep facility classification. prefixRules apply in order; entries override. status: mapped | ported | workaround | gap | not-needed",
-
   "prefixRules": [
-    { "prefix": "trap_AAS_", "status": "not-needed", "meep": "meep navmesh (Polyanya) + BVH", "note": "AAS replaced wholesale: bots run on meep behaviour trees + navmesh. Brief section 2." },
-    { "prefix": "trap_Bot", "status": "not-needed", "meep": "meep behaviour trees + blackboard", "note": "botlib deleted; anti-goal in brief section 10." },
-    { "prefix": "trap_EA_", "status": "not-needed", "meep": "bot writes usercmd_t directly", "note": "Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t." },
-    { "prefix": "trap_Characteristic_", "status": "not-needed", "meep": "behaviour-tree blackboard", "note": "Bot personality files not ported." },
-    { "prefix": "trap_LAN_", "status": "not-needed", "meep": "-", "note": "Server browser. Single process, no netcode." },
-    { "prefix": "trap_CIN_", "status": "not-needed", "meep": "-", "note": "RoQ cinematic playback. Cut." },
-    { "prefix": "trap_Rank", "status": "not-needed", "meep": "-", "note": "Q3 online rankings service, dead since 2002." },
-    { "prefix": "trap_CL_UI_Rank", "status": "not-needed", "meep": "-", "note": "As above." }
+    {
+      "prefix": "trap_AAS_",
+      "status": "not-needed",
+      "meep": "own waypoint graph (not meep NavigationMesh)",
+      "note": "AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything."
+    },
+    {
+      "prefix": "trap_Bot",
+      "status": "not-needed",
+      "meep": "meep behaviour trees + blackboard",
+      "note": "botlib deleted; anti-goal in brief section 10. Bots run meep behaviour trees (SelectorBehavior / SequenceBehavior / ConditionBehavior) over a three-branch tree."
+    },
+    {
+      "prefix": "trap_EA_",
+      "status": "not-needed",
+      "meep": "bot writes usercmd_t directly",
+      "note": "Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t."
+    },
+    {
+      "prefix": "trap_Characteristic_",
+      "status": "not-needed",
+      "meep": "behaviour-tree blackboard",
+      "note": "Bot personality files not ported."
+    },
+    {
+      "prefix": "trap_LAN_",
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Server browser. Single process, no netcode."
+    },
+    {
+      "prefix": "trap_CIN_",
+      "status": "not-needed",
+      "meep": "-",
+      "note": "RoQ cinematic playback. Cut."
+    },
+    {
+      "prefix": "trap_Rank",
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3 online rankings service, dead since 2002."
+    },
+    {
+      "prefix": "trap_CL_UI_Rank",
+      "status": "not-needed",
+      "meep": "-",
+      "note": "As above."
+    }
   ],
-
   "entries": {
-    "trap_Trace": { "status": "ported", "meep": "-", "note": "cm_trace.c ported verbatim. pmove fidelity depends on exact brush-plane sweep semantics, start-solid handling and the 1/32 epsilon; meep narrowphase gives different contact normals." },
-    "trap_TraceCapsule": { "status": "ported", "meep": "-", "note": "Capsule traces are used for player-vs-player in ioq3; OA defaults to bbox." },
-    "trap_PointContents": { "status": "ported", "meep": "-", "note": "Brush contents lookup. No meep equivalent - contents are Q3 semantics (lava/slime/water/playerclip/trigger)." },
-    "trap_CM_BoxTrace": { "status": "ported", "meep": "-", "note": "Same clipmap, client side." },
-    "trap_CM_CapsuleTrace": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_TransformedBoxTrace": { "status": "ported", "meep": "-", "note": "Needed for moving brush models (doors, plats)." },
-    "trap_CM_TransformedCapsuleTrace": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_PointContents": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_TransformedPointContents": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_LoadMap": { "status": "ported", "meep": "-", "note": "cm_load.c ported: brushes, leafs, patch collision. Separate from the render-side BSP conversion." },
-    "trap_CM_InlineModel": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_NumInlineModels": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_TempBoxModel": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_TempCapsuleModel": { "status": "ported", "meep": "-", "note": "" },
-    "trap_SetBrushModel": { "status": "ported", "meep": "-", "note": "Binds an entity to BSP submodel *N; drives door/plat collision." },
-    "trap_SnapVector": { "status": "ported", "meep": "-", "note": "Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation." },
-    "trap_EntitiesInBox": { "status": "mapped", "meep": "core/bvh2 BVH3 box query", "note": "Q3 areagrid replaced by meep BVH. Semantics differ (Q3 returns absmin/absmax overlaps), so a thin adapter re-tests AABBs." },
-    "trap_EntityContact": { "status": "ported", "meep": "-", "note": "Exact contact against the clipmap, not a broadphase test." },
-    "trap_EntityContactCapsule": { "status": "ported", "meep": "-", "note": "" },
-    "trap_CM_MarkFragments": { "status": "not-needed", "meep": "DecalSystem3 (GPU decals)", "note": "Q3 clips world triangles on the CPU to build mark polygons. Replaced by meep GPU decals per brief section 2." },
-
-    "trap_LinkEntity": { "status": "mapped", "meep": "ECS + BVH insert", "note": "Server-side spatial linking becomes BVH residency." },
-    "trap_UnlinkEntity": { "status": "mapped", "meep": "ECS + BVH remove", "note": "" },
-    "trap_InPVS": { "status": "not-needed", "meep": "renderer culling", "note": "PVS gated sound/event delivery per client. Single process, one player." },
-    "trap_InPVSIgnorePortals": { "status": "not-needed", "meep": "-", "note": "As above." },
-    "trap_AreasConnected": { "status": "not-needed", "meep": "-", "note": "Areaportal state only mattered for PVS-driven network scope." },
-    "trap_AdjustAreaPortalState": { "status": "not-needed", "meep": "-", "note": "As above." },
-    "trap_R_inPVS": { "status": "not-needed", "meep": "-", "note": "As above." },
-
-    "trap_LocateGameData": { "status": "not-needed", "meep": "ECS dataset", "note": "Shared-memory handshake between QVM and engine. Gone with the QVM." },
-    "trap_GetSnapshot": { "status": "not-needed", "meep": "-", "note": "Netcode; brief section 2 says delete entirely." },
-    "trap_GetCurrentSnapshotNumber": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_GetCurrentCmdNumber": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_GetGameState": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_GetServerCommand": { "status": "not-needed", "meep": "direct call / meep Signal", "note": "Server-to-client command stream collapses to a function call." },
-    "trap_SendServerCommand": { "status": "not-needed", "meep": "direct call / meep Signal", "note": "169 call sites collapse to direct calls; the ones that matter carry HUD, scoreboard and print payloads." },
-    "trap_SendClientCommand": { "status": "not-needed", "meep": "direct call", "note": "" },
-    "trap_DropClient": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_GetUserinfo": { "status": "mapped", "meep": "plain config object", "note": "Userinfo string becomes a typed settings object." },
-    "trap_SetUserinfo": { "status": "mapped", "meep": "plain config object", "note": "" },
-    "trap_GetServerinfo": { "status": "mapped", "meep": "plain config object", "note": "" },
-    "trap_SetConfigstring": { "status": "mapped", "meep": "ECS singleton components", "note": "Configstrings are a replication cache; locally they are just game state." },
-    "trap_GetConfigstring": { "status": "mapped", "meep": "ECS singleton components", "note": "" },
-    "trap_GetConfigString": { "status": "mapped", "meep": "ECS singleton components", "note": "UI-side spelling of the same call." },
-    "trap_GetUsercmd": { "status": "mapped", "meep": "engine/input plus own usercmd_t builder", "note": "" },
-    "trap_GetUserCmd": { "status": "mapped", "meep": "engine/input plus own usercmd_t builder", "note": "cgame-side spelling." },
-    "trap_SetUserCmdValue": { "status": "mapped", "meep": "own usercmd_t builder", "note": "" },
-    "trap_Send": { "status": "not-needed", "meep": "-", "note": "OA-specific raw send." },
-
-    "trap_R_RegisterModel": { "status": "mapped", "meep": "AssetManager + GLTFSceneBundleAssetLoader", "note": "MD3 converted to glTF offline, loaded through meep glTF path." },
-    "trap_R_RegisterSkin": { "status": "mapped", "meep": "material swap on ShadedGeometry", "note": "Q3 .skin maps surface name to shader; becomes a material table applied per primitive entity." },
-    "trap_R_RegisterShader": { "status": "mapped", "meep": "StandardShadeMaterial", "note": "Offline .shader to PBR conversion per brief section 2." },
-    "trap_R_RegisterShaderNoMip": { "status": "mapped", "meep": "meep UI image", "note": "464 call sites, almost all 2D HUD/menu icons." },
-    "trap_R_RegisterFont": { "status": "mapped", "meep": "engine/asset/loaders/font + UI text", "note": "" },
-    "trap_R_AddRefEntityToScene": { "status": "mapped", "meep": "ShadedGeometry + ShadedGeometrySystem3", "note": "Q3 immediate-mode scene list becomes retained ECS entities. Biggest structural change on the client side." },
-    "trap_R_AddPolyToScene": { "status": "workaround", "meep": "Geometry rebuilt per frame / Trail3D / particles", "note": "Immediate-mode triangle soup. Most uses (marks, sprites, trails) map to decals/particles/trails; the rest rebuild a Geometry and set needsUpdate." },
-    "trap_R_AddPolysToScene": { "status": "workaround", "meep": "as above", "note": "" },
-    "trap_R_AddLightToScene": { "status": "mapped", "meep": "Light + LightSystem3 (clustered)", "note": "Q3 dlights were a fixed small pool; clustered lighting removes the cap." },
-    "trap_R_AddAdditiveLightToScene": { "status": "mapped", "meep": "Light", "note": "Additive-vs-normal dlight distinction has no PBR analogue; folded into intensity." },
-    "trap_R_ClearScene": { "status": "not-needed", "meep": "retained scene", "note": "Immediate-mode artifact." },
-    "trap_R_RenderScene": { "status": "mapped", "meep": "Engine graphics loop", "note": "" },
-    "trap_R_SetColor": { "status": "mapped", "meep": "UI element tint", "note": "183 call sites, all 2D." },
-    "trap_R_DrawStretchPic": { "status": "mapped", "meep": "meep UI views", "note": "The entire Q3 HUD and menu draw model is this one call. Becomes retained UI views." },
-    "trap_R_LerpTag": { "status": "not-needed", "meep": "skeletal animation + attachment sockets", "note": "MD3 tag hierarchy replaced per brief section 2." },
-    "trap_CM_LerpTag": { "status": "not-needed", "meep": "as above", "note": "" },
-    "trap_R_ModelBounds": { "status": "mapped", "meep": "AABB3 from scene bundle", "note": "" },
-    "trap_R_LightForPoint": { "status": "gap", "meep": "nothing directly", "note": "Q3 samples the BSP lightgrid to shade dynamic models. See gap register." },
-    "trap_R_RemapShader": { "status": "not-needed", "meep": "swap material reference", "note": "Used for team colours and teleport effects; a material swap." },
-    "trap_R_GetViewPosition": { "status": "mapped", "meep": "camera Transform", "note": "" },
-    "trap_R_LoadWorldMap": { "status": "mapped", "meep": "offline BSP to scene bundle plus runtime load", "note": "" },
-    "trap_R_LFX_ParticleEffect": { "status": "mapped", "meep": "ParticleEmitterSystem3 / Particular", "note": "OA LFX particle extension, replaced outright." },
-    "trap_GetGlconfig": { "status": "mapped", "meep": "graphics device info", "note": "Only used for screen dimensions and aspect." },
-    "trap_UpdateScreen": { "status": "not-needed", "meep": "-", "note": "Synchronous repaint during long loads; meep streams assets instead." },
-    "trap_GetEntityToken": { "status": "ported", "meep": "-", "note": "Walks the BSP entity lump string. Ported as part of the BSP reader." },
-
-    "trap_S_RegisterSound": { "status": "mapped", "meep": "SoundAssetLoader", "note": "" },
-    "trap_S_StartSound": { "status": "mapped", "meep": "sound emitter component", "note": "Positional one-shot." },
-    "trap_S_StartLocalSound": { "status": "mapped", "meep": "2D sound event", "note": "" },
-    "trap_S_AddLoopingSound": { "status": "mapped", "meep": "looping sound emitter", "note": "Q3 rebuilds the looping-sound set every frame; meep keeps them as entities." },
-    "trap_S_AddRealLoopingSound": { "status": "mapped", "meep": "looping sound emitter", "note": "" },
-    "trap_S_ClearLoopingSounds": { "status": "not-needed", "meep": "retained emitters", "note": "Immediate-mode artifact." },
-    "trap_S_StopLoopingSound": { "status": "mapped", "meep": "stop/remove emitter", "note": "" },
-    "trap_S_UpdateEntityPosition": { "status": "mapped", "meep": "Transform on emitter entity", "note": "" },
-    "trap_S_Respatialize": { "status": "mapped", "meep": "SoundListener component", "note": "" },
-    "trap_S_StartBackgroundTrack": { "status": "mapped", "meep": "music bus / streaming source", "note": "" },
-    "trap_S_StopBackgroundTrack": { "status": "mapped", "meep": "music bus", "note": "" },
-
-    "trap_Key_GetCatcher": { "status": "mapped", "meep": "engine/input context stack", "note": "" },
-    "trap_Key_SetCatcher": { "status": "mapped", "meep": "engine/input context stack", "note": "" },
-    "trap_Key_IsDown": { "status": "mapped", "meep": "input query API", "note": "" },
-    "trap_Key_GetKey": { "status": "mapped", "meep": "input query API", "note": "" },
-    "trap_Key_ClearStates": { "status": "mapped", "meep": "input reset", "note": "" },
-    "trap_Key_GetBindingBuf": { "status": "mapped", "meep": "own binding table", "note": "Q3 bindings live in the engine; here they are game data." },
-    "trap_Key_SetBinding": { "status": "mapped", "meep": "own binding table", "note": "" },
-    "trap_Key_KeynumToStringBuf": { "status": "mapped", "meep": "own binding table", "note": "" },
-    "trap_Key_GetOverstrikeMode": { "status": "not-needed", "meep": "DOM text input", "note": "Console and chat text editing." },
-    "trap_Key_SetOverstrikeMode": { "status": "not-needed", "meep": "DOM text input", "note": "" },
-    "trap_GetClipboardData": { "status": "mapped", "meep": "core/clipboard", "note": "" },
-
-    "trap_FS_FOpenFile": { "status": "mapped", "meep": "AssetManager (async)", "note": "Q3 filesystem is synchronous; meep assets are promises. See gap register." },
-    "trap_FS_Read": { "status": "mapped", "meep": "ArrayBufferLoader", "note": "" },
-    "trap_FS_Write": { "status": "workaround", "meep": "engine/save storage", "note": "Only used for demo, config and stat writing; mostly cut." },
-    "trap_FS_Seek": { "status": "mapped", "meep": "DataView offset", "note": "" },
-    "trap_FS_FCloseFile": { "status": "not-needed", "meep": "GC", "note": "" },
-    "trap_FS_GetFileList": { "status": "workaround", "meep": "build-time manifest", "note": "No directory listing in a browser. The asset pipeline emits a JSON manifest." },
-
-    "trap_Cvar_Register": { "status": "mapped", "meep": "engine/options + reactive values", "note": "" },
-    "trap_Cvar_Update": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_Set": { "status": "mapped", "meep": "engine/options", "note": "357 call sites: the most-used syscall in the codebase." },
-    "trap_Cvar_SetValue": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_Reset": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_Create": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_VariableValue": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_VariableIntegerValue": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_VariableStringBuffer": { "status": "mapped", "meep": "engine/options", "note": "" },
-    "trap_Cvar_InfoStringBuffer": { "status": "not-needed", "meep": "-", "note": "Serialises cvars into the network userinfo string." },
-
-    "trap_Argc": { "status": "mapped", "meep": "own console tokenizer", "note": "" },
-    "trap_Argv": { "status": "mapped", "meep": "own console tokenizer", "note": "" },
-    "trap_Args": { "status": "mapped", "meep": "own console tokenizer", "note": "" },
-    "trap_argc": { "status": "mapped", "meep": "own console tokenizer", "note": "Lowercase alias in OA g_local.h." },
-    "trap_argv": { "status": "mapped", "meep": "own console tokenizer", "note": "Lowercase alias in OA g_local.h." },
-    "trap_AddCommand": { "status": "mapped", "meep": "own console command table", "note": "" },
-    "trap_RemoveCommand": { "status": "mapped", "meep": "own console command table", "note": "" },
-    "trap_Cmd_ExecuteText": { "status": "mapped", "meep": "own console", "note": "" },
-    "trap_SendConsoleCommand": { "status": "mapped", "meep": "own console", "note": "" },
-
-    "trap_Print": { "status": "mapped", "meep": "engine/logging", "note": "" },
-    "trap_Printf": { "status": "mapped", "meep": "engine/logging", "note": "" },
-    "trap_Error": { "status": "mapped", "meep": "throw + engine/logging", "note": "" },
-    "trap_Milliseconds": { "status": "mapped", "meep": "engine Clock", "note": "" },
-    "trap_RealTime": { "status": "mapped", "meep": "Date", "note": "" },
-    "trap_MemoryRemaining": { "status": "not-needed", "meep": "-", "note": "QVM heap accounting." },
-
-    "trap_PC_LoadSource": { "status": "workaround", "meep": "offline conversion to JSON", "note": "Q3 C-preprocessor-flavoured .menu/.cfg parser. Menu files are not ported; the few data files that use it are converted offline." },
-    "trap_PC_FreeSource": { "status": "workaround", "meep": "-", "note": "" },
-    "trap_PC_ReadToken": { "status": "workaround", "meep": "-", "note": "" },
-    "trap_PC_SourceFileAndLine": { "status": "workaround", "meep": "-", "note": "" },
-    "trap_PC_AddGlobalDefine": { "status": "workaround", "meep": "-", "note": "" },
-
-    "trap_DebugPolygonCreate": { "status": "mapped", "meep": "DebugDrawSystem3", "note": "" },
-    "trap_DebugPolygonDelete": { "status": "mapped", "meep": "DebugDrawSystem3", "note": "" },
-    "trap_GetClientState": { "status": "not-needed", "meep": "-", "note": "Connection state machine." },
-    "trap_SetPbClStatus": { "status": "not-needed", "meep": "-", "note": "PunkBuster." },
-    "trap_GetCDKey": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_SetCDKey": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_VerifyCDKey": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_StringContains": { "status": "not-needed", "meep": "String.includes", "note": "botlib string helper." },
-    "trap_UnifyWhiteSpaces": { "status": "not-needed", "meep": "-", "note": "botlib chat helper." },
-    "trap_GeneticParentsAndChildSelection": { "status": "not-needed", "meep": "-", "note": "botlib fuzzy-logic genetic algorithm." },
-    "trap_loadCamera": { "status": "not-needed", "meep": "-", "note": "Q3 .camera scripted-camera playback; unused in deathmatch." },
-    "trap_startCamera": { "status": "not-needed", "meep": "-", "note": "" },
-    "trap_getCameraInfo": { "status": "not-needed", "meep": "-", "note": "" }
+    "trap_Trace": {
+      "status": "ported",
+      "meep": "-",
+      "note": "cm_trace.c ported verbatim. pmove fidelity depends on exact brush-plane sweep semantics, start-solid handling and the 1/32 epsilon; meep narrowphase gives different contact normals."
+    },
+    "trap_TraceCapsule": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Capsule traces are used for player-vs-player in ioq3; OA defaults to bbox."
+    },
+    "trap_PointContents": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Brush contents lookup. No meep equivalent - contents are Q3 semantics (lava/slime/water/playerclip/trigger)."
+    },
+    "trap_CM_BoxTrace": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Same clipmap, client side."
+    },
+    "trap_CM_CapsuleTrace": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_TransformedBoxTrace": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Needed for moving brush models (doors, plats)."
+    },
+    "trap_CM_TransformedCapsuleTrace": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_PointContents": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_TransformedPointContents": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_LoadMap": {
+      "status": "ported",
+      "meep": "-",
+      "note": "cm_load.c ported: brushes, leafs, patch collision. Separate from the render-side BSP conversion."
+    },
+    "trap_CM_InlineModel": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_NumInlineModels": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_TempBoxModel": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_TempCapsuleModel": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_SetBrushModel": {
+      "status": "ported",
+      "meep": "kinematic RigidBody per submodel brush",
+      "note": "Binds an entity to BSP submodel *N. On the physics backend the submodel becomes KinematicVelocity bodies; on the clipmap backend, entityClip.ts is SV_ClipMoveToEntities reduced to translation."
+    },
+    "trap_SnapVector": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation."
+    },
+    "trap_EntitiesInBox": {
+      "status": "mapped",
+      "meep": "core/bvh2 BVH3 box query",
+      "note": "Q3 areagrid replaced by meep BVH. Semantics differ (Q3 returns absmin/absmax overlaps), so a thin adapter re-tests AABBs."
+    },
+    "trap_EntityContact": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Exact contact against the clipmap, not a broadphase test."
+    },
+    "trap_EntityContactCapsule": {
+      "status": "ported",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_CM_MarkFragments": {
+      "status": "not-needed",
+      "meep": "DecalSystem3 (GPU decals)",
+      "note": "Q3 clips world triangles on the CPU to build mark polygons. Replaced by meep GPU decals per brief section 2."
+    },
+    "trap_LinkEntity": {
+      "status": "mapped",
+      "meep": "ECS + BVH insert",
+      "note": "Server-side spatial linking becomes BVH residency."
+    },
+    "trap_UnlinkEntity": {
+      "status": "mapped",
+      "meep": "ECS + BVH remove",
+      "note": ""
+    },
+    "trap_InPVS": {
+      "status": "not-needed",
+      "meep": "renderer culling",
+      "note": "PVS gated sound/event delivery per client. Single process, one player."
+    },
+    "trap_InPVSIgnorePortals": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "As above."
+    },
+    "trap_AreasConnected": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Areaportal state only mattered for PVS-driven network scope."
+    },
+    "trap_AdjustAreaPortalState": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "As above."
+    },
+    "trap_R_inPVS": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "As above."
+    },
+    "trap_LocateGameData": {
+      "status": "not-needed",
+      "meep": "ECS dataset",
+      "note": "Shared-memory handshake between QVM and engine. Gone with the QVM."
+    },
+    "trap_GetSnapshot": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Netcode; brief section 2 says delete entirely."
+    },
+    "trap_GetCurrentSnapshotNumber": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_GetCurrentCmdNumber": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_GetGameState": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_GetServerCommand": {
+      "status": "not-needed",
+      "meep": "direct call / meep Signal",
+      "note": "Server-to-client command stream collapses to a function call."
+    },
+    "trap_SendServerCommand": {
+      "status": "not-needed",
+      "meep": "direct call / meep Signal",
+      "note": "169 call sites collapse to direct calls; the ones that matter carry HUD, scoreboard and print payloads."
+    },
+    "trap_SendClientCommand": {
+      "status": "not-needed",
+      "meep": "direct call",
+      "note": ""
+    },
+    "trap_DropClient": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_GetUserinfo": {
+      "status": "mapped",
+      "meep": "plain config object",
+      "note": "Userinfo string becomes a typed settings object."
+    },
+    "trap_SetUserinfo": {
+      "status": "mapped",
+      "meep": "plain config object",
+      "note": ""
+    },
+    "trap_GetServerinfo": {
+      "status": "mapped",
+      "meep": "plain config object",
+      "note": ""
+    },
+    "trap_SetConfigstring": {
+      "status": "mapped",
+      "meep": "ECS singleton components",
+      "note": "Configstrings are a replication cache; locally they are just game state."
+    },
+    "trap_GetConfigstring": {
+      "status": "mapped",
+      "meep": "ECS singleton components",
+      "note": ""
+    },
+    "trap_GetConfigString": {
+      "status": "mapped",
+      "meep": "ECS singleton components",
+      "note": "UI-side spelling of the same call."
+    },
+    "trap_GetUsercmd": {
+      "status": "mapped",
+      "meep": "engine/input plus own usercmd_t builder",
+      "note": ""
+    },
+    "trap_GetUserCmd": {
+      "status": "mapped",
+      "meep": "engine/input plus own usercmd_t builder",
+      "note": "cgame-side spelling."
+    },
+    "trap_SetUserCmdValue": {
+      "status": "mapped",
+      "meep": "own usercmd_t builder",
+      "note": ""
+    },
+    "trap_Send": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "OA-specific raw send."
+    },
+    "trap_R_RegisterModel": {
+      "status": "mapped",
+      "meep": "AssetManager + GLTFSceneBundleAssetLoader",
+      "note": "MD3 converted to glTF offline. Player models need a skeleton inferred from the vertex-morph frames first (D-042); meep has no morph-target path."
+    },
+    "trap_R_RegisterSkin": {
+      "status": "mapped",
+      "meep": "material swap on ShadedGeometry",
+      "note": "Q3 .skin maps surface name to shader; becomes a material table applied per primitive entity."
+    },
+    "trap_R_RegisterShader": {
+      "status": "mapped",
+      "meep": "StandardShadeMaterial",
+      "note": "Offline .shader to PBR conversion per brief section 2."
+    },
+    "trap_R_RegisterShaderNoMip": {
+      "status": "mapped",
+      "meep": "meep UI image",
+      "note": "464 call sites, almost all 2D HUD/menu icons."
+    },
+    "trap_R_RegisterFont": {
+      "status": "mapped",
+      "meep": "engine/asset/loaders/font + UI text",
+      "note": ""
+    },
+    "trap_R_AddRefEntityToScene": {
+      "status": "mapped",
+      "meep": "ShadedGeometry + ShadedGeometrySystem3",
+      "note": "Q3 immediate-mode scene list becomes retained ECS entities. Biggest structural change on the client side."
+    },
+    "trap_R_AddPolyToScene": {
+      "status": "workaround",
+      "meep": "Geometry rebuilt per frame / Trail3D / particles",
+      "note": "Immediate-mode triangle soup. Most uses (marks, sprites, trails) map to decals/particles/trails; the rest rebuild a Geometry and set needsUpdate."
+    },
+    "trap_R_AddPolysToScene": {
+      "status": "workaround",
+      "meep": "as above",
+      "note": ""
+    },
+    "trap_R_AddLightToScene": {
+      "status": "mapped",
+      "meep": "Light + LightSystem3 (clustered)",
+      "note": "Q3 dlights were a fixed small pool; clustered lighting removes the cap."
+    },
+    "trap_R_AddAdditiveLightToScene": {
+      "status": "mapped",
+      "meep": "Light",
+      "note": "Additive-vs-normal dlight distinction has no PBR analogue; folded into intensity."
+    },
+    "trap_R_ClearScene": {
+      "status": "not-needed",
+      "meep": "retained scene",
+      "note": "Immediate-mode artifact."
+    },
+    "trap_R_RenderScene": {
+      "status": "mapped",
+      "meep": "Engine graphics loop",
+      "note": ""
+    },
+    "trap_R_SetColor": {
+      "status": "mapped",
+      "meep": "UI element tint",
+      "note": "183 call sites, all 2D."
+    },
+    "trap_R_DrawStretchPic": {
+      "status": "mapped",
+      "meep": "meep UI views",
+      "note": "The entire Q3 HUD and menu draw model is this one call. Becomes retained UI views."
+    },
+    "trap_R_LerpTag": {
+      "status": "mapped",
+      "meep": "glTF node hierarchy + animation channels",
+      "note": "MD3 tags become animated nodes in the converted glTF: tag_torso is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player."
+    },
+    "trap_CM_LerpTag": {
+      "status": "mapped",
+      "meep": "glTF node hierarchy + animation channels",
+      "note": "MD3 tags become animated nodes in the converted glTF: tag_torso is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player."
+    },
+    "trap_R_ModelBounds": {
+      "status": "mapped",
+      "meep": "AABB3 from scene bundle",
+      "note": ""
+    },
+    "trap_R_LightForPoint": {
+      "status": "gap",
+      "meep": "nothing directly",
+      "note": "Q3 samples the BSP lightgrid to shade dynamic models. See gap register."
+    },
+    "trap_R_RemapShader": {
+      "status": "not-needed",
+      "meep": "swap material reference",
+      "note": "Used for team colours and teleport effects; a material swap."
+    },
+    "trap_R_GetViewPosition": {
+      "status": "mapped",
+      "meep": "camera Transform",
+      "note": ""
+    },
+    "trap_R_LoadWorldMap": {
+      "status": "mapped",
+      "meep": "offline BSP to scene bundle plus runtime load",
+      "note": ""
+    },
+    "trap_R_LFX_ParticleEffect": {
+      "status": "mapped",
+      "meep": "ParticleEmitterSystem3 / Particular",
+      "note": "OA LFX particle extension, replaced outright."
+    },
+    "trap_GetGlconfig": {
+      "status": "mapped",
+      "meep": "graphics device info",
+      "note": "Only used for screen dimensions and aspect."
+    },
+    "trap_UpdateScreen": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Synchronous repaint during long loads; meep streams assets instead."
+    },
+    "trap_GetEntityToken": {
+      "status": "ported",
+      "meep": "-",
+      "note": "Walks the BSP entity lump string. Ported as part of the BSP reader."
+    },
+    "trap_S_RegisterSound": {
+      "status": "mapped",
+      "meep": "SoundAssetLoader",
+      "note": ""
+    },
+    "trap_S_StartSound": {
+      "status": "mapped",
+      "meep": "sopra playOneShot",
+      "note": "Positional one-shot. Played straight through the sopra engine rather than as an AudioEmitter component: only looping events take the spatially-managed path, and a machinegun would mean an entity built and destroyed ten times a second."
+    },
+    "trap_S_StartLocalSound": {
+      "status": "mapped",
+      "meep": "sopra playOneShot, is3D false",
+      "note": "Pickups and feedback tones, played dry."
+    },
+    "trap_S_AddLoopingSound": {
+      "status": "mapped",
+      "meep": "looping sound emitter",
+      "note": "Q3 rebuilds the looping-sound set every frame; meep keeps them as entities."
+    },
+    "trap_S_AddRealLoopingSound": {
+      "status": "mapped",
+      "meep": "looping sound emitter",
+      "note": ""
+    },
+    "trap_S_ClearLoopingSounds": {
+      "status": "not-needed",
+      "meep": "retained emitters",
+      "note": "Immediate-mode artifact."
+    },
+    "trap_S_StopLoopingSound": {
+      "status": "mapped",
+      "meep": "stop/remove emitter",
+      "note": ""
+    },
+    "trap_S_UpdateEntityPosition": {
+      "status": "mapped",
+      "meep": "Transform on emitter entity",
+      "note": ""
+    },
+    "trap_S_Respatialize": {
+      "status": "mapped",
+      "meep": "SoundListener on the camera entity",
+      "note": "AudioEmitterSystem forwards the listener pose from the component each frame."
+    },
+    "trap_S_StartBackgroundTrack": {
+      "status": "mapped",
+      "meep": "music bus / streaming source",
+      "note": ""
+    },
+    "trap_S_StopBackgroundTrack": {
+      "status": "mapped",
+      "meep": "music bus",
+      "note": ""
+    },
+    "trap_Key_GetCatcher": {
+      "status": "mapped",
+      "meep": "engine/input context stack",
+      "note": ""
+    },
+    "trap_Key_SetCatcher": {
+      "status": "mapped",
+      "meep": "engine/input context stack",
+      "note": ""
+    },
+    "trap_Key_IsDown": {
+      "status": "mapped",
+      "meep": "input query API",
+      "note": ""
+    },
+    "trap_Key_GetKey": {
+      "status": "mapped",
+      "meep": "input query API",
+      "note": ""
+    },
+    "trap_Key_ClearStates": {
+      "status": "mapped",
+      "meep": "input reset",
+      "note": ""
+    },
+    "trap_Key_GetBindingBuf": {
+      "status": "mapped",
+      "meep": "own binding table",
+      "note": "Q3 bindings live in the engine; here they are game data."
+    },
+    "trap_Key_SetBinding": {
+      "status": "mapped",
+      "meep": "own binding table",
+      "note": ""
+    },
+    "trap_Key_KeynumToStringBuf": {
+      "status": "mapped",
+      "meep": "own binding table",
+      "note": ""
+    },
+    "trap_Key_GetOverstrikeMode": {
+      "status": "not-needed",
+      "meep": "DOM text input",
+      "note": "Console and chat text editing."
+    },
+    "trap_Key_SetOverstrikeMode": {
+      "status": "not-needed",
+      "meep": "DOM text input",
+      "note": ""
+    },
+    "trap_GetClipboardData": {
+      "status": "mapped",
+      "meep": "core/clipboard",
+      "note": ""
+    },
+    "trap_FS_FOpenFile": {
+      "status": "mapped",
+      "meep": "AssetManager (async)",
+      "note": "Q3 filesystem is synchronous; meep assets are promises. See gap register."
+    },
+    "trap_FS_Read": {
+      "status": "mapped",
+      "meep": "ArrayBufferLoader",
+      "note": ""
+    },
+    "trap_FS_Write": {
+      "status": "workaround",
+      "meep": "engine/save storage",
+      "note": "Only used for demo, config and stat writing; mostly cut."
+    },
+    "trap_FS_Seek": {
+      "status": "mapped",
+      "meep": "DataView offset",
+      "note": ""
+    },
+    "trap_FS_FCloseFile": {
+      "status": "not-needed",
+      "meep": "GC",
+      "note": ""
+    },
+    "trap_FS_GetFileList": {
+      "status": "workaround",
+      "meep": "build-time manifest",
+      "note": "No directory listing in a browser. The asset pipeline emits a JSON manifest."
+    },
+    "trap_Cvar_Register": {
+      "status": "mapped",
+      "meep": "engine/options + reactive values",
+      "note": ""
+    },
+    "trap_Cvar_Update": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_Set": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": "357 call sites: the most-used syscall in the codebase."
+    },
+    "trap_Cvar_SetValue": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_Reset": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_Create": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_VariableValue": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_VariableIntegerValue": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_VariableStringBuffer": {
+      "status": "mapped",
+      "meep": "engine/options",
+      "note": ""
+    },
+    "trap_Cvar_InfoStringBuffer": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Serialises cvars into the network userinfo string."
+    },
+    "trap_Argc": {
+      "status": "mapped",
+      "meep": "own console tokenizer",
+      "note": ""
+    },
+    "trap_Argv": {
+      "status": "mapped",
+      "meep": "own console tokenizer",
+      "note": ""
+    },
+    "trap_Args": {
+      "status": "mapped",
+      "meep": "own console tokenizer",
+      "note": ""
+    },
+    "trap_argc": {
+      "status": "mapped",
+      "meep": "own console tokenizer",
+      "note": "Lowercase alias in OA g_local.h."
+    },
+    "trap_argv": {
+      "status": "mapped",
+      "meep": "own console tokenizer",
+      "note": "Lowercase alias in OA g_local.h."
+    },
+    "trap_AddCommand": {
+      "status": "mapped",
+      "meep": "own console command table",
+      "note": ""
+    },
+    "trap_RemoveCommand": {
+      "status": "mapped",
+      "meep": "own console command table",
+      "note": ""
+    },
+    "trap_Cmd_ExecuteText": {
+      "status": "mapped",
+      "meep": "own console",
+      "note": ""
+    },
+    "trap_SendConsoleCommand": {
+      "status": "mapped",
+      "meep": "own console",
+      "note": ""
+    },
+    "trap_Print": {
+      "status": "mapped",
+      "meep": "engine/logging",
+      "note": ""
+    },
+    "trap_Printf": {
+      "status": "mapped",
+      "meep": "engine/logging",
+      "note": ""
+    },
+    "trap_Error": {
+      "status": "mapped",
+      "meep": "throw + engine/logging",
+      "note": ""
+    },
+    "trap_Milliseconds": {
+      "status": "mapped",
+      "meep": "engine Clock",
+      "note": ""
+    },
+    "trap_RealTime": {
+      "status": "mapped",
+      "meep": "Date",
+      "note": ""
+    },
+    "trap_MemoryRemaining": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "QVM heap accounting."
+    },
+    "trap_PC_LoadSource": {
+      "status": "workaround",
+      "meep": "offline conversion to JSON",
+      "note": "Q3 C-preprocessor-flavoured .menu/.cfg parser. Menu files are not ported; the few data files that use it are converted offline."
+    },
+    "trap_PC_FreeSource": {
+      "status": "workaround",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_PC_ReadToken": {
+      "status": "workaround",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_PC_SourceFileAndLine": {
+      "status": "workaround",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_PC_AddGlobalDefine": {
+      "status": "workaround",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_DebugPolygonCreate": {
+      "status": "mapped",
+      "meep": "DebugDrawSystem3",
+      "note": ""
+    },
+    "trap_DebugPolygonDelete": {
+      "status": "mapped",
+      "meep": "DebugDrawSystem3",
+      "note": ""
+    },
+    "trap_GetClientState": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Connection state machine."
+    },
+    "trap_SetPbClStatus": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "PunkBuster."
+    },
+    "trap_GetCDKey": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_SetCDKey": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_VerifyCDKey": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_StringContains": {
+      "status": "not-needed",
+      "meep": "String.includes",
+      "note": "botlib string helper."
+    },
+    "trap_UnifyWhiteSpaces": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "botlib chat helper."
+    },
+    "trap_GeneticParentsAndChildSelection": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "botlib fuzzy-logic genetic algorithm."
+    },
+    "trap_loadCamera": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3 .camera scripted-camera playback; unused in deathmatch."
+    },
+    "trap_startCamera": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    },
+    "trap_getCameraInfo": {
+      "status": "not-needed",
+      "meep": "-",
+      "note": ""
+    }
   }
 }

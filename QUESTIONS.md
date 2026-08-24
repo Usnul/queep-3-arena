@@ -10,48 +10,50 @@ Format: **Q-nnn** — the question, the default in use, and what changes if the 
 
 ## Still open
 
-### Q-001 — Is the licence flip to GPLv2 what you intended?
+*Nothing. Q-001, Q-003 and Q-005 were answered; the rest were settled by doing.*
+
+New questions, if any, would go here. There are none: every open decision at this point has a
+default that is cheap to reverse, and they are recorded in `DECISIONS.md` rather than raised as
+questions.
+
+---
+
+## Answered
+
+### Q-001 — Is the licence flip to GPLv2 what you intended? — **answered: yes**
 
 The repo shipped an MIT `LICENSE` with your copyright on it, and the brief says the repo is
 GPLv2. Since the port derives from GPL-2.0-only id/OpenArena code, MIT was not available, so
-`LICENSE` is now GPLv2 (D-001).
+`LICENSE` is GPLv2 (D-001) and `package.json` says `GPL-2.0-or-later`.
 
-**Default in use:** GPLv2; `package.json` says `GPL-2.0-or-later`.
-**If different:** the only alternative that changes anything is dual-licensing the
-original-to-this-port files (asset pipeline, meep integration layer) separately from the ported
-ones. Say so and I will split the headers — mechanical and cheap now, less cheap later.
+### Q-003 — How much of the OA character roster is worth converting? — **answered: all of them**
 
-### Q-003 — How much of the OA character roster is worth converting?
+Done: **15 of the 16** characters OA 0.8.8 ships with an `animation.cfg`. The sixteenth,
+`angelyss`, ships `lower.md3` and no `upper.md3` or `head.md3`, and is reported rather than
+silently skipped.
 
-`pak2-players.pk3` is 74 MB of MD3 characters. Each needs converting to glTF with a skeleton,
-because meep animates skeletally and MD3 is vertex-morph. Per-character work with a
-per-character failure mode.
+The proposed default was three characters sharing one skeleton, on the reasoning that
+per-character conversion is per-character risk. That reasoning turned out to be wrong in a useful
+way: the risk is in the *method*, not in the models. Once the skinning decomposition worked on
+`sarge`, the other fourteen cost 5.8 seconds of CPU and no attention at all. Reconstruction error
+across the roster runs 0.005 to 0.267 Q3 units -- under a centimetre in the worst case (D-042).
 
-**Default in use:** not yet started — phase 4 deferred player models in favour of finishing the
-oracle work. When it starts: convert **three** characters sharing one skeleton and one animation
-set. Enough for a deathmatch to read as one, and it caps the risk of an animation pipeline
-becoming a phase in its own right.
-**If different:** more characters is linear extra time, not extra risk, once the first works.
+### Q-005 — Breadth or depth from here? — **answered: breadth**
 
-### Q-005 — Should the demo prioritise breadth or depth from here?
+Done, in the order given: items and pickups, movers and triggers, the character roster,
+positional audio, and bots. What each does and does not do is in `DECISIONS.md` D-033 through
+D-055.
 
-Phase 2 is finished to a standard the rest is not: movement and collision are bit-exact against
-a compiled-from-source oracle across 100,000 traces and ~50,000 simulated frames. Phases 3–5 are
-partial.
+Two things are worth flagging back, because breadth surfaced findings that depth would not have:
 
-The remaining work splits into two shapes and I would rather you chose than guess:
+- The single most broadly applicable finding in the report came out of the *bots* --
+  meep's navmesh is good and there is no path from a Q3 level to its input (GAP-016). It is
+  measured and reproducible in one command.
+- Two silent-failure API traps (GAP-014, GAP-015) came out of the physics and character work
+  respectively. Both are the kind that only appear when you actually wire the subsystem up.
 
-- **Breadth** — items and pickups, doors and platforms (BSP submodels), player models and
-  animation, positional audio, bots on meep's behaviour trees. Makes the demo look and play more
-  like Quake; each piece is shallow.
-- **Depth** — patch collision (`cm_patch.c`, D-017, currently the reason curved surfaces are not
-  solid and why the differential suite runs on 25 of 72 maps), and extending the oracle to cover
-  the weapon and item code the same way movement is covered.
-
-**Default in use:** breadth, on the reasoning that the demo half of the brief is the half that
-is behind. Depth is the more defensible engineering answer and I would switch to it on a word.
-
----
+Depth remains the more defensible engineering answer for a *product*; for a report about an
+engine, breadth found more.
 
 ## Answered by doing
 

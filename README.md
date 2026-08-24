@@ -17,18 +17,29 @@ Requires Node >= 24 and a WebGPU-capable browser.
 ```bash
 npm install
 npm run setup
-node tools/convert-map.ts oa_dm1 aggressor oa_dm2
+node tools/convert-map.ts oa_dm1 aggressor oa_dm4 oa_dm5 oa_dm7 am_thornish
 node tools/convert-fx.ts
+npm run assets
 npm run dev
 ```
+
+`npm run assets` converts the static props, the 15 player characters and the sound bank. It is
+separate from the map conversion because it runs once for the whole game rather than once per
+map.
 
 `npm run setup` clones the reference C sources at pinned commits and downloads the OpenArena
 0.8.8 game data (425 MB). Nothing it fetches is committed — see [ASSETS.md](ASSETS.md) for
 provenance and licensing of every input.
 
 Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
-to jump, ctrl to crouch, mouse-1 to fire, number keys to change weapon. `?fly=1` swaps the
-player for a noclip camera.
+to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon.
+
+| query parameter | effect |
+|---|---|
+| `?map=<name>` | which level to load |
+| `?fly=1` | swaps the player for a noclip camera, for inspecting conversions |
+| `?trace=clipmap` | runs movement on the ported `cm_trace` instead of meep's physics, for an A/B |
+| `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
 
 ## Verification
 
@@ -48,20 +59,40 @@ TypeScript port is then run against it frame by frame and must agree bit-for-bit
 randomised traces and roughly 50,000 simulated movement frames, tolerance zero. Emscripten is
 expected at `.refs/emsdk`; `oracle/build.mjs` prints the install commands if it is missing.
 
+One finding in the report is reproducible on its own:
+
+```bash
+npm run navmesh-probe
+```
+
+which tries to build meep's `NavigationMesh` from a Quake III level three different ways and
+reports how many spawn-point pairs it can route between. The answer is 0–5%, and GAP-016
+explains why.
+
 ## What works
 
-- Six OpenArena maps convert and render at 137–253 FPS, with lighting reconstructed as dynamic
-  lights from the map's own `.shader` data.
-- Movement and collision are bit-exact against the C: strafe jumping, ramp jumps, stair
-  stepping, crouching, water.
-- Rockets, machinegun, shotgun, railgun and plasma fire with Q3's own damage numbers, against
-  targets that take damage, die and respawn.
-- Effects — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
+- **Six OpenArena maps** convert and render at 137–253 FPS, with lighting reconstructed as
+  dynamic lights from the map's own `.shader` data.
+- **Movement** is Q3's, on meep's physics. The ported `cm_trace` is bit-exact against the C and
+  is what the physics backend was tuned against: contact normals agree 98–99.6%, and position
+  divergence over 400 frames of identical input is 0.06–0.22 units at the median.
+- **Weapons** fire with Q3's own damage numbers and fire rates, extracted from the sources
+  rather than transcribed.
+- **Items** spawn, drop to the floor, bob, spin, get picked up under `BG_CanItemBeGrabbed`'s
+  rules and respawn on their own clocks.
+- **Movers** — doors, plats, buttons — run `g_mover.c`'s four-state machine, with jump pads
+  solved by `AimAtTarget` and teleporters that take you somewhere.
+- **15 characters**, converted from MD3 vertex-morph animation to skinned glTF by inferring a
+  skeleton the source data does not contain.
+- **Positional audio** for weapons, impacts, items, movers, jump pads and footsteps.
+- **Bots** on meep's behaviour trees, running the *same* `Pmove` the player does — they route,
+  fight, take items, and one has been observed strafe-jumping.
+- **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
   GPU decals and clustered lights.
 
-Not done: items and pickups, doors and platforms, player models and animation, audio, bots. See
-[REPORT.md](REPORT.md) for the state of each phase and [DECISIONS.md](DECISIONS.md) for what was
-cut and why.
+Every one of those has an edge it does not reach, and each is written down rather than left to
+be discovered: see [DECISIONS.md](DECISIONS.md) D-041, D-045 and D-055 for what movers,
+characters and bots respectively do *not* do.
 
 ## Documents
 
