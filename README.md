@@ -32,7 +32,8 @@ map.
 provenance and licensing of every input.
 
 Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
-to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon.
+to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon. Input runs on meep's
+own `engine.devices` rather than DOM listeners — see GAP-017 for why that is not optional.
 
 | query parameter | effect |
 |---|---|

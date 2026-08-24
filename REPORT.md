@@ -65,7 +65,20 @@ Ranked by how much they would cost the next person, not by how much they cost me
    routes 100% of the same pairs, because a trace does not care how many surfaces the world is
    made of (GAP-016).
 
-5. **Two APIs silently accept a wrong-but-plausible call and do nothing, and both cost an hour
+5. **The application rendered at 160 FPS and could not be played, and finding out why took a walk
+   up the computed styles.** meep builds its pointer and keyboard devices on `viewStack.el` and
+   starts them — but that element and everything under it, including the render canvas, are
+   `pointer-events: none`, so no pointer event ever reaches the device; and although it carries
+   `tabindex="0"`, nothing focuses it, so key events go to `<body>` instead. Both halves fail
+   silently and look exactly like an application with no input code at all, which is the wrong
+   place to start looking. The fix is four lines of app-level CSS and a `focus()` call, and after
+   it the device layer is genuinely nicer than the DOM — `keyboard.keys.w.is_down` needs no
+   held-key bookkeeping, and `pointer.on.move` hands over the pointer-lock delta as its third
+   argument already extracted. Worth a warning from `PointerDevice.start()` when its element
+   computes to `pointer-events: none`: two lines, for a failure that is otherwise invisible
+   (GAP-017).
+
+6. **Two APIs silently accept a wrong-but-plausible call and do nothing, and both cost an hour
    each.** `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
    `ColliderObserverSystem` the consumer must also register. Register only the first and every
    body is real, present in the broadphase, and completely intangible -- 537 static bodies and
@@ -77,7 +90,7 @@ Ranked by how much they would cost the next person, not by how much they cost me
    first-use warning, or accepting both forms -- and both are the kind of failure where every
    diagnostic you reach for reports success.
 
-6. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
+7. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
    is literally named "used for light map", and there is a whole `shade/renderer/lightmap/`
    subsystem — but it is a *baker*, and no material has a lightmap slot. Every level format
    that predates real-time GI ships baked lighting and none of it can come in. This is also the
@@ -85,41 +98,41 @@ Ranked by how much they would cost the next person, not by how much they cost me
    walls show full detail, but the floors read as flat grey, because what is missing is not
    brightness but spatial variation in brightness (GAP-006).
 
-7. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
+8. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
    dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
    not register against geometry count. That matters more than a benchmark: q3map2 strips every
    `light` entity from a compiled BSP (measured: zero across six maps), so with lightmaps
    unavailable, reconstructing the lighting as dynamic lights was not a showcase choice — it
    was the only remaining route to a lit level. It worked with no tuning.
 
-8. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+9. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
    main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
    concurrent executor and a worker pool. A real level is several times that size (GAP-008).
 
-9. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
+10. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
    `LabelView` rejects a call its own implementation explicitly supports, `Engine`'s constructor
    options are typed as one of their own fields' types, and `entityManager` is `any`. Consumers
    are forced into `skipLibCheck: true`, which disables checking of every *other* dependency
    they have (GAP-001).
 
-10. **`/samples` contains no runnable engine sample.** The published package ships
+11. **`/samples` contains no runnable engine sample.** The published package ships
    `samples/generation/**` and nothing else — procedural-generation fixtures. Nothing boots the
    engine, loads a model, or draws a frame, and `exports` has no `./samples/*` entry so the
    folder cannot be imported even though it is shipped. `EngineHarness` turns out to be the
    real worked example; finding that took reading a directory listing (GAP-002).
 
-11. **A scene with no environment map renders black, silently.** Shade assumes global
+12. **A scene with no environment map renders black, silently.** Shade assumes global
    illumination and `make_default_environment` documents this well — but you only read that
    docblock if you already suspect the environment. `EngineHarness.buildBasics` sets one up for
    you, so this bites exactly when you stop using the all-or-nothing helper, which is the moment
    you stop being a beginner. A first-frame warning would remove it entirely.
 
-12. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
+13. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
    documented — inside the docblock of a function consumers never call. A hand-built view
    quaternion assuming -Z points the camera exactly backwards, which in a closed level presents
    as *a dark scene* rather than a reversed one. I diagnosed it as a lighting problem first.
 
-13. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+14. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
     correctly does not have.** Of 309 distinct `trap_*` syscalls, 203 belong to subsystems this
     port deletes outright; of the 106 that remain, 77 map onto an existing meep facility, 19 are
     deliberately ported, 9 worked around, 1 a genuine gap. Worth stating plainly before the gap
@@ -1114,6 +1127,58 @@ the expensive way.
 - **Cost:** ~2 hours to get it wrong, ~1 hour to get it right after the maintainer pointed at
   `bt_mesh_append` and `bt_merge_verts_by_distance`. The tooling was never the problem.
 - **Evidence:** `tools/navmesh-probe.ts`, which reproduces the whole table in one command.
+
+### GAP-017: The element the input devices listen on is `pointer-events: none` and never focused
+
+- **Severity:** high. The application renders perfectly at 160 FPS and cannot be played, and
+  nothing anywhere says why.
+- **What happened:** the game loaded, drew, ran its simulation, updated its HUD — and WASD did
+  nothing and the mouse did not turn the view. No error, no warning, no failed assertion.
+- **The cause, which is two things that compound.** `Engine`'s constructor builds
+  `devices.pointer` and `devices.keyboard` on `viewStack.el` and starts them, so that element is
+  where input is expected to arrive. But:
+  - **It is not hit-testable.** `.view-stack`, `.game-view` and the render canvas are all
+    `pointer-events: none`. `document.elementFromPoint` at the centre of the viewport returns
+    `<html>`. No `pointerdown` or `pointermove` ever reaches the element the `PointerDevice` is
+    listening on, so the device is live, started, and permanently silent.
+  - **It is never focused.** The element carries `tabindex="0"` — it is clearly *meant* to be
+    focused — but nothing focuses it, so `document.activeElement` is `<body>` and keyboard events
+    go there instead. `KeyboardDevice`'s own constructor docblock insists the element must be
+    focusable, which suggests the intent was understood; making it focus*ed* is the step that is
+    missing.
+- **Why it is worse than it sounds.** Both halves fail *silently and identically to a game with
+  no input code at all*, which is the wrong place to start debugging. My first assumption was that
+  my own listeners were wrong, then that pointer lock was being refused, then that the ticker was
+  not running. The actual diagnosis needed `getComputedStyle` up the parent chain — not a place
+  anyone looks when the keyboard does not work.
+- **A third trap on the way out.** Once the element is hit-testable, listeners still have to use
+  the right event family: the devices listen for **Pointer Events** (`pointermove`, `pointerdown`),
+  not `mousemove`/`mousedown`. Synthesising a `MouseEvent` to test the wiring reports "still
+  broken" and sends you back to the previous two causes. That one is on me, but it is an easy
+  half-hour to lose.
+- **Workaround**, and it is small once found — app-level CSS on an element the engine hands you,
+  not a change to the engine:
+
+  ```js
+  const input = engine.viewStack.el;
+  input.style.pointerEvents = 'auto';
+  input.focus();
+  input.addEventListener('pointerdown', () => input.focus());
+  ```
+
+  After that, `keyboard.keys.w.is_down`, `pointer.mouseButtonLeft.is_down` and
+  `pointer.on.move`'s **third** argument — the pointer-lock delta, already extracted from
+  `movementX`/`movementY` — are everything a first-person controller needs, and they are a nicer
+  API than the DOM's. The device layer is good; reaching it is the problem.
+- **What would fix it:** have whatever creates the view stack focus it, and either give
+  `.view-stack` `pointer-events: auto` with the *children* opting out, or have `PointerDevice`
+  warn on `start()` when its element's computed `pointer-events` is `none` — which is a two-line
+  check for a failure that is otherwise invisible.
+- **Cost:** the first version of this port shipped raw DOM listeners on `graphics.domElement` and
+  I recorded that as a deliberate choice. It was not a choice; it was a bug that had not been
+  noticed, because I had verified movement through headless harnesses and the browser build was
+  only ever checked for *load* errors. Found when the maintainer tried to play it.
+- **Evidence:** `src/client/PlayerController.ts`, `src/app/main.ts`. Recorded during phase 5.
 
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.

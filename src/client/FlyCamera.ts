@@ -10,24 +10,26 @@
  *
  * ---
  *
- * Deliberately not built on meep's input abstraction, and deliberately throwaway.
- * This exists to answer "did the map convert correctly", and is replaced in
- * phase 2 by the real `bg_pmove` controller reading a `usercmd_t`. Wiring it
- * through the engine's input layer would mean writing that integration twice.
+ * A debug camera, on meep's input devices for the same reason the player
+ * controller is: the canvas and the view stack above it are `pointer-events:
+ * none`, so raw DOM listeners on them receive nothing at all (GAP-017).
  */
+
+import type { InputDevices, PointerMoveHandler } from './PlayerController.ts';
 
 interface TransformLike {
     position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number };
     rotation: { _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown };
 }
 
-const KEY_FORWARD = new Set(['KeyW', 'ArrowUp']);
-const KEY_BACK = new Set(['KeyS', 'ArrowDown']);
-const KEY_LEFT = new Set(['KeyA', 'ArrowLeft']);
-const KEY_RIGHT = new Set(['KeyD', 'ArrowRight']);
-const KEY_UP = new Set(['Space']);
-const KEY_DOWN = new Set(['ControlLeft', 'KeyC']);
-const KEY_FAST = new Set(['ShiftLeft', 'ShiftRight']);
+/** meep key names, from `input/devices/KeyCodes.js`. */
+const KEY_FORWARD = ['w', 'up_arrow'];
+const KEY_BACK = ['s', 'down_arrow'];
+const KEY_LEFT = ['a', 'left_arrow'];
+const KEY_RIGHT = ['d', 'right_arrow'];
+const KEY_UP = ['space'];
+const KEY_DOWN = ['ctrl', 'c'];
+const KEY_FAST = ['shift'];
 
 /**
  * Metres per second. A Q3 player runs at 320 units/s, which is 10 m/s at the
@@ -39,7 +41,7 @@ const FAST_MULTIPLIER = 4;
 export class FlyCamera {
     private readonly transform: TransformLike;
     private readonly element: HTMLElement;
-    private readonly held = new Set<string>();
+    private readonly devices: InputDevices;
 
     /** Radians. Yaw around +Y, pitch around the camera's local X. */
     yaw = 0;
@@ -47,66 +49,55 @@ export class FlyCamera {
 
     private attached = false;
 
-    constructor(transform: TransformLike, element: HTMLElement) {
+    constructor(transform: TransformLike, element: HTMLElement, devices: InputDevices) {
         this.transform = transform;
         this.element = element;
+        this.devices = devices;
     }
 
     attach(): void {
         if (this.attached) return;
         this.attached = true;
 
-        window.addEventListener('keydown', this.onKeyDown);
-        window.addEventListener('keyup', this.onKeyUp);
-        window.addEventListener('blur', this.onBlur);
-        this.element.addEventListener('mousedown', this.onMouseDown);
-        document.addEventListener('mousemove', this.onMouseMove);
+        this.devices.keyboard.on.down.add(this.onKeyDown);
+        this.devices.pointer.on.down.add(this.onPointerDown);
+        this.devices.pointer.on.move.add(this.onPointerMove);
     }
 
     detach(): void {
         if (!this.attached) return;
         this.attached = false;
 
-        window.removeEventListener('keydown', this.onKeyDown);
-        window.removeEventListener('keyup', this.onKeyUp);
-        window.removeEventListener('blur', this.onBlur);
-        this.element.removeEventListener('mousedown', this.onMouseDown);
-        document.removeEventListener('mousemove', this.onMouseMove);
+        this.devices.keyboard.on.down.remove(this.onKeyDown);
+        this.devices.pointer.on.down.remove(this.onPointerDown);
+        this.devices.pointer.on.move.remove(this.onPointerMove);
     }
 
+    /** Only to stop space scrolling the page; movement is polled. */
     private readonly onKeyDown = (e: KeyboardEvent): void => {
-        this.held.add(e.code);
         if (e.code === 'Space') e.preventDefault();
     };
 
-    private readonly onKeyUp = (e: KeyboardEvent): void => {
-        this.held.delete(e.code);
-    };
-
-    /** Dropping every key on blur stops the camera drifting away while unfocused. */
-    private readonly onBlur = (): void => {
-        this.held.clear();
-    };
-
-    private readonly onMouseDown = (): void => {
+    private readonly onPointerDown = (): void => {
         if (document.pointerLockElement !== this.element) {
             void this.element.requestPointerLock();
         }
     };
 
-    private readonly onMouseMove = (e: MouseEvent): void => {
+    private readonly onPointerMove: PointerMoveHandler = (_position, _event, delta): void => {
         if (document.pointerLockElement !== this.element) return;
 
-        this.yaw -= e.movementX * 0.0022;
-        this.pitch -= e.movementY * 0.0022;
+        this.yaw -= delta.x * 0.0022;
+        this.pitch -= delta.y * 0.0022;
 
         const limit = Math.PI / 2 - 0.01;
         if (this.pitch > limit) this.pitch = limit;
         if (this.pitch < -limit) this.pitch = -limit;
     };
 
-    private has(codes: ReadonlySet<string>): boolean {
-        for (const c of codes) if (this.held.has(c)) return true;
+    private has(names: readonly string[]): boolean {
+        const keys = this.devices.keyboard.keys;
+        for (const name of names) if (keys[name]?.is_down === true) return true;
         return false;
     }
 

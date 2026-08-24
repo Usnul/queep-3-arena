@@ -148,6 +148,33 @@ async function main(): Promise<void> {
 
     EngineHarness.addFpsCounter(engine);
 
+    /*
+     The element that owns input.
+
+     Not the canvas. meep's `PointerDevice` and `KeyboardDevice` are constructed
+     on `viewStack.el` and started by the `Engine` constructor, so that element
+     -- not `graphics.domElement` -- is where input arrives. Attaching listeners
+     to the canvas produces an application that renders perfectly and cannot be
+     played, which is exactly what happened here (GAP-017).
+
+     Two properties have to be corrected before any of it works, and both are
+     app-level CSS on an element the engine handed us rather than changes to the
+     engine:
+
+     - `pointer-events`. The view stack, the game view and the canvas are all
+       `pointer-events: none`, so the stack is not a hit-test target and the
+       pointer device it owns never receives an event.
+     - focus. The stack carries `tabindex="0"` -- it is *meant* to be focused --
+       but nothing focuses it, so key events go to `<body>` and the keyboard
+       device never sees them either.
+    */
+    const input = engine.viewStack.el as HTMLElement;
+    input.style.pointerEvents = 'auto';
+    input.focus();
+
+    // A click anywhere puts focus back, so tabbing away and clicking in resumes.
+    input.addEventListener('pointerdown', () => input.focus());
+
     const mapName = requestedMap();
     const baseUrl = `/assets/built/${mapName}`;
 
@@ -169,7 +196,7 @@ async function main(): Promise<void> {
      pointer. Resuming on any earlier event would be a console warning and no
      sound; resuming here is the first moment the browser will allow.
     */
-    canvasGesture(graphics.domElement as HTMLElement, async () => {
+    firstGesture(input, async () => {
         if (sound === null) return;
         await sound.resumeContext();
         audio.enabled = true;
@@ -204,7 +231,6 @@ async function main(): Promise<void> {
     if (!ecd.isComponentTypeRegistered(SoundListener)) ecd.registerComponentType(SoundListener);
     cameraEntity.add(transform).add(camera).add(new SoundListener()).build(ecd);
 
-    const canvas = graphics.domElement as HTMLElement;
     const hud = new Hud();
     hud.link(engine.viewStack);
 
@@ -215,7 +241,7 @@ async function main(): Promise<void> {
             spawn?._origin[2] ?? 0
         );
 
-        const fly = new FlyCamera(transform, canvas);
+        const fly = new FlyCamera(transform, input, engine.devices);
         fly.attach();
         engine.ticker.onTick.add((dt: number) => {
             fly.update(dt);
@@ -245,7 +271,8 @@ async function main(): Promise<void> {
 
         const player = new PlayerController(
             clipMap,
-            canvas,
+            input,
+            engine.devices,
             spawn?._originQ3 ?? [0, 0, 0],
             physicsWorld
         );
@@ -720,12 +747,12 @@ async function main(): Promise<void> {
  * representation would be a second thing that can disagree with `cm_trace.c`.
  */
 /** Run `action` once, on the first click -- the gesture that unlocks audio. */
-function canvasGesture(element: HTMLElement, action: () => void): void {
+function firstGesture(element: HTMLElement, action: () => void): void {
     const once = (): void => {
-        element.removeEventListener('mousedown', once);
+        element.removeEventListener('pointerdown', once);
         action();
     };
-    element.addEventListener('mousedown', once);
+    element.addEventListener('pointerdown', once);
 }
 
 async function loadClipMap(baseUrl: string, name: string): Promise<ClipMap> {

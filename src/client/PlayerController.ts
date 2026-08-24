@@ -20,9 +20,15 @@
  * `ps.origin` (Q3) -> camera `Transform.position` (meep). Nothing else in the
  * client needs to know either convention. See DECISIONS.md D-011.
  *
- * Input handling is deliberately minimal and is not built on meep's input
- * abstraction -- see GAP-010 in REPORT.md for why that is a finding rather than
- * laziness.
+ * Input comes from meep's own devices -- `engine.devices.keyboard` and
+ * `engine.devices.pointer` -- rather than from raw DOM listeners. That is not a
+ * style preference: raw listeners on the canvas do not work at all, because the
+ * canvas and the whole view stack above it are `pointer-events: none` and the
+ * stack is what the devices listen on. See GAP-017.
+ *
+ * `pointer.on.move` hands over `(position, event, delta)` and the third argument
+ * is already the pointer-lock movement, so the look code reads it directly
+ * rather than reaching into the event.
  */
 
 import { ClipMap } from '../q3/cm/ClipMap.ts';
@@ -59,12 +65,18 @@ interface TransformLike {
     };
 }
 
-const KEY_FORWARD = new Set(['KeyW', 'ArrowUp']);
-const KEY_BACK = new Set(['KeyS', 'ArrowDown']);
-const KEY_LEFT = new Set(['KeyA', 'ArrowLeft']);
-const KEY_RIGHT = new Set(['KeyD', 'ArrowRight']);
-const KEY_JUMP = new Set(['Space']);
-const KEY_CROUCH = new Set(['ControlLeft', 'KeyC', 'ShiftLeft']);
+/*
+ Key names are meep's, from `input/devices/KeyCodes.js`, not DOM `event.code`.
+ `keyboard.keys.<name>.is_down` is a live switch, so movement polls it once a
+ frame instead of maintaining a held-key set -- which also means a key released
+ while the window was unfocused cannot get stuck down.
+*/
+const KEY_FORWARD = ['w', 'up_arrow'];
+const KEY_BACK = ['s', 'down_arrow'];
+const KEY_LEFT = ['a', 'left_arrow'];
+const KEY_RIGHT = ['d', 'right_arrow'];
+const KEY_JUMP = ['space'];
+const KEY_CROUCH = ['ctrl', 'c', 'shift'];
 
 /**
  * Weapon select, matching Q3's number-row bindings.
@@ -86,16 +98,57 @@ const WEAPON_ORDER: readonly WeaponId[] = [
 ];
 
 const KEY_WEAPON: ReadonlyMap<string, WeaponId> = new Map([
-    ['Digit1', 'WP_GAUNTLET'],
-    ['Digit2', 'WP_MACHINEGUN'],
-    ['Digit3', 'WP_SHOTGUN'],
-    ['Digit4', 'WP_GRENADE_LAUNCHER'],
-    ['Digit5', 'WP_ROCKET_LAUNCHER'],
-    ['Digit6', 'WP_LIGHTNING'],
-    ['Digit7', 'WP_RAILGUN'],
-    ['Digit8', 'WP_PLASMAGUN'],
-    ['Digit9', 'WP_BFG'],
+    ['1', 'WP_GAUNTLET'],
+    ['2', 'WP_MACHINEGUN'],
+    ['3', 'WP_SHOTGUN'],
+    ['4', 'WP_GRENADE_LAUNCHER'],
+    ['5', 'WP_ROCKET_LAUNCHER'],
+    ['6', 'WP_LIGHTNING'],
+    ['7', 'WP_RAILGUN'],
+    ['8', 'WP_PLASMAGUN'],
+    ['9', 'WP_BFG'],
 ] as const);
+
+/* ------------------------------------------------------------------ *
+ * The shape of meep's input devices, structurally.
+ *
+ * Written out rather than imported so the controller stays testable without an
+ * engine, and so the generated `.d.ts`'s `readonly keys: any` does not leak an
+ * `any` into every key read (GAP-001).
+ * ------------------------------------------------------------------ */
+
+export interface InputSwitch {
+    readonly is_down: boolean;
+}
+
+export interface InputSignal<H> {
+    add(handler: H): void;
+    remove(handler: H): void;
+}
+
+/** `(position, event, delta)`; the third is the pointer-lock movement. */
+export type PointerMoveHandler = (
+    position: unknown,
+    event: unknown,
+    delta: { readonly x: number; readonly y: number }
+) => void;
+
+export interface InputDevices {
+    readonly keyboard: {
+        readonly keys: Readonly<Record<string, InputSwitch | undefined>>;
+        readonly on: {
+            readonly down: InputSignal<(event: KeyboardEvent) => void>;
+        };
+    };
+    readonly pointer: {
+        readonly mouseButtonLeft: InputSwitch;
+        readonly on: {
+            readonly move: InputSignal<PointerMoveHandler>;
+            readonly down: InputSignal<(position: unknown, event: unknown) => void>;
+            readonly wheel: InputSignal<(delta: unknown, event: WheelEvent) => void>;
+        };
+    };
+}
 
 /**
  * Q3 sends view angles as 16-bit fixed point. Keeping the browser's mouse deltas
@@ -108,7 +161,7 @@ export class PlayerController {
     readonly ps: PlayerState;
     private readonly pmove: Pmove;
     private readonly element: HTMLElement;
-    private readonly held = new Set<string>();
+    private readonly devices: InputDevices;
 
     /** 16-bit view angles, as `usercmd_t.angles` carries them. */
     private yaw = 0;
@@ -141,7 +194,14 @@ export class PlayerController {
      */
     movers: MoverSource | null = null;
 
-    /** True on the frames the attack button is held. */
+    /**
+     * True on the frames the attack button is held.
+     *
+     * Polled from `pointer.mouseButtonLeft` each frame rather than tracked
+     * across down/up edges. An edge-tracked flag survives a lost pointer lock,
+     * an alt-tab, or a button released over a different element, and the
+     * symptom is a weapon that keeps firing after you let go.
+     */
     attacking = false;
 
     /** Raised when the weapon should fire; the arena wires this to `WeaponSystem`. */
@@ -162,13 +222,20 @@ export class PlayerController {
      *   `cm_trace`, which is bit-exact against the C and is what the physics
      *   backend is tuned against.
      */
+    /**
+     * @param element the element that owns pointer lock. Must be the one meep's
+     *   devices listen on -- `engine.viewStack.el` -- or the lock and the input
+     *   end up on different elements and neither works.
+     */
     constructor(
         cm: ClipMap,
         element: HTMLElement,
+        devices: InputDevices,
         spawnQ3: readonly number[],
         physics: PhysicsTraceBackend | null = null
     ) {
         this.element = element;
+        this.devices = devices;
 
         /*
          Movement is built by `createPmoveHost`, which bots use too. The shared
@@ -191,13 +258,13 @@ export class PlayerController {
         if (this.attached) return;
         this.attached = true;
 
-        window.addEventListener('keydown', this.onKeyDown);
-        window.addEventListener('keyup', this.onKeyUp);
-        window.addEventListener('blur', this.onBlur);
-        this.element.addEventListener('mousedown', this.onMouseDown);
-        this.element.addEventListener('wheel', this.onWheel, { passive: false });
-        document.addEventListener('mouseup', this.onMouseUp);
-        document.addEventListener('mousemove', this.onMouseMove);
+        this.devices.keyboard.on.down.add(this.onKeyDown);
+        this.devices.pointer.on.move.add(this.onPointerMove);
+        this.devices.pointer.on.down.add(this.onPointerDown);
+        this.devices.pointer.on.wheel.add(this.onWheel);
+
+        // Pointer lock is a DOM capability, not an input one, so this stays a
+        // document listener. It is the only one left.
         document.addEventListener('pointerlockchange', this.onPointerLockChange);
     }
 
@@ -205,22 +272,24 @@ export class PlayerController {
         if (!this.attached) return;
         this.attached = false;
 
-        window.removeEventListener('keydown', this.onKeyDown);
-        window.removeEventListener('keyup', this.onKeyUp);
-        window.removeEventListener('blur', this.onBlur);
-        this.element.removeEventListener('mousedown', this.onMouseDown);
-        this.element.removeEventListener('wheel', this.onWheel);
-        document.removeEventListener('mouseup', this.onMouseUp);
-        document.removeEventListener('mousemove', this.onMouseMove);
+        this.devices.keyboard.on.down.remove(this.onKeyDown);
+        this.devices.pointer.on.move.remove(this.onPointerMove);
+        this.devices.pointer.on.down.remove(this.onPointerDown);
+        this.devices.pointer.on.wheel.remove(this.onWheel);
+
         document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     }
 
+    /**
+     * Weapon select only. Movement is polled from the switches instead, because
+     * a held key is a state and an edge is a bad way to track one.
+     */
     private readonly onKeyDown = (e: KeyboardEvent): void => {
-        this.held.add(e.code);
         if (e.code === 'Space') e.preventDefault();
 
-        const w = KEY_WEAPON.get(e.code);
-        if (w !== undefined) this.selectWeapon(w);
+        const digit = e.code.startsWith('Digit') ? e.code.slice(5) : e.key;
+        const weapon = KEY_WEAPON.get(digit);
+        if (weapon !== undefined) this.selectWeapon(weapon);
     };
 
     /**
@@ -250,48 +319,38 @@ export class PlayerController {
         }
     }
 
-    private readonly onWheel = (e: WheelEvent): void => {
+    private readonly onWheel = (_delta: unknown, e: WheelEvent): void => {
         if (!this.active) return;
         e.preventDefault();
         this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
     };
 
-    private readonly onKeyUp = (e: KeyboardEvent): void => {
-        this.held.delete(e.code);
-    };
-
-    private readonly onBlur = (): void => {
-        this.held.clear();
-    };
-
-    private readonly onMouseDown = (e: MouseEvent): void => {
+    /** First click takes the pointer lock; every click after it fires. */
+    private readonly onPointerDown = (): void => {
         if (document.pointerLockElement !== this.element) {
             void this.element.requestPointerLock();
-            return;
         }
-
-        if (e.button === 0) this.attacking = true;
-    };
-
-    private readonly onMouseUp = (e: MouseEvent): void => {
-        if (e.button === 0) this.attacking = false;
     };
 
     private readonly onPointerLockChange = (): void => {
         this.active = document.pointerLockElement === this.element;
-        if (!this.active) {
-            this.held.clear();
-            this.attacking = false;
-        }
+        if (!this.active) this.attacking = false;
     };
 
-    private readonly onMouseMove = (e: MouseEvent): void => {
+    /**
+     * @param delta pointer-lock movement, handed over by the device.
+     *
+     * meep reads `movementX`/`movementY` off the event and passes them as the
+     * third argument, so this never touches the raw event -- which is also what
+     * makes the device swappable for a gamepad or a replay.
+     */
+    private readonly onPointerMove: PointerMoveHandler = (_position, _event, delta): void => {
         if (!this.active) return;
 
         // `| 0` after each accumulation so yaw wraps in 32 bits and is then
         // truncated to 16 by `usercmd_t.angles`, exactly as the engine does.
-        this.yaw = (this.yaw - e.movementX * ANGLE_PER_PIXEL) | 0;
-        this.pitch = (this.pitch + e.movementY * ANGLE_PER_PIXEL) | 0;
+        this.yaw = (this.yaw - delta.x * ANGLE_PER_PIXEL) | 0;
+        this.pitch = (this.pitch + delta.y * ANGLE_PER_PIXEL) | 0;
 
         // `PM_UpdateViewAngles` clamps to +/-16000 (87.9 degrees) itself, but
         // clamping the raw command too stops the accumulator drifting far past
@@ -300,8 +359,10 @@ export class PlayerController {
         if (this.pitch < -16000) this.pitch = -16000;
     };
 
-    private has(codes: ReadonlySet<string>): boolean {
-        for (const c of codes) if (this.held.has(c)) return true;
+    /** True when any of the named meep keys is down. */
+    private has(names: readonly string[]): boolean {
+        const keys = this.devices.keyboard.keys;
+        for (const name of names) if (keys[name]?.is_down === true) return true;
         return false;
     }
 
@@ -322,6 +383,8 @@ export class PlayerController {
         cmd.angles[2] = 0;
         cmd.buttons = 0;
         cmd.weapon = 1;
+
+        this.attacking = this.active && this.devices.pointer.mouseButtonLeft.is_down;
 
         if (this.active) {
             cmd.moves[FORWARDMOVE] =

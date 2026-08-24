@@ -1069,3 +1069,40 @@ Two process notes, since the failure was mine both times:
   hours of trying is not the same as a gap, and the first version of GAP-016 asserted the former
   from the latter. The entry now leads with the correction, because a report whose errors are
   visible is worth more than one that is merely confident.
+
+---
+
+### D-059: Input runs on meep's devices, and the previous arrangement was a bug I had documented as a decision
+
+The port originally read input from raw DOM listeners on `graphics.domElement`, and a comment in
+`PlayerController` called that deliberate. It was not. It never worked at all: the canvas and the
+whole view stack above it are `pointer-events: none`, so no mouse event reaches them, and the
+element meep's own devices listen on -- `viewStack.el` -- is never focused, so no key event
+reaches that either. The game rendered, simulated, updated its HUD, and ignored every input
+(GAP-017).
+
+It survived because every claim I made about movement was verified through headless harnesses
+against the C oracle, and the browser build was only ever checked for *load* errors. The lesson is
+the same one D-036 records about the physics colliders: a measurement taken through a test harness
+says nothing about the path that ships.
+
+Input is now `engine.devices.keyboard` and `engine.devices.pointer`, which is both the fix and the
+better arrangement:
+
+- **Held keys are switches, not bookkeeping.** `keyboard.keys.w.is_down` is polled once a frame,
+  so there is no held-key set to get out of step and no key that can stick down because its keyup
+  landed while the window was unfocused. The old code needed a `blur` handler for exactly that.
+- **The pointer-lock delta arrives already extracted.** `pointer.on.move` sends
+  `(position, event, delta)` and the third argument is `movementX`/`movementY`, so the look code
+  never touches the raw event -- which is also what makes the device swappable for a gamepad or a
+  recorded input stream.
+- **The attack button is polled too**, for the same reason as the movement keys: an edge-tracked
+  flag survives a lost pointer lock and the symptom is a weapon that keeps firing after you let go.
+
+The only DOM listener left is `pointerlockchange`, because pointer lock is a browser capability
+rather than an input one.
+
+Two app-level corrections are required first, and they are CSS on an element the engine hands over
+rather than changes to the engine: `pointer-events: auto` on the view stack, so it is a hit-test
+target at all, and `focus()` on it, so keyboard events land there. Both are in `main.ts` with the
+reasoning next to them.
