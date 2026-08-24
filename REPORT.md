@@ -636,11 +636,19 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   texture plus a UV set you already have. `StandardShadeMaterial` has albedo, normal, ORM and
   emissive slots — no lightmap slot.
 - **Workaround:** none for the lightmaps themselves; they are dropped. Static lighting is
-  instead *reconstructed* as real dynamic lights (see GAP-007 for why that was even possible),
+  instead *reconstructed* as real dynamic lights (see DECISIONS.md D-012),
   which is arguably the better demo but is a different picture from Q3's. `uv1` is still
   carried through the pipeline into the geometry so the data is not lost when a slot exists.
   Roughly 40 minutes, most of it spent establishing that the lightmap subsystem was a baker
   rather than an importer — the directory listing strongly suggests otherwise.
+
+  **What it costs, visually, measured on the running demo:** large flat surfaces read as
+  uniform. 29 of `oa_dm1`'s 30 materials have their albedo texture loaded and the walls show
+  full brick detail, but the floors look untextured. That is not a texturing bug — it is the
+  absence of the baked ambient occlusion and light falloff that gave Q3's floors their
+  variation. Reconstructed point lights cannot substitute, because what is missing is not
+  brightness but *spatial variation* in brightness. This is the single most visible quality gap
+  in the demo and it traces directly to this entry.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.
