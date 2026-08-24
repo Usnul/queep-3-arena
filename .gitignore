@@ -6,3 +6,6 @@ oracle/build/
 *.log
 .vite/
 coverage/
+
+# JetBrains
+.idea/
