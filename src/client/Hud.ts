@@ -62,6 +62,8 @@ export interface HudState {
     readonly weapon: string;
     readonly damage: number;
     readonly kills: number;
+    /** Which collision backend movement is running on. */
+    readonly backend: string;
 }
 
 /** Peak speed decays this fast once the player slows, in units per second. */
@@ -122,7 +124,8 @@ export class Hud {
             const weapon = state.weapon.replace(/^WP_/, '').toLowerCase().replace(/_/g, ' ');
             this.stateModel.set(
                 `${state.map}  ·  ${weapon}  ·  ${state.kills} kills  ·  ` +
-                `${state.damage} damage  ·  ${state.onGround ? 'ground' : 'air'}`
+                `${state.damage} damage  ·  ${state.onGround ? 'ground' : 'air'}  ·  ` +
+                `${state.backend}`
             );
         }
     }

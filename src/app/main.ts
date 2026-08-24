@@ -28,6 +28,7 @@ import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
 import { Hud } from '../client/Hud.ts';
 import { Arena } from '../client/Arena.ts';
+import { PhysicsWorld } from '../client/PhysicsWorld.ts';
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
@@ -37,6 +38,19 @@ function requestedMap(): string {
 /** `?fly=1` swaps the player for a noclip camera, for inspecting conversions. */
 function flyMode(): boolean {
     return new URLSearchParams(window.location.search).get('fly') === '1';
+}
+
+/**
+ * `?trace=clipmap` runs movement on the ported `cm_trace` instead of meep's
+ * physics.
+ *
+ * Both backends ship. Physics is the default (D-029); the clipmap is bit-exact
+ * against the C and is what the physics backend is measured against, so having
+ * it a query parameter away makes an A/B comparison in the running game a
+ * refresh rather than a rebuild.
+ */
+function useClipmapTrace(): boolean {
+    return new URLSearchParams(window.location.search).get('trace') === 'clipmap';
 }
 
 async function main(): Promise<void> {
@@ -108,15 +122,33 @@ async function main(): Promise<void> {
         fly.attach();
         engine.ticker.onTick.add((dt: number) => {
             fly.update(dt);
-            hud.update({ mode: 'fly', speed: 0, onGround: false, map: mapName, weapon: '', damage: 0, kills: 0 });
+            hud.update({
+                mode: 'fly', speed: 0, onGround: false, map: mapName,
+                weapon: '', damage: 0, kills: 0, backend: 'noclip',
+            });
         });
 
         expose(engine, { loaded, clipMap, fly });
     } else {
+        const clipmapOnly = useClipmapTrace();
+
+        const physicsWorld = clipmapOnly ? null : new PhysicsWorld(ecd, clipMap);
+
+        if (physicsWorld !== null) {
+            await em.addSystem(physicsWorld.system);
+            console.log(
+                `[queep] physics: ${physicsWorld.stats.brushes} brushes -> ` +
+                `${physicsWorld.stats.bodies} static bodies ` +
+                `(${physicsWorld.stats.hullMilliseconds.toFixed(0)} ms hulls, ` +
+                `${physicsWorld.stats.bodyMilliseconds.toFixed(0)} ms bodies)`
+            );
+        }
+
         const player = new PlayerController(
             clipMap,
             canvas,
-            spawn?._originQ3 ?? [0, 0, 0]
+            spawn?._originQ3 ?? [0, 0, 0],
+            physicsWorld
         );
         player.attach();
 
@@ -149,10 +181,11 @@ async function main(): Promise<void> {
                 weapon: player.weapon,
                 damage: arena.totalDamage,
                 kills: arena.kills,
+                backend: clipmapOnly ? 'clipmap' : 'physics',
             });
         });
 
-        expose(engine, { loaded, clipMap, player, arena });
+        expose(engine, { loaded, clipMap, player, arena, physicsWorld });
     }
 
     console.log(

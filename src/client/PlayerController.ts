@@ -40,6 +40,25 @@ import {
 } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
 import { weaponStats } from '../game/Weapons.ts';
+import type { TraceResult } from '../q3/cm/trace.ts';
+
+/**
+ * What `PlayerController` needs from a physics-backed trace.
+ *
+ * A structural type rather than an import of `PhysicsWorld`, so the simulation
+ * side does not acquire a dependency on the presentation side just to be able
+ * to swap collision backends.
+ */
+export interface PhysicsTraceBackend {
+    trace(
+        out: TraceResult,
+        startQ3: ArrayLike<number>,
+        endQ3: ArrayLike<number>,
+        minsQ3: ArrayLike<number>,
+        maxsQ3: ArrayLike<number>,
+        contentMask: number
+    ): void;
+}
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -104,7 +123,18 @@ export class PlayerController {
     /** Milliseconds until the current weapon can fire again. */
     private cooldownMs = 0;
 
-    constructor(cm: ClipMap, element: HTMLElement, spawnQ3: readonly number[]) {
+    /**
+     * @param traceBackend `'physics'` runs `pm->trace` on meep's physics
+     *   (D-029, the shipping configuration); `'clipmap'` runs the ported
+     *   `cm_trace`, which is bit-exact against the C and is what the physics
+     *   backend is tuned against.
+     */
+    constructor(
+        cm: ClipMap,
+        element: HTMLElement,
+        spawnQ3: readonly number[],
+        physics: PhysicsTraceBackend | null = null
+    ) {
         this.element = element;
 
         const ps = createPlayerState();
@@ -141,8 +171,12 @@ export class PlayerController {
             pmove_float: 0,
             pmove_flags: 0,
             trace(results, start, mins, maxs, end, _passEnt, contentMask) {
+                if (physics !== null) {
+                    physics.trace(results, start, end, mins, maxs, contentMask);
+                    return;
+                }
+
                 boxTrace(results, cm, start, end, mins, maxs, contentMask);
-                // Only the world exists so far; brush entities arrive in phase 3.
                 results.entityNum =
                     results.fraction !== 1.0 ? C.ENTITYNUM_WORLD : C.ENTITYNUM_NONE;
             },

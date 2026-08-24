@@ -438,3 +438,107 @@ Q3 does the same thing the right way round — `G_Damage` calls `player_die` fro
 rather than after returning. Recorded because the failure mode is instructive: every *number*
 was correct and the bug was purely in ordering, which is exactly the kind of thing a damage
 test that only asserts on health totals will not catch.
+
+---
+
+## Direction change - meep's physics for movement
+
+### D-029: Movement runs on meep's physics; the ported `cm_*` becomes the reference
+
+Overriding D-007 on the maintainer's instruction: *"I appreciate that collision code in Q3 is
+entirely different from the standard modern physics engine, but I believe that meep's physics is
+the right way to go here, tuning movement and controls to match as closely as possible."*
+
+**What changed, and what deliberately did not.** `pm->trace` is a callback in Q3 and is a
+callback here, so the swap happens at that one seam. `bg_pmove` itself is untouched - the
+acceleration, the plane clipping, the step logic, the velocity snap, all of which is where
+strafe jumping actually lives. Only the question *"what does this box hit"* is answered
+differently.
+
+**The collision volumes are still Q3's.** Every solid brush becomes one static `RigidBody` with
+a `ConvexHullShape3D`. A Q3 brush is the intersection of its half-spaces, which is exactly a
+convex polyhedron, so `brushHull.ts` converts the plane set into vertices and faces losslessly
+using `cm_polylib.c`'s own winding algorithm. Building collision from the *render* geometry
+instead would have been wrong in both directions - Q3 maps carry `playerclip` brushes that block
+and do not draw, and detail brushes that draw and do not block.
+
+**The oracle became the tuning instrument rather than a pass/fail gate.** "As closely as
+possible" is not actionable without a number. `tools/measure-divergence.ts` runs identical input
+through three configurations - the C oracle, the port on the ported clipmap, and the port on
+meep physics - and reports how far the third drifts from the first. Because the second is
+bit-exact, any divergence in the third is attributable to the collision backend and nothing
+else. The clipmap backend still ships behind `?trace=clipmap` so an A/B is a refresh rather than
+a rebuild.
+
+Measured on `oa_dm1` and `aggressor`, in Q3 units (one unit is roughly 3 cm):
+
+| metric | result |
+|---|---|
+| contact normals agreeing with Q3 | 98.2-99.6% of valid-plane hits |
+| sweep fraction error | median 0, p90 ~1.5e-3 |
+| hit/miss agreement | 88-90% |
+| position error, median | 0.00-0.22 units |
+| position error, bunny-hop p90 | 0.12 units |
+
+### D-030: Three things had to be restored on top of meep's physics
+
+Each was found by measurement, not by reading, and each is a case where meep's answer is
+reasonable and Q3's is different.
+
+1. **The surface epsilon.** `CM_TraceThroughBrush` computes
+   `f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2)`, so every Q3 trace stops 1/8 unit short and a
+   resting player floats in a small gap. `shape_cast` stops exactly at contact, which sounds
+   better and is catastrophic: the player lands flush, that resting contact then blocks every
+   subsequent sweep at `t = 0`, and they freeze one frame after touching down. Measured:
+   bit-exact for nine frames of falling, then permanent divergence at the instant of landing.
+
+2. **`startsolid` is not "touching".** `shape_cast` reports `t = 0` both for a box resting *on*
+   a floor and for one buried *in* it. Q3 distinguishes them - `startsolid` means behind every
+   plane of a brush - and the difference matters because `startsolid` routes pmove into
+   `PM_CorrectAllSolid`, which jitters the player a unit in each direction hunting for space.
+   `overlap_shape` answers exactly the right question, so it is asked rather than guessed at.
+
+3. **Contact plane selection at corners.** The dominant remaining error, and the most
+   interesting one. EPA returns the minimum-penetration axis; `CM_TraceThroughBrush` returns the
+   **latest entering plane**. On a flat wall they agree. In a corner they do not: measured,
+   meep returned `[0, 1, 0]` where Q3 returned `[-1, 0, 0]`, `PM_SlideMove` clipped velocity
+   against the wrong plane, accumulated a contradictory one on the retry, hit its five-plane
+   limit and zeroed the player's velocity - the player stopped dead, wedged, a metre from the
+   corner. The plane is now re-derived by Q3's rule against the hit brush's own planes, and
+   across every brush the box is touching, because `CM_TraceThroughLeaf` compares entry
+   fractions across all brushes in a leaf and a corner is usually two brushes rather than two
+   faces. This one change took bunny-hop's p90 error from 56 units to 0.12.
+
+### D-031: What is still different, and what it costs
+
+Honest about the remainder rather than quiet about it.
+
+- **Flush contacts.** Q3 maintains an invariant that a player is never closer than
+  `SURFACE_CLIP_EPSILON` to a surface. The physics backend can reach a genuinely flush position
+  (zero gap), which Q3 would call `startsolid` and which has no valid contact plane. It is
+  recoverable - the player slides out - but it is a state Q3 never enters. This is the cause of
+  the remaining `walk-into-walls` divergence, whose median is 0.09 units but whose tail is long.
+- **1,381 of 20,000 sampled sweeps** report a blocking contact where the clipmap reports none,
+  almost all of them at `t = 0` resting contacts. An attempt to make these permissive - letting
+  the move complete, which is what `CM_TraceThroughBrush` does when a sweep starts inside a brush
+  and exits it - was **eight times worse**: hit/miss agreement fell from 88% to 10% and the
+  player began tunnelling through walls. The reason is that Q3's early return is *per brush* and
+  the leaf's other brushes are still tested; a whole-trace `fraction = 1` skips all of them.
+  Reverted, and recorded because it read as obviously correct.
+- **Long-horizon divergence is expected and is not the number to tune on.** Two runs that
+  separate then explore different parts of a level produce arbitrarily large position errors.
+  The median and the early-frame behaviour are the meaningful figures; the max is chaos.
+
+### D-032: `cm_trace` stays, and stays bit-exact
+
+The ported clipmap is not dead code. It is:
+
+- the **reference** the physics backend is measured against, and the reason any divergence can
+  be attributed to the backend rather than to the port;
+- the source of **`CONTENTS_*` queries** - water, lava, slime, teleporters. Those are Q3
+  semantics, not collision, and a physics engine has no opinion on whether a volume is slime;
+- the **contact plane oracle** - `PhysicsWorld` re-derives normals using the same rule, against
+  the same brush planes;
+- a **shipping A/B**, behind `?trace=clipmap`.
+
+Its differential suites still demand bit-exactness and still pass.
