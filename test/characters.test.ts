@@ -39,6 +39,7 @@ interface Gltf {
         children?: number[];
         translation?: number[];
         rotation?: number[];
+        scale?: number[];
         mesh?: number;
         skin?: number;
     }[];
@@ -206,8 +207,81 @@ describe.each(ALL)('the emitted glTF [%s]', (name) => {
     it.skipIf(loaded === null)('is structurally valid where the spec is normative', () => {
         const { gltf, bin } = loaded!;
 
-        expect(gltf.skins.length).toBe(2);
-        expect(gltf.animations.length).toBeGreaterThan(20);
+        expect(gltf.skins.length).toBeGreaterThanOrEqual(1);
+
+        /*
+         Every character has the legs and shared clips; only the ones with torso
+         geometry have the seven `TORSO_*` ones. `neko`'s `upper.md3` is 278
+         frames and no surfaces, so it legitimately ships 18 rather than 25.
+        */
+        const torsoClips = gltf.animations.filter((a) => a.name.startsWith('TORSO_')).length;
+        expect(gltf.animations.length).toBe(gltf.skins.length === 2 ? 25 : 18);
+        expect(torsoClips).toBe(gltf.skins.length === 2 ? 7 : 0);
+
+        // Every clip drives something.
+        for (const animation of gltf.animations) {
+            expect(animation.channels.length, `${animation.name} has no channels`).toBeGreaterThan(0);
+        }
+
+        /*
+         And every joint owns at least one vertex. An empty cluster becomes a
+         joint at the world origin that deforms nothing and adds two no-op
+         channels to every clip -- 28% of `sarge`'s torso joints, before the
+         compaction pass.
+        */
+        for (const [index, skin] of gltf.skins.entries()) {
+            const owned = new Set<number>();
+
+            for (const mesh of gltf.meshes) {
+                const node = gltf.nodes.find((n) => n.mesh === gltf.meshes.indexOf(mesh));
+                if (node?.skin !== index) continue;
+
+                for (const primitive of mesh.primitives) {
+                    const attribute = primitive.attributes['JOINTS_0'];
+                    if (attribute === undefined) continue;
+                    for (const joint of readAccessor(gltf, bin, attribute) as Uint16Array) {
+                        owned.add(joint);
+                    }
+                }
+            }
+
+            expect(owned.size, `${skin.name} has joints that own nothing`).toBe(skin.joints.length);
+        }
+
+        /*
+         Every number in the file has to be a number. This looks like the kind
+         of assertion that never fires, and it caught two characters: OA ships
+         MD3 surfaces with zero vertices (`tony`'s `l_belt` and `u_vest`) and
+         one model with no surfaces at all (`neko/upper.md3`, 278 frames, no
+         geometry). Rigging a skeleton over nothing produces `NaN` centroids,
+         `JSON.stringify` writes those as `null`, and the loader rejects the
+         file with "expected x to be a number" -- naming neither the file nor
+         the field. The earlier version of this test passed on both, because it
+         only checked that min/max were *present*.
+        */
+        for (const [index, accessor] of gltf.accessors.entries()) {
+            expect(accessor.count, `accessor ${index} is empty`).toBeGreaterThan(0);
+
+            for (const bound of [accessor.min, accessor.max]) {
+                if (bound === undefined) continue;
+                for (const value of bound) {
+                    expect(Number.isFinite(value), `accessor ${index} bound ${value}`).toBe(true);
+                }
+            }
+        }
+
+        for (const [index, node] of gltf.nodes.entries()) {
+            for (const key of ['translation', 'rotation', 'scale'] as const) {
+                const value = node[key];
+                if (value === undefined) continue;
+                for (const component of value) {
+                    expect(
+                        Number.isFinite(component),
+                        `node ${index} (${node.name}) ${key} = ${JSON.stringify(value)}`
+                    ).toBe(true);
+                }
+            }
+        }
 
         for (const mesh of gltf.meshes) {
             for (const primitive of mesh.primitives) {

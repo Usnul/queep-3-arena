@@ -259,6 +259,21 @@ export function parseMd3(buffer: ArrayBuffer, name: string): Md3Model {
 }
 
 /**
+ * The surfaces of a model that actually have geometry.
+ *
+ * OA ships MD3s with empty surfaces and, in one case, with none at all:
+ * `tony`'s `l_belt` and `u_vest` are 0 vertices and 0 triangles, and
+ * `neko/upper.md3` has 278 frames and no surfaces whatsoever. Q3's renderer
+ * skips them without comment; a converter that does not emits zero-count glTF
+ * accessors and rigs a skeleton over no vertices, which produces `NaN`
+ * centroids that `JSON.stringify` writes as `null` and a loader rejects with
+ * "expected x to be a number".
+ */
+export function drawableSurfaces(md3: Md3Model): Md3Surface[] {
+    return md3.surfaces.filter((s) => s.numVerts > 0 && s.indices.length > 0);
+}
+
+/**
  * Parse a `.skin` file: `surfaceName,texturePath` per line.
  *
  * Q3 also allows `tag_*,` lines with an empty right-hand side, and OA files

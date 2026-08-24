@@ -34,7 +34,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ShaderIndex } from './pipeline/shader-index.ts';
-import { parseMd3, normaliseShaderName, type Md3Model } from './pipeline/md3.ts';
+import {
+    parseMd3,
+    normaliseShaderName,
+    drawableSurfaces,
+    type Md3Model,
+    type Md3Surface,
+} from './pipeline/md3.ts';
 import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
 import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import type {
@@ -125,12 +131,9 @@ function toBundleMaterial(name: string, pbr: PbrMaterial, albedo: string | null)
 
 function appendSurface(
     accum: Accum,
-    md3: Md3Model,
-    surfaceIndex: number,
+    surface: Md3Surface,
     materialIndex: number
 ): BundleMesh {
-    const surface = md3.surfaces[surfaceIndex]!;
-
     const positions = surface.positions[0]!;
     const normals = surface.normals[0]!;
 
@@ -206,9 +209,10 @@ async function convertModels(): Promise<void> {
         }
 
         const meshes: BundleMesh[] = [];
+        const surfaces = drawableSurfaces(md3);
 
-        for (let s = 0; s < md3.surfaces.length; s++) {
-            const surface = md3.surfaces[s]!;
+        for (let s = 0; s < surfaces.length; s++) {
+            const surface = surfaces[s]!;
             const shaderName = normaliseShaderName(surface.shaders[0] ?? surface.name);
 
             let materialIndex = materialByShader.get(shaderName);
@@ -227,7 +231,7 @@ async function convertModels(): Promise<void> {
                 materialByShader.set(shaderName, materialIndex);
             }
 
-            meshes.push(appendSurface(accum, md3, s, materialIndex));
+            meshes.push(appendSurface(accum, surface, materialIndex));
         }
 
         const frame = md3.frames[0];

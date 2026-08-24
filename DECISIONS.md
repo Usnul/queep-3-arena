@@ -982,3 +982,46 @@ is in turn why a Q3 player runs a route instead of camping.
 - **Bots do not fight each other well.** They see the player specifically, not each other:
   `perceive` traces to one enemy. They *hit* each other with splash and stray fire, and the damage
   counts, but there is no bot-versus-bot target selection.
+
+---
+
+## Corrections found by running the whole thing
+
+### D-056: OA ships MD3 surfaces with no geometry, and two of them broke two characters
+
+`tony`'s `l_belt` and `u_vest` are 0 vertices and 0 triangles. `neko/upper.md3` is 278 frames and
+**no surfaces at all** -- a placeholder whose only job is to carry `tag_head`. Q3's renderer skips
+both without comment.
+
+The converter did not, and the failure travelled a long way from its cause: zero-vertex surfaces
+became zero-count glTF accessors, and rigging a skeleton over no vertices produced `NaN`
+centroids that `JSON.stringify` writes as `null`. The loader then rejected the file with
+`expected x to be a number, instead was 'object'(=null)`, naming neither the file nor the field.
+
+Two characters of fifteen, found by loading all fifteen in the browser rather than by any test.
+`drawableSurfaces` now filters them at the reader, `decomposeSkin` refuses to decompose nothing,
+and the structural test asserts that every accessor has a non-zero count and every number in the
+file is finite -- which is the assertion that would have caught it, and which the earlier version
+did not make because it only checked that `min`/`max` were *present*.
+
+### D-057: 28% of every character's joints owned no vertices
+
+Chasing the above turned up a second, quieter one. k-means with farthest-point seeding does
+produce empty clusters -- a seed lands on an outlier, the refinement pass moves its only vertices
+elsewhere, and nothing comes back. An empty cluster became a joint at the world origin: it owned
+no vertices, deformed nothing, and contributed two no-op animation channels to every clip.
+
+Measured on `sarge`'s torso: **nine of thirty-two joints**. Across the roster, compacting them
+away took joint counts from a uniform 64 to 30-64 and file sizes down about 20% -- `sarge` from
+387 KB to 312 KB, `major` from 379 to 268 -- with **reconstruction error unchanged to three
+decimal places**, which is the proof that they were contributing nothing.
+
+It was not a correctness bug on its own; meep's loader prunes no-op channels on the way in, and
+the pose is identical either way. It became one for `neko`, whose torso has no geometry at all: its
+`TORSO_*` clips carried nothing but two channels placing a head at its own rest pose, those pruned
+to zero, and a zero-channel clip trips an assertion inside `MeshSystem3` that names no model.
+
+Three fixes, each of which would have been enough alone and all of which are right: empty clusters
+are compacted away, tag nodes are authored with their frame-0 rest pose rather than identity (so
+their channels are not no-ops, and the unposed model is correct in any viewer), and a `TORSO_*`
+clip is not emitted for a character with no torso.

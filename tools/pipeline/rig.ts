@@ -414,6 +414,10 @@ export function decomposeSkin(
     vertexCount: number,
     options: RigOptions
 ): RigResult {
+    if (vertexCount === 0 || frames.length === 0) {
+        throw new Error('decomposeSkin: nothing to decompose (0 vertices or 0 frames)');
+    }
+
     const jointCount = Math.max(1, Math.min(options.joints, vertexCount));
     const rest = frames[0]!;
 
@@ -483,13 +487,90 @@ export function decomposeSkin(
         if (changed === 0) break;
     }
 
+    /*
+     Drop clusters that ended up with no members.
+
+     k-means over trajectories does produce empty clusters -- farthest-point
+     seeding puts a seed on an outlier, the refinement pass moves its only
+     vertices elsewhere, and nothing comes back. An empty cluster becomes a joint
+     at the world origin with an identity rotation: it owns no vertices, deforms
+     nothing, and contributes two no-op animation channels to every single clip.
+
+     Measured on `sarge`'s torso: nine of thirty-two joints were empty, which is
+     28% of the skin's joints and 28% of every clip's channels. It is not a
+     correctness bug -- the pose is identical either way, and meep's loader
+     prunes the no-op channels on the way in -- but it is 28% of the file, and it
+     is how a character with *no* torso geometry ends up emitting clips that
+     prune to zero channels and trip an assertion three layers away.
+    */
+    return compact(frames, assignment, vertexCount, jointCount, fitted);
+}
+
+function compact(
+    frames: readonly Float32Array[],
+    assignment: Uint16Array,
+    vertexCount: number,
+    jointCount: number,
+    fitted: { centroids: Float32Array; rotations: Float32Array[]; translations: Float32Array[] }
+): RigResult {
+    const used = new Uint8Array(jointCount);
+    for (let v = 0; v < vertexCount; v++) used[assignment[v]!] = 1;
+
+    const remap = new Int32Array(jointCount).fill(-1);
+    let kept = 0;
+    for (let j = 0; j < jointCount; j++) if (used[j] === 1) remap[j] = kept++;
+
+    if (kept === jointCount) {
+        return {
+            centroids: fitted.centroids,
+            jointCount,
+            vertexJoint: assignment,
+            rotations: fitted.rotations,
+            translations: fitted.translations,
+            error: measure(frames, assignment, vertexCount, fitted),
+        };
+    }
+
+    const centroids = new Float32Array(kept * 3);
+    for (let j = 0; j < jointCount; j++) {
+        const to = remap[j]!;
+        if (to < 0) continue;
+        centroids[to * 3] = fitted.centroids[j * 3]!;
+        centroids[to * 3 + 1] = fitted.centroids[j * 3 + 1]!;
+        centroids[to * 3 + 2] = fitted.centroids[j * 3 + 2]!;
+    }
+
+    const rotations: Float32Array[] = [];
+    const translations: Float32Array[] = [];
+
+    for (let f = 0; f < frames.length; f++) {
+        const rotation = new Float32Array(kept * 4);
+        const translation = new Float32Array(kept * 3);
+
+        for (let j = 0; j < jointCount; j++) {
+            const to = remap[j]!;
+            if (to < 0) continue;
+
+            for (let k = 0; k < 4; k++) rotation[to * 4 + k] = fitted.rotations[f]![j * 4 + k]!;
+            for (let k = 0; k < 3; k++) translation[to * 3 + k] = fitted.translations[f]![j * 3 + k]!;
+        }
+
+        rotations.push(rotation);
+        translations.push(translation);
+    }
+
+    const vertexJoint = new Uint16Array(vertexCount);
+    for (let v = 0; v < vertexCount; v++) vertexJoint[v] = remap[assignment[v]!]!;
+
+    const compacted = { centroids, rotations, translations };
+
     return {
-        centroids: fitted.centroids,
-        jointCount,
-        vertexJoint: assignment,
-        rotations: fitted.rotations,
-        translations: fitted.translations,
-        error: measure(frames, assignment, vertexCount, fitted),
+        centroids,
+        jointCount: kept,
+        vertexJoint,
+        rotations,
+        translations,
+        error: measure(frames, vertexJoint, vertexCount, compacted),
     };
 }
 

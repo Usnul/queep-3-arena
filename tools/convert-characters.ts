@@ -39,7 +39,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ShaderIndex } from './pipeline/shader-index.ts';
-import { parseMd3, parseSkin, normaliseShaderName, type Md3Model } from './pipeline/md3.ts';
+import {
+    parseMd3,
+    parseSkin,
+    normaliseShaderName,
+    drawableSurfaces,
+    type Md3Model,
+} from './pipeline/md3.ts';
 import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
 import { decomposeSkin, type RigResult } from './pipeline/rig.ts';
 import {
@@ -182,10 +188,14 @@ function loadPart(dir: string, part: Part): LoadedPart | null {
     return { md3, skin };
 }
 
-/** Every surface of a part, concatenated, so the part gets one shared skeleton. */
+/** Every drawable surface of a part, concatenated, so it gets one shared skeleton. */
 function combinedFrames(md3: Md3Model): { frames: Float32Array[]; vertexCount: number } {
-    const vertexCount = md3.surfaces.reduce((n, s) => n + s.numVerts, 0);
-    const frameCount = Math.max(1, ...md3.surfaces.map((s) => s.numFrames));
+    const surfaces = drawableSurfaces(md3);
+
+    const vertexCount = surfaces.reduce((n, s) => n + s.numVerts, 0);
+    if (vertexCount === 0) return { frames: [], vertexCount: 0 };
+
+    const frameCount = Math.max(1, ...surfaces.map((s) => s.numFrames));
 
     const frames: Float32Array[] = [];
 
@@ -193,7 +203,7 @@ function combinedFrames(md3: Md3Model): { frames: Float32Array[]; vertexCount: n
         const combined = new Float32Array(vertexCount * 3);
         let at = 0;
 
-        for (const surface of md3.surfaces) {
+        for (const surface of surfaces) {
             const positions = surface.positions[Math.min(f, surface.numFrames - 1)]!;
             combined.set(positions, at);
             at += surface.numVerts * 3;
@@ -272,199 +282,7 @@ async function convertCharacter(
         return material;
     };
 
-    /* ---- nodes ---- */
-
-    const rootChildren: number[] = [];
-    const root = gltf.node({ name, children: rootChildren });
-
-    /**
-     * Build one animated part: its skeleton, its skin, and its meshes.
-     *
-     * `parent` is the node the joints hang off, which is the root for the legs
-     * and `tag_torso` for the torso. glTF joints may live anywhere in the
-     * hierarchy, and putting the torso's under the tag is what makes the tag
-     * compose with the torso's own rig instead of having to be baked into it.
-     */
-    const buildPart = async (
-        part: LoadedPart,
-        label: string,
-        parentChildren: number[]
-    ): Promise<PartRig> => {
-        const { frames, vertexCount } = combinedFrames(part.md3);
-        const rig = decomposeSkin(frames, vertexCount, {
-            joints: JOINTS_PER_PART,
-            refineIterations: REFINE_ITERATIONS,
-        });
-
-        // Joint nodes, at their rest centroids with identity rotation.
-        const jointNodes: number[] = [];
-        for (let j = 0; j < rig.jointCount; j++) {
-            const [x, y, z] = q3PointToGltf(
-                rig.centroids[j * 3]!,
-                rig.centroids[j * 3 + 1]!,
-                rig.centroids[j * 3 + 2]!
-            );
-            const node = gltf.node({
-                name: `${label}_joint_${j}`,
-                translation: [x, y, z],
-                rotation: [0, 0, 0, 1],
-            });
-            jointNodes.push(node);
-            parentChildren.push(node);
-        }
-
-        /*
-         Inverse bind matrix is a pure translation by minus the rest centroid.
-         The joint node sits *at* the centroid, so the pair cancels at rest and
-         the model in its bind pose is exactly MD3 frame 0 -- which is what a
-         viewer shows when nothing is playing, and a good way to see at a glance
-         that the rig is not inside out.
-        */
-        const ibm = new Float32Array(rig.jointCount * 16);
-        for (let j = 0; j < rig.jointCount; j++) {
-            const [x, y, z] = q3PointToGltf(
-                rig.centroids[j * 3]!,
-                rig.centroids[j * 3 + 1]!,
-                rig.centroids[j * 3 + 2]!
-            );
-            const o = j * 16;
-            ibm[o] = 1; ibm[o + 5] = 1; ibm[o + 10] = 1; ibm[o + 15] = 1;
-            ibm[o + 12] = -x; ibm[o + 13] = -y; ibm[o + 14] = -z;
-        }
-
-        const skinIndex = gltf.skin(
-            `${label}_skin`,
-            jointNodes,
-            gltf.matrices(ibm),
-            jointNodes[0] ?? root
-        );
-
-        /* ---- meshes, one primitive per MD3 surface ---- */
-
-        const primitives = [];
-        const surfaceOffsets: number[] = [];
-        let cursor = 0;
-
-        for (const surface of part.md3.surfaces) {
-            surfaceOffsets.push(cursor);
-
-            const n = surface.numVerts;
-            const positions = new Float32Array(n * 3);
-            const normals = new Float32Array(n * 3);
-            const uv = new Float32Array(n * 2);
-            const joints = new Uint16Array(n * 4);
-            const weights = new Float32Array(n * 4);
-
-            const restPositions = surface.positions[0]!;
-            const restNormals = surface.normals[0]!;
-
-            for (let i = 0; i < n; i++) {
-                const [x, y, z] = q3PointToGltf(
-                    restPositions[i * 3]!,
-                    restPositions[i * 3 + 1]!,
-                    restPositions[i * 3 + 2]!
-                );
-                positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
-
-                const [nx, ny, nz] = q3PointToGltf(
-                    restNormals[i * 3]!,
-                    restNormals[i * 3 + 1]!,
-                    restNormals[i * 3 + 2]!
-                );
-                normals[i * 3] = nx; normals[i * 3 + 1] = ny; normals[i * 3 + 2] = nz;
-
-                uv[i * 2] = surface.st[i * 2]!;
-                // MD3's V increases downward, glTF's does not.
-                uv[i * 2 + 1] = 1 - surface.st[i * 2 + 1]!;
-
-                joints[i * 4] = rig.vertexJoint[cursor + i]!;
-                weights[i * 4] = 1;
-            }
-
-            primitives.push({
-                attributes: {
-                    POSITION: gltf.positions(positions),
-                    NORMAL: gltf.vec3(normals),
-                    TEXCOORD_0: gltf.vec2(uv),
-                    JOINTS_0: gltf.joints(joints),
-                    WEIGHTS_0: gltf.vec4(weights),
-                },
-                indices: gltf.indices(Uint32Array.from(surface.indices)),
-                material: await materialFor(part, surface.name, surface.shaders[0] ?? surface.name),
-            });
-
-            cursor += n;
-        }
-
-        const meshIndex = gltf.mesh(`${label}_mesh`, primitives);
-
-        /*
-         The skinned mesh node sits at the root with an identity transform. The
-         spec says a skinned mesh node's own transform must be ignored, and
-         implementations disagree about how thoroughly; putting it at the root
-         means there is nothing to disagree about.
-        */
-        rootChildren.push(gltf.node({ name: `${label}_mesh_node`, mesh: meshIndex, skin: skinIndex }));
-
-        return { rig, jointNodes, skinIndex, surfaceOffsets };
-    };
-
-    const legs = await buildPart(lower, 'legs', rootChildren);
-
-    // `tag_torso` on `lower.md3` places the torso, and moves with the legs.
-    const torsoChildren: number[] = [];
-    const tagTorso = gltf.node({ name: 'tag_torso', children: torsoChildren, rotation: [0, 0, 0, 1] });
-    rootChildren.push(tagTorso);
-
-    const torso = await buildPart(upper, 'torso', torsoChildren);
-
-    // `tag_head` on `upper.md3`. Q3 draws the head at frame 0 always, so it is a
-    // plain child rather than a skin.
-    const headChildren: number[] = [];
-    const tagHead = gltf.node({ name: 'tag_head', children: headChildren, rotation: [0, 0, 0, 1] });
-    torsoChildren.push(tagHead);
-
-    if (head !== null) {
-        const primitives = [];
-        for (const surface of head.md3.surfaces) {
-            const n = surface.numVerts;
-            const positions = new Float32Array(n * 3);
-            const normals = new Float32Array(n * 3);
-            const uv = new Float32Array(n * 2);
-
-            const restPositions = surface.positions[0]!;
-            const restNormals = surface.normals[0]!;
-
-            for (let i = 0; i < n; i++) {
-                const [x, y, z] = q3PointToGltf(
-                    restPositions[i * 3]!, restPositions[i * 3 + 1]!, restPositions[i * 3 + 2]!
-                );
-                positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
-
-                const [nx, ny, nz] = q3PointToGltf(
-                    restNormals[i * 3]!, restNormals[i * 3 + 1]!, restNormals[i * 3 + 2]!
-                );
-                normals[i * 3] = nx; normals[i * 3 + 1] = ny; normals[i * 3 + 2] = nz;
-
-                uv[i * 2] = surface.st[i * 2]!;
-                uv[i * 2 + 1] = 1 - surface.st[i * 2 + 1]!;
-            }
-
-            primitives.push({
-                attributes: {
-                    POSITION: gltf.positions(positions),
-                    NORMAL: gltf.vec3(normals),
-                    TEXCOORD_0: gltf.vec2(uv),
-                },
-                indices: gltf.indices(Uint32Array.from(surface.indices)),
-                material: await materialFor(head, surface.name, surface.shaders[0] ?? surface.name),
-            });
-        }
-
-        headChildren.push(gltf.node({ name: 'head_mesh_node', mesh: gltf.mesh('head_mesh', primitives) }));
-    }
-
-    /* ---- animation clips ---- */
+    /* ---- tags ---- */
 
     const tagIndex = (md3: Md3Model, frame: number, tagName: string): number => {
         const tags = md3.tags[Math.min(frame, md3.tags.length - 1)] ?? [];
@@ -533,6 +351,247 @@ async function convertCharacter(
         out[at + 3] = w / length;
     };
 
+    /** Frame-0 transform of a named tag, as a glTF node's rest pose. */
+    function restOfTag(md3: Md3Model, tagName: string): {
+        translation?: number[];
+        rotation?: number[];
+    } {
+        const at = tagIndex(md3, 0, tagName);
+        if (at < 0) return { rotation: [0, 0, 0, 1] };
+
+        const scratch = new Float32Array(4);
+        tagRotation(md3, 0, at, scratch, 0);
+
+        const origin = md3.tags[0]![at]!.origin;
+        const [tx, ty, tz] = q3PointToGltf(origin[0], origin[1], origin[2]);
+        const [qx, qy, qz, qw] = q3QuatToGltf(scratch, 0);
+
+        return { translation: [tx, ty, tz], rotation: [qx, qy, qz, qw] };
+    }
+
+    /* ---- nodes ---- */
+
+    const rootChildren: number[] = [];
+    const root = gltf.node({ name, children: rootChildren });
+
+    /**
+     * Build one animated part: its skeleton, its skin, and its meshes.
+     *
+     * `parent` is the node the joints hang off, which is the root for the legs
+     * and `tag_torso` for the torso. glTF joints may live anywhere in the
+     * hierarchy, and putting the torso's under the tag is what makes the tag
+     * compose with the torso's own rig instead of having to be baked into it.
+     */
+    const buildPart = async (
+        part: LoadedPart,
+        label: string,
+        parentChildren: number[]
+    ): Promise<PartRig | null> => {
+        const { frames, vertexCount } = combinedFrames(part.md3);
+
+        /*
+         A part with no drawable geometry is not an error. `neko/upper.md3` has
+         278 frames and no surfaces at all -- it is a placeholder whose only
+         purpose is to carry `tag_head`, and the tag animation is read from the
+         model whether or not anything hangs off it. Returning null here and
+         letting the tag sampling continue is what keeps that character's head
+         in the right place on a body that does not exist.
+        */
+        if (vertexCount === 0) return null;
+
+        const rig = decomposeSkin(frames, vertexCount, {
+            joints: JOINTS_PER_PART,
+            refineIterations: REFINE_ITERATIONS,
+        });
+
+        // Joint nodes, at their rest centroids with identity rotation.
+        const jointNodes: number[] = [];
+        for (let j = 0; j < rig.jointCount; j++) {
+            const [x, y, z] = q3PointToGltf(
+                rig.centroids[j * 3]!,
+                rig.centroids[j * 3 + 1]!,
+                rig.centroids[j * 3 + 2]!
+            );
+            const node = gltf.node({
+                name: `${label}_joint_${j}`,
+                translation: [x, y, z],
+                rotation: [0, 0, 0, 1],
+            });
+            jointNodes.push(node);
+            parentChildren.push(node);
+        }
+
+        /*
+         Inverse bind matrix is a pure translation by minus the rest centroid.
+         The joint node sits *at* the centroid, so the pair cancels at rest and
+         the model in its bind pose is exactly MD3 frame 0 -- which is what a
+         viewer shows when nothing is playing, and a good way to see at a glance
+         that the rig is not inside out.
+        */
+        const ibm = new Float32Array(rig.jointCount * 16);
+        for (let j = 0; j < rig.jointCount; j++) {
+            const [x, y, z] = q3PointToGltf(
+                rig.centroids[j * 3]!,
+                rig.centroids[j * 3 + 1]!,
+                rig.centroids[j * 3 + 2]!
+            );
+            const o = j * 16;
+            ibm[o] = 1; ibm[o + 5] = 1; ibm[o + 10] = 1; ibm[o + 15] = 1;
+            ibm[o + 12] = -x; ibm[o + 13] = -y; ibm[o + 14] = -z;
+        }
+
+        const skinIndex = gltf.skin(
+            `${label}_skin`,
+            jointNodes,
+            gltf.matrices(ibm),
+            jointNodes[0] ?? root
+        );
+
+        /* ---- meshes, one primitive per MD3 surface ---- */
+
+        const primitives = [];
+        const surfaceOffsets: number[] = [];
+        let cursor = 0;
+
+        for (const surface of drawableSurfaces(part.md3)) {
+            surfaceOffsets.push(cursor);
+
+            const n = surface.numVerts;
+            const positions = new Float32Array(n * 3);
+            const normals = new Float32Array(n * 3);
+            const uv = new Float32Array(n * 2);
+            const joints = new Uint16Array(n * 4);
+            const weights = new Float32Array(n * 4);
+
+            const restPositions = surface.positions[0]!;
+            const restNormals = surface.normals[0]!;
+
+            for (let i = 0; i < n; i++) {
+                const [x, y, z] = q3PointToGltf(
+                    restPositions[i * 3]!,
+                    restPositions[i * 3 + 1]!,
+                    restPositions[i * 3 + 2]!
+                );
+                positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+
+                const [nx, ny, nz] = q3PointToGltf(
+                    restNormals[i * 3]!,
+                    restNormals[i * 3 + 1]!,
+                    restNormals[i * 3 + 2]!
+                );
+                normals[i * 3] = nx; normals[i * 3 + 1] = ny; normals[i * 3 + 2] = nz;
+
+                uv[i * 2] = surface.st[i * 2]!;
+                // MD3's V increases downward, glTF's does not.
+                uv[i * 2 + 1] = 1 - surface.st[i * 2 + 1]!;
+
+                joints[i * 4] = rig.vertexJoint[cursor + i]!;
+                weights[i * 4] = 1;
+            }
+
+            primitives.push({
+                attributes: {
+                    POSITION: gltf.positions(positions),
+                    NORMAL: gltf.vec3(normals),
+                    TEXCOORD_0: gltf.vec2(uv),
+                    JOINTS_0: gltf.joints(joints),
+                    WEIGHTS_0: gltf.vec4(weights),
+                },
+                indices: gltf.indices(Uint32Array.from(surface.indices)),
+                material: await materialFor(part, surface.name, surface.shaders[0] ?? surface.name),
+            });
+
+            cursor += n;
+        }
+
+        const meshIndex = gltf.mesh(`${label}_mesh`, primitives);
+
+        /*
+         The skinned mesh node sits at the root with an identity transform. The
+         spec says a skinned mesh node's own transform must be ignored, and
+         implementations disagree about how thoroughly; putting it at the root
+         means there is nothing to disagree about.
+        */
+        rootChildren.push(gltf.node({ name: `${label}_mesh_node`, mesh: meshIndex, skin: skinIndex }));
+
+        return { rig, jointNodes, skinIndex, surfaceOffsets };
+    };
+
+    const legs = await buildPart(lower, 'legs', rootChildren);
+
+    /*
+     `tag_torso` on `lower.md3` places the torso, and moves with the legs.
+
+     Its rest transform is the tag's *frame 0*, not identity. A node whose rest
+     pose is identity and whose animation writes identity has channels that do
+     nothing, and a downstream optimiser that prunes no-op channels can empty a
+     clip entirely -- which is how a character with no torso geometry produced
+     seven zero-channel clips and an assertion from inside the mesh system.
+     Authoring the real rest pose also makes the unposed model correct, which is
+     what any glTF viewer shows.
+    */
+    const torsoChildren: number[] = [];
+    const tagTorso = gltf.node({
+        name: 'tag_torso',
+        children: torsoChildren,
+        ...restOfTag(lower.md3, 'tag_torso'),
+    });
+    rootChildren.push(tagTorso);
+
+    const torso = await buildPart(upper, 'torso', torsoChildren);
+
+    // `tag_head` on `upper.md3`. Q3 draws the head at frame 0 always, so it is a
+    // plain child rather than a skin.
+    const headChildren: number[] = [];
+    const tagHead = gltf.node({
+        name: 'tag_head',
+        children: headChildren,
+        ...restOfTag(upper.md3, 'tag_head'),
+    });
+    torsoChildren.push(tagHead);
+
+    if (head !== null && drawableSurfaces(head.md3).length > 0) {
+        const primitives = [];
+        for (const surface of drawableSurfaces(head.md3)) {
+            const n = surface.numVerts;
+            const positions = new Float32Array(n * 3);
+            const normals = new Float32Array(n * 3);
+            const uv = new Float32Array(n * 2);
+
+            const restPositions = surface.positions[0]!;
+            const restNormals = surface.normals[0]!;
+
+            for (let i = 0; i < n; i++) {
+                const [x, y, z] = q3PointToGltf(
+                    restPositions[i * 3]!, restPositions[i * 3 + 1]!, restPositions[i * 3 + 2]!
+                );
+                positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+
+                const [nx, ny, nz] = q3PointToGltf(
+                    restNormals[i * 3]!, restNormals[i * 3 + 1]!, restNormals[i * 3 + 2]!
+                );
+                normals[i * 3] = nx; normals[i * 3 + 1] = ny; normals[i * 3 + 2] = nz;
+
+                uv[i * 2] = surface.st[i * 2]!;
+                uv[i * 2 + 1] = 1 - surface.st[i * 2 + 1]!;
+            }
+
+            primitives.push({
+                attributes: {
+                    POSITION: gltf.positions(positions),
+                    NORMAL: gltf.vec3(normals),
+                    TEXCOORD_0: gltf.vec2(uv),
+                },
+                indices: gltf.indices(Uint32Array.from(surface.indices)),
+                material: await materialFor(head, surface.name, surface.shaders[0] ?? surface.name),
+            });
+        }
+
+        headChildren.push(gltf.node({ name: 'head_mesh_node', mesh: gltf.mesh('head_mesh', primitives) }));
+    }
+
+    /* ---- animation clips ---- */
+
     const torsoTagOnLegs = tagIndex(lower.md3, 0, 'tag_torso');
     const headTagOnTorso = tagIndex(upper.md3, 0, 'tag_head');
 
@@ -542,6 +601,15 @@ async function convertCharacter(
         const isLegs = animation.name.startsWith('LEGS_');
         const isTorso = animation.name.startsWith('TORSO_');
         const isBoth = animation.name.startsWith('BOTH_');
+
+        /*
+         A torso clip with no torso is not worth emitting. `neko`'s `upper.md3`
+         is 278 frames of nothing but `tag_head`, so its TORSO_* clips would
+         carry two channels that place a head -- which is a real thing to do,
+         but not one worth a clip, and it is exactly the shape that prunes to
+         zero and trips an assertion.
+        */
+        if (isTorso && torso === null) continue;
 
         const count = Math.max(1, animation.numFrames);
 
@@ -632,11 +700,11 @@ async function convertCharacter(
         };
 
         if (isLegs || isBoth) {
-            samplePart(legs);
+            if (legs !== null) samplePart(legs);
             sampleTag(tagTorso, lower.md3, torsoTagOnLegs);
         }
         if (isTorso || isBoth) {
-            samplePart(torso);
+            if (torso !== null) samplePart(torso);
             sampleTag(tagHead, upper.md3, headTagOnTorso);
         }
 
@@ -653,21 +721,32 @@ async function convertCharacter(
         JSON.stringify(gltf.document(`${name}.bin`), null, 1)
     );
 
+    if (legs === null) {
+        console.warn(`  ${name}: skipped, lower.md3 has no drawable surfaces`);
+        return null;
+    }
+
     const report = {
         name,
-        joints: legs.rig.jointCount + torso.rig.jointCount,
+        joints: legs.rig.jointCount + (torso?.rig.jointCount ?? 0),
         clips: gltf.animations.length,
         legsError: legs.rig.error,
-        torsoError: torso.rig.error,
+        torsoError: torso?.rig.error ?? null,
         hasHead: head !== null,
+        hasTorso: torso !== null,
         untextured,
         bytes: gltf.buffer().byteLength,
     };
 
+    const torsoText =
+        torso === null
+            ? 'no torso geometry'
+            : `torso err ${torso.rig.error.mean.toFixed(3)}/${torso.rig.error.max.toFixed(2)}`;
+
     console.log(
         `  ${name.padEnd(12)} ${report.clips} clips, ${report.joints} joints, ` +
         `legs err ${legs.rig.error.mean.toFixed(3)}/${legs.rig.error.max.toFixed(2)} ` +
-        `torso err ${torso.rig.error.mean.toFixed(3)}/${torso.rig.error.max.toFixed(2)} ` +
+        `${torsoText} ` +
         `(${(report.bytes / 1024).toFixed(0)} KB)` +
         (head === null ? ' [no head]' : '') +
         (untextured > 0 ? ` [${untextured} untextured]` : '')
