@@ -1193,6 +1193,13 @@ Observations that are not gaps — the facility exists and works — but cost ti
   naming because GAP-015 makes it fire with an empty name, which is the one case where a good
   message does not help -- fixing the API would let this message do its job.
 
+- **"clip must have at least one channel" is a good assertion in the wrong place.** It fires
+  inside `MeshSystem3` and names neither the model nor the clip, so a fifteen-character roster
+  becomes fifteen candidates. The condition it catches is real and worth catching -- the fix on
+  this side was three separate defects in the exporter (D-057) -- but the message would be worth
+  the model URL. Contrast `ClipListPlayer`'s missing-clip warning, which prints the model's whole
+  clip list beside the name it could not find.
+
 - **The engine's own docblocks argue with themselves productively.** `AudioEmitterSystem`'s
   explains why only looping events take the spatially-managed path, which is exactly the fact
   that decided this port plays one-shots through sopra directly. Reading it saved a design
