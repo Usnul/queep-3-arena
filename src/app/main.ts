@@ -31,11 +31,16 @@ import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { loadMap } from '../client/map/loadMap.ts';
 import { loadModels } from '../client/map/loadModels.ts';
 import { ItemsView } from '../client/ItemsView.ts';
-import { ItemSystem, type DropTrace } from '../game/Items.ts';
+import { ItemSystem, newInventory, type DropTrace } from '../game/Items.ts';
 import { MoverSystem, carryDisplacement, type Vec3 } from '../game/Movers.ts';
+import type { Damageable } from '../game/Weapons.ts';
+import { vec3 as q3vec3 } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS } from '../client/Characters.ts';
 import { AudioBank, Footsteps } from '../client/Audio.ts';
+import { Bot } from '../game/Bot.ts';
+import { BotRuntime, type BotWorld } from '../client/Bots.ts';
+import { buildWaypoints, linkMapPortals } from '../game/Waypoints.ts';
 import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
 import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
@@ -216,7 +221,7 @@ async function main(): Promise<void> {
             fly.update(dt);
             hud.update({
                 mode: 'fly', speed: 0, onGround: false, map: mapName,
-                weapon: '', damage: 0, kills: 0, backend: 'noclip',
+                weapon: '', damage: 0, kills: 0, deaths: 0, backend: 'noclip',
                 health: 0, armor: 0, ammo: -1, pickup: '', pickupAgeSeconds: 99,
             });
         });
@@ -359,28 +364,151 @@ async function main(): Promise<void> {
         const playerMaxs: Vec3 = [0, 0, 0];
         const carry: Vec3 = [0, 0, 0];
 
-        /*
-         One character per spawn point, cycling the roster, as a showcase and a
-         placeholder for the bots that will drive them. They stand where a
-         player would and run the idle pair -- `LEGS_IDLE` plus `TORSO_STAND` --
-         which is what Q3 shows a player doing nothing.
-        */
-        const characters: Character[] = [];
-        const characterSpawns = loaded.bundle.entities.filter(
-            (e) => e.classname === 'info_player_deathmatch'
+        /* ---- navigation ---- */
+
+        const t0Nav = performance.now();
+        const graph = buildWaypoints(loaded.bundle.submodels?.[0] ?? {
+            minsQ3: [-4096, -4096, -4096],
+            maxsQ3: [4096, 4096, 4096],
+        }, dropTrace);
+        const portals = linkMapPortals(
+            graph,
+            loaded.bundle.entities,
+            loaded.bundle.submodels ?? []
         );
 
-        for (let i = 0; i < characterSpawns.length && i < CHARACTERS.length; i++) {
-            const spawnPoint = characterSpawns[i]!;
-            const character = new Character(ecd, CHARACTERS[i % CHARACTERS.length]!);
-            character.place(
-                [spawnPoint._originQ3[0]!, spawnPoint._originQ3[1]!, spawnPoint._originQ3[2]! + 24],
-                spawnPoint._angle
-            );
+        console.log(
+            `[queep] nav: ${graph.stats.nodes} nodes, ${graph.stats.links} links, ` +
+            `${graph.stats.drops} drops, ${portals.teleports} teleports, ` +
+            `${portals.jumppads} jump pads, ` +
+            `largest component ${(graph.stats.largestComponent * 100).toFixed(0)}% ` +
+            `(${(performance.now() - t0Nav).toFixed(0)} ms)`
+        );
+
+        /* ---- bots ---- */
+
+        const botSpawns = loaded.bundle.entities
+            .filter((e) => e.classname === 'info_player_deathmatch')
+            .map((e) => e._originQ3);
+
+        const botWorld: BotWorld = {
+            graph,
+            items: items.items,
+            trace: (start, mins, maxs, end, mask) => {
+                const out = createTrace();
+                if (physicsWorld !== null) {
+                    physicsWorld.trace(out, start, end, mins, maxs, mask);
+                } else {
+                    boxTrace(out, clipMap, start, end, mins, maxs, mask);
+                }
+                return out;
+            },
+            playerOrigin: () => player.ps.origin,
+            playerAlive: () => player.inventory.health > 0,
+            spawns: botSpawns.map((spawn) => {
+                const node = graph.nearestInMainBody(spawn);
+                return node < 0
+                    ? spawn
+                    : [
+                          graph.nodes[node]!.origin[0],
+                          graph.nodes[node]!.origin[1],
+                          graph.nodes[node]!.origin[2] - 9,
+                      ];
+            }),
+            fire: (bot, eye, angles, weapon) => {
+                /*
+                 The bot's own id as `ownerId`, so `hitscanShot` skips it. The
+                 muzzle is 14 units in front of the eye and a bot's own box is
+                 15 wide, so a bot firing with `ownerId: 0` shoots itself the
+                 instant it pulls the trigger.
+                */
+                arena.weapons.fire(weapon, eye, angles, bot.id, (Math.random() * 0xffff) | 0);
+            },
+        };
+
+        /*
+         The player, as something bots can shoot.
+         
+         Bots were firing at it for a hundred rounds apiece and doing nothing,
+         because `weapons.targets` held only the boxes and the bots. `origin`
+         is a live reference to `ps.origin` rather than a copy, so it tracks
+         without anything having to remember to update it; `health` and `armor`
+         are accessors over the same inventory the HUD reads, so there is one
+         number rather than two that can disagree.
+        */
+        const playerTarget: Damageable = {
+            id: 0,
+            origin: player.ps.origin,
+            mins: q3vec3(-15, -15, -24),
+            maxs: q3vec3(15, 15, 32),
+            get health(): number {
+                return player.inventory.health;
+            },
+            set health(value: number) {
+                player.inventory.health = value;
+            },
+            get armor(): number {
+                return player.inventory.armor;
+            },
+            set armor(value: number) {
+                player.inventory.armor = value;
+            },
+            get dead(): boolean {
+                return player.inventory.health <= 0;
+            },
+            set dead(_value: boolean) {
+                // Death is derived from health; nothing sets it directly.
+            },
+        };
+        arena.weapons.targets.push(playerTarget);
+
+        const botRuntime = new BotRuntime(botWorld);
+        const characters: Character[] = [];
+
+        /*
+         One bot per spawn point beyond the player's, up to the roster size. Q3
+         fills a server from `bot_minplayers`; there is no server here, so the
+         map's own spawn count stands in -- a map built for eight players gets
+         seven opponents.
+        */
+        for (let i = 1; i < botSpawns.length && i <= CHARACTERS.length; i++) {
+            const name = CHARACTERS[(i - 1) % CHARACTERS.length]!;
+
+            /*
+             Snapped to the navigation graph's main body. A spawn point the
+             graph cannot route out of produces a bot that stands still for the
+             whole match -- see `nearestInMainBody`.
+            */
+            const snapped = graph.nearestInMainBody(botSpawns[i]!);
+            const spawnQ3 =
+                snapped < 0
+                    ? botSpawns[i]!
+                    : [
+                          graph.nodes[snapped]!.origin[0],
+                          graph.nodes[snapped]!.origin[1],
+                          // Node origins are standing positions and the host
+                          // adds Q3's own 9-unit spawn lift, so take it back off.
+                          graph.nodes[snapped]!.origin[2] - 9,
+                      ];
+
+            const bot = new Bot({
+                id: 2000 + i,
+                name,
+                character: name,
+                cm: clipMap,
+                spawnQ3,
+                physics: physicsWorld,
+                movers: () => ({ movers: movers.clipEntities }),
+            });
+
+            const character = new Character(ecd, name);
             characters.push(character);
+
+            botRuntime.spawn(bot, character);
+            arena.weapons.targets.push(bot);
         }
 
-        console.log(`[queep] characters: ${characters.length} placed`);
+        console.log(`[queep] bots: ${botRuntime.bots.length}, ${characters.length} characters`);
 
         let pickupName = '';
         let pickupAge = 99;
@@ -389,13 +517,22 @@ async function main(): Promise<void> {
         const footsteps = new Footsteps();
         let lastWeapon = player.weapon;
 
-        // Targets at the other spawn points: somewhere to shoot, without
-        // inventing level geometry the map does not have.
-        const spawnPoints = loaded.bundle.entities.filter(
-            (e) => e.classname === 'info_player_deathmatch'
-        );
-        for (const s of spawnPoints.slice(1, 5)) {
-            arena.addTarget(s._originQ3);
+        /** Seconds until the player respawns; negative means alive. */
+        let respawnIn = -1;
+
+        /*
+         The red boxes at spawn points are gone: bots stand there now, they are
+         `Damageable` in the same list, and they shoot back. `Arena.addTarget`
+         stays because it is still the shortest way to put something shootable
+         in a scene, and `?targets=1` puts them back for testing damage without
+         the AI in the way.
+        */
+        if (new URLSearchParams(window.location.search).get('targets') === '1') {
+            for (const s of loaded.bundle.entities
+                .filter((e) => e.classname === 'info_player_deathmatch')
+                .slice(1, 5)) {
+                arena.addTarget(s._originQ3);
+            }
         }
 
         player.onDryFire = () => {
@@ -429,6 +566,50 @@ async function main(): Promise<void> {
 
             itemsView.update(items.now);
             pickupAge += deltaSeconds;
+
+            /* ---- bots ---- */
+
+            botRuntime.update(deltaSeconds, deltaSeconds * 1000, items.items);
+
+            /* ---- the player's own mortality ---- */
+
+            if (player.inventory.health <= 0 && respawnIn < 0) {
+                respawnIn = 2;
+                arena.explosion(player.ps.origin, 90);
+                audio.play('impact/flesh', player.ps.origin);
+            }
+
+            if (respawnIn >= 0) {
+                respawnIn -= deltaSeconds;
+                if (respawnIn < 0) {
+                    /*
+                     `ClientSpawn`, minus the spawn-point selection Q3 does with
+                     `SelectSpawnPoint` -- which scores every point by distance
+                     from the nearest enemy so you do not materialise in front
+                     of one. A random point is the honest simplification.
+                    */
+                    const spawnPoint =
+                        botSpawns[(Math.random() * botSpawns.length) | 0] ?? [0, 0, 0];
+
+                    player.ps.origin[0] = spawnPoint[0]!;
+                    player.ps.origin[1] = spawnPoint[1]!;
+                    player.ps.origin[2] = spawnPoint[2]! + 9;
+                    player.ps.velocity[0] = 0;
+                    player.ps.velocity[1] = 0;
+                    player.ps.velocity[2] = 0;
+
+                    const fresh = newInventory();
+                    player.inventory.health = fresh.health;
+                    player.inventory.armor = 0;
+                    player.inventory.weapons.clear();
+                    for (const w of fresh.weapons) player.inventory.weapons.add(w);
+                    for (const key of Object.keys(player.inventory.ammo)) {
+                        delete player.inventory.ammo[key];
+                    }
+                    Object.assign(player.inventory.ammo, fresh.ammo);
+                    player.selectWeapon('WP_MACHINEGUN');
+                }
+            }
 
             /* ---- player audio ---- */
 
@@ -507,6 +688,7 @@ async function main(): Promise<void> {
                 weapon: player.weapon,
                 damage: arena.totalDamage,
                 kills: arena.kills,
+                deaths: arena.deaths,
                 backend: clipmapOnly ? 'clipmap' : 'physics',
                 health: player.inventory.health,
                 armor: player.inventory.armor,
@@ -516,7 +698,10 @@ async function main(): Promise<void> {
             });
         });
 
-        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models, movers, moversView, characters, audio });
+        expose(engine, {
+            loaded, clipMap, player, arena, physicsWorld, items, models,
+            movers, moversView, characters, audio, graph, botRuntime,
+        });
     }
 
     console.log(

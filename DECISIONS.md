@@ -864,3 +864,121 @@ disk, because that is a bug, while a file on disk that nothing names is not.
 Copied rather than transcoded: OA's WAVs are PCM, every browser decodes them through
 `decodeAudioData`, and re-encoding would trade a real quality loss against a saving on assets that
 are not committed anyway.
+
+---
+
+## Breadth: bots
+
+### D-050: A bot is a `usercmd_t`, not a moving object
+
+Every bot owns a `pmove_t` built by the same `createPmoveHost` the player uses, fills a
+`usercmd_t`, and runs `Pmove`. That is Q3's own arrangement -- `BotAIStartFrame` fills a
+`usercmd_t` and hands it to the same `ClientThink` a human's goes through -- and it is the
+property worth keeping: a bot accelerates, strafes, steps, falls and strafe-jumps identically to
+the player, because it is running the identical code.
+
+The alternative, and what most ports do, is to lerp a bot toward its next waypoint. That produces
+something that occupies the same room as the player and is not the same kind of object: it cannot
+be out-strafed, it does not slide off a ramp, and it arrives places the player cannot.
+
+Measured on `oa_dm1`: six bots at 1.3-1.8 ms a frame including perception, the behaviour tree,
+`Pmove` and character placement. One bot was observed at 381 units per second, which is above the
+320-unit run speed -- it had strafe-jumped, without anything in the bot code knowing what that is.
+
+`createPmoveHost` was extracted from `PlayerController` for this, and the extraction is the point
+rather than a tidy-up: two movement setups is two games.
+
+### D-051: Navigation is a floor sample, and the first two attempts are in the record
+
+No AAS, per the brief. What replaced it took three tries, and the failures are more useful than
+the result.
+
+1. **Item and spawn entities as nodes.** The reasoning was sound -- AAS goal areas are
+   overwhelmingly item locations -- and the result was not: 50 nodes, 91 links, and a largest
+   connected component of *three*. Items are scattered and the straight line between two of them
+   almost always clips a pillar.
+2. **A floor sample at 96-unit spacing.** 357 nodes, and a largest component of 29%. Better, and
+   still one component per storey: a walk link cannot cross a drop, and a Q3 arena is layered.
+3. **64-unit spacing, one-way drop edges, and teleporters and jump pads as edges.** 766 nodes,
+   1,956 links, 213 drops, and 53% in one piece.
+
+Each number is measured, and the spacing was chosen from the curve rather than by feel: on
+`oa_dm7` the largest component is 49% at 96-unit spacing, 91% at 64, and 92% at 48. 64 is where it
+flattens, and the reason is that a Q3 corridor is often 128 wide -- at 96 spacing it gets a single
+column of nodes, and a single column makes a T-junction into two components.
+
+Two edge kinds are not optional on a Q3 map:
+
+- **Drops**, which are AAS's `TRAVEL_WALKOFFLEDGE`. Without them the graph is per-floor.
+- **Jump pads and teleporters**, which are how a map like `oa_dm7` connects at all. Measured:
+  item-to-item reachability there goes from 33% to 51% purely by adding the four pads as edges.
+
+The operational metric is not the component size but "can a bot get from one item to another":
+85% on `oa_dm1`, 95% on `aggressor`, 51% on `oa_dm7`, 27% on `am_thornish`. The last two are maps
+built around jumping, and a walk-only graph is honestly worse at them.
+
+### D-052: Three bugs that each looked like a different bug
+
+Recorded because each cost real time and each had a misleading symptom.
+
+- **Bots planned routes and stood still.** The behaviour tree was ticked every frame and never
+  restarted. A tree is a *plan*: once the root reports `Succeeded` it is finished, and
+  `SequenceBehavior.finalize` parks its cursor past the last child, so every subsequent tick
+  short-circuits to `Succeeded` on the first line. The first frame's planning branch succeeded and
+  the tree was still reporting that success 900 frames later. Q3 has the same shape and hides it --
+  `AINode_*` returns and is called afresh next frame -- so the restart is now explicit, with the
+  reason written down next to it.
+- **Bots walked into walls forever.** The route's first node came from `nearest`, which is
+  straight-line, so a bot standing a stride from a wall frequently had its nearest node on the far
+  side of it. Fixed by `nearestReachable`, which considers candidates nearest-first and takes the
+  first one a player-sized box can actually sweep to.
+- **Two of six bots never moved at all.** They spawned at `info_player_deathmatch` points whose
+  neighbourhood in the graph was a three-node island. Q3 does not have this problem because AAS
+  guarantees every spawn point is in a reachable area; this graph carries no such guarantee, so
+  bot spawns are snapped to the nearest node in the graph's main body. It is a spawn-time
+  correction rather than a runtime one on purpose -- a bot that *wanders* into an island is still
+  stuck there, and that is the truth about the graph rather than something to hide.
+
+### D-053: The tree is small, and its shape is the argument
+
+    Selector
+      Sequence [ Condition(enemy visible or recently seen) -> Fight  ]
+      Sequence [ Condition(has a route)                    -> Travel ]
+      Action   [ pick a goal and a route                            ]
+
+A Q3 deathmatch bot does three things in strict priority and this says so in the order it is meant
+to be read. The equivalent in `ai_dmq3.c` is spread across a dozen functions and an `ainode_t`
+function pointer, and the priority is implicit in which node sets which other node.
+
+The two long-running leaves are custom `Behavior` subclasses, because `ActionBehavior` is
+single-shot and travelling takes many frames -- which is the whole reason a behaviour tree is a
+tree rather than a switch statement.
+
+Goal selection is the part of `BotChooseLTGItem` that survives without Q3's character files:
+score every reachable item by what the bot lacks, minus a distance penalty. Q3's fuzzy weights come
+out of per-character `.c` files this port does not have, and inventing them would be guesswork
+dressed as fidelity.
+
+### D-054: Armour, and the player as something that can be shot
+
+Bots fired a hundred rounds each into the player and did nothing, because `weapons.targets` held
+only the shootable boxes and the other bots. The player is now a `Damageable` whose `origin` is a
+live reference to `ps.origin` and whose `health` and `armor` are accessors over the same inventory
+the HUD reads -- one number, not two that can disagree.
+
+That made `G_Damage`'s armour split worth porting: `save = ceil(damage * 0.66)`, capped by the
+armour on hand, taken off health. The ceiling matters at low damage -- a 5-point hit takes 4 from
+armour and 1 from health -- and it is why 100 armour is worth roughly 200 effective health, which
+is in turn why a Q3 player runs a route instead of camping.
+
+### D-055: What the bots do not do
+
+- **No rocket jumping, and no jumping to reach anything.** The graph has no jump edges, so a bot
+  goes where it can walk, drop, teleport or be launched. Jumping happens only as stuck recovery.
+- **No aim prediction.** A bot fires at where the player *is*. Q3 leads its target based on skill.
+- **No fuzzy weapon preference, no chat, no team play, no taunts.**
+- **`SelectSpawnPoint` is a random pick**, where Q3 scores every point by distance from the
+  nearest enemy so a respawn does not materialise in front of one.
+- **Bots do not fight each other well.** They see the player specifically, not each other:
+  `perceive` traces to one enemy. They *hit* each other with splash and stray fire, and the damage
+  counts, but there is no bot-versus-bot target selection.

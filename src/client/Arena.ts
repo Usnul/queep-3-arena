@@ -90,6 +90,8 @@ export class Arena implements WeaponEvents {
     /** Damage dealt this session, for the HUD. */
     totalDamage = 0;
     kills = 0;
+    /** Times the player has been killed. */
+    deaths = 0;
 
     /** Trail puffs are emitted every Nth projectile step, not every frame. */
     private trailAccumulator = 0;
@@ -247,27 +249,42 @@ export class Arena implements WeaponEvents {
     }
 
     hit(target: Damageable, damage: number): void {
+        /*
+         `targets` is the list of boxes this class owns; anything else in
+         `weapons.targets` -- bots, since they became `Damageable` -- belongs to
+         someone else and must not be reached into. The first version cast every
+         hit to a `Target` and read `entity` off it, which was correct while the
+         only damageable things were boxes and threw the moment a bot shot
+         another bot.
+        */
+        const box = this.targets.includes(target as Target) ? (target as Target) : null;
+
         this.totalDamage += damage;
 
         // `CG_HitSound`: the local, non-positional confirmation tone. It is not
         // a sound in the world -- it is feedback, and Q3 plays it dry.
         this.audio?.playLocal('feedback/hit');
 
-        const t = target as Target;
-        t.lastHit = this.now;
+        if (box !== null) box.lastHit = this.now;
 
-        if (target.dead) {
-            this.kills += 1;
-            t.respawnIn = 3;
+        if (!target.dead) return;
 
-            // A dead target detonates, which makes the kill legible without any
-            // death animation.
-            this.effects.explosion(target.origin, 90);
+        /*
+         The player is target id 0, and dying is not scoring. Counting it was
+         the difference between a scoreboard and a body count.
+        */
+        if (target.id !== 0) this.kills += 1;
+        else this.deaths += 1;
 
-            if (this.ecd.entityExists(t.entity)) {
-                this.ecd.removeEntity(t.entity);
-            }
-        }
+        // A death detonates, which makes the kill legible without a death
+        // animation. Bots have one; boxes never will.
+        this.effects.explosion(target.origin, 90);
+        this.audio?.play('impact/flesh', target.origin);
+
+        if (box === null) return;
+
+        box.respawnIn = 3;
+        if (this.ecd.entityExists(box.entity)) this.ecd.removeEntity(box.entity);
     }
 
     projectileSpawned(projectile: Projectile): void {

@@ -31,6 +31,9 @@ export type WeaponId = keyof typeof balance.weapons;
 /** `MASK_SHOT` from q_shared.h. */
 export const MASK_SHOT = CONTENTS.SOLID | CONTENTS.BODY | CONTENTS.CORPSE;
 
+/** `g_combat.c`: the fraction of damage armour takes before health does. */
+const ARMOR_PROTECTION = 0.66;
+
 export interface WeaponStats {
     readonly hitscan?: boolean;
     readonly fireRateMs: number;
@@ -57,6 +60,14 @@ export interface Damageable {
     health: number;
     /** Set when health reaches zero. */
     dead: boolean;
+    /**
+     * Armour, if this thing wears any. Absent on scenery.
+     *
+     * `G_Damage` sends two thirds of every hit to armour before health, which
+     * is what makes 100 armour worth roughly 200 effective health and is the
+     * reason a Q3 player runs a route rather than camping.
+     */
+    armor?: number;
 }
 
 /** What the presentation layer is told about. */
@@ -338,8 +349,32 @@ export class WeaponSystem {
     }
 
     private damage(target: Damageable, points: number): void {
-        const applied = Math.round(points);
+        let applied = Math.round(points);
         if (applied <= 0) return;
+
+        /*
+         `G_Damage`'s armour split:
+
+             save = ceil( damage * ARMOR_PROTECTION );   // 0.66
+             if ( save >= armor ) save = armor;
+             armor -= save;
+             damage -= save;
+
+         The ceiling matters at low damage -- a 5-point hit takes 4 from armour
+         and 1 from health, not 3 and 2 -- and it is why armour drains fast
+         under a machinegun and slowly under nothing.
+        */
+        if (target.armor !== undefined && target.armor > 0) {
+            const saved = Math.min(target.armor, Math.ceil(applied * ARMOR_PROTECTION));
+            target.armor -= saved;
+            applied -= saved;
+
+            // A hit fully absorbed by armour still counts as a hit.
+            if (applied <= 0) {
+                this.events.hit(target, 0);
+                return;
+            }
+        }
 
         target.health -= applied;
 

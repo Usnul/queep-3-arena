@@ -62,6 +62,7 @@ export interface HudState {
     readonly weapon: string;
     readonly damage: number;
     readonly kills: number;
+    readonly deaths: number;
     /** Which collision backend movement is running on. */
     readonly backend: string;
     readonly health: number;
@@ -163,7 +164,7 @@ export class Hud {
         } else {
             const weapon = state.weapon.replace(/^WP_/, '').toLowerCase().replace(/_/g, ' ');
             this.stateModel.set(
-                `${state.map}  ·  ${weapon}  ·  ${state.kills} kills  ·  ` +
+                `${state.map}  ·  ${weapon}  ·  ${state.kills}/${state.deaths}  ·  ` +
                 `${state.damage} damage  ·  ${state.onGround ? 'ground' : 'air'}  ·  ` +
                 `${state.backend}`
             );

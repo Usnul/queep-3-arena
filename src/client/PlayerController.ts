@@ -25,13 +25,9 @@
  * laziness.
  */
 
-import { vec3 } from '../q3/math.ts';
-import { ClipMap, MASK_PLAYERSOLID } from '../q3/cm/ClipMap.ts';
-import { boxTrace, pointContents } from '../q3/cm/trace.ts';
+import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
 import {
-    createPlayerState,
-    createUserCmd,
     FORWARDMOVE,
     RIGHTMOVE,
     UPMOVE,
@@ -41,26 +37,17 @@ import {
 import * as C from '../q3/pmove/constants.ts';
 import { weaponStats, type WeaponId } from '../game/Weapons.ts';
 import { newInventory, type Inventory } from '../game/Items.ts';
-import type { TraceResult } from '../q3/cm/trace.ts';
-import { clipToEntities, type ClippedEntity } from '../q3/cm/entityClip.ts';
+import {
+    createPmoveHost,
+    type MoverSource,
+    type PhysicsTraceBackend,
+} from '../game/PmoveHost.ts';
 
-/**
- * What `PlayerController` needs from a physics-backed trace.
- *
- * A structural type rather than an import of `PhysicsWorld`, so the simulation
- * side does not acquire a dependency on the presentation side just to be able
- * to swap collision backends.
- */
-export interface PhysicsTraceBackend {
-    trace(
-        out: TraceResult,
-        startQ3: ArrayLike<number>,
-        endQ3: ArrayLike<number>,
-        minsQ3: ArrayLike<number>,
-        maxsQ3: ArrayLike<number>,
-        contentMask: number
-    ): void;
-}
+/*
+ Re-exported because `main.ts` and `PhysicsWorld` both name it, and moving the
+ definition into `PmoveHost` should not move every import with it.
+*/
+export type { PhysicsTraceBackend };
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -152,7 +139,7 @@ export class PlayerController {
      * entity list and the controller needs a spawn point from the same list.
      * Ignored entirely on the physics backend, which sees movers as bodies.
      */
-    movers: { readonly movers: readonly ClippedEntity[] } | null = null;
+    movers: MoverSource | null = null;
 
     /** True on the frames the attack button is held. */
     attacking = false;
@@ -183,62 +170,21 @@ export class PlayerController {
     ) {
         this.element = element;
 
-        const ps = createPlayerState();
-        ps.pm_type = C.PM_NORMAL;
-        ps.gravity = 800;
-        ps.speed = 320;
-        ps.groundEntityNum = C.ENTITYNUM_NONE;
-        ps.stats[C.STAT_HEALTH] = this.inventory.health;
-        ps.viewheight = C.DEFAULT_VIEWHEIGHT;
-        ps.origin[0] = spawnQ3[0] ?? 0;
-        ps.origin[1] = spawnQ3[1] ?? 0;
-        // `G_SelectSpawnPoint` lifts the spawn by 9 units before placing a player.
-        ps.origin[2] = (spawnQ3[2] ?? 0) + 9;
+        /*
+         Movement is built by `createPmoveHost`, which bots use too. The shared
+         setup is the point: a bot moving through a different `pmove_t` is a bot
+         playing a different game, and the difference would show up as bots
+         taking jumps the player cannot.
+        */
+        this.pmove = createPmoveHost({
+            cm,
+            spawnQ3,
+            physics,
+            movers: () => this.movers,
+            startHealth: this.inventory.health,
+        });
 
-        this.ps = ps;
-
-        this.pmove = {
-            ps,
-            cmd: createUserCmd(),
-            tracemask: MASK_PLAYERSOLID,
-            debugLevel: 0,
-            noFootsteps: false,
-            gauntletHit: false,
-            framecount: 0,
-            numtouch: 0,
-            touchents: new Int32Array(C.MAXTOUCH),
-            mins: vec3(),
-            maxs: vec3(),
-            watertype: 0,
-            waterlevel: 0,
-            xyspeed: 0,
-            pmove_fixed: 0,
-            pmove_msec: 8,
-            pmove_float: 0,
-            pmove_flags: 0,
-            trace: (results, start, mins, maxs, end, _passEnt, contentMask) => {
-                if (physics !== null) {
-                    // Movers are kinematic bodies, so `shape_cast` already
-                    // includes them -- world and entities are one query.
-                    physics.trace(results, start, end, mins, maxs, contentMask);
-                    return;
-                }
-
-                boxTrace(results, cm, start, end, mins, maxs, contentMask);
-                results.entityNum =
-                    results.fraction !== 1.0 ? C.ENTITYNUM_WORLD : C.ENTITYNUM_NONE;
-
-                const movers = this.movers;
-                if (movers !== null && movers.movers.length > 0) {
-                    clipToEntities(
-                        results, cm, start, end, mins, maxs, contentMask, movers.movers
-                    );
-                }
-            },
-            pointcontents(point, _passEnt) {
-                return pointContents(cm, point[0]!, point[1]!, point[2]!);
-            },
-        };
+        this.ps = this.pmove.ps;
     }
 
     attach(): void {
