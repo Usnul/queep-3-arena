@@ -706,6 +706,41 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
 - **Evidence:** `src/client/map/loadMap.ts` timings, reported in `LoadedMap.timings.geometry`.
   Recorded at phase 1.
 
+### GAP-009: `FirstPersonPlayerController` cannot host a fixed-physics shooter, and that is a positioning problem rather than a defect
+
+This entry exists because the engine ships a first-person character controller, a Q3 port is
+the most obvious thing anyone would point it at, and the two are structurally incompatible. A
+maintainer converting this report into a backlog should know that before someone else finds out
+the expensive way.
+
+- **Needed:** run `bg_pmove` — a fixed, non-configurable step function whose exact arithmetic
+  *is* the game.
+- **meep offers:** 3,690 lines across `engine/control/first-person/**`, and it is clearly good
+  work: motion phases, ability composition, a `KinematicMover` with stair and ramp handling, and
+  a "mastery" layer that rewards well-timed inputs. Its `DESIGN.md` states two goals — "feel
+  alive" and "be configurable" — and cites Mirror's Edge Catalyst, Star Citizen stance/breathing
+  and critically-damped spring cameras.
+
+  Those goals are the opposite of what a Q3 port needs. Q3 movement is not tuned for feel; it is
+  a specific set of floating-point operations that players spent twenty-five years learning to
+  exploit. Strafe jumping exists *because* `PM_Accelerate` caps `addspeed` against a projection
+  of current velocity onto the wish direction, which is a bug. Configurability cannot express
+  "this bug, exactly". The controller also declares collision resolution a non-goal in
+  `DESIGN.md`, assuming a layer that reports `grounded` and `groundNormal` — and which layer
+  that is decides ramp jumps.
+- **Workaround:** none needed; the port implements `bg_pmove` itself and does not use the
+  controller. Recorded because the *absence* of a workaround is the finding.
+- **Severity:** minor for this port, potentially major for adoption. Anyone arriving with an
+  existing movement model — a Quake-lineage shooter, a physics-driven platformer, a netcode
+  rollback design with its own step function — needs to know quickly that this controller is a
+  complete opinion about movement rather than a substrate for one.
+- **Suggested fix:** documentation, not code. One line in the README or at the top of
+  `DESIGN.md` saying what it is *for* ("an opinionated, tunable feel-first controller; bring
+  your own if you have a fixed movement model") would set expectations correctly. The engine is
+  otherwise unusually good at this — see the `NavigationMeshAgent` and `draw_side` notes.
+- **Evidence:** `src/engine/control/first-person/DESIGN.md` §1, `src/q3/pmove/pmove.ts`,
+  DECISIONS.md D-007. Recorded at phase 2.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
@@ -767,6 +802,20 @@ Observations that are not gaps — the facility exists and works — but cost ti
 - **`EntityManager` has no `update`; the method is `simulate`.** Minor, but the ECS is the
   thing a consumer touches most and the name is not the conventional one. Discovered by
   enumerating the prototype.
+
+### Added during phase 2
+
+- **A design document says "no implementation yet" above 3,690 lines of implementation.**
+  `engine/control/first-person/DESIGN.md` opens with *"Status: **Draft** — design doc. No
+  implementation yet"*, and then lists the companion files as "(planned)". All of them exist and
+  are substantial. This is the one place in the engine where the documentation actively
+  misleads: I nearly skipped evaluating the controller entirely on the strength of that header.
+  A stale status line is cheap to fix and expensive to leave.
+
+- **`ShadeMaterial.draw_side` is the model to copy.** A settable property documented in its own
+  docblock as having no effect, with the workaround spelled out. It cost me nothing because the
+  answer was where I looked. Whatever process produced that comment should be applied to the
+  `DESIGN.md` header above.
 
 ---
 
@@ -830,6 +879,30 @@ Load time, cold, from the local dev server:
 
 Meshlet construction is 92% of load time on the large map and is synchronous — see GAP-008.
 It is the only part of this table that would need work in a real title.
+
+### Phase 2 — collision and movement
+
+Not meep's numbers — this is the port's own arithmetic, and it does not use meep's physics
+(D-007). Included because the maintainer will reasonably ask what a fixed-physics shooter costs
+in pure JavaScript, and because it bears on GAP-009.
+
+Everything runs in `Math.fround`-wrapped float32 to match the C bit-for-bit, which is the
+slowest reasonable way to write it:
+
+| suite | work | wall clock |
+|---|---|---|
+| `CM_BoxTrace` differential | 100,000 randomised player sweeps across 5 maps, each run twice (port + WASM oracle) | 1.47 s |
+| Position tests | 100,000 degenerate traces across 5 maps, twice | included above |
+| `CM_PointContents` | 100,000 queries across 5 maps, twice | included above |
+| `Pmove` differential | 3 maps x 6 patterns x 40 episodes x up to 240 frames, both implementations | 2.17 s |
+
+Reading the trace figure: 200,000 box traces against real BSP geometry in well under a second,
+including the WASM half. A movement frame issues roughly ten traces, so the collision budget for
+a 125 Hz server tick is not a constraint even at this precision.
+
+Peak horizontal speed reached in the movement suite was **523 units/s against a 320 base**,
+which is the number that says strafe jumping is actually working rather than merely not
+crashing.
 
 ### Asset pipeline, for scale
 

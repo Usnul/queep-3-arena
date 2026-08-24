@@ -1,5 +1,5 @@
 /*
- * Phase 1 entry point: load a converted Q3 map and fly through it.
+ * Entry point: load a converted Q3 map and play it with real Q3 movement.
  *
  * Copyright (C) 2026 queep-3-arena contributors
  *
@@ -18,13 +18,21 @@ import { Camera } from '@woosh/meep-engine/src/engine/graphics/ecs/camera/Camera
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 
+import { BspFile } from '../q3/bsp/BspFile.ts';
+import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { loadMap } from '../client/map/loadMap.ts';
+import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
+import { Hud } from '../client/Hud.ts';
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
-    const p = new URLSearchParams(window.location.search);
-    return p.get('map') ?? 'oa_dm1';
+    return new URLSearchParams(window.location.search).get('map') ?? 'oa_dm1';
+}
+
+/** `?fly=1` swaps the player for a noclip camera, for inspecting conversions. */
+function flyMode(): boolean {
+    return new URLSearchParams(window.location.search).get('fly') === '1';
 }
 
 async function main(): Promise<void> {
@@ -34,13 +42,11 @@ async function main(): Promise<void> {
     const ecd = em.dataset;
     const graphics = engine.graphics;
 
-    if (graphics === null) {
-        throw new Error('engine started without graphics');
-    }
+    if (graphics === null) throw new Error('engine started without graphics');
 
     // `EngineHarness.shadeScene` is the only way to reach the scene the harness's
-    // own systems draw into -- the graphics facade does not hand one back. Any
-    // system registered with a *different* Scene renders into nothing, silently.
+    // own systems draw into -- the graphics facade does not hand one back, and a
+    // system registered with a different Scene renders into nothing, silently.
     const scene = EngineHarness.shadeScene(engine);
 
     await em.addSystem(new ShadedGeometrySystem3(graphics, scene));
@@ -48,25 +54,22 @@ async function main(): Promise<void> {
     await em.addSystem(new CameraSystem3(graphics));
 
     /*
-     Shade assumes global illumination: with no environment map, every surface
-     renders unlit and the level is a black void with a few emissive panels in
-     it. `make_default_environment` says so in its own docblock, but nothing warns
-     at runtime, and "my geometry is black" reads as a material problem rather
-     than a missing environment. Cost about 25 minutes -- see REPORT.md ergonomics.
-
-     The default is an outdoor sky, which is the wrong *look* for a Q3 arena but
-     the right *function*: it is the ambient term, and Q3's own lighting comes
-     from the emissive surfaces and point lights the pipeline reconstructs.
+     Shade assumes global illumination: with no environment map every surface
+     renders unlit, and "my geometry is black" reads as a material problem rather
+     than a missing environment. See REPORT.md ergonomics.
     */
     graphics.set_environment_map(make_default_environment());
 
     EngineHarness.addFpsCounter(engine);
 
     const mapName = requestedMap();
-    const loaded = await loadMap(ecd, `/assets/built/${mapName}`);
+    const baseUrl = `/assets/built/${mapName}`;
 
-    // Spawn the camera at a real player spawn point so the first frame shows the
-    // level rather than the inside of a wall.
+    const [loaded, clipMap] = await Promise.all([
+        loadMap(ecd, baseUrl),
+        loadClipMap(baseUrl, mapName),
+    ]);
+
     const spawn =
         loaded.bundle.entities.find((e) => e.classname === 'info_player_deathmatch') ??
         loaded.bundle.entities.find((e) => e.classname === 'info_player_start') ??
@@ -75,44 +78,84 @@ async function main(): Promise<void> {
     const camera = new Camera();
     camera.active.set(true);
     camera.autoClip = false;
-    // Scene is in metres (DECISIONS.md D-011). A Q3 arena is ~50 m across, so
-    // 600 m of far plane covers the largest OA map with room to spare.
+    // Scene is metres (DECISIONS.md D-011). A Q3 arena is ~50 m across.
     camera.clip_near = 0.1;
     camera.clip_far = 600;
     camera.fov.set(90);
 
     const transform = new Transform();
-    if (spawn !== null) {
-        // Q3 spawn origins sit at the player's centre; +0.8 m puts the camera at
-        // roughly eye height above it.
-        transform.position.set(
-            spawn._origin[0] ?? 0,
-            (spawn._origin[1] ?? 0) + 0.8,
-            spawn._origin[2] ?? 0
-        );
-    } else {
-        transform.position.set(0, 6, 0);
-    }
-
     const cameraEntity = new Entity();
     cameraEntity.add(transform).add(camera).build(ecd);
 
-    const fly = new FlyCamera(transform, graphics.domElement as HTMLElement);
-    fly.attach();
-    // `onTick` is documented as `Signal<number>` but is emitted as `any` in the
-    // published types, so the callback parameter has no inferred type. Annotating
-    // it locally rather than reaching for `any` -- see GAP-001.
-    engine.ticker.onTick.add((deltaSeconds: number) => fly.update(deltaSeconds));
+    const canvas = graphics.domElement as HTMLElement;
+    const hud = new Hud();
+    hud.link(engine.viewStack);
 
-    Object.assign(window as unknown as Record<string, unknown>, {
-        queep: { engine, loaded, fly },
-    });
+    if (flyMode()) {
+        transform.position.set(
+            spawn?._origin[0] ?? 0,
+            (spawn?._origin[1] ?? 0) + 0.8,
+            spawn?._origin[2] ?? 0
+        );
+
+        const fly = new FlyCamera(transform, canvas);
+        fly.attach();
+        engine.ticker.onTick.add((dt: number) => {
+            fly.update(dt);
+            hud.update({ mode: 'fly', speed: 0, onGround: false, map: mapName });
+        });
+
+        expose(engine, { loaded, clipMap, fly });
+    } else {
+        const player = new PlayerController(
+            clipMap,
+            canvas,
+            spawn?._originQ3 ?? [0, 0, 0]
+        );
+        player.attach();
+
+        // `onTick` is documented as `Signal<number>` but is emitted as `any`, so
+        // the callback parameter has no inferred type -- see GAP-001.
+        engine.ticker.onTick.add((deltaSeconds: number) => {
+            player.update(deltaSeconds, transform);
+            hud.update({
+                mode: player.active ? 'play' : 'click-to-play',
+                speed: player.speed,
+                onGround: player.onGround,
+                map: mapName,
+            });
+        });
+
+        expose(engine, { loaded, clipMap, player });
+    }
 
     console.log(
-        `[queep] ${mapName}: ${loaded.bundle.stats['meshes']} meshes, ` +
-        `${loaded.bundle.stats['triangles']} tris, ${loaded.bundle.lights.length} lights`,
+        `[queep] ${mapName}: ${loaded.bundle.stats['triangles']} tris, ` +
+        `${loaded.bundle.lights.length} lights, ${clipMap.numBrushes} brushes` +
+        (clipMap.numPatches > 0
+            ? ` (WARNING: ${clipMap.numPatches} patches -- curved surfaces are not solid, see D-017)`
+            : ''),
         loaded.timings
     );
+}
+
+/**
+ * The collision model comes from the BSP itself rather than a converted format,
+ * so the runtime and the pmove oracle read the same bytes. A second
+ * representation would be a second thing that can disagree with `cm_trace.c`.
+ */
+async function loadClipMap(baseUrl: string, name: string): Promise<ClipMap> {
+    const response = await fetch(`${baseUrl}/collision.bsp`);
+    if (!response.ok) {
+        throw new Error(`${baseUrl}/collision.bsp: HTTP ${response.status}`);
+    }
+    return new ClipMap(new BspFile(await response.arrayBuffer(), name));
+}
+
+function expose(engine: unknown, extra: Record<string, unknown>): void {
+    Object.assign(window as unknown as Record<string, unknown>, {
+        queep: { engine, ...extra },
+    });
 }
 
 main().catch((e: unknown) => {

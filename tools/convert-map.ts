@@ -626,6 +626,15 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
     writeFileSync(join(outDir, 'scene.json'), JSON.stringify(scene));
 
+    /*
+     The BSP itself, so the runtime can build its collision model from the same
+     bytes the oracle does. Not re-encoded into a bespoke format: `ClipMap` reads
+     the lumps directly, and a second representation would be a second thing that
+     can disagree with `cm_trace.c` about plane winding -- which would present as
+     a physics bug that looks like a rendering bug.
+    */
+    copyFileSync(bspPath, join(outDir, 'collision.bsp'));
+
     console.log(
         `${mapName}: ${meshes.length} meshes, ${totalVerts} verts, ${totalIndices / 3} tris, ` +
         `${materials.length} materials, ${lights.length} lights, ${scene.stats.texturesWritten} textures` +
