@@ -1,0 +1,825 @@
+{
+ "$generated": "tools/extract-balance.mjs -- do not edit by hand",
+ "$source": "OpenArena gamecode, pinned in tools/fetch-sources.mjs",
+ "items": [
+  {
+   "classname": "item_armor_shard",
+   "pickupSound": "sound/misc/ar1_pkup.wav",
+   "models": [
+    "models/powerups/armor/shard.md3",
+    "models/powerups/armor/shard_sphere.md3"
+   ],
+   "icon": "icons/iconr_shard",
+   "pickupName": "Armor Shard",
+   "quantity": 5,
+   "type": "IT_ARMOR",
+   "tag": "0"
+  },
+  {
+   "classname": "item_armor_combat",
+   "pickupSound": "sound/misc/ar2_pkup.wav",
+   "models": [
+    "models/powerups/armor/armor_yel.md3"
+   ],
+   "icon": "icons/iconr_yellow",
+   "pickupName": "Armor",
+   "quantity": 50,
+   "type": "IT_ARMOR",
+   "tag": "0"
+  },
+  {
+   "classname": "item_armor_body",
+   "pickupSound": "sound/misc/ar2_pkup.wav",
+   "models": [
+    "models/powerups/armor/armor_red.md3"
+   ],
+   "icon": "icons/iconr_red",
+   "pickupName": "Heavy Armor",
+   "quantity": 100,
+   "type": "IT_ARMOR",
+   "tag": "0"
+  },
+  {
+   "classname": "item_health_small",
+   "pickupSound": "sound/items/s_health.wav",
+   "models": [
+    "models/powerups/health/small_cross.md3",
+    "models/powerups/health/small_sphere.md3"
+   ],
+   "icon": "icons/iconh_green",
+   "pickupName": "5 Health",
+   "quantity": 5,
+   "type": "IT_HEALTH",
+   "tag": "0"
+  },
+  {
+   "classname": "item_health",
+   "pickupSound": "sound/items/n_health.wav",
+   "models": [
+    "models/powerups/health/medium_cross.md3",
+    "models/powerups/health/medium_sphere.md3"
+   ],
+   "icon": "icons/iconh_yellow",
+   "pickupName": "25 Health",
+   "quantity": 25,
+   "type": "IT_HEALTH",
+   "tag": "0"
+  },
+  {
+   "classname": "item_health_large",
+   "pickupSound": "sound/items/l_health.wav",
+   "models": [
+    "models/powerups/health/large_cross.md3",
+    "models/powerups/health/large_sphere.md3"
+   ],
+   "icon": "icons/iconh_red",
+   "pickupName": "50 Health",
+   "quantity": 50,
+   "type": "IT_HEALTH",
+   "tag": "0"
+  },
+  {
+   "classname": "item_health_mega",
+   "pickupSound": "sound/items/m_health.wav",
+   "models": [
+    "models/powerups/health/mega_cross.md3",
+    "models/powerups/health/mega_sphere.md3"
+   ],
+   "icon": "icons/iconh_mega",
+   "pickupName": "Mega Health",
+   "quantity": 100,
+   "type": "IT_HEALTH",
+   "tag": "0"
+  },
+  {
+   "classname": "weapon_gauntlet",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/gauntlet/gauntlet.md3"
+   ],
+   "icon": "icons/iconw_gauntlet",
+   "pickupName": "Gauntlet",
+   "quantity": 0,
+   "type": "IT_WEAPON",
+   "tag": "WP_GAUNTLET"
+  },
+  {
+   "classname": "weapon_shotgun",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/shotgun/shotgun.md3"
+   ],
+   "icon": "icons/iconw_shotgun",
+   "pickupName": "Shotgun",
+   "quantity": 10,
+   "type": "IT_WEAPON",
+   "tag": "WP_SHOTGUN"
+  },
+  {
+   "classname": "weapon_machinegun",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/machinegun/machinegun.md3"
+   ],
+   "icon": "icons/iconw_machinegun",
+   "pickupName": "Machinegun",
+   "quantity": 40,
+   "type": "IT_WEAPON",
+   "tag": "WP_MACHINEGUN"
+  },
+  {
+   "classname": "weapon_grenadelauncher",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/grenadel/grenadel.md3"
+   ],
+   "icon": "icons/iconw_grenade",
+   "pickupName": "Grenade Launcher",
+   "quantity": 10,
+   "type": "IT_WEAPON",
+   "tag": "WP_GRENADE_LAUNCHER"
+  },
+  {
+   "classname": "weapon_rocketlauncher",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/rocketl/rocketl.md3"
+   ],
+   "icon": "icons/iconw_rocket",
+   "pickupName": "Rocket Launcher",
+   "quantity": 10,
+   "type": "IT_WEAPON",
+   "tag": "WP_ROCKET_LAUNCHER"
+  },
+  {
+   "classname": "weapon_lightning",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/lightning/lightning.md3"
+   ],
+   "icon": "icons/iconw_lightning",
+   "pickupName": "Lightning Gun",
+   "quantity": 100,
+   "type": "IT_WEAPON",
+   "tag": "WP_LIGHTNING"
+  },
+  {
+   "classname": "weapon_railgun",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/railgun/railgun.md3"
+   ],
+   "icon": "icons/iconw_railgun",
+   "pickupName": "Railgun",
+   "quantity": 10,
+   "type": "IT_WEAPON",
+   "tag": "WP_RAILGUN"
+  },
+  {
+   "classname": "weapon_plasmagun",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/plasma/plasma.md3"
+   ],
+   "icon": "icons/iconw_plasma",
+   "pickupName": "Plasma Gun",
+   "quantity": 50,
+   "type": "IT_WEAPON",
+   "tag": "WP_PLASMAGUN"
+  },
+  {
+   "classname": "weapon_bfg",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/bfg/bfg.md3"
+   ],
+   "icon": "icons/iconw_bfg",
+   "pickupName": "BFG10K",
+   "quantity": 20,
+   "type": "IT_WEAPON",
+   "tag": "WP_BFG"
+  },
+  {
+   "classname": "weapon_grapplinghook",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons2/grapple/grapple.md3"
+   ],
+   "icon": "icons/iconw_grapple",
+   "pickupName": "Grappling Hook",
+   "quantity": 0,
+   "type": "IT_WEAPON",
+   "tag": "WP_GRAPPLING_HOOK"
+  },
+  {
+   "classname": "ammo_shells",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/shotgunam.md3"
+   ],
+   "icon": "icons/icona_shotgun",
+   "pickupName": "Shells",
+   "quantity": 10,
+   "type": "IT_AMMO",
+   "tag": "WP_SHOTGUN"
+  },
+  {
+   "classname": "ammo_bullets",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/machinegunam.md3"
+   ],
+   "icon": "icons/icona_machinegun",
+   "pickupName": "Bullets",
+   "quantity": 50,
+   "type": "IT_AMMO",
+   "tag": "WP_MACHINEGUN"
+  },
+  {
+   "classname": "ammo_grenades",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/grenadeam.md3"
+   ],
+   "icon": "icons/icona_grenade",
+   "pickupName": "Grenades",
+   "quantity": 5,
+   "type": "IT_AMMO",
+   "tag": "WP_GRENADE_LAUNCHER"
+  },
+  {
+   "classname": "ammo_cells",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/plasmaam.md3"
+   ],
+   "icon": "icons/icona_plasma",
+   "pickupName": "Cells",
+   "quantity": 30,
+   "type": "IT_AMMO",
+   "tag": "WP_PLASMAGUN"
+  },
+  {
+   "classname": "ammo_lightning",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/lightningam.md3"
+   ],
+   "icon": "icons/icona_lightning",
+   "pickupName": "Lightning",
+   "quantity": 60,
+   "type": "IT_AMMO",
+   "tag": "WP_LIGHTNING"
+  },
+  {
+   "classname": "ammo_rockets",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/rocketam.md3"
+   ],
+   "icon": "icons/icona_rocket",
+   "pickupName": "Rockets",
+   "quantity": 5,
+   "type": "IT_AMMO",
+   "tag": "WP_ROCKET_LAUNCHER"
+  },
+  {
+   "classname": "ammo_slugs",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/railgunam.md3"
+   ],
+   "icon": "icons/icona_railgun",
+   "pickupName": "Slugs",
+   "quantity": 10,
+   "type": "IT_AMMO",
+   "tag": "WP_RAILGUN"
+  },
+  {
+   "classname": "ammo_bfg",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/bfgam.md3"
+   ],
+   "icon": "icons/icona_bfg",
+   "pickupName": "Bfg Ammo",
+   "quantity": 15,
+   "type": "IT_AMMO",
+   "tag": "WP_BFG"
+  },
+  {
+   "classname": "holdable_teleporter",
+   "pickupSound": "sound/items/holdable.wav",
+   "models": [
+    "models/powerups/holdable/teleporter.md3"
+   ],
+   "icon": "icons/teleporter",
+   "pickupName": "Personal Teleporter",
+   "quantity": 60,
+   "type": "IT_HOLDABLE",
+   "tag": "HI_TELEPORTER"
+  },
+  {
+   "classname": "holdable_medkit",
+   "pickupSound": "sound/items/holdable.wav",
+   "models": [
+    "models/powerups/holdable/medkit.md3",
+    "models/powerups/holdable/medkit_sphere.md3"
+   ],
+   "icon": "icons/medkit",
+   "pickupName": "Medkit",
+   "quantity": 60,
+   "type": "IT_HOLDABLE",
+   "tag": "HI_MEDKIT"
+  },
+  {
+   "classname": "item_quad",
+   "pickupSound": "sound/items/quaddamage.wav",
+   "models": [
+    "models/powerups/instant/quad.md3",
+    "models/powerups/instant/quad_ring.md3"
+   ],
+   "icon": "icons/quad",
+   "pickupName": "Quad Damage",
+   "quantity": 30,
+   "type": "IT_POWERUP",
+   "tag": "PW_QUAD"
+  },
+  {
+   "classname": "item_enviro",
+   "pickupSound": "sound/items/protect.wav",
+   "models": [
+    "models/powerups/instant/enviro.md3",
+    "models/powerups/instant/enviro_ring.md3"
+   ],
+   "icon": "icons/envirosuit",
+   "pickupName": "Battle Suit",
+   "quantity": 30,
+   "type": "IT_POWERUP",
+   "tag": "PW_BATTLESUIT"
+  },
+  {
+   "classname": "item_haste",
+   "pickupSound": "sound/items/haste.wav",
+   "models": [
+    "models/powerups/instant/haste.md3",
+    "models/powerups/instant/haste_ring.md3"
+   ],
+   "icon": "icons/haste",
+   "pickupName": "Speed",
+   "quantity": 30,
+   "type": "IT_POWERUP",
+   "tag": "PW_HASTE"
+  },
+  {
+   "classname": "item_invis",
+   "pickupSound": "sound/items/invisibility.wav",
+   "models": [
+    "models/powerups/instant/invis.md3",
+    "models/powerups/instant/invis_ring.md3"
+   ],
+   "icon": "icons/invis",
+   "pickupName": "Invisibility",
+   "quantity": 30,
+   "type": "IT_POWERUP",
+   "tag": "PW_INVIS"
+  },
+  {
+   "classname": "item_regen",
+   "pickupSound": "sound/items/regeneration.wav",
+   "models": [
+    "models/powerups/instant/regen.md3",
+    "models/powerups/instant/regen_ring.md3"
+   ],
+   "icon": "icons/regen",
+   "pickupName": "Regeneration",
+   "quantity": 30,
+   "type": "IT_POWERUP",
+   "tag": "PW_REGEN"
+  },
+  {
+   "classname": "item_flight",
+   "pickupSound": "sound/items/flight.wav",
+   "models": [
+    "models/powerups/instant/flight.md3",
+    "models/powerups/instant/flight_ring.md3"
+   ],
+   "icon": "icons/flight",
+   "pickupName": "Flight",
+   "quantity": 60,
+   "type": "IT_POWERUP",
+   "tag": "PW_FLIGHT"
+  },
+  {
+   "classname": "team_CTF_redflag",
+   "pickupSound": null,
+   "models": [
+    "models/flags/r_flag.md3"
+   ],
+   "icon": "icons/iconf_red1",
+   "pickupName": "Red Flag",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "PW_REDFLAG"
+  },
+  {
+   "classname": "team_CTF_blueflag",
+   "pickupSound": null,
+   "models": [
+    "models/flags/b_flag.md3"
+   ],
+   "icon": "icons/iconf_blu1",
+   "pickupName": "Blue Flag",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "PW_BLUEFLAG"
+  },
+  {
+   "classname": "holdable_kamikaze",
+   "pickupSound": "sound/items/holdable.wav",
+   "models": [
+    "models/powerups/kamikazi.md3"
+   ],
+   "icon": "icons/kamikaze",
+   "pickupName": "Kamikaze",
+   "quantity": 60,
+   "type": "IT_HOLDABLE",
+   "tag": "HI_KAMIKAZE"
+  },
+  {
+   "classname": "holdable_portal",
+   "pickupSound": "sound/items/holdable.wav",
+   "models": [
+    "models/powerups/holdable/porter.md3"
+   ],
+   "icon": "icons/portal",
+   "pickupName": "Portal",
+   "quantity": 60,
+   "type": "IT_HOLDABLE",
+   "tag": "HI_PORTAL"
+  },
+  {
+   "classname": "holdable_invulnerability",
+   "pickupSound": "sound/items/holdable.wav",
+   "models": [
+    "models/powerups/holdable/invulnerability.md3"
+   ],
+   "icon": "icons/invulnerability",
+   "pickupName": "Invulnerability",
+   "quantity": 60,
+   "type": "IT_HOLDABLE",
+   "tag": "HI_INVULNERABILITY"
+  },
+  {
+   "classname": "ammo_nails",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/nailgunam.md3"
+   ],
+   "icon": "icons/icona_nailgun",
+   "pickupName": "Nails",
+   "quantity": 20,
+   "type": "IT_AMMO",
+   "tag": "WP_NAILGUN"
+  },
+  {
+   "classname": "ammo_mines",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/proxmineam.md3"
+   ],
+   "icon": "icons/icona_proxlauncher",
+   "pickupName": "Proximity Mines",
+   "quantity": 10,
+   "type": "IT_AMMO",
+   "tag": "WP_PROX_LAUNCHER"
+  },
+  {
+   "classname": "ammo_belt",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/ammo/chaingunam.md3"
+   ],
+   "icon": "icons/icona_chaingun",
+   "pickupName": "Chaingun Belt",
+   "quantity": 100,
+   "type": "IT_AMMO",
+   "tag": "WP_CHAINGUN"
+  },
+  {
+   "classname": "item_scout",
+   "pickupSound": "sound/items/scout.wav",
+   "models": [
+    "models/powerups/scout.md3"
+   ],
+   "icon": "icons/scout",
+   "pickupName": "Scout",
+   "quantity": 30,
+   "type": "IT_PERSISTANT_POWERUP",
+   "tag": "PW_SCOUT"
+  },
+  {
+   "classname": "item_guard",
+   "pickupSound": "sound/items/guard.wav",
+   "models": [
+    "models/powerups/guard.md3"
+   ],
+   "icon": "icons/guard",
+   "pickupName": "Guard",
+   "quantity": 30,
+   "type": "IT_PERSISTANT_POWERUP",
+   "tag": "PW_GUARD"
+  },
+  {
+   "classname": "item_doubler",
+   "pickupSound": "sound/items/doubler.wav",
+   "models": [
+    "models/powerups/doubler.md3"
+   ],
+   "icon": "icons/doubler",
+   "pickupName": "Doubler",
+   "quantity": 30,
+   "type": "IT_PERSISTANT_POWERUP",
+   "tag": "PW_DOUBLER"
+  },
+  {
+   "classname": "item_ammoregen",
+   "pickupSound": "sound/items/ammoregen.wav",
+   "models": [
+    "models/powerups/ammo.md3"
+   ],
+   "icon": "icons/ammo_regen",
+   "pickupName": "Ammo Regen",
+   "quantity": 30,
+   "type": "IT_PERSISTANT_POWERUP",
+   "tag": "PW_AMMOREGEN"
+  },
+  {
+   "classname": "team_CTF_neutralflag",
+   "pickupSound": null,
+   "models": [
+    "models/flags/n_flag.md3"
+   ],
+   "icon": "icons/iconf_neutral1",
+   "pickupName": "Neutral Flag",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "PW_NEUTRALFLAG"
+  },
+  {
+   "classname": "item_redcube",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/orb/r_orb.md3"
+   ],
+   "icon": "icons/iconh_rorb",
+   "pickupName": "Red Cube",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "0"
+  },
+  {
+   "classname": "item_bluecube",
+   "pickupSound": "sound/misc/am_pkup.wav",
+   "models": [
+    "models/powerups/orb/b_orb.md3"
+   ],
+   "icon": "icons/iconh_borb",
+   "pickupName": "Blue Cube",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "0"
+  },
+  {
+   "classname": "weapon_nailgun",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons/nailgun/nailgun.md3"
+   ],
+   "icon": "icons/iconw_nailgun",
+   "pickupName": "Nailgun",
+   "quantity": 10,
+   "type": "IT_WEAPON",
+   "tag": "WP_NAILGUN"
+  },
+  {
+   "classname": "weapon_prox_launcher",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons/proxmine/proxmine.md3"
+   ],
+   "icon": "icons/iconw_proxlauncher",
+   "pickupName": "Prox Launcher",
+   "quantity": 5,
+   "type": "IT_WEAPON",
+   "tag": "WP_PROX_LAUNCHER"
+  },
+  {
+   "classname": "weapon_chaingun",
+   "pickupSound": "sound/misc/w_pkup.wav",
+   "models": [
+    "models/weapons/vulcan/vulcan.md3"
+   ],
+   "icon": "icons/iconw_chaingun",
+   "pickupName": "Chaingun",
+   "quantity": 80,
+   "type": "IT_WEAPON",
+   "tag": "WP_CHAINGUN"
+  },
+  {
+   "classname": "team_DD_pointAblue",
+   "pickupSound": null,
+   "models": [
+    "models/dpoints/a_blue.md3"
+   ],
+   "icon": "icons/icona_blue",
+   "pickupName": "Point A (Blue)",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DD_POINTABLUE"
+  },
+  {
+   "classname": "team_DD_pointBblue",
+   "pickupSound": null,
+   "models": [
+    "models/dpoints/b_blue.md3"
+   ],
+   "icon": "icons/iconb_blue",
+   "pickupName": "Point B (Blue)",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DD_POINTBBLUE"
+  },
+  {
+   "classname": "team_DD_pointAred",
+   "pickupSound": null,
+   "models": [
+    "models/dpoints/a_red.md3"
+   ],
+   "icon": "icons/icona_red",
+   "pickupName": "Point A (Red)",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DD_POINTARED"
+  },
+  {
+   "classname": "team_DD_pointBred",
+   "pickupSound": null,
+   "models": [
+    "models/dpoints/b_red.md3"
+   ],
+   "icon": "icons/iconb_red",
+   "pickupName": "Point B (Red)",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DD_POINTBRED"
+  },
+  {
+   "classname": "team_DD_pointAwhite",
+   "pickupSound": null,
+   "models": [
+    "models/dpoints/a_white.md3"
+   ],
+   "icon": "icons/icona_white",
+   "pickupName": "Point A (White)",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DD_POINTAWHITE"
+  },
+  {
+   "classname": "team_DD_pointBwhite",
+   "pickupSound": null,
+   "models": [
+    "models/dpoints/b_white.md3"
+   ],
+   "icon": "icons/iconb_white",
+   "pickupName": "Point B (White)",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DD_POINTBWHITE"
+  },
+  {
+   "classname": "team_dom_pointWhite",
+   "pickupSound": null,
+   "models": [
+    "models/flags/n_flag.md3"
+   ],
+   "icon": "icons/iconf_neutral1",
+   "pickupName": "Neutral domination point",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DOM_POINTWHITE"
+  },
+  {
+   "classname": "team_dom_pointRed",
+   "pickupSound": null,
+   "models": [
+    "models/flags/r_flag.md3"
+   ],
+   "icon": "icons/iconf_red1",
+   "pickupName": "Red domination point",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DOM_POINTRED"
+  },
+  {
+   "classname": "team_dom_pointBlue",
+   "pickupSound": null,
+   "models": [
+    "models/flags/b_flag.md3"
+   ],
+   "icon": "icons/iconf_blu1",
+   "pickupName": "Blue domination point",
+   "quantity": 0,
+   "type": "IT_TEAM",
+   "tag": "DOM_POINTBLUE"
+  }
+ ],
+ "weapons": {
+  "WP_GAUNTLET": {
+   "hitscan": true,
+   "fireRateMs": 400,
+   "damage": 50,
+   "range": 32
+  },
+  "WP_MACHINEGUN": {
+   "hitscan": true,
+   "fireRateMs": 100,
+   "damage": 7,
+   "teamDamage": 5,
+   "spread": 200
+  },
+  "WP_SHOTGUN": {
+   "hitscan": true,
+   "fireRateMs": 1000,
+   "damage": 10,
+   "pellets": 11,
+   "spread": 700
+  },
+  "WP_GRENADE_LAUNCHER": {
+   "fireRateMs": 800,
+   "hitscan": false,
+   "damage": 100,
+   "splashDamage": 100,
+   "splashRadius": 150,
+   "speed": 700
+  },
+  "WP_ROCKET_LAUNCHER": {
+   "fireRateMs": 800,
+   "hitscan": false,
+   "damage": 100,
+   "splashDamage": 100,
+   "splashRadius": 120,
+   "speed": 900
+  },
+  "WP_LIGHTNING": {
+   "hitscan": true,
+   "fireRateMs": 50,
+   "damage": 8,
+   "range": 768
+  },
+  "WP_RAILGUN": {
+   "hitscan": true,
+   "fireRateMs": 1500,
+   "damage": 100
+  },
+  "WP_PLASMAGUN": {
+   "fireRateMs": 100,
+   "hitscan": false,
+   "damage": 20,
+   "splashDamage": 15,
+   "splashRadius": 20,
+   "speed": 2000
+  },
+  "WP_BFG": {
+   "fireRateMs": 200,
+   "hitscan": false,
+   "damage": 100,
+   "splashDamage": 100,
+   "splashRadius": 120,
+   "speed": 2000
+  },
+  "WP_CHAINGUN": {
+   "hitscan": true,
+   "fireRateMs": 30,
+   "damage": 7,
+   "spread": 600
+  },
+  "WP_PROX_LAUNCHER": {
+   "fireRateMs": 800,
+   "hitscan": false,
+   "damage": 0,
+   "splashDamage": 100,
+   "splashRadius": 150,
+   "speed": 700
+  }
+ },
+ "respawn": {
+  "armorSeconds": 25,
+  "healthSeconds": 35,
+  "ammoSeconds": 40,
+  "holdableSeconds": 60,
+  "megaHealthSeconds": 35,
+  "powerupSeconds": 120
+ }
+}
