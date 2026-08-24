@@ -319,3 +319,61 @@ All of it compiles **unmodified**. Making that work needed only build-configurat
 WebAssembly so the six platform macros ioquake3's `__EMSCRIPTEN__` block defines are supplied on
 the command line. Unmodified sources are the property that makes this an oracle rather than a
 second implementation.
+
+### D-022: The weapon state machine and torso animation are not ported
+
+`PM_Weapon`, `PM_BeginWeaponChange`, `PM_FinishWeaponChange`, `PM_TorsoAnimation` and
+`PM_Animate` write `weaponTime`, `weaponstate`, `torsoAnim` and `torsoTimer`. None of those feed
+back into position or velocity, so movement does not need them; phase 3 does, and adds them
+there.
+
+The interesting part is how the differential test copes. Those functions *raise events*, so the
+oracle's `eventSequence` would run ahead of the port's for a reason unrelated to movement. Two
+options:
+
+1. Exclude `eventSequence` from the comparison. Rejected: it would also hide a genuinely
+   missing *movement* event, which is the failure mode this suite most needs to catch — and
+   which it did in fact catch twice (D-023).
+2. Make the C take its own early-out. `PM_Weapon` opens with
+   `if ( ps->persistant[PERS_TEAM] == TEAM_SPECTATOR || ... ) return;`, and `PERS_TEAM` is read
+   nowhere else in `bg_pmove.c` or `bg_slidemove.c`. Setting it on both sides disables exactly
+   the unported subsystem and nothing else, without modifying any C.
+
+Option 2 is what the suite does.
+
+### D-023: Four real bugs the pmove oracle caught
+
+None of these were visible by reading the port next to the C. All four produced *plausible*
+behaviour — a player who moves, jumps and collides — and would have been found, if at all, as
+"the movement feels slightly wrong".
+
+1. **`OVERCLIP` is `1.001f`, not `1.001`.** The float32 value is 1.0010000467300415, and every
+   surface clip multiplies by it. Using the double drifted by one ULP per clip, which showed up
+   only after ~140 frames of bunny hopping and nowhere earlier. `MIN_WALK_NORMAL` is `0.7f` for
+   the same reason.
+
+2. **`PM_CrashLand`'s `t` stays in double.** `t = (-b - sqrt(den)) / (2*a)`: `sqrt` returns a
+   double, so the numerator promotes and the whole expression stays double until it lands in the
+   `float t`. Rounding the square root early shifted `delta` by a few ULPs, and `delta` is
+   compared against 1, 7, 40 and 60 — a landing sitting just either side of `delta < 1` changes
+   whether an event fires at all.
+
+3. **`PM_StepSlideMove` raises step events I had not ported.** The `EV_STEP_4`/`8`/`12`/`16`
+   block sits after an `#if 0` at the bottom of `bg_slidemove.c`, and I stopped reading the
+   function at the `PM_ClipVelocity` above it. Position and velocity agreed bit-for-bit; the
+   port was exactly one event behind after ~40 frames.
+
+4. **`CM_PositionTest` expands the box for leaf selection only.** The C builds a local
+   `leafList_t` whose `bounds` are the player box grown by one unit on each axis, and uses that
+   for the tree walk — while `CM_TestBoxInBrush` keeps rejecting brushes against the
+   *unexpanded* `tw->bounds`. I had written the expanded box into `tw->bounds`, making the axial
+   rejection one unit too generous, so a player standing on a floor tested as inside it.
+   Symptom: crouch, release crouch, and `PM_CheckDuck`'s headroom probe reports solid, so the
+   player never stands up again.
+
+**Bug 4 also exposed a hole in the trace suite.** `CM_PositionTest` runs only when
+`start == end`, and randomised sweeps never generate that, so the entire position-test path was
+untested — the *pmove* suite found it instead. The trace suite now has a dedicated
+position-test case, alternating standing and crouched boxes. Worth stating as a general lesson:
+a differential suite over randomised inputs tests the paths random inputs reach, and degenerate
+cases have to be asked for by name.

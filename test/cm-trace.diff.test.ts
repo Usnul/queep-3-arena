@@ -206,6 +206,68 @@ describe.each(MAPS)('CM_BoxTrace differential [%s]', (MAP) => {
         ).toEqual([]);
     });
 
+    /**
+     * Position tests -- `start == end`.
+     *
+     * This case has its own code path in the C (`CM_PositionTest` ->
+     * `CM_BoxLeafnums_r` -> `CM_TestBoxInBrush`) and randomised sweeps never
+     * generate it, so for a while it was completely untested. Two real bugs were
+     * hiding there, and both were found by the *pmove* suite instead, as a
+     * crouched player who could never stand up: `PM_CheckDuck` probes headroom
+     * with exactly this degenerate trace.
+     */
+    it('agrees on position tests (start == end)', () => {
+        const rand = rng(0x9051);
+        const N = 20_000;
+
+        const failures: string[] = [];
+        let solidCount = 0;
+
+        const out = createTrace();
+
+        for (let i = 0; i < N; i++) {
+            const p: [number, number, number] = [
+                asF32(worldMin[0] + rand() * (worldMax[0] - worldMin[0])),
+                asF32(worldMin[1] + rand() * (worldMax[1] - worldMin[1])),
+                asF32(worldMin[2] + rand() * (worldMax[2] - worldMin[2])),
+            ];
+
+            // Alternate standing and crouched boxes: the stand-up probe uses the
+            // standing box from a position the crouched one fits in, which is
+            // precisely where the boundary behaviour matters.
+            const maxs = i % 2 === 0 ? PLAYER_MAXS : ([15, 15, 16] as const);
+
+            const expected = oracle.boxTrace(p, PLAYER_MINS, maxs, p, MASK_PLAYERSOLID);
+            boxTrace(out, cm, p, p, PLAYER_MINS, maxs, MASK_PLAYERSOLID);
+
+            if (expected.allsolid) solidCount += 1;
+
+            const problems: string[] = [];
+            if (out.allsolid !== expected.allsolid) {
+                problems.push(`allsolid ${out.allsolid} != ${expected.allsolid}`);
+            }
+            if (out.startsolid !== expected.startsolid) {
+                problems.push(`startsolid ${out.startsolid} != ${expected.startsolid}`);
+            }
+            if (out.fraction !== expected.fraction) {
+                problems.push(`fraction ${out.fraction} != ${expected.fraction}`);
+            }
+            if (out.contents !== expected.contents) {
+                problems.push(`contents ${out.contents} != ${expected.contents}`);
+            }
+
+            if (problems.length > 0 && failures.length < 8) {
+                failures.push(
+                    `case ${i}: p=[${p.map((v) => v.toFixed(3))}] maxs_z=${maxs[2]}\n    ` +
+                    problems.join('\n    ')
+                );
+            }
+        }
+
+        expect(solidCount, 'some sampled boxes must land in solid').toBeGreaterThan(0);
+        expect(failures, failures.join('\n')).toEqual([]);
+    });
+
     it('agrees on point contents', () => {
         const rand = rng(0xc047e);
         const N = 20_000;

@@ -134,6 +134,24 @@ const tw = new TraceWork();
 const MAX_POSITION_LEAFS = 1024;
 const positionLeafs = new Int32Array(MAX_POSITION_LEAFS);
 
+/**
+ * `leafList_t.bounds` -- the box the *leaf walk* uses, which is deliberately not
+ * `tw.bounds`.
+ *
+ * `CM_PositionTest` expands the player box by one unit on every axis before
+ * choosing leaves, so a box resting exactly on a surface still finds the leaf
+ * below it. That expansion belongs to leaf selection only: `CM_TestBoxInBrush`
+ * still rejects brushes against the *unexpanded* `tw->bounds`.
+ *
+ * Writing the expanded box into `tw.bounds` instead -- which is what this did
+ * first, because the C uses a local `leafList_t` and the distinction is easy to
+ * miss -- makes the axial rejection one unit too generous, and a player standing
+ * on a floor tests as inside it. Symptom: crouch, release crouch, and
+ * `PM_CheckDuck`'s headroom trace reports solid, so the player never stands up.
+ */
+const leafBoundsMin = new Float32Array(3);
+const leafBoundsMax = new Float32Array(3);
+
 /* ------------------------------------------------------------------ *
  * CM_TraceThroughBrush
  * ------------------------------------------------------------------ */
@@ -394,16 +412,15 @@ function boxLeafnumsR(cm: ClipMap, nodenum: number): void {
         const nz = cm.planes[p + 2]!;
         const dist = cm.planes[p + 3]!;
 
-        // `BoxOnPlaneSide` -- the general form, since the axial fast path is an
-        // optimisation whose result is identical.
         const s = boxOnPlaneSide(
-            tw.boundsMin,
-            tw.boundsMax,
+            leafBoundsMin,
+            leafBoundsMax,
             nx,
             ny,
             nz,
             dist,
-            cm.planeSignbits[planeIndex]!
+            cm.planeSignbits[planeIndex]!,
+            cm.planeTypes[planeIndex]!
         );
 
         if (s === 1) {
@@ -419,6 +436,18 @@ function boxLeafnumsR(cm: ClipMap, nodenum: number): void {
 
 /**
  * `BoxOnPlaneSide` from `q_math.c`: 1 = in front, 2 = behind, 3 = straddling.
+ *
+ * **The axial fast path is not an optimisation.** It uses `<=` and `>=` against
+ * the box extents, where the general path compares accumulated dot products with
+ * `>=` and `<`. Those disagree exactly on the boundary -- a box whose face lies
+ * precisely on an axial plane is "in front" under the fast path and "straddling"
+ * under the general one.
+ *
+ * Leaving it out was a real bug, and one the trace differential suite could not
+ * see: `BoxOnPlaneSide` is reached only from `CM_PositionTest`, which runs only
+ * when `start == end`, and randomised sweeps never generate that. It surfaced in
+ * the *pmove* suite instead, as a crouched player failing to stand up --
+ * `PM_CheckDuck` tests headroom with exactly such a degenerate trace.
  */
 function boxOnPlaneSide(
     mins: ArrayLike<number>,
@@ -427,8 +456,16 @@ function boxOnPlaneSide(
     ny: number,
     nz: number,
     dist: number,
-    signbits: number
+    signbits: number,
+    type: number
 ): number {
+    // Fast axial cases.
+    if (type < 3) {
+        if (dist <= mins[type]!) return 1;
+        if (dist >= maxs[type]!) return 2;
+        return 3;
+    }
+
     let dist1: number;
     let dist2: number;
 
@@ -482,8 +519,8 @@ function boxOnPlaneSide(
 
 function positionTest(cm: ClipMap): void {
     for (let i = 0; i < 3; i++) {
-        tw.boundsMin[i] = f32(f32(tw.start[i]! + tw.sizeMin[i]!) - 1);
-        tw.boundsMax[i] = f32(f32(tw.start[i]! + tw.sizeMax[i]!) + 1);
+        leafBoundsMin[i] = f32(f32(tw.start[i]! + tw.sizeMin[i]!) - 1);
+        leafBoundsMax[i] = f32(f32(tw.start[i]! + tw.sizeMax[i]!) + 1);
     }
 
     leafCount = 0;
@@ -637,10 +674,10 @@ function traceThroughTree(
 export function boxTrace(
     out: TraceResult,
     cm: ClipMap,
-    start: readonly number[],
-    end: readonly number[],
-    mins: readonly number[],
-    maxs: readonly number[],
+    start: ArrayLike<number>,
+    end: ArrayLike<number>,
+    mins: ArrayLike<number>,
+    maxs: ArrayLike<number>,
     brushmask: number,
     model = 0
 ): void {
