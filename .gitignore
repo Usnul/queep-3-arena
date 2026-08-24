@@ -11,3 +11,5 @@ coverage/
 .idea/
 
 assets/shots/
+
+oracle/build/

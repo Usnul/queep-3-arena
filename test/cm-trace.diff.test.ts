@@ -1,0 +1,239 @@
+/*
+ * cm-trace.diff.test.ts -- differential test: TypeScript CM_BoxTrace vs the C.
+ *
+ * This file is part of queep-3-arena and is licensed GPLv2 (see LICENSE).
+ *
+ * ---
+ *
+ * Traces are tested before movement is, because a movement divergence caused by
+ * a trace divergence is very hard to attribute: pmove issues up to ten traces a
+ * frame and clips velocity against their planes, so one wrong contact normal
+ * becomes a metre of position error twenty frames later. Proving the trace first
+ * turns that into a two-stage bisection.
+ *
+ * Cases are randomised but seeded, so a failure is reproducible from the seed
+ * printed in the message.
+ */
+
+import { describe, it, expect, beforeAll } from 'vitest';
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { BspFile } from '../src/q3/bsp/BspFile.ts';
+import { ClipMap, MASK_PLAYERSOLID } from '../src/q3/cm/ClipMap.ts';
+import { boxTrace, pointContents, createTrace } from '../src/q3/cm/trace.ts';
+import { Oracle } from './oracle.ts';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Maps with **zero** `MST_PATCH` surfaces, so the port's missing patch collision
+ * (D-017) cannot mask a real divergence in what *is* ported. 25 of the 72 maps in
+ * the OA set qualify; these five span two orders of magnitude of brush count and
+ * include both tight indoor geometry and a large open one.
+ *
+ * Patch-bearing maps get their own suite once patch collision exists.
+ */
+const MAPS = ['oa_dm1', 'aggressor', 'oa_dm2', 'q3dm6ish', 'islanddm'] as const;
+
+function bspPath(map: string): string {
+    return join(ROOT, 'assets', 'extracted', 'maps', `${map}.bsp`);
+}
+
+/** Player bounding box, `bg_public.h`. */
+const PLAYER_MINS = [-15, -15, -24] as const;
+const PLAYER_MAXS = [15, 15, 32] as const;
+
+/**
+ * Divergence thresholds -- **zero**.
+ *
+ * The port reproduces the C's `float` rounding step for step (see the `f32`
+ * note in `src/q3/cm/trace.ts`), so the two agree bit-for-bit and there is no
+ * reason to allow slack. A tolerance here would hide exactly the class of bug
+ * this suite exists to catch: a trace that picks a different plane at a grazing
+ * contact produces a small position error on the frame it happens and a large
+ * one twenty frames later.
+ *
+ * Before the float32 work, with a 1e-5 fraction tolerance, this suite reported
+ * 2 divergences in 4000 sweeps.
+ */
+const FRACTION_TOLERANCE = 0;
+const POSITION_TOLERANCE = 0;
+
+/**
+ * Inputs are rounded to float32 before either side sees them.
+ *
+ * The oracle receives its coordinates through `HEAPF32`, so whatever the
+ * generator produced arrives there already rounded to 32 bits. Handing the
+ * TypeScript port the unrounded float64 would mean the two are not being given
+ * the same trace, and the last few digits of `endpos` would differ for a reason
+ * that has nothing to do with the port.
+ */
+const asF32 = (v: number): number => Math.fround(v);
+
+/** Mulberry32 -- small, seedable, and identical run to run. */
+function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+describe.each(MAPS)('CM_BoxTrace differential [%s]', (MAP) => {
+    let oracle: Oracle;
+    let cm: ClipMap;
+    let worldMin: [number, number, number];
+    let worldMax: [number, number, number];
+
+    beforeAll(async () => {
+        const BSP_PATH = bspPath(MAP);
+
+        if (!existsSync(BSP_PATH)) {
+            throw new Error(
+                `missing ${BSP_PATH}\nrun: npm run setup`
+            );
+        }
+
+        oracle = await Oracle.create();
+        oracle.loadBsp(BSP_PATH);
+
+        const raw = readFileSync(BSP_PATH);
+        const bsp = new BspFile(
+            raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
+            MAP
+        );
+        cm = new ClipMap(bsp);
+
+        const world = bsp.models[0]!;
+        worldMin = [...world.mins] as [number, number, number];
+        worldMax = [...world.maxs] as [number, number, number];
+    });
+
+    it('loads the same collision data as the engine', () => {
+        expect(cm.models.length).toBe(oracle.numInlineModels);
+        // The chosen map must have no patches, or the comparison below is
+        // testing the port's known gap rather than its correctness.
+        expect(cm.numPatches).toBe(0);
+    });
+
+    it('agrees on randomised player-sized sweeps', () => {
+        const rand = rng(0x51ee7);
+        const N = 20_000;
+
+        let compared = 0;
+        let hits = 0;
+        const failures: string[] = [];
+
+        const out = createTrace();
+
+        for (let i = 0; i < N; i++) {
+            const inBounds = (): [number, number, number] => [
+                asF32(worldMin[0] + rand() * (worldMax[0] - worldMin[0])),
+                asF32(worldMin[1] + rand() * (worldMax[1] - worldMin[1])),
+                asF32(worldMin[2] + rand() * (worldMax[2] - worldMin[2])),
+            ];
+
+            const start = inBounds();
+
+            // Mix long sweeps across the level with short ones typical of a
+            // movement frame -- the short ones are where the epsilon handling
+            // matters and the long ones are where the tree walk does.
+            const end: [number, number, number] =
+                rand() < 0.5
+                    ? inBounds()
+                    : [
+                          asF32(start[0] + (rand() - 0.5) * 64),
+                          asF32(start[1] + (rand() - 0.5) * 64),
+                          asF32(start[2] + (rand() - 0.5) * 64),
+                      ];
+
+            const expected = oracle.boxTrace(start, PLAYER_MINS, PLAYER_MAXS, end, MASK_PLAYERSOLID);
+            boxTrace(out, cm, start, end, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
+
+            compared += 1;
+            if (expected.fraction < 1) hits += 1;
+
+            const problems: string[] = [];
+
+            if (out.allsolid !== expected.allsolid) {
+                problems.push(`allsolid ${out.allsolid} != ${expected.allsolid}`);
+            }
+            if (out.startsolid !== expected.startsolid) {
+                problems.push(`startsolid ${out.startsolid} != ${expected.startsolid}`);
+            }
+            if (Math.abs(out.fraction - expected.fraction) > FRACTION_TOLERANCE) {
+                problems.push(`fraction ${out.fraction} != ${expected.fraction}`);
+            }
+            for (let k = 0; k < 3; k++) {
+                if (Math.abs(out.endpos[k]! - expected.endpos[k]!) > POSITION_TOLERANCE) {
+                    problems.push(`endpos[${k}] ${out.endpos[k]} != ${expected.endpos[k]}`);
+                }
+            }
+            // The plane only means anything when something was hit.
+            if (expected.fraction < 1 && !expected.allsolid) {
+                for (let k = 0; k < 3; k++) {
+                    if (Math.abs(out.planeNormal[k]! - expected.planeNormal[k]!) > 1e-4) {
+                        problems.push(
+                            `normal[${k}] ${out.planeNormal[k]} != ${expected.planeNormal[k]}`
+                        );
+                    }
+                }
+            }
+            if (out.contents !== expected.contents) {
+                problems.push(`contents ${out.contents} != ${expected.contents}`);
+            }
+
+            if (problems.length > 0 && failures.length < 8) {
+                failures.push(
+                    `case ${i}: start=[${start.map((v) => v.toFixed(3))}] ` +
+                    `end=[${end.map((v) => v.toFixed(3))}]\n    ${problems.join('\n    ')}`
+                );
+            }
+        }
+
+        // A suite where nothing ever hit anything would pass trivially.
+        expect(hits, 'randomised sweeps must actually hit geometry').toBeGreaterThan(compared * 0.1);
+
+        expect(
+            failures,
+            `${failures.length} divergence(s) of ${compared} sweeps (seed 0x51ee7):\n` +
+            failures.join('\n')
+        ).toEqual([]);
+    });
+
+    it('agrees on point contents', () => {
+        const rand = rng(0xc047e);
+        const N = 20_000;
+
+        const failures: string[] = [];
+        let nonZero = 0;
+
+        for (let i = 0; i < N; i++) {
+            const p: [number, number, number] = [
+                asF32(worldMin[0] + rand() * (worldMax[0] - worldMin[0])),
+                asF32(worldMin[1] + rand() * (worldMax[1] - worldMin[1])),
+                asF32(worldMin[2] + rand() * (worldMax[2] - worldMin[2])),
+            ];
+
+            const expected = oracle.pointContents(p);
+            const actual = pointContents(cm, p[0], p[1], p[2]);
+
+            if (expected !== 0) nonZero += 1;
+
+            if (actual !== expected && failures.length < 8) {
+                failures.push(
+                    `case ${i}: p=[${p.map((v) => v.toFixed(3))}] ` +
+                    `got 0x${(actual >>> 0).toString(16)} want 0x${(expected >>> 0).toString(16)}`
+                );
+            }
+        }
+
+        expect(nonZero, 'sampled points must land inside brushes sometimes').toBeGreaterThan(0);
+        expect(failures, failures.join('\n')).toEqual([]);
+    });
+});

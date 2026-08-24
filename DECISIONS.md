@@ -235,3 +235,87 @@ also carry a real `.ts` extension, hence `allowImportingTsExtensions`.
 
 Sharing the reader is worth the constraint. A disagreement between two BSP readers about, say,
 plane winding would surface as a physics bug that looks like a rendering bug.
+
+---
+
+## Phase 2 — collision and movement
+
+### D-017: Patch (curved surface) collision is not ported yet
+
+`cm_patch.c` is 1,763 lines that turn `MST_PATCH` surfaces into collision hulls. It is deferred,
+and the deferral is contained rather than hidden:
+
+- `ClipMap` counts `numPatches` for every map it loads, so a caller can tell whether a given
+  level is affected.
+- The differential test runs only on maps with **zero** patches — 25 of the 72 in the OA set —
+  so the gap cannot mask a divergence in what *is* ported. `oa_dm1`, `aggressor`, `oa_dm2`,
+  `q3dm6ish` and `islanddm` are the five it uses, spanning 449 to 9,384 brushes.
+
+Consequence while it is missing: on a patch-bearing map, curved surfaces are not solid. That is
+a real gap and it is why the deferral is recorded here rather than treated as done.
+
+### D-018: Capsule tracing is not ported
+
+`CM_BoxTrace`'s `capsule` parameter and the `CM_Trace*Capsule*` family are unported. Every call
+in OpenArena's movement path passes `qfalse`; capsules exist for player-vs-player clipping in
+ioquake3, which is server-side entity code this port replaces with meep's BVH anyway
+(`trap_EntitiesInBox` in the matrix). Porting ~400 lines of dead code to have it agree with an
+oracle that never exercises it is not worth the reading burden on `trace.ts`.
+
+### D-019: The port reproduces the C's float32 rounding, rather than tolerating divergence
+
+`cm_trace.c` computes in `float`. JavaScript computes in `float64`, which is *more* precise —
+and that is a problem, not a benefit, because the trace's decisions are exact comparisons on
+near-cancelling quantities (`d1 > 0 && d2 >= d1`, `enterFrac < leaveFrac`, `t1 >= offset + 1`).
+Being more precise than the oracle produces a *different* answer, not a better one.
+
+Measured: 4,000 randomised player-sized sweeps against `oa_dm1` in double precision produced 2
+divergences — one a 1.4e-5 fraction difference, one a grazing contact the port missed entirely
+because a tie broke the other way.
+
+So `src/q3/cm/trace.ts` wraps every arithmetic step in `Math.fround`, and `dot3` reproduces
+`DotProduct`'s left-to-right association exactly. `Math.fround` compiles to a single machine
+instruction under V8, so the runtime cost is negligible; the cost is readability, paid down with
+a block comment explaining why.
+
+The payoff is that the differential test can demand **exact** equality. A tolerance would have
+hidden precisely the class of bug this exercise exists to catch — and did: see D-020.
+
+### D-020: Two real bugs the oracle caught that review would not have
+
+Both were found by the differential suite, and neither was visible by reading the port against
+the C.
+
+1. **The missing `SURFACE_CLIP_EPSILON` in `CM_BoundsIntersect`.** The C widens a brush's
+   bounding box by 1/8 unit on every axis *before* deciding whether to test the brush at all.
+   I had written a plain AABB overlap. The result was that the port silently skipped brushes it
+   merely grazed — 1 divergence in 4,000 sweeps, invisible in ordinary play, and exactly the
+   kind of thing that makes a strafe jump land differently on one map in twenty.
+
+2. **A float32 mantissa in the test harness.** The oracle originally marshalled the whole
+   `trace_t` back as floats. Content masks run to `0x20000001`, which needs 30 mantissa bits, so
+   it came back as `0x20000000`. This presented as the *port* disagreeing about `contents` on
+   one map in five — a convincing-looking port bug that was entirely in the measuring
+   instrument. Flag fields now travel through an int buffer.
+
+The second is worth recording precisely because it is embarrassing: a differential test is only
+as trustworthy as its plumbing, and "the port is wrong" was the wrong conclusion for an hour.
+
+### D-021: The oracle is built from OpenArena's `bg_pmove.c`, not ioquake3's
+
+The brief says to compile ioquake3's `bg_pmove.c`. The two differ by more than formatting —
+`pm_wadeScale`, `pm_swimFastScale`, the `cg_enableQ` scale hook, and two extra `pmove_t` fields
+(`pmove_float`, `pmove_flags`) — across 710 differing lines. Since the port is of OA's gameplay
+and the assets are OA's, an oracle built from ioquake3's pmove would be testing the port against
+code the port is not a port of.
+
+So: **`bg_pmove.c`, `bg_slidemove.c`, `bg_misc.c`, `q_math.c` and `q_shared.c` are OpenArena's;
+`cm_*` are ioquake3's**, which is the split the brief actually intends — OA does not ship engine
+code.
+
+All of it compiles **unmodified**. Making that work needed only build-configuration changes:
+`Q3_VM` and `BOTLIB` must be left *undefined* rather than defined to 0 (they are tested with
+`#ifdef`), `NDEBUG` selects the release allocator forms, and OA's `q_platform.h` predates
+WebAssembly so the six platform macros ioquake3's `__EMSCRIPTEN__` block defines are supplied on
+the command line. Unmodified sources are the property that makes this an oracle rather than a
+second implementation.
