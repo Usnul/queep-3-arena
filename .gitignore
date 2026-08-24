@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.refs/
+assets/
+oracle/build/
+*.log
+.vite/
+coverage/
