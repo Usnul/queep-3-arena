@@ -39,6 +39,7 @@ import {
     type PlayerState,
 } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
+import { weaponStats } from '../game/Weapons.ts';
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -56,6 +57,16 @@ const KEY_LEFT = new Set(['KeyA', 'ArrowLeft']);
 const KEY_RIGHT = new Set(['KeyD', 'ArrowRight']);
 const KEY_JUMP = new Set(['Space']);
 const KEY_CROUCH = new Set(['ControlLeft', 'KeyC', 'ShiftLeft']);
+
+/** Weapon select, matching Q3's number-row bindings. */
+const KEY_WEAPON: ReadonlyMap<string, 'WP_MACHINEGUN' | 'WP_ROCKET_LAUNCHER' | 'WP_SHOTGUN' | 'WP_RAILGUN' | 'WP_PLASMAGUN'> =
+    new Map([
+        ['Digit2', 'WP_MACHINEGUN'],
+        ['Digit3', 'WP_SHOTGUN'],
+        ['Digit5', 'WP_ROCKET_LAUNCHER'],
+        ['Digit6', 'WP_PLASMAGUN'],
+        ['Digit7', 'WP_RAILGUN'],
+    ]);
 
 /**
  * Q3 sends view angles as 16-bit fixed point. Keeping the browser's mouse deltas
@@ -79,6 +90,19 @@ export class PlayerController {
 
     /** Set true while the pointer is locked; movement input is ignored otherwise. */
     active = false;
+
+    /** Currently selected weapon. */
+    weapon: 'WP_MACHINEGUN' | 'WP_ROCKET_LAUNCHER' | 'WP_SHOTGUN' | 'WP_RAILGUN' | 'WP_PLASMAGUN' =
+        'WP_ROCKET_LAUNCHER';
+
+    /** True on the frames the attack button is held. */
+    attacking = false;
+
+    /** Raised when the weapon should fire; the arena wires this to `WeaponSystem`. */
+    onFire: ((eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>) => void) | null = null;
+
+    /** Milliseconds until the current weapon can fire again. */
+    private cooldownMs = 0;
 
     constructor(cm: ClipMap, element: HTMLElement, spawnQ3: readonly number[]) {
         this.element = element;
@@ -136,6 +160,7 @@ export class PlayerController {
         window.addEventListener('keyup', this.onKeyUp);
         window.addEventListener('blur', this.onBlur);
         this.element.addEventListener('mousedown', this.onMouseDown);
+        document.addEventListener('mouseup', this.onMouseUp);
         document.addEventListener('mousemove', this.onMouseMove);
         document.addEventListener('pointerlockchange', this.onPointerLockChange);
     }
@@ -148,6 +173,7 @@ export class PlayerController {
         window.removeEventListener('keyup', this.onKeyUp);
         window.removeEventListener('blur', this.onBlur);
         this.element.removeEventListener('mousedown', this.onMouseDown);
+        document.removeEventListener('mouseup', this.onMouseUp);
         document.removeEventListener('mousemove', this.onMouseMove);
         document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     }
@@ -155,6 +181,9 @@ export class PlayerController {
     private readonly onKeyDown = (e: KeyboardEvent): void => {
         this.held.add(e.code);
         if (e.code === 'Space') e.preventDefault();
+
+        const w = KEY_WEAPON.get(e.code);
+        if (w !== undefined) this.weapon = w;
     };
 
     private readonly onKeyUp = (e: KeyboardEvent): void => {
@@ -165,15 +194,25 @@ export class PlayerController {
         this.held.clear();
     };
 
-    private readonly onMouseDown = (): void => {
+    private readonly onMouseDown = (e: MouseEvent): void => {
         if (document.pointerLockElement !== this.element) {
             void this.element.requestPointerLock();
+            return;
         }
+
+        if (e.button === 0) this.attacking = true;
+    };
+
+    private readonly onMouseUp = (e: MouseEvent): void => {
+        if (e.button === 0) this.attacking = false;
     };
 
     private readonly onPointerLockChange = (): void => {
         this.active = document.pointerLockElement === this.element;
-        if (!this.active) this.held.clear();
+        if (!this.active) {
+            this.held.clear();
+            this.attacking = false;
+        }
     };
 
     private readonly onMouseMove = (e: MouseEvent): void => {
@@ -229,7 +268,31 @@ export class PlayerController {
 
         runPmove(this.pmove);
 
+        this.fireIfReady(msec);
+
         this.writeCamera(cameraTransform);
+    }
+
+    /**
+     * Q3's weapon timing: a fixed cooldown per shot, from the balance table.
+     *
+     * Counted in the same integer milliseconds the simulation runs on rather
+     * than in seconds, so the fire rate is exactly the `addTime` value from
+     * `PM_Weapon` and does not drift with frame rate.
+     */
+    private fireIfReady(msec: number): void {
+        this.cooldownMs -= msec;
+
+        if (!this.attacking || !this.active) return;
+        if (this.cooldownMs > 0) return;
+        if (this.onFire === null) return;
+
+        const ps = this.ps;
+        const eye = [ps.origin[0]!, ps.origin[1]!, ps.origin[2]! + ps.viewheight];
+
+        this.onFire(eye, ps.viewangles);
+
+        this.cooldownMs = weaponStats(this.weapon).fireRateMs;
     }
 
     /** Q3 (Z-up, units) -> meep (Y-up, metres). The only place this happens. */

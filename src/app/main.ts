@@ -13,6 +13,9 @@ import { EngineHarness } from '@woosh/meep-engine/src/engine/EngineHarness.js';
 import { ShadedGeometrySystem3 } from '@woosh/meep-engine/src/engine/graphics3/ShadedGeometrySystem3.js';
 import { LightSystem3 } from '@woosh/meep-engine/src/engine/graphics3/LightSystem3.js';
 import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem3.js';
+import { DecalSystem3 } from '@woosh/meep-engine/src/engine/graphics3/DecalSystem3.js';
+import { ParticleEmitterSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticleEmitterSystem3.js';
+import { ImageBitmapAssetLoader } from '@woosh/meep-engine/src/engine/asset/loaders/image/ImageBitmapAssetLoader.js';
 import { make_default_environment } from '@woosh/meep-engine/src/engine/graphics3/make_default_environment.js';
 import { Camera } from '@woosh/meep-engine/src/engine/graphics/ecs/camera/Camera.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
@@ -24,6 +27,7 @@ import { loadMap } from '../client/map/loadMap.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
 import { Hud } from '../client/Hud.ts';
+import { Arena } from '../client/Arena.ts';
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
@@ -52,6 +56,8 @@ async function main(): Promise<void> {
     await em.addSystem(new ShadedGeometrySystem3(graphics, scene));
     await em.addSystem(new LightSystem3(graphics, scene));
     await em.addSystem(new CameraSystem3(graphics));
+    await em.addSystem(new DecalSystem3(graphics, engine.assetManager));
+    await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
 
     /*
      Shade assumes global illumination: with no environment map every surface
@@ -102,7 +108,7 @@ async function main(): Promise<void> {
         fly.attach();
         engine.ticker.onTick.add((dt: number) => {
             fly.update(dt);
-            hud.update({ mode: 'fly', speed: 0, onGround: false, map: mapName });
+            hud.update({ mode: 'fly', speed: 0, onGround: false, map: mapName, weapon: '', damage: 0, kills: 0 });
         });
 
         expose(engine, { loaded, clipMap, fly });
@@ -114,19 +120,39 @@ async function main(): Promise<void> {
         );
         player.attach();
 
+        const arena = new Arena(ecd, clipMap);
+
+        // Targets at the other spawn points: somewhere to shoot, without
+        // inventing level geometry the map does not have.
+        const spawnPoints = loaded.bundle.entities.filter(
+            (e) => e.classname === 'info_player_deathmatch'
+        );
+        for (const s of spawnPoints.slice(1, 5)) {
+            arena.addTarget(s._originQ3);
+        }
+
+        player.onFire = (eye, angles) => {
+            arena.weapons.fire(player.weapon, eye, angles, 0, (Math.random() * 0xffff) | 0);
+        };
+
         // `onTick` is documented as `Signal<number>` but is emitted as `any`, so
         // the callback parameter has no inferred type -- see GAP-001.
         engine.ticker.onTick.add((deltaSeconds: number) => {
             player.update(deltaSeconds, transform);
+            arena.update(deltaSeconds);
+
             hud.update({
                 mode: player.active ? 'play' : 'click-to-play',
                 speed: player.speed,
                 onGround: player.onGround,
                 map: mapName,
+                weapon: player.weapon,
+                damage: arena.totalDamage,
+                kills: arena.kills,
             });
         });
 
-        expose(engine, { loaded, clipMap, player });
+        expose(engine, { loaded, clipMap, player, arena });
     }
 
     console.log(

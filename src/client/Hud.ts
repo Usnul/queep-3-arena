@@ -58,6 +58,10 @@ export interface HudState {
     readonly speed: number;
     readonly onGround: boolean;
     readonly map: string;
+    /** Weapon id, or empty in fly mode. */
+    readonly weapon: string;
+    readonly damage: number;
+    readonly kills: number;
 }
 
 /** Peak speed decays this fast once the player slows, in units per second. */
@@ -108,11 +112,18 @@ export class Hud {
         this.peakModel.set(`peak ${Math.round(this.peak)} ups`);
 
         if (state.mode === 'click-to-play') {
-            this.stateModel.set('click to play  ·  WASD move  ·  space jump  ·  ctrl crouch');
+            this.stateModel.set(
+                'click to play  ·  WASD move  ·  space jump  ·  ctrl crouch  ·  ' +
+                'mouse1 fire  ·  2/3/5/6/7 weapon'
+            );
         } else if (state.mode === 'fly') {
             this.stateModel.set(`${state.map}  ·  noclip`);
         } else {
-            this.stateModel.set(`${state.map}  ·  ${state.onGround ? 'ground' : 'air'}`);
+            const weapon = state.weapon.replace(/^WP_/, '').toLowerCase().replace(/_/g, ' ');
+            this.stateModel.set(
+                `${state.map}  ·  ${weapon}  ·  ${state.kills} kills  ·  ` +
+                `${state.damage} damage  ·  ${state.onGround ? 'ground' : 'air'}`
+            );
         }
     }
 }

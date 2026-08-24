@@ -377,3 +377,64 @@ untested — the *pmove* suite found it instead. The trace suite now has a dedic
 position-test case, alternating standing and crouched boxes. Worth stating as a general lesson:
 a differential suite over randomised inputs tests the paths random inputs reach, and degenerate
 cases have to be asked for by name.
+
+---
+
+## Phase 3 — game simulation
+
+### D-024: Balance numbers are extracted from the C, not transcribed
+
+`tools/extract-balance.mjs` parses `bg_itemlist[]` out of `bg_misc.c` (60 items) and pulls every
+weapon's damage, splash, projectile speed, fire rate and item respawn time from `g_weapon.c`,
+`g_missile.c`, `bg_pmove.c` and `g_items.c`. Output is committed as
+`src/game/balance.generated.json`; `--check` fails if it drifts.
+
+Each regex is **scoped to a named C function** rather than searched file-wide. That earned its
+keep immediately: `Weapon_Gauntlet` is an *empty function* in OpenArena, and the gauntlet's
+damage and reach live in `CheckGauntletAttack`. A file-wide search for
+`damage = <n> * s_quadFactor` would have matched some other weapon and produced a plausible
+wrong number that nothing would ever have caught.
+
+### D-025: The simulation raises events; the presentation decides what they look like
+
+`WeaponSystem` knows about damage and traces and nothing about rendering. `Effects` knows about
+particles and decals and nothing about damage. `Arena` is the only class that knows both, and
+it is thin.
+
+This is not architecture for its own sake — it is what makes the Q3 replacement rule tractable.
+The brief says particles, decals and sound are meep's and Q3's go in the bin, while damage and
+balance stay faithful. Those two rules apply to different sides of this line, and keeping them
+in separate files means neither can quietly contaminate the other.
+
+### D-026: Weapon spread reproduces `Q_crandom`, not `Math.random`
+
+Shotgun pellet placement is a balance number. Q3 lays out its eleven pellets by a specific
+sequence from a per-shot seed, and a different distribution — even one with the same variance —
+is a different weapon at close range. The generator is reproduced and seeded per shot as the C
+does.
+
+### D-027: Targets are boxes, and the target is not a player
+
+Phase 3's exit condition is "playable deathmatch against a stationary target". The target is a
+player-sized box (`-15,-15,-24` to `15,15,32`) with health, hit detection and a respawn timer,
+placed at the map's own spare spawn points.
+
+Player-sized deliberately: splash falloff is computed from the *closest point on the bounding
+box* rather than from the centre, as `G_RadiusDamage` does, so a wrongly-sized target would
+silently change how much splash damage lands. Getting the box right means the damage numbers
+being verified are the real ones.
+
+Not ported into this: player-vs-player collision, gibbing, or the death animation. A killed
+target detonates and comes back after three seconds, which makes the kill legible without
+inventing content.
+
+### D-028: `dead` is set before the hit event, not after
+
+Found by testing: rocket damage was exactly 100, the target's health reached exactly 0, and the
+kill counter stayed at zero. The event was being raised before the flag was set, so the only
+listener that cares whether a hit was fatal could never see that it was.
+
+Q3 does the same thing the right way round — `G_Damage` calls `player_die` from inside itself
+rather than after returning. Recorded because the failure mode is instructive: every *number*
+was correct and the bug was purely in ordering, which is exactly the kind of thing a damage
+test that only asserts on health totals will not catch.

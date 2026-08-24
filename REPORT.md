@@ -749,6 +749,52 @@ the expensive way.
 - **Evidence:** `src/engine/control/first-person/DESIGN.md` §1, `src/q3/pmove/pmove.ts`,
   DECISIONS.md D-007. Recorded at phase 2.
 
+### GAP-010: Particle parameter names are string-typed and case-trapped
+
+- **Needed:** animate particle scale and colour over a particle's lifetime.
+- **meep offers:** `ParticleLayer.parameterTracks`, keyed by name, with the names in a
+  `ParticleParameters` constant. The trap is that the constant's **keys** are `Scale` and
+  `Color` while its **values** are `'scale'` and `'color'`. Writing the name out — which is
+  the natural thing to do when you are assembling an emitter as a JSON literal, as
+  `ParticleEmitter.fromJSON` invites — throws at emitter-construction time:
+
+  ```
+  Failed to add track with name 'Scale', no parameter exists with that name
+  ```
+
+- **Workaround:** import `ParticleParameters` and use the constants. Five minutes, entirely
+  because **the error message is good**: it names the offending track, says exactly what is
+  wrong, and is thrown at construction rather than swallowed into a silently empty effect.
+  Worth saying explicitly — most engines would have rendered nothing and told you nothing.
+- **Severity:** papercut.
+- **Suggested fix:** the JSON path is the one that invites string literals, so either accept
+  both cases there, or type the field as a union in the generated declarations so TypeScript
+  rejects `'Scale'` at compile time. Aligning the constant's keys with its values would also
+  do it.
+- **Evidence:** `src/client/Effects.ts` `SCALE`/`COLOR`,
+  `src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js`. Recorded at
+  phase 3.
+
+### GAP-011: Photometric lighting makes "physically plausible" and "reads well" different questions
+
+- **Needed:** a rocket explosion that lights the room.
+- **meep offers:** exactly what it should — a point light in lumens, with correct
+  inverse-square falloff. There is no defect here at all.
+- **What happened:** the first attempt used 60,000 lumens, on the reasoning that an explosion
+  is *very bright*. It is: the result saturated every surface in the corridor to white and
+  completely hid the particle effect the light existed to illuminate. 12,000 lumens — about
+  eight household bulbs, which sounds far too dim for a rocket — is what actually reads as an
+  explosion.
+- **Workaround:** tune by eye, which is the normal answer and took about ten minutes across
+  the explosion flash and the muzzle flash.
+- **Severity:** papercut, and arguably not a gap at all. Recorded because it is the *second*
+  time photometric units cost time in this port (GAP-005 was the first, and much more
+  expensive), and the pattern is worth naming: physical units remove one class of guesswork
+  and introduce another. An engine that ships them benefits from shipping reference values
+  alongside — "a torch is ~300 lm, a room light ~1500, a muzzle flash ~2500, an explosion
+  ~12000" in the lighting docs would have skipped both incidents.
+- **Evidence:** `src/client/Effects.ts` `explosion()`. Recorded at phase 3.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
@@ -977,6 +1023,26 @@ Specific things that would be a loss to regress.
   right and worth defending: `q3map_surfacelight`'s values turned out to map to lumens almost
   1:1 with no per-map tuning, because both are proportional to emitted power. An ad-hoc
   0-to-1 intensity scale would have required hand-tuning every map.
+
+### Added during phase 3
+
+- **`DecalSystem3` registers its own asset loader.** `startup` checks
+  `assets.hasLoaderForType(GameAssetType.Image)` and registers an `ImageRGBADataLoader` if one
+  is missing, so decals work without the consumer knowing that an image loader is a thing that
+  exists. Small, and exactly the right instinct — a system that needs a facility should acquire
+  it rather than fail with "no loader for type image".
+
+- **Error messages name the thing that is wrong.** `Failed to add track with name 'Scale', no
+  parameter exists with that name` (GAP-010) told me what to fix without reading any engine
+  source. `ERR_PACKAGE_PATH_NOT_EXPORTED` at a Vite config crash pointed straight at the
+  missing `./package.json` export. `Only URLs with a scheme in: file, data, and node`... came
+  from Node rather than meep, but the meep-side ones held up under pressure.
+
+- **Building an effect out of ECS components composes without ceremony.** An explosion here is
+  a `Light` entity, two `ParticleEmitter` entities and a `Decal` entity, each with a
+  `Transform`, each independently removable on its own timer. No effect system, no particle
+  manager, no registration step. That is the ECS claim in the README actually paying off on a
+  concrete task.
 
 ---
 
