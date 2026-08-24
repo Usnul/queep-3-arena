@@ -58,8 +58,19 @@ export class ItemsView {
     private readonly library: ModelLibrary;
     private readonly drawn: DrawnItem[] = [];
 
-    /** Item classnames with no converted model. Reported rather than swallowed. */
+    /**
+     * Item classnames that drew nothing at all.
+     *
+     * Kept separate from `partial` on purpose. Several Q3 items are two models
+     * -- a solid body and an additive shell -- and OA ships the body without the
+     * shell for four of them. Lumping the two cases together reports a shard
+     * that renders correctly as "no model", which sends the next person looking
+     * for a bug that is not there.
+     */
     readonly unmodelled: string[] = [];
+
+    /** Classnames that drew some of their models but not all. */
+    readonly partial: string[] = [];
 
     constructor(ecd: EcsDataset, library: ModelLibrary) {
         this.ecd = ecd;
@@ -79,12 +90,12 @@ export class ItemsView {
             const transforms: Transform[] = [];
             const geometries: ShadedGeometry[] = [];
 
+            let missing = 0;
+
             for (const modelPath of item.def.models) {
                 const components = this.library.components(modelPath);
                 if (components === null) {
-                    if (!this.unmodelled.includes(item.def.classname)) {
-                        this.unmodelled.push(item.def.classname);
-                    }
+                    missing += 1;
                     continue;
                 }
 
@@ -104,6 +115,11 @@ export class ItemsView {
                     transforms.push(transform);
                     geometries.push(geometry);
                 }
+            }
+
+            if (missing > 0) {
+                const list = transforms.length === 0 ? this.unmodelled : this.partial;
+                if (!list.includes(item.def.classname)) list.push(item.def.classname);
             }
 
             if (transforms.length === 0) continue;

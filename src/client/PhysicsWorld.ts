@@ -78,6 +78,14 @@ export interface PhysicsWorldStats {
     readonly bodyMilliseconds: number;
 }
 
+/** Handle for one brush entity's collision, returned by `PhysicsWorld.addMover`. */
+export interface MoverBodies {
+    readonly model: number;
+    readonly count: number;
+    /** Offset from the submodel's authored position, in Q3 units and Q3 axes. */
+    setOffset(q3x: number, q3y: number, q3z: number): void;
+}
+
 export class PhysicsWorld {
     readonly system: PhysicsSystem;
 
@@ -110,6 +118,10 @@ export class PhysicsWorld {
 
     /** Packed body id -> the same, for `overlap_shape` results. */
     private readonly hullByBody = new Map<number, BrushHull>();
+
+    /** Kept so `addMover` can build submodel bodies after the initial load. */
+    private cm: ClipMap | null = null;
+    private ecd: EcsDataset | null = null;
 
     private constructor() {
         this.system = new PhysicsSystem();
@@ -147,12 +159,44 @@ export class PhysicsWorld {
         return world;
     }
 
+    /**
+     * Static bodies for one submodel: `func_static`, and brush entities this
+     * port does not simulate.
+     *
+     * Q3 makes every brush entity solid whether or not the game code knows what
+     * to do with it, so an unimplemented `func_rotating` is still a wall. The
+     * alternative -- skipping it -- puts a hole in the level exactly where the
+     * map author put a solid object.
+     */
+    addStaticModel(model: number): number {
+        const cm = this.cm;
+        const ecd = this.ecd;
+        if (cm === null || ecd === null) return 0;
+
+        const submodel = cm.models[model];
+        if (submodel === undefined) return 0;
+
+        const set = buildHulls(cm, MASK_PLAYERSOLID, submodel.firstBrush, submodel.numBrushes);
+
+        let built = 0;
+        for (const hull of set.hulls) {
+            if (this.addStaticHull(ecd, hull) !== null) built += 1;
+        }
+        return built;
+    }
+
     private build(ecd: EcsDataset, cm: ClipMap): void {
         if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
         if (!ecd.isComponentTypeRegistered(RigidBody)) ecd.registerComponentType(RigidBody);
         if (!ecd.isComponentTypeRegistered(Collider)) ecd.registerComponentType(Collider);
 
-        const set = buildHulls(cm, MASK_PLAYERSOLID);
+        /*
+         Model 0 only. Models 1..n are brush entities and their brushes belong
+         to movers, which get kinematic bodies from `addMover` instead -- see
+         `buildHulls`'s own note on what happens if they are lumped in here.
+        */
+        const world = cm.models[0]!;
+        const set = buildHulls(cm, MASK_PLAYERSOLID, world.firstBrush, world.numBrushes);
 
         const t0 = performance.now();
         let bodies = 0;
@@ -168,6 +212,67 @@ export class PhysicsWorld {
             hullMilliseconds: set.milliseconds,
             bodyMilliseconds: performance.now() - t0,
         };
+
+        this.cm = cm;
+        this.ecd = ecd;
+    }
+
+    /**
+     * Build kinematic bodies for one BSP submodel, and return a handle that
+     * moves them.
+     *
+     * `KinematicVelocity` rather than `Static` or `KinematicPosition`. Static
+     * bodies live in a separate broadphase tree that does not expect to move.
+     * `KinematicPosition` is the kind that *names* what a mover does, and its
+     * own docblock says it is reserved and not implemented -- pose-driven bodies
+     * present to the solver as walls that teleport -- with an explicit
+     * instruction to prefer `KinematicVelocity` until it lands. This port has no
+     * dynamic bodies for a mover to push, so the solver's view of it does not
+     * matter; only the query broadphase does, and that tracks the transform.
+     *
+     * The hulls stay in the submodel's authored positions and the *transform*
+     * carries the mover's offset, so the offset the simulation computes is the
+     * offset the collision sees, with no second copy of the geometry to keep in
+     * step.
+     */
+    addMover(model: number): MoverBodies | null {
+        const cm = this.cm;
+        const ecd = this.ecd;
+        if (cm === null || ecd === null) return null;
+
+        const submodel = cm.models[model];
+        if (submodel === undefined) return null;
+
+        const set = buildHulls(cm, MASK_PLAYERSOLID, submodel.firstBrush, submodel.numBrushes);
+        if (set.hulls.length === 0) return null;
+
+        const transforms: Transform[] = [];
+
+        for (const hull of set.hulls) {
+            const transform = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
+            if (transform !== null) transforms.push(transform);
+        }
+
+        if (transforms.length === 0) return null;
+
+        // Where each body sits with the mover at rest, so an offset can be
+        // applied without re-deriving the centroid every frame.
+        const rest = transforms.map((t) => [t.position.x, t.position.y, t.position.z] as const);
+
+        return {
+            model,
+            count: transforms.length,
+            setOffset(q3x: number, q3y: number, q3z: number): void {
+                const mx = q3x * WORLD_SCALE;
+                const my = q3z * WORLD_SCALE;
+                const mz = -q3y * WORLD_SCALE;
+
+                for (let i = 0; i < transforms.length; i++) {
+                    const at = rest[i]!;
+                    transforms[i]!.position.set(at[0] + mx, at[1] + my, at[2] + mz);
+                }
+            },
+        };
     }
 
     /**
@@ -180,7 +285,11 @@ export class PhysicsWorld {
      * its own origin gets a bounding volume 2,000 units across and the
      * broadphase stops discriminating.
      */
-    private addStaticHull(ecd: EcsDataset, hull: BrushHull): boolean {
+    private addStaticHull(
+        ecd: EcsDataset,
+        hull: BrushHull,
+        kind: number = BodyKind.Static
+    ): Transform | null {
         const cx = (hull.bounds[0]! + hull.bounds[3]!) * 0.5;
         const cy = (hull.bounds[1]! + hull.bounds[4]!) * 0.5;
         const cz = (hull.bounds[2]! + hull.bounds[5]!) * 0.5;
@@ -205,11 +314,11 @@ export class PhysicsWorld {
             shape = ConvexHullShape3D.from(local, hull.indices);
         } catch {
             // Degenerate hulls exist in shipped maps; one should not abort a load.
-            return false;
+            return null;
         }
 
         const body = new RigidBody();
-        body.kind = BodyKind.Static;
+        body.kind = kind;
 
         const collider = new Collider() as unknown as ColliderWithShape;
         collider.shape = shape;
@@ -224,7 +333,7 @@ export class PhysicsWorld {
 
         new Entity().add(transform).add(body).add(collider as unknown as Collider).build(ecd);
 
-        return true;
+        return transform;
     }
 
     /**

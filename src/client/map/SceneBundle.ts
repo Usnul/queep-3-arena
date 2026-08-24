@@ -65,6 +65,23 @@ export interface BundleEntity extends Record<string, unknown> {
     readonly _angle: number;
 }
 
+/**
+ * One BSP model's mesh list.
+ *
+ * Model 0 is the world. Models 1..n are brush entities -- `func_door`,
+ * `func_button`, `trigger_*` -- referenced from an entity's `model` key as the
+ * string `*3`. Trigger volumes are `nodraw` and legitimately have no meshes at
+ * all, which is why `meshes` being empty is not an error.
+ */
+export interface BundleSubmodel {
+    readonly model: number;
+    /** Indices into `SceneBundle.meshes`. */
+    readonly meshes: readonly number[];
+    readonly minsQ3: readonly number[];
+    readonly maxsQ3: readonly number[];
+    readonly numBrushes: number;
+}
+
 export interface SceneBundle {
     readonly name: string;
     readonly generator: string;
@@ -79,6 +96,8 @@ export interface SceneBundle {
     /** Virtual texture path -> filename under `textures/`, or `null` if missing. */
     readonly textures: Readonly<Record<string, string | null>>;
     readonly meshes: readonly BundleMesh[];
+    /** Absent in bundles written before movers existed. */
+    readonly submodels?: readonly BundleSubmodel[];
     readonly lights: readonly BundleLight[];
     readonly sun: BundleSun | null;
     readonly entities: readonly BundleEntity[];

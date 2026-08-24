@@ -19,6 +19,7 @@
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
+import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometryFlags.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 
@@ -30,6 +31,8 @@ import { buildMaterials, buildGeometry } from './bundle.ts';
 export interface LoadedMap {
     readonly bundle: SceneBundle;
     readonly meshEntities: readonly number[];
+    /** BSP model index -> the transforms of its drawn meshes. Model 0 is absent. */
+    readonly submodelTransforms: ReadonlyMap<number, readonly Transform[]>;
     readonly lightEntities: readonly number[];
     readonly timings: Readonly<Record<string, number>>;
 }
@@ -73,6 +76,20 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
 
     const meshEntities: number[] = [];
 
+    /*
+     Which meshes belong to a *moving* BSP model, so they can be given their own
+     transform. Older bundles have no `submodels` table, in which case every
+     mesh is world geometry -- which is what the loader assumed before movers
+     existed, so the fallback is the previous behaviour rather than a failure.
+    */
+    const movingMesh = new Map<number, number>();
+    for (const submodel of bundle.submodels ?? []) {
+        if (submodel.model === 0) continue;
+        for (const mesh of submodel.meshes) movingMesh.set(mesh, submodel.model);
+    }
+
+    const submodelTransforms = new Map<number, Transform[]>();
+
     for (let i = 0; i < bundle.meshes.length; i++) {
         const mesh = bundle.meshes[i]!;
         const material = materials[mesh.material];
@@ -87,9 +104,29 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         );
 
         const meshlet = meshlet_geometry_build_from_geometry(geometry);
+        const shaded = ShadedGeometry.from(meshlet, material);
+
+        const transform = new Transform();
+        const model = movingMesh.get(i);
+
+        if (model !== undefined) {
+            /*
+             A door's transform is written on every frame it is moving, position
+             only. GAP-008's docblock on this flag is explicit about the trade:
+             set it when a transform is written more than once between reads,
+             leave it off when it is written exactly once. A mover is the first
+             case while it is in motion and the second while it is at rest, and
+             an idle flush is one length test, so the flag wins on balance.
+            */
+            shaded.setFlag(ShadedGeometryFlags.DeferredBoundsUpdate);
+
+            const list = submodelTransforms.get(model) ?? [];
+            list.push(transform);
+            submodelTransforms.set(model, list);
+        }
 
         const builder = new Entity();
-        builder.add(new Transform()).add(ShadedGeometry.from(meshlet, material)).build(ecd);
+        builder.add(transform).add(shaded).build(ecd);
 
         meshEntities.push(builder.id);
     }
@@ -151,6 +188,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
     return {
         bundle,
         meshEntities,
+        submodelTransforms,
         lightEntities,
         timings: {
             fetch: tFetched - t0,

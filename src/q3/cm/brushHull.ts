@@ -336,18 +336,35 @@ export interface HullSet {
 }
 
 /**
- * Convert every brush in a clipmap that matches `contentMask`.
+ * Convert every brush in a range that matches `contentMask`.
  *
  * Only solid-ish brushes are worth turning into physics bodies; triggers and
  * fog are gameplay volumes handled elsewhere.
+ *
+ * The range matters. The brush lump holds the world's brushes *and* every brush
+ * entity's, and a submodel's brushes are a contiguous slice of it. Converting
+ * all of them into static bodies -- which is what an unbounded loop does -- nails
+ * every door permanently shut at its closed position, and does it silently:
+ * the level looks right, and the door's geometry moves while its collision does
+ * not.
+ *
+ * @param firstBrush first brush index, from the model lump.
+ * @param numBrushes how many, or `-1` for "to the end".
  */
-export function buildHulls(cm: ClipMap, contentMask: number): HullSet {
+export function buildHulls(
+    cm: ClipMap,
+    contentMask: number,
+    firstBrush = 0,
+    numBrushes = -1
+): HullSet {
     const t0 = performance.now();
 
     const hulls: BrushHull[] = [];
     let skipped = 0;
 
-    for (let i = 0; i < cm.numBrushes; i++) {
+    const end = numBrushes < 0 ? cm.numBrushes : Math.min(cm.numBrushes, firstBrush + numBrushes);
+
+    for (let i = firstBrush; i < end; i++) {
         if ((cm.brushContents[i]! & contentMask) === 0) continue;
 
         const hull = brushToHull(cm, i);

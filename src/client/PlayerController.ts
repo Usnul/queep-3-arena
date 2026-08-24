@@ -42,6 +42,7 @@ import * as C from '../q3/pmove/constants.ts';
 import { weaponStats, type WeaponId } from '../game/Weapons.ts';
 import { newInventory, type Inventory } from '../game/Items.ts';
 import type { TraceResult } from '../q3/cm/trace.ts';
+import { clipToEntities, type ClippedEntity } from '../q3/cm/entityClip.ts';
 
 /**
  * What `PlayerController` needs from a physics-backed trace.
@@ -144,6 +145,15 @@ export class PlayerController {
     /** Currently selected weapon. */
     weapon: WeaponId = 'WP_MACHINEGUN';
 
+    /**
+     * Brush entities the ported clipmap has to be clipped against.
+     *
+     * Set after construction, because the mover simulation needs the map's
+     * entity list and the controller needs a spawn point from the same list.
+     * Ignored entirely on the physics backend, which sees movers as bodies.
+     */
+    movers: { readonly movers: readonly ClippedEntity[] } | null = null;
+
     /** True on the frames the attack button is held. */
     attacking = false;
 
@@ -200,8 +210,10 @@ export class PlayerController {
             pmove_msec: 8,
             pmove_float: 0,
             pmove_flags: 0,
-            trace(results, start, mins, maxs, end, _passEnt, contentMask) {
+            trace: (results, start, mins, maxs, end, _passEnt, contentMask) => {
                 if (physics !== null) {
+                    // Movers are kinematic bodies, so `shape_cast` already
+                    // includes them -- world and entities are one query.
                     physics.trace(results, start, end, mins, maxs, contentMask);
                     return;
                 }
@@ -209,6 +221,13 @@ export class PlayerController {
                 boxTrace(results, cm, start, end, mins, maxs, contentMask);
                 results.entityNum =
                     results.fraction !== 1.0 ? C.ENTITYNUM_WORLD : C.ENTITYNUM_NONE;
+
+                const movers = this.movers;
+                if (movers !== null && movers.movers.length > 0) {
+                    clipToEntities(
+                        results, cm, start, end, mins, maxs, contentMask, movers.movers
+                    );
+                }
             },
             pointcontents(point, _passEnt) {
                 return pointContents(cm, point[0]!, point[1]!, point[2]!);
@@ -431,6 +450,26 @@ export class PlayerController {
     }
 
     /** Horizontal speed in Q3 units per second, for the debug readout. */
+    /**
+     * The player's current bounding box, in Q3 units relative to `ps.origin`.
+     *
+     * Read from `pmove` rather than assumed, because `PM_CheckDuck` shortens
+     * `maxs[2]` from 32 to 16 while crouched -- and a trigger test against the
+     * standing box would open a door you cannot fit through.
+     */
+    get mins(): ArrayLike<number> {
+        return this.pmove.mins;
+    }
+
+    get maxs(): ArrayLike<number> {
+        return this.pmove.maxs;
+    }
+
+    /** Face a given Q3 yaw. Used by teleporters, which choose your facing. */
+    setYaw(degrees: number): void {
+        this.yaw = Math.round((degrees * 65536) / 360) & 65535;
+    }
+
     get speed(): number {
         return Math.hypot(this.ps.velocity[0]!, this.ps.velocity[1]!);
     }

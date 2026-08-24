@@ -608,3 +608,88 @@ The fix in the code is a factory that registers both systems before building any
 order cannot be got wrong from outside. The fix in the process is that the browser build is now
 smoke-checked -- player at rest on a floor, items at `floor + 15 + 1/8` -- as part of finishing
 a phase rather than as part of looking at it.
+
+---
+
+## Breadth: movers, triggers and jump pads
+
+### D-037: Brush entities are BSP submodels, and the converter had to stop pretending otherwise
+
+`convert-map.ts` originally emitted model 0 and left a comment saying models 1..n were phase-3
+work. That comment was right about the danger and wrong about the timing: a converter that merges
+every model into one vertex block welds every door permanently open, and one that emits only
+model 0 leaves a level with holes where its doors should be.
+
+Each BSP model now gets its own group map and its own vertex block, and `scene.json` carries a
+`submodels` table saying which meshes belong to which. Model 0 is drawn as one static batch;
+1..n each get a transform. The same split runs through collision: `buildHulls` grew a brush range
+so the world's brushes become static bodies and a submodel's become that mover's.
+
+The failure mode this avoids is worth naming, because it is invisible. An unranged `buildHulls`
+turns a door's brushes into *static* bodies at the door's closed position -- so the door's
+geometry opens and its collision does not, and the level looks correct while being unplayable in
+one specific doorway.
+
+### D-038: Movers ride on meep's kinematic bodies, and the clipmap backend clips against them by hand
+
+Two backends, two mechanisms, one simulation.
+
+On the physics backend a submodel's brushes become `KinematicVelocity` bodies and `MoversView`
+writes their transforms. `shape_cast` then finds them with no further work: the world trace and
+the entity trace are the same query, which is a genuine simplification over Q3, where
+`SV_Trace` walks the world and then loops over every solid entity by hand.
+
+`KinematicVelocity` rather than the better-named `KinematicPosition` because the latter's own
+docblock says it is reserved and not implemented, with an explicit instruction to prefer velocity
+until it lands. This port has no dynamic bodies for a mover to push, so only the query broadphase
+matters, and that tracks the transform.
+
+The ported clipmap needs the loop, so it has one: `entityClip.ts` is `SV_ClipMoveToEntities`
+reduced to the translation-only case, since Q3 doors, plats and buttons all have zero angles.
+Keeping the A/B honest was the point, and it paid immediately -- both backends report a sweep
+fraction of exactly 0.424 through a closed door on `oa_dm1` and exactly 1.0 through the same
+doorway once it opens.
+
+### D-039: Unimplemented brush entities are solid rather than absent
+
+`func_static` is spawned as a static body. So is anything else with a brush model that this port
+does not simulate -- `func_rotating`, `func_bobbing`, `func_train` -- and each is named in
+`MoverSystem.unhandled` so the loss is recorded.
+
+The alternative is dropping them, and the two failures are not symmetric. A fan that does not
+spin is a cosmetic loss in one corner of one room. A fan you can walk through is a hole in the
+map, and it is the kind of hole a player finds and a developer does not. Triggers are the
+exception and are genuinely dropped: an unimplemented trigger is non-solid and invisible in Q3
+too, so ignoring it costs a behaviour rather than a wall.
+
+### D-040: Jump pads are solved, not scripted
+
+`trigger_push` in Q3 does not carry a velocity. It carries a `target`, and `AimAtTarget` solves
+for the launch that lands there under `g_gravity`: `time = sqrt(height / (0.5 * gravity))`, so
+the vertical component is `time * gravity` and the horizontal is whatever covers the ground
+distance in that time. That is ported rather than approximated, and the test asserts the
+*property* rather than the numbers -- it integrates each solved launch forward under gravity and
+checks it arrives within a hundredth of a unit of the target. Measured on `oa_dm7`, all four
+pads.
+
+Two things fall out of doing it properly. Q3 deletes a pad whose target is not above it, because
+`sqrt` of a negative puts a NaN in `ps->velocity` and a NaN there propagates through every
+subsequent pmove; that guard is ported. And `BG_TouchJumpPad` *overwrites* velocity rather than
+adding to it, which is why a jump pad launches you identically however fast you ran onto it --
+a detail players rely on and a naive `+=` would break.
+
+### D-041: What movers do not do
+
+Recorded rather than left to be discovered.
+
+- **No crush.** `G_MoverPush` calls `ent->blocked` when a push cannot be resolved, and
+  `Blocked_Door` either damages the player for `dmg` or reverses the door. Here a mover simply
+  displaces whatever it overlaps, so it is possible to be shoved into geometry rather than
+  crushed or reprieved. Riding and being pushed both work; being crushed does not.
+- **No `func_rotating`, `func_bobbing`, `func_pendulum` or `func_train`.** All four are solid and
+  stationary, per D-039. None appear in the six converted maps.
+- **No shootable doors.** `oa_dm1`'s `*8` has `health 1` and opens when shot. The damage system
+  does not reach brush entities yet, so it stays shut. It is the only one across the six maps.
+- **No door teaming.** Q3 links doors that touch into a team with a shared trigger and a single
+  master. Doors that should open together do so here because they share a `targetname`, which
+  covers every case in the six maps but is not the same rule.

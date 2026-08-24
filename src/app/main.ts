@@ -27,6 +27,8 @@ import { loadMap } from '../client/map/loadMap.ts';
 import { loadModels } from '../client/map/loadModels.ts';
 import { ItemsView } from '../client/ItemsView.ts';
 import { ItemSystem, type DropTrace } from '../game/Items.ts';
+import { MoverSystem, carryDisplacement, type Vec3 } from '../game/Movers.ts';
+import { MoversView } from '../client/MoversView.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
@@ -192,8 +194,64 @@ async function main(): Promise<void> {
             (itemsView.unmodelled.length > 0
                 ? `
   no model: ${itemsView.unmodelled.join(', ')}`
+                : '') +
+            (itemsView.partial.length > 0
+                ? `
+  partial (OA ships no shell model): ${itemsView.partial.join(', ')}`
                 : '')
         );
+
+        /* ---- movers: doors, plats, buttons, triggers ---- */
+
+        let teleportTo: Vec3 | null = null;
+        let teleportYaw = 0;
+        let hurtPending = 0;
+        let pushVelocity: Vec3 | null = null;
+
+        const movers = new MoverSystem({
+            moverSound: () => {
+                // Audio is phase 4; the hook exists so the call sites are right.
+            },
+            teleport: (destination) => {
+                teleportTo = [...destination.origin];
+                teleportYaw = destination.angle;
+            },
+            hurt: (damage) => {
+                hurtPending += damage;
+            },
+            push: (velocity) => {
+                // `BG_TouchJumpPad` overwrites velocity outright rather than
+                // adding to it, which is why a jump pad launches you the same
+                // way however fast you ran onto it.
+                pushVelocity = [velocity[0]!, velocity[1]!, velocity[2]!];
+            },
+        });
+
+        movers.spawn(loaded.bundle.entities, loaded.bundle.submodels ?? []);
+
+        // Only the clipmap backend needs this; physics sees kinematic bodies.
+        player.movers = { movers: movers.clipEntities };
+
+        const moversView = new MoversView(movers, loaded.submodelTransforms, physicsWorld);
+        moversView.update();
+
+        let staticBodies = 0;
+        for (const model of movers.statics) {
+            staticBodies += physicsWorld?.addStaticModel(model) ?? 0;
+        }
+
+        console.log(
+            `[queep] movers: ${moversView.moverCount} brush entities, ` +
+            `${movers.triggers.length} triggers, ${movers.destinations.length} destinations, ` +
+            `${moversView.bodyCount} kinematic bodies, ` +
+            `${movers.statics.length} static brush entities (${staticBodies} bodies)` +
+            (movers.unhandled.length > 0 ? `
+  unhandled: ${movers.unhandled.join(', ')}` : '')
+        );
+
+        const playerMins: Vec3 = [0, 0, 0];
+        const playerMaxs: Vec3 = [0, 0, 0];
+        const carry: Vec3 = [0, 0, 0];
 
         let pickupName = '';
         let pickupAge = 99;
@@ -234,6 +292,53 @@ async function main(): Promise<void> {
             itemsView.update(items.now);
             pickupAge += deltaSeconds;
 
+            /* ---- movers ---- */
+
+            const ps = player.ps;
+            for (let i = 0; i < 3; i++) {
+                playerMins[i] = ps.origin[i]! + player.mins[i]!;
+                playerMaxs[i] = ps.origin[i]! + player.maxs[i]!;
+            }
+
+            movers.update(deltaSeconds, playerMins, playerMaxs, true);
+            movers.touchButtons(playerMins, playerMaxs);
+            moversView.update();
+
+            /*
+             Carrying happens after the movers have moved and before the next
+             pmove, which is the order `G_RunFrame` uses: movers push, then
+             clients think. The other way round and a plat leaves from under you.
+            */
+            if (carryDisplacement(movers.movers, playerMins, playerMaxs, carry)) {
+                ps.origin[0]! += carry[0];
+                ps.origin[1]! += carry[1];
+                ps.origin[2]! += carry[2];
+            }
+
+            if (teleportTo !== null) {
+                ps.origin[0] = teleportTo[0];
+                ps.origin[1] = teleportTo[1];
+                // `TeleportPlayer` drops the player 1 unit clear of the mark.
+                ps.origin[2] = teleportTo[2] + 1;
+                ps.velocity[0] = 0;
+                ps.velocity[1] = 0;
+                ps.velocity[2] = 0;
+                player.setYaw(teleportYaw);
+                teleportTo = null;
+            }
+
+            if (hurtPending > 0) {
+                player.inventory.health -= hurtPending;
+                hurtPending = 0;
+            }
+
+            if (pushVelocity !== null) {
+                ps.velocity[0] = pushVelocity[0];
+                ps.velocity[1] = pushVelocity[1];
+                ps.velocity[2] = pushVelocity[2];
+                pushVelocity = null;
+            }
+
             /*
              `ClientTimerActions` runs on a 1000 ms cadence, not per frame. Health
              above max bleeds off one point a second; doing it per frame would
@@ -262,7 +367,7 @@ async function main(): Promise<void> {
             });
         });
 
-        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models });
+        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models, movers, moversView });
     }
 
     console.log(

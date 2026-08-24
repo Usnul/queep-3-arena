@@ -210,7 +210,6 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
     /* ---- group surfaces by material ---- */
 
-    const groups = new Map<number, MeshGroup>();
     const stats = {
         planar: 0,
         patch: 0,
@@ -220,6 +219,16 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         skySurfaces: 0,
         noDraw: 0,
     };
+
+    /*
+     One group map per BSP model. Model 0 is the world; 1..n are brush entities
+     -- doors, plats, buttons -- which move, so their surfaces have to stay in
+     their own vertex blocks. Merging them into the world welds every door
+     permanently open, which is what happens if you only ever read model 0's
+     surface range and wonder why the level has no doors in it.
+    */
+    const modelGroups: Map<number, MeshGroup>[] = models.map(() => new Map<number, MeshGroup>());
+    let groups = modelGroups[0]!;
 
     const groupFor = (shaderNum: number): MeshGroup => {
         let g = groups.get(shaderNum);
@@ -257,14 +266,15 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         return g;
     };
 
-    // Only model 0 (the world) is emitted as static geometry. Models 1..n are
-    // brush entities -- doors, plats, buttons -- which move, so they become their
-    // own entities in phase 3. Their surfaces are recorded but not merged into
-    // the world, otherwise a door would be welded permanently open.
-    const world = models[0]!;
-    const worldSurfaceEnd = world.firstSurface + world.numSurfaces;
+    for (let mi = 0; mi < models.length; mi++) {
+        groups = modelGroups[mi]!;
+        const model = models[mi]!;
+        emitSurfaceRange(model.firstSurface, model.firstSurface + model.numSurfaces);
+    }
+    groups = modelGroups[0]!;
 
-    for (let si = world.firstSurface; si < worldSurfaceEnd; si++) {
+    function emitSurfaceRange(from: number, to: number): void {
+    for (let si = from; si < to; si++) {
         const surf = surfaces[si]!;
         const pbr = pbrByShaderNum[surf.shaderNum]!;
 
@@ -302,6 +312,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         }
 
         stats.skipped += 1;
+    }
     }
 
     function emitIndexed(surf: BspSurface, group: MeshGroup, pbr: PbrMaterial): void {
@@ -396,9 +407,11 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
     let totalVerts = 0;
     let totalIndices = 0;
-    for (const g of groups.values()) {
-        totalVerts += g.positions.length / 3;
-        totalIndices += g.indices.length;
+    for (const map of modelGroups) {
+        for (const g of map.values()) {
+            totalVerts += g.positions.length / 3;
+            totalIndices += g.indices.length;
+        }
     }
 
     const vertexData = new Float32Array(totalVerts * OUT_STRIDE);
@@ -407,7 +420,11 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     let vCursor = 0;
     let iCursor = 0;
 
-    for (const g of groups.values()) {
+    /** `submodelMeshes[i]` indexes into `meshes` for BSP model `i`. Model 0 is the world. */
+    const submodelMeshes: number[][] = models.map(() => []);
+
+    for (let modelIndex = 0; modelIndex < modelGroups.length; modelIndex++) {
+    for (const g of modelGroups[modelIndex]!.values()) {
         const count = g.positions.length / 3;
         if (count === 0 || g.indices.length === 0) continue;
 
@@ -435,6 +452,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             indexData[iCursor + i] = g.indices[i]!;
         }
 
+        submodelMeshes[modelIndex]!.push(meshes.length);
         meshes.push({
             material: g.materialIndex,
             vertexOffset,
@@ -445,6 +463,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
         vCursor += count;
         iCursor += g.indices.length;
+    }
     }
 
     /* ---- lights ---- */
@@ -579,6 +598,20 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         materials,
         textures: textureFor,
         meshes,
+        /*
+         Which meshes belong to which BSP model. `submodels[0]` is the world and
+         the runtime draws it as one static batch; 1..n are brush entities, and
+         the runtime gives each its own transform so it can be moved. The
+         bounds and centre come straight from the model lump -- Q3 movers rotate
+         about the *model's* centre, not about the world origin.
+        */
+        submodels: models.map((m, i) => ({
+            model: i,
+            meshes: submodelMeshes[i]!,
+            minsQ3: m.mins,
+            maxsQ3: m.maxs,
+            numBrushes: m.numBrushes,
+        })),
         lights,
         sun,
         entities,
@@ -592,6 +625,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             entities: entities.length,
             texturesWritten: [...written.values()].filter((v) => v !== '').length,
             texturesMissing: [...written.values()].filter((v) => v === '').length,
+            submodels: models.length - 1,
         },
     };
 
