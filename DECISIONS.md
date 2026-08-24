@@ -799,3 +799,68 @@ exactly the kind of thing that first appears on the fourteenth.
 - **No weapon attachment.** `tag_weapon` is parsed and not used, because there is no third-person
   view to hang a weapon in yet.
 - **Heads never animate**, which is faithful: Q3 draws the head at frame 0 always.
+
+---
+
+## Breadth: audio
+
+### D-046: One-shots through sopra directly, not `AudioEmitter` components
+
+Q3's sound model for everything a weapon, a pickup or a door does is
+`S_StartSound(origin, entity, channel, handle)`: fire-and-forget, at a point, no handle kept.
+sopra's `playOneShot(description, { position })` is the same shape, so the port is a bank of
+`EventDescription`s and a function that plays one.
+
+The component route -- an `AudioEmitter` entity per sound -- is the right answer for a torch that
+hums and the wrong one for a machinegun firing ten times a second: an entity built and destroyed
+per shot. `AudioEmitterSystem`'s own docblock settles it, in that only *looping* events take the
+spatially-managed path; a finite one-shot takes the direct path anyway. The system is still
+registered, because it is what creates the shared sopra engine, registers the sound asset loader,
+forwards the listener pose and ticks the mixer.
+
+Random variants are picked by the game, not by a `RandomContainerAudioClip`. That is the faithful
+arrangement -- `CG_FireWeapon` does `rand() % 4` itself -- and it means the four machinegun
+flashes and four footsteps behave as Q3 intends rather than as the audio engine's container
+policy decides.
+
+### D-047: Attenuation is Q3's range, on a curve that matches its shape
+
+`S_Base`'s `SOUND_RANGE_DEFAULT` is 1250 units and `SOUND_FULLVOLUME` is 80, which at this port's
+scale is flat inside 2.5 m and falling away over the next 36. Those two numbers are why a rocket
+across a Q3 arena is faintly audible rather than silent.
+
+The curve is built with `buildAttenuationCurve` over `interpolate_irradiance_smith` rather than a
+straight line. Smith sheds two thirds of its level inside the first seventh of the range, which is
+much closer to Q3's own falloff than linear, and the builder's own docblock explains why it
+matters: keyframes land where the curvature is rather than being spread evenly across a long quiet
+tail nobody hears themselves cross.
+
+Measured in the running app, by tapping the master bus with an `AnalyserNode` and reading RMS
+after playing one rocket at a series of distances from the listener:
+
+| distance (Q3 units) | 0 | 80 | 300 | 800 | 1250 |
+|---|---|---|---|---|---|
+| RMS | 0.891 | 0.795 | 0.193 | 0.034 | 0.000 |
+
+Flat to `distanceMin`, monotonic after it, silent at `distanceMax`. That is the check that matters
+and it is not one a headless test can make -- Web Audio needs a browser and a running context --
+so it is recorded here with its method rather than pinned by a test.
+
+### D-048: Footsteps come from distance travelled, because they cannot come from the animation
+
+`CG_PlayerAnimation` fires a footstep from two fixed points in the leg cycle, so steps speed up
+with the run rather than drifting against it. There is no animation driving the local player here
+-- it is a first-person camera -- so the cycle is reconstructed from the quantity the animation is
+itself a function of: distance travelled, one step every 48 units. Below a walk Q3 plays no
+footstep at all, which is kept.
+
+### D-049: The sound set is curated, and misses are reported
+
+OA ships about 40 MB of audio, most of it announcer lines, taunts and per-character voice for
+modes this port does not have. `convert-sounds.ts` copies the 58 files something in the port
+actually triggers -- 3.3 MB -- and the manifest records anything named by the code and absent from
+disk, because that is a bug, while a file on disk that nothing names is not.
+
+Copied rather than transcoded: OA's WAVs are PCM, every browser decodes them through
+`decodeAudioData`, and re-encoding would trade a real quality loss against a saving on assets that
+are not committed anyway.

@@ -29,6 +29,9 @@
     "trap-matrix": "node tools/trap-matrix.mjs --out REPORT.md",
     "balance": "node tools/extract-balance.mjs",
     "check": "npm run typecheck && node tools/trap-matrix.mjs --check && node tools/extract-balance.mjs --check && npm test",
-    "convert-models": "node tools/convert-models.ts"
+    "convert-models": "node tools/convert-models.ts",
+    "convert-characters": "node tools/convert-characters.ts",
+    "convert-sounds": "node tools/convert-sounds.ts",
+    "assets": "node tools/convert-models.ts && node tools/convert-characters.ts && node tools/convert-sounds.ts"
   }
 }

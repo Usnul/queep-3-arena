@@ -160,6 +160,12 @@ export class PlayerController {
     /** Raised when the weapon should fire; the arena wires this to `WeaponSystem`. */
     onFire: ((eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>) => void) | null = null;
 
+    /** Raised when the attack button is held on an empty weapon. */
+    onDryFire: (() => void) | null = null;
+
+    /** Rate limit for the empty click, so holding fire is a click and not a buzz. */
+    private dryFireCooldownMs = 0;
+
     /** Milliseconds until the current weapon can fire again. */
     private cooldownMs = 0;
 
@@ -411,7 +417,14 @@ export class PlayerController {
          the weapon's rate. Gauntlet's ammo is -1 and stays there.
         */
         const ammo = this.inventory.ammo[this.weapon] ?? 0;
-        if (ammo === 0) return;
+        if (ammo === 0) {
+            this.dryFireCooldownMs -= msec;
+            if (this.dryFireCooldownMs <= 0) {
+                this.dryFireCooldownMs = 500;
+                this.onDryFire?.();
+            }
+            return;
+        }
         if (ammo > 0) this.inventory.ammo[this.weapon] = ammo - 1;
 
         const ps = this.ps;

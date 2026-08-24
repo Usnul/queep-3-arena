@@ -35,6 +35,7 @@ import {
     type WeaponId,
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
+import type { AudioBank } from './Audio.ts';
 
 const WORLD_SCALE = 1 / 32;
 
@@ -93,6 +94,13 @@ export class Arena implements WeaponEvents {
     /** Trail puffs are emitted every Nth projectile step, not every frame. */
     private trailAccumulator = 0;
     private readonly trailEvery = 2;
+
+    /**
+     * Set after construction, because the bank is fetched and the arena is not.
+     * Null until then, and silent rather than throwing -- a frame of missing
+     * audio during load is not worth a failure path.
+     */
+    audio: AudioBank | null = null;
 
     constructor(ecd: EcsDataset, cm: ClipMap) {
         this.ecd = ecd;
@@ -223,20 +231,27 @@ export class Arena implements WeaponEvents {
      * WeaponEvents
      * ------------------------------------------------------------------ */
 
-    muzzleFlash(originQ3: ArrayLike<number>, _weapon: WeaponId): void {
+    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId): void {
         this.effects.muzzleFlash(originQ3);
+        this.audio?.play(`weapon/${weapon}`, originQ3);
     }
 
     bulletImpact(originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void {
         this.effects.bulletImpact(originQ3, normalQ3);
+        this.audio?.play('impact/bullet', originQ3);
     }
 
     explosion(originQ3: ArrayLike<number>, radiusQ3: number): void {
         this.effects.explosion(originQ3, radiusQ3);
+        this.audio?.play('impact/rocket', originQ3);
     }
 
     hit(target: Damageable, damage: number): void {
         this.totalDamage += damage;
+
+        // `CG_HitSound`: the local, non-positional confirmation tone. It is not
+        // a sound in the world -- it is feedback, and Q3 plays it dry.
+        this.audio?.playLocal('feedback/hit');
 
         const t = target as Target;
         t.lastHit = this.now;

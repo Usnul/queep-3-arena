@@ -90,7 +90,11 @@ the GPLv2/CC inputs above and carries their terms.
 |---|---|---|
 | `assets/download/` | `fetch-assets.mjs` | the untouched upstream archive |
 | `assets/extracted/` | `extract-pk3.mjs` | flattened pk3 contents in Q3 load order, plus `manifest.json` recording the origin pk3 of every file |
-| `assets/built/` | the phase-1 pipeline | converted output: maps as meep scene data, textures, glTF models, audio |
+| `assets/built/<map>/` | `convert-map.ts` | `scene.json` (materials, mesh table, submodel table, lights, entities), `geometry.bin`, `textures/`, and the untouched `collision.bsp` |
+| `assets/built/models/` | `convert-models.ts` | one bundle of every static prop -- pickups, weapon world models, ammo, gibs -- as `models.json` plus `models.bin` |
+| `assets/built/characters/<name>/` | `convert-characters.ts` | player models as skinned glTF: `<name>.gltf`, `<name>.bin`, textures. The skeleton is *inferred* from MD3's vertex-morph frames (DECISIONS.md D-042) and is not present in the source data |
+| `assets/built/sound/` | `convert-sounds.ts` | the WAV files the port triggers, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded |
+| `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals |
 
 ---
 

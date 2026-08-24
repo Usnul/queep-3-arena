@@ -35,6 +35,9 @@ import { ItemSystem, type DropTrace } from '../game/Items.ts';
 import { MoverSystem, carryDisplacement, type Vec3 } from '../game/Movers.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS } from '../client/Characters.ts';
+import { AudioBank, Footsteps } from '../client/Audio.ts';
+import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
+import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
@@ -120,6 +123,18 @@ async function main(): Promise<void> {
     await em.addSystem(new AnimationSystem3(graphics, meshes));
 
     /*
+     Sound. `AudioEmitterSystem` is registered even though this port plays
+     everything as a one-shot rather than through `AudioEmitter` components: it
+     is what creates the shared sopra engine, registers the sound asset loader,
+     forwards the listener pose from the `SoundListener` component, and ticks
+     the mixer. Without it there is no engine to play a one-shot into.
+    */
+    const sound = engine.sound;
+    if (sound !== null) {
+        await em.addSystem(new AudioEmitterSystem(engine.assetManager, sound));
+    }
+
+    /*
      Shade assumes global illumination: with no environment map every surface
      renders unlit, and "my geometry is black" reads as a material problem rather
      than a missing environment. See REPORT.md ergonomics.
@@ -131,11 +146,34 @@ async function main(): Promise<void> {
     const mapName = requestedMap();
     const baseUrl = `/assets/built/${mapName}`;
 
-    const [loaded, clipMap, models] = await Promise.all([
+    const [loaded, clipMap, models, audio] = await Promise.all([
         loadMap(ecd, baseUrl),
         loadClipMap(baseUrl, mapName),
         loadModels('/assets/built/models'),
+        AudioBank.load(
+            '/assets/built/sound',
+            // `obtainSopra` is idempotent and `AudioEmitterSystem` has already
+            // called it, so this is the same engine the system ticks.
+            sound === null ? null : sound.sopra
+        ),
     ]);
+
+    /*
+     Browsers create an `AudioContext` suspended and will not start it without a
+     user gesture, so the bank stays silent until the player clicks to lock the
+     pointer. Resuming on any earlier event would be a console warning and no
+     sound; resuming here is the first moment the browser will allow.
+    */
+    canvasGesture(graphics.domElement as HTMLElement, async () => {
+        if (sound === null) return;
+        await sound.resumeContext();
+        audio.enabled = true;
+    });
+
+    console.log(
+        `[queep] sound: ${audio.stats['names']} names, ${audio.stats['files']} files, ` +
+        `${audio.stats['kilobytes']} KB`
+    );
 
     const spawn =
         loaded.bundle.entities.find((e) => e.classname === 'info_player_deathmatch') ??
@@ -152,7 +190,14 @@ async function main(): Promise<void> {
 
     const transform = new Transform();
     const cameraEntity = new Entity();
-    cameraEntity.add(transform).add(camera).build(ecd);
+
+    /*
+     The listener rides the camera, which is the player's head. Q3 does the same
+     -- `S_Respatialize` is called with the view origin -- and it is why a rocket
+     behind you is behind you rather than behind your feet.
+    */
+    if (!ecd.isComponentTypeRegistered(SoundListener)) ecd.registerComponentType(SoundListener);
+    cameraEntity.add(transform).add(camera).add(new SoundListener()).build(ecd);
 
     const canvas = graphics.domElement as HTMLElement;
     const hud = new Hud();
@@ -202,6 +247,7 @@ async function main(): Promise<void> {
         player.attach();
 
         const arena = new Arena(ecd, clipMap);
+        arena.audio = audio;
 
         /*
          Items drop to the floor through the same backend movement uses, so a
@@ -249,10 +295,29 @@ async function main(): Promise<void> {
         let pushVelocity: Vec3 | null = null;
 
         const movers = new MoverSystem({
-            moverSound: () => {
-                // Audio is phase 4; the hook exists so the call sites are right.
+            moverSound: (mover, which) => {
+                /*
+                 `SP_func_door` and `SP_func_plat` set different sounds, and
+                 `SP_func_button` has a start sound and no stop sound at all --
+                 a switch clicks once rather than clicking and then thumping.
+                */
+                const centre: [number, number, number] = [
+                    (mover.mins[0] + mover.maxs[0]) * 0.5 + mover.origin[0],
+                    (mover.mins[1] + mover.maxs[1]) * 0.5 + mover.origin[1],
+                    (mover.mins[2] + mover.maxs[2]) * 0.5 + mover.origin[2],
+                ];
+
+                if (mover.classname === 'func_button') {
+                    if (which === 'start') audio.play('mover/button', centre);
+                    return;
+                }
+
+                const kind = mover.classname === 'func_plat' ? 'plat' : 'door';
+                audio.play(`mover/${kind}_${which}`, centre);
             },
             teleport: (destination) => {
+                audio.play('world/telein', player.ps.origin);
+                audio.play('world/teleout', destination.origin);
                 teleportTo = [...destination.origin];
                 teleportYaw = destination.angle;
             },
@@ -264,6 +329,7 @@ async function main(): Promise<void> {
                 // adding to it, which is why a jump pad launches you the same
                 // way however fast you ran onto it.
                 pushVelocity = [velocity[0]!, velocity[1]!, velocity[2]!];
+                audio.playLocal('world/jumppad');
             },
         });
 
@@ -320,6 +386,9 @@ async function main(): Promise<void> {
         let pickupAge = 99;
         let secondAccumulator = 0;
 
+        const footsteps = new Footsteps();
+        let lastWeapon = player.weapon;
+
         // Targets at the other spawn points: somewhere to shoot, without
         // inventing level geometry the map does not have.
         const spawnPoints = loaded.bundle.entities.filter(
@@ -328,6 +397,10 @@ async function main(): Promise<void> {
         for (const s of spawnPoints.slice(1, 5)) {
             arena.addTarget(s._originQ3);
         }
+
+        player.onDryFire = () => {
+            audio.playLocal('weapon/empty');
+        };
 
         player.onFire = (eye, angles) => {
             arena.weapons.fire(player.weapon, eye, angles, 0, (Math.random() * 0xffff) | 0);
@@ -347,6 +420,8 @@ async function main(): Promise<void> {
             )) {
                 pickupName = event.label;
                 pickupAge = 0;
+                // `Touch_Item` plays the pickup sound to the picker only, dry.
+                audio.playLocal(`item/${event.item.def.classname}`);
                 if (event.selectWeapon !== null) {
                     player.selectWeapon(event.selectWeapon as typeof player.weapon);
                 }
@@ -354,6 +429,17 @@ async function main(): Promise<void> {
 
             itemsView.update(items.now);
             pickupAge += deltaSeconds;
+
+            /* ---- player audio ---- */
+
+            const step = footsteps.update(player.speed, player.onGround, deltaSeconds);
+            if (step === 'step') audio.play('player/footstep', player.ps.origin);
+            else if (step === 'land') audio.play('player/land', player.ps.origin);
+
+            if (player.weapon !== lastWeapon) {
+                lastWeapon = player.weapon;
+                audio.playLocal('weapon/change');
+            }
 
             /* ---- movers ---- */
 
@@ -430,7 +516,7 @@ async function main(): Promise<void> {
             });
         });
 
-        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models, movers, moversView, characters });
+        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models, movers, moversView, characters, audio });
     }
 
     console.log(
@@ -448,6 +534,15 @@ async function main(): Promise<void> {
  * so the runtime and the pmove oracle read the same bytes. A second
  * representation would be a second thing that can disagree with `cm_trace.c`.
  */
+/** Run `action` once, on the first click -- the gesture that unlocks audio. */
+function canvasGesture(element: HTMLElement, action: () => void): void {
+    const once = (): void => {
+        element.removeEventListener('mousedown', once);
+        action();
+    };
+    element.addEventListener('mousedown', once);
+}
+
 async function loadClipMap(baseUrl: string, name: string): Promise<ClipMap> {
     const response = await fetch(`${baseUrl}/collision.bsp`);
     if (!response.ok) {
