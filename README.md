@@ -17,12 +17,51 @@ Requires Node >= 24 and a WebGPU-capable browser.
 ```bash
 npm install
 npm run setup
+node tools/convert-map.ts oa_dm1 aggressor oa_dm2
+node tools/convert-fx.ts
 npm run dev
 ```
 
 `npm run setup` clones the reference C sources at pinned commits and downloads the OpenArena
 0.8.8 game data (425 MB). Nothing it fetches is committed — see [ASSETS.md](ASSETS.md) for
 provenance and licensing of every input.
+
+Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
+to jump, ctrl to crouch, mouse-1 to fire, number keys to change weapon. `?fly=1` swaps the
+player for a noclip camera.
+
+## Verification
+
+```bash
+npm run check
+```
+
+Typechecks, verifies the `trap_` matrix and balance tables are current, and runs the
+differential test suites. The movement suites need the WebAssembly oracle:
+
+```bash
+node oracle/build.mjs
+```
+
+which compiles OpenArena's `bg_pmove.c` and ioquake3's `cm_*` **unmodified** to WASM. The
+TypeScript port is then run against it frame by frame and must agree bit-for-bit — 100,000
+randomised traces and roughly 50,000 simulated movement frames, tolerance zero. Emscripten is
+expected at `.refs/emsdk`; `oracle/build.mjs` prints the install commands if it is missing.
+
+## What works
+
+- Six OpenArena maps convert and render at 137–253 FPS, with lighting reconstructed as dynamic
+  lights from the map's own `.shader` data.
+- Movement and collision are bit-exact against the C: strafe jumping, ramp jumps, stair
+  stepping, crouching, water.
+- Rockets, machinegun, shotgun, railgun and plasma fire with Q3's own damage numbers, against
+  targets that take damage, die and respawn.
+- Effects — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
+  GPU decals and clustered lights.
+
+Not done: items and pickups, doors and platforms, player models and animation, audio, bots. See
+[REPORT.md](REPORT.md) for the state of each phase and [DECISIONS.md](DECISIONS.md) for what was
+cut and why.
 
 ## Documents
 

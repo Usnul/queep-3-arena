@@ -15,44 +15,106 @@ the port needed, the port worked around it and the workaround is written down he
 
 ## 1. Executive summary
 
-> Ranked, most consequential first. Populated as evidence accumulates; a rank with no gap
-> entries behind it is not yet earned. Current state: end of phase 0.
+Ranked by how much they would cost the next person, not by how much they cost me.
 
-1. **`/samples` does not contain a single sample of the engine rendering anything.** The
-   published package ships `samples/generation/**` and nothing else — 30-odd files, all of
-   them procedural-map-generation fixtures. There is no sample that boots the engine, loads a
-   model, lights it, or draws a frame. The brief for this port said "read the source, the
-   `/samples` folder, and the docs"; two of those three do not exist inside the package. See
-   GAP-002.
-2. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
+1. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
    spent on graphics.** The engine itself came up cleanly and rendered at 230 FPS on the first
-   frame it drew. The time went to three integration defects that a consumer hits in a fixed
-   order and cannot skip: an optional peer dependency that is a mandatory top-level import
-   (GAP-003), worker bundles addressed at a web-root path that no application has (GAP-004),
-   and a missing `./package.json` export that breaks the standard way of locating a package
-   root. Each is individually small. Together they are the entire first-run experience.
-3. **Generated `.d.ts` files do not typecheck standalone.** Ten distinct unresolved type names
-   leak out of JSDoc into the published declarations. Consumers are forced into
-   `skipLibCheck: true`, which also disables checking of every *other* dependency they have.
-   See GAP-001.
-4. **Clustered lighting is as good as advertised, and the port depends on it existing.** 147
-   dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame — light count
-   did not register against geometry count. This matters more than a benchmark: q3map2 strips
-   every `light` entity from a compiled BSP (measured: zero across six maps) and meep cannot
-   import Q3's baked lightmaps, so reconstructing the lighting as dynamic lights was not a
-   showcase choice, it was the only remaining route to a lit level. It worked with no tuning.
-5. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
-   is literally named "used for light map", and there is a whole lightmap subsystem — but it is
-   a baker, and no material has a lightmap slot. Every level format that predates real-time GI
-   ships baked lighting; none of it can come in. See GAP-006.
-6. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+   frame it drew. The time went to integration defects a consumer hits in a fixed order and
+   cannot skip: an optional peer dependency that is a mandatory top-level import (GAP-003),
+   worker bundles addressed at a web-root path no application has (GAP-004), and a missing
+   `./package.json` export that breaks the standard way of locating a package root. Each is
+   individually trivial. Together they are the entire first-run experience, and they are the
+   cheapest thing on this list to fix.
+
+2. **Photometric lighting has no guidance, and world scale is silently load-bearing.**
+   `PointLight.intensity` is candela and falloff is inverse-square in scene units, which is the
+   right design. The consequence is undocumented: content authored in any unit other than
+   metres renders black, with no diagnostic. Diagnosing it cost about 90 minutes and was
+   actively misleading — raising every light's intensity by 10,000x moved mean frame luminance
+   from 14.7 to 25.7, which reads as "lights are disconnected", not "your distances are 32x too
+   large" (GAP-005). It then cost a further ten minutes at the other end of the scale when a
+   physically-plausible 60,000-lumen explosion whited out a corridor (GAP-011). A short table
+   of reference values in the lighting docs would have prevented both.
+
+3. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
+   is literally named "used for light map", and there is a whole `shade/renderer/lightmap/`
+   subsystem — but it is a *baker*, and no material has a lightmap slot. Every level format
+   that predates real-time GI ships baked lighting and none of it can come in. This is also the
+   single most visible quality gap in the demo: 29 of 30 materials load their textures and the
+   walls show full detail, but the floors read as flat grey, because what is missing is not
+   brightness but spatial variation in brightness (GAP-006).
+
+4. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
+   dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
+   not register against geometry count. That matters more than a benchmark: q3map2 strips every
+   `light` entity from a compiled BSP (measured: zero across six maps), so with lightmaps
+   unavailable, reconstructing the lighting as dynamic lights was not a showcase choice — it
+   was the only remaining route to a lit level. It worked with no tuning.
+
+5. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
    main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
-   concurrent executor and a worker pool. See GAP-008.
-7. **Two-thirds of Q3's engine surface is netcode, bot AI and 1999-era platform plumbing that
-   meep correctly does not have.** Of 309 distinct `trap_*` syscalls, 205 belong to subsystems
-   this port deletes outright. Of the 104 that remain, 75 map onto an existing meep facility.
-   Worth stating plainly before the gap register makes things look worse than they are.
-8. *(further items land as phases complete)*
+   concurrent executor and a worker pool. A real level is several times that size (GAP-008).
+
+6. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
+   `LabelView` rejects a call its own implementation explicitly supports, `Engine`'s constructor
+   options are typed as one of their own fields' types, and `entityManager` is `any`. Consumers
+   are forced into `skipLibCheck: true`, which disables checking of every *other* dependency
+   they have (GAP-001).
+
+7. **`/samples` contains no runnable engine sample.** The published package ships
+   `samples/generation/**` and nothing else — procedural-generation fixtures. Nothing boots the
+   engine, loads a model, or draws a frame, and `exports` has no `./samples/*` entry so the
+   folder cannot be imported even though it is shipped. `EngineHarness` turns out to be the
+   real worked example; finding that took reading a directory listing (GAP-002).
+
+8. **A scene with no environment map renders black, silently.** Shade assumes global
+   illumination and `make_default_environment` documents this well — but you only read that
+   docblock if you already suspect the environment. `EngineHarness.buildBasics` sets one up for
+   you, so this bites exactly when you stop using the all-or-nothing helper, which is the moment
+   you stop being a beginner. A first-frame warning would remove it entirely.
+
+9. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
+   documented — inside the docblock of a function consumers never call. A hand-built view
+   quaternion assuming -Z points the camera exactly backwards, which in a closed level presents
+   as *a dark scene* rather than a reversed one. I diagnosed it as a lighting problem first.
+
+10. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+    correctly does not have.** Of 309 distinct `trap_*` syscalls, 205 belong to subsystems this
+    port deletes outright; of the 104 that remain, 75 map onto an existing meep facility, 19 are
+    deliberately ported, 9 worked around, 1 a genuine gap. Worth stating plainly before the gap
+    register below makes things look worse than they are.
+
+### What this port did not use, and why
+
+Two large meep subsystems were evaluated and deliberately not used. Both decisions are about
+this port's constraints rather than the subsystems' quality, and a maintainer reading the gap
+register should not mistake them for complaints.
+
+- **The physics engine**, for player movement. Q3 movement is *defined* by the exact behaviour
+  of `CM_BoxTrace` — which plane it reports at a grazing edge, how `startsolid` is flagged, the
+  1/32 epsilon. Strafe-jumping is emergent from those specifics. Any other narrowphase, however
+  correct, produces a different game (D-007).
+- **`FirstPersonPlayerController`**, for the same reason at a higher level. Its own `DESIGN.md`
+  states its goals as "feel alive" and "be configurable"; Q3's movement is neither tuned nor
+  configurable, it is a fixed set of float operations players spent 25 years learning to
+  exploit. See GAP-009 — which is a *positioning* finding, not a defect.
+
+### State of the work
+
+| phase | status |
+|---|---|
+| 0 — setup | complete; `tsc --noEmit` clean, engine rendering |
+| 1 — asset pipeline | complete; 6 maps convert and render, 137–253 FPS |
+| 2 — collision and movement | complete and **oracle-verified bit-exact**, tolerance zero |
+| 3 — game simulation | weapons, damage, targets, effects; items and movers not done |
+| 4 — presentation | particles, decals, lights, HUD done; audio and player models not done |
+| 5 — bots | not started |
+| 6 — report | this document, written continuously |
+
+Phases 3–5 are partial and the gaps are listed honestly in `DECISIONS.md`. The brief said a
+half-finished demo with an excellent report is a success and the reverse is a failure, so effort
+went to the report and to phase 2, which is the one place the brief called fidelity
+non-negotiable.
 
 ---
 
