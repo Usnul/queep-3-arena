@@ -693,3 +693,109 @@ Recorded rather than left to be discovered.
 - **No door teaming.** Q3 links doors that touch into a team with a shared trigger and a single
   master. Doors that should open together do so here because they share a `targetname`, which
   covers every case in the six maps but is not the same rule.
+
+---
+
+## Breadth: characters
+
+### D-042: MD3 vertex morph becomes a skeleton by decomposition, not by hand-rigging
+
+The brief says to replace the animation pipeline rather than port it, and meep's loader makes that
+concrete: `load_gltf` maps the glTF `weights` channel to `-1` and skips it, so there is no
+morph-target path and no amount of care with the MD3 data will produce one. A Q3 player model has
+no bones. One has to be *inferred*.
+
+The method is a reduced skinning decomposition, after Le & Deng's SSDR without the weight-solve
+stage:
+
+1. **Cluster by trajectory.** Two vertices that follow the same path through every frame belong to
+   the same bone, which is the definition of a bone. k-means over the concatenated per-frame
+   positions therefore finds bones without being told what a limb is. Absolute positions rather
+   than displacements, because displacement-only features merge the left and right feet -- they
+   follow mirrored paths that are identical in magnitude for half the cycle.
+2. **Fit a rigid transform per cluster per frame**, by Kabsch, via Horn's quaternion method. Not an
+   SVD: an SVD-based Kabsch has to check `det(R) < 0` and flip a column, and getting that wrong
+   produces a reflection that reconstructs the points perfectly and turns the model inside out.
+   Horn's method goes straight to a quaternion and cannot reflect.
+3. **Reassign and refit.** Each vertex moves to whichever cluster reconstructs it best across all
+   frames. This is what lets a bad initial split recover.
+
+Seeding is farthest-point rather than random, so the pipeline is deterministic. A converter that
+emits a different skeleton on every run makes every diff useless.
+
+**Measured, 32 joints per part, across the 15 convertible characters** (one Q3 unit is about 3 cm):
+
+| | mean error | worst |
+|---|---|---|
+| best (`smarine`) | 0.005-0.009 | 0.15 |
+| median | ~0.07 | ~1.8 |
+| worst (`gargoyle` torso) | 0.267 | 4.21 |
+
+A mean of 0.07 units is two millimetres on a 1.75 m character. The joint count was chosen from the
+curve rather than by taste: on `sarge`'s legs, 16 joints gives 0.102, 24 gives 0.043, and 32 gives
+0.042 -- the knee is at 24, and the torso keeps improving to 32, so 32 for both.
+
+Every vertex ends with a single influence at weight 1. Real skinning blends four; the cost of not
+doing so is a crease at cluster boundaries rather than a bend. Solving for smooth weights is the
+obvious next step and is not done.
+
+The alternative worth naming because it is tempting: one joint per vertex, with each joint's
+translation track *being* that vertex's trajectory. That is bit-exact, and it turns a 278-vertex
+leg into a 278-joint skeleton with a 17 KB matrix palette per instance. Exactness is not worth 40x
+the joints when the error at 32 is a fraction of a millimetre.
+
+### D-043: The three-part structure survives into the glTF, because it is load-bearing
+
+A Q3 player is `lower.md3`, `upper.md3`, `head.md3`, joined by `tag_torso` and `tag_head`, and the
+split is not an artefact of 1999 tooling: **the legs and the torso animate independently**. A
+player runs and fires at the same time, from two clips chosen by different rules from different
+state.
+
+So the output is two skins and two sets of clips over disjoint joint sets, with Q3's own
+`LEGS_*` / `TORSO_*` / `BOTH_*` names kept. Playing one of each is two entries in meep's clip list,
+not a blend tree. The torso's joints are children of the `tag_torso` node, so the tag composes with
+the torso's own rig instead of having to be baked into every frame of it.
+
+Two details that are silent failures if missed, both pinned by tests:
+
+- **The legs frame correction.** `animation.cfg` writes legs frame numbers as offsets into the
+  whole animation set, but they index into `lower.md3`, which does not contain the torso-only
+  frames. `CG_ParseAnimationFile` subtracts the gap. On `sarge` that gap is 63, and without it
+  every legs animation plays 63 frames late -- running plays a death.
+- **The tag axis convention.** MD3 stores forward/left/up, and they are the *columns* of the
+  local-to-parent rotation, not the rows. `CG_PositionRotatedEntityOnTag` settles it by composing
+  the origin as `parent + sum(origin[i] * parentAxis[i])`. Reading them as rows transposes every
+  tag, which inverts each rotation -- heads face backwards on any character whose torso is turned,
+  and are correct on any character standing square.
+
+### D-044: The verification is a numerical replay, not a screenshot
+
+There are four places for this pipeline to be wrong -- the rig, the axis conversion, the frame
+sampling, and the tag composition -- and all four produce a model that loads and renders and is
+subtly wrong. Looking at it catches a mirrored character; it does not catch a run cycle that is
+one frame out.
+
+So `test/characters.test.ts` reads the emitted glTF back, evaluates the skinning by hand the way a
+renderer would -- inverse bind matrix, joint quaternion, joint translation -- and compares against
+the MD3 frames the file was built from. The tolerance is the rig's own measured error rather than
+a number chosen to make it pass, so a sampling bug shows up as a mean an order of magnitude above
+the rig's.
+
+The tag test checks the rotation by what it *does* rather than by its components: applying it to
+the local forward axis must give the tag's own forward vector. A transposed matrix-to-quaternion
+conversion passes any component-wise check loose enough to pass at all, and fails this one at once.
+
+The structural half runs over all 15 characters, because the failures it catches -- an out-of-range
+joint index, weights that do not sum to one, a missing `POSITION` min/max -- are per-model and are
+exactly the kind of thing that first appears on the fourteenth.
+
+### D-045: What the character pipeline does not do
+
+- **`angelyss` is not converted.** OA 0.8.8 ships its `lower.md3` and no `upper.md3` or
+  `head.md3`. Reported rather than silently skipped.
+- **One influence per vertex**, so joints crease rather than bend. See D-042.
+- **No LOD.** MD3 carries up to three levels of detail as separate files (`lower_1.md3`,
+  `lower_2.md3`); only the base model is read.
+- **No weapon attachment.** `tag_weapon` is parsed and not used, because there is no third-person
+  view to hang a weapon in yet.
+- **Heads never animate**, which is faithful: Q3 draws the head at frame 0 always.

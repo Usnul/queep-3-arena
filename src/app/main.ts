@@ -15,6 +15,11 @@ import { LightSystem3 } from '@woosh/meep-engine/src/engine/graphics3/LightSyste
 import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem3.js';
 import { DecalSystem3 } from '@woosh/meep-engine/src/engine/graphics3/DecalSystem3.js';
 import { ParticleEmitterSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticleEmitterSystem3.js';
+import { MeshSystem3 } from '@woosh/meep-engine/src/engine/graphics3/MeshSystem3.js';
+import { AnimationSystem3 } from '@woosh/meep-engine/src/engine/graphics3/AnimationSystem3.js';
+import { GLTFSceneBundleAssetLoader } from '@woosh/meep-engine/src/engine/asset/loaders/GLTFSceneBundleAssetLoader.js';
+import { GameAssetType } from '@woosh/meep-engine/src/engine/asset/GameAssetType.js';
+import { load_model_scene_bundle } from '@woosh/meep-engine/src/engine/asset/load_model_scene_bundle.js';
 import { ImageBitmapAssetLoader } from '@woosh/meep-engine/src/engine/asset/loaders/image/ImageBitmapAssetLoader.js';
 import { make_default_environment } from '@woosh/meep-engine/src/engine/graphics3/make_default_environment.js';
 import { Camera } from '@woosh/meep-engine/src/engine/graphics/ecs/camera/Camera.js';
@@ -29,6 +34,7 @@ import { ItemsView } from '../client/ItemsView.ts';
 import { ItemSystem, type DropTrace } from '../game/Items.ts';
 import { MoverSystem, carryDisplacement, type Vec3 } from '../game/Movers.ts';
 import { MoversView } from '../client/MoversView.ts';
+import { Character, CHARACTERS } from '../client/Characters.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
@@ -78,6 +84,40 @@ async function main(): Promise<void> {
     await em.addSystem(new CameraSystem3(graphics));
     await em.addSystem(new DecalSystem3(graphics, engine.assetManager));
     await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
+
+    /*
+     Skinned models. Three registrations, and none of them are optional:
+
+     - the glTF loader, because nothing registers it for you. `AssetManager`
+       ships with no model loader at all and `load_model_scene_bundle` asserts
+       on the type rather than falling back, so the failure is at least loud.
+     - `MeshSystem3`, which owns `SGMesh` and puts models into the same Shade
+       scene the harness draws (hence `EngineHarness.shadeScene`, not a new one).
+     - `AnimationSystem3`, which needs the mesh system by reference: a clip
+       nobody registered cannot be driven, and registration happens when the
+       instance is built.
+    */
+    await engine.assetManager.registerLoader(
+        GameAssetType.ModelGLTF_JSON,
+        new GLTFSceneBundleAssetLoader()
+    );
+    /*
+     ...and the image loader the glTF loader's *own dependencies* need. It asks
+     for `x-meep/image-bitmap` and the error when nothing answers arrives from
+     inside `tiny-gltf`, once per texture, as an unhandled rejection: sixteen
+     identical errors naming a type the application never mentioned. See
+     REPORT.md ergonomics.
+    */
+    await engine.assetManager.registerLoader(
+        GameAssetType.ImageBitmap,
+        new ImageBitmapAssetLoader()
+    );
+
+    const meshes = new MeshSystem3(graphics, scene, (url: string) =>
+        load_model_scene_bundle(engine.assetManager, url)
+    );
+    await em.addSystem(meshes);
+    await em.addSystem(new AnimationSystem3(graphics, meshes));
 
     /*
      Shade assumes global illumination: with no environment map every surface
@@ -253,6 +293,29 @@ async function main(): Promise<void> {
         const playerMaxs: Vec3 = [0, 0, 0];
         const carry: Vec3 = [0, 0, 0];
 
+        /*
+         One character per spawn point, cycling the roster, as a showcase and a
+         placeholder for the bots that will drive them. They stand where a
+         player would and run the idle pair -- `LEGS_IDLE` plus `TORSO_STAND` --
+         which is what Q3 shows a player doing nothing.
+        */
+        const characters: Character[] = [];
+        const characterSpawns = loaded.bundle.entities.filter(
+            (e) => e.classname === 'info_player_deathmatch'
+        );
+
+        for (let i = 0; i < characterSpawns.length && i < CHARACTERS.length; i++) {
+            const spawnPoint = characterSpawns[i]!;
+            const character = new Character(ecd, CHARACTERS[i % CHARACTERS.length]!);
+            character.place(
+                [spawnPoint._originQ3[0]!, spawnPoint._originQ3[1]!, spawnPoint._originQ3[2]! + 24],
+                spawnPoint._angle
+            );
+            characters.push(character);
+        }
+
+        console.log(`[queep] characters: ${characters.length} placed`);
+
         let pickupName = '';
         let pickupAge = 99;
         let secondAccumulator = 0;
@@ -367,7 +430,7 @@ async function main(): Promise<void> {
             });
         });
 
-        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models, movers, moversView });
+        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models, movers, moversView, characters });
     }
 
     console.log(

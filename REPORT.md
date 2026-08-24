@@ -968,6 +968,38 @@ the expensive way.
   `PhysicsSystem.register(em)` that adds both, which would make the pairing unmissable.
 - **Evidence:** `src/client/PhysicsWorld.ts` `PhysicsWorld.create`. Recorded during phase 3b.
 
+### GAP-015: `new Animation({clips})` takes JSON, is documented as taking components, and silently accepts either
+
+- **Severity:** medium -- a wrong-but-plausible call that produces no error and no animation.
+- **What happened:** `new Animation({ clips: [clip1, clip2] })` with real `AnimationClip`
+  instances builds an `Animation` whose list is the right length, whose clips are real
+  `AnimationClip`s, and whose every clip name is the **empty string**. Nothing then matches any
+  clip in the model, `ClipListPlayer` produces zero playbacks, and the entity stands still.
+- **Why the obvious call is the wrong one:** the constructor's own docblock says
+  `@property {List.<AnimationClip>} clips`, and the field is declared `@type {List<AnimationClip>}`.
+  Both point at the component type. The constructor in fact forwards to `fromJSON`, which calls
+  `this.clips.fromJSON(json.clips, AnimationClip)` -- so the argument must be *plain objects*, and
+  passing the documented type quietly produces empty names rather than throwing.
+- **Measured, not inferred:** constructing both ways in the running app and reading the names back
+  gives `''` for the instance form and `'LEGS_RUN'` for the JSON form.
+- **What makes it expensive to diagnose:** the engine has a good diagnostic for exactly this
+  failure. `ClipListPlayer#report_missing` warns once per name, with the model's real clip list
+  beside it -- a genuinely well-designed message. It never fires here, because the name is `''`
+  and... it does fire, but for a name that is empty, so the console line reads as noise rather than
+  as the answer. Everything downstream looks correct: the model loads, the skins are there, the
+  clip list has the right length.
+- **Workaround:** pass JSON and read the constructed clips back out.
+
+  ```js
+  const animation = new Animation({ clips: [{ name, weight: 1, repeatCount: -1, timeScale: 1, flags: 0 }] });
+  const clip = animation.clips.get(0);
+  ```
+
+- **What would fix it:** accept both -- `fromJSON` could pass through anything already an
+  `AnimationClip` -- or type the parameter as the JSON it is. Either removes the trap.
+- **Cost:** ~40 minutes, most of it spent believing the *model* had not loaded.
+- **Evidence:** `src/client/Characters.ts` `clipJson`. Recorded during the character phase.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
