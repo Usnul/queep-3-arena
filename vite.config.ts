@@ -4,7 +4,7 @@
 
 import { defineConfig, type Plugin } from 'vite';
 import { createRequire } from 'node:module';
-import { createReadStream } from 'node:fs';
+import { createReadStream, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 /**
@@ -62,6 +62,51 @@ function meepWorkerBundles(): Plugin {
 }
 
 /**
+ * Dev-only: `POST /__shot/<name>` with a PNG data URL body writes
+ * `assets/shots/<name>.png`.
+ *
+ * The renderer's output is the only way to tell a correct conversion from a
+ * plausible-looking wrong one, and reading pixels back through a headless
+ * automation channel a few bytes at a time is not a way to look at a level. This
+ * is the smallest thing that gets a frame onto disk. It exists only in the dev
+ * server; there is no production build.
+ */
+function screenshotSink(): Plugin {
+    return {
+        name: 'queep:screenshot-sink',
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                const url = (req.url ?? '').split('?')[0] ?? '';
+
+                if (req.method !== 'POST' || !url.startsWith('/__shot/')) {
+                    next();
+                    return;
+                }
+
+                const name = url.slice('/__shot/'.length).replace(/[^a-z0-9_.-]/gi, '_');
+                const chunks: Buffer[] = [];
+
+                req.on('data', (c: Buffer) => chunks.push(c));
+                req.on('end', () => {
+                    const body = Buffer.concat(chunks).toString('utf8');
+                    const comma = body.indexOf(',');
+                    const dir = resolve(import.meta.dirname, 'assets', 'shots');
+
+                    mkdirSync(dir, { recursive: true });
+                    writeFileSync(
+                        resolve(dir, `${name}.png`),
+                        Buffer.from(body.slice(comma + 1), 'base64')
+                    );
+
+                    res.statusCode = 200;
+                    res.end(`assets/shots/${name}.png`);
+                });
+            });
+        },
+    };
+}
+
+/**
  * meep is proprietary and must never end up inside a committed or shipped
  * artefact (brief section 3). Marking it external is the mechanical enforcement
  * of that: even if someone later adds a build step, rollup cannot inline the
@@ -73,7 +118,7 @@ function meepWorkerBundles(): Plugin {
 const MEEP_EXTERNAL = [/^@woosh\/meep-engine(\/.*)?$/];
 
 export default defineConfig({
-    plugins: [meepWorkerBundles()],
+    plugins: [meepWorkerBundles(), screenshotSink()],
 
     resolve: {
         alias: {

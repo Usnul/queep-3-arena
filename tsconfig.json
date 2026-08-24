@@ -12,6 +12,10 @@
     "allowJs": false,
     "skipLibCheck": true,
     "isolatedModules": true,
+    // Node 24 runs the pipeline's .ts sources directly via type stripping, which
+    // requires imports to carry the real .ts extension. Vite resolves them too.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
     "resolveJsonModule": true,

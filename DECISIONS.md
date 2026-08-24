@@ -137,3 +137,101 @@ Windows: `process.argv[1]` is `H:\git\...` and the correct URL is `file:///H:/gi
 three slashes and a drive letter. The guard silently evaluated false and the script did
 nothing, exiting 0. All tooling now uses `pathToFileURL()`. Noted because it is the kind of
 silent no-op that costs an hour when it happens inside CI rather than in front of you.
+
+---
+
+## Phase 1 — asset pipeline
+
+### D-011: The simulation runs in Q3 units; the presentation layer runs in metres
+
+Geometry, light positions and light radii are multiplied by exactly **1/32** in
+`tools/convert-map.ts`. The simulation is not scaled at all.
+
+The original plan (recorded here as it was, because the reasoning for the change is the
+useful part) was to keep everything in Q3 units, on the grounds that `bg_pmove` is full of
+literal constants — jump velocity 270, step height 18, the 1/8-unit velocity snap — whose
+relationships to each other *are* the movement feel, and that scaling them risked divergence
+against the phase-2 oracle.
+
+That reasoning is still right about the simulation and was wrong about the renderer. meep's
+lights are photometric: `PointLight.intensity` is candela, falloff is inverse-square **in scene
+units**. At Q3 scale a ceiling light is ~300 units from the floor, and a level lit to a normal
+brightness needs intensities in the millions. Loaded 1:1, the map renders black. See GAP-005 —
+this cost about 90 minutes.
+
+So the two systems keep their own units and the pipeline converts once, offline. The
+conversion is a multiply at a single boundary rather than a factor threaded through the
+physics.
+
+**1/32 rather than 0.0254** (one Q3 unit as one inch, the usual folklore figure) for two
+reasons. It puts the 56-unit player bounding box at 1.75 m instead of an implausible 1.42 m.
+And it is a power of two, so the conversion is exact in binary floating point and contributes
+no rounding error of its own — which matters when the same positions round-trip between a
+simulation that must match a C oracle bit-for-bit and a renderer that does not care.
+
+### D-012: Static lighting is reconstructed as dynamic lights, not imported
+
+Q3 ships every level's lighting baked into the BSP as 128×128 lightmap pages. Two facts
+together ruled that route out:
+
+1. **meep cannot import baked lightmaps.** Its lightmap subsystem is a *baker* — see GAP-006.
+2. **q3map2 strips every `light` entity from the compiled BSP** after baking. Confirmed
+   empirically: across six OA maps, `light` entity count is **zero** in all of them. The lights
+   only exist in the `.map` sources, which are not shipped.
+
+So neither the baked result nor the original sources are available. What *is* available is the
+`.shader` scripts, and they carry the light data q3map2 itself used: 679 `q3map_surfacelight`
+declarations, 527 `q3map_lightimage`, 66 `q3map_sun`. The pipeline therefore:
+
+- gives every `q3map_surfacelight` surface a PBR emissive, so it glows;
+- places a real point light at each such surface's centroid, clustering within 3 m so a ceiling
+  of panels becomes one light per fixture rather than one per polygon;
+- converts `q3map_sun` into a directional light with the map's own intended azimuth and
+  elevation.
+
+This produces between 13 and 147 dynamic lights per map from real map data. It is a deviation
+from Q3's appearance and it is the deviation the brief asks for: it is the version that shows
+what the engine does. The performance answer is in the report — light count did not register.
+
+### D-013: `.shader` scripts are read structurally, never interpreted
+
+`tools/pipeline/shader-script.ts` reads a script's structure — name, global directives, stage
+directives — and hands back tokens. It never evaluates one. `shader-to-pbr.ts` then picks out
+about a dozen directives that carry information a PBR material can represent, and counts
+everything it drops.
+
+Writing a `.shader` interpreter is an explicit anti-goal, and the boundary is easy to erode one
+directive at a time. Keeping extraction and projection in separate files, with the projection
+holding an explicit list of what it drops, makes crossing that line a visible act rather than a
+drift.
+
+The projection that matters: a Q3 lit surface is conventionally three stages — `$lightmap`,
+then the diffuse with `blendFunc filter`, then a `.blend` texture with `blendfunc add`. That
+maps cleanly onto PBR: the filter stage is **albedo**, and an additive stage over a lit surface
+*is* a **glow map**, so it becomes emissive. Measured lossiness across the whole OA set is in
+the report's performance section.
+
+### D-014: Only BSP model 0 becomes static geometry
+
+Models 1..n are brush entities — doors, plats, buttons — which move. Merging them into the
+world would weld every door permanently open. They are recorded and left for phase 3, where
+they become their own entities with their own transforms.
+
+### D-015: A dev-only screenshot endpoint
+
+`vite.config.ts` serves `POST /__shot/<name>`, writing a PNG to `assets/shots/`. Verifying a
+BSP conversion means *looking* at it — the difference between a correct conversion and a
+plausible-looking wrong one is not visible in statistics, and reading pixels back through an
+automation channel a few bytes at a time is not looking. It exists only in the dev server, and
+there is no production build.
+
+### D-016: Node's strip-only TypeScript constrains the pipeline's style
+
+Node 24 runs `.ts` directly, which is why `tools/` can import `src/q3/**` and the BSP reader
+can be shared between the pipeline and the runtime rather than written twice. The cost is that
+strip-only type removal rejects anything requiring code generation: **no parameter
+properties** (`constructor(private x)`), no enums, no namespaces, no decorators. Imports must
+also carry a real `.ts` extension, hence `allowImportingTsExtensions`.
+
+Sharing the reader is worth the constraint. A disagreement between two BSP readers about, say,
+plane winding would surface as a physics bug that looks like a rendering bug.

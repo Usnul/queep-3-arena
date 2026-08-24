@@ -35,12 +35,24 @@ the port needed, the port worked around it and the workaround is written down he
    leak out of JSDoc into the published declarations. Consumers are forced into
    `skipLibCheck: true`, which also disables checking of every *other* dependency they have.
    See GAP-001.
-4. **Two-thirds of Q3's engine surface is netcode, bot AI and 1999-era platform plumbing that
+4. **Clustered lighting is as good as advertised, and the port depends on it existing.** 147
+   dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame — light count
+   did not register against geometry count. This matters more than a benchmark: q3map2 strips
+   every `light` entity from a compiled BSP (measured: zero across six maps) and meep cannot
+   import Q3's baked lightmaps, so reconstructing the lighting as dynamic lights was not a
+   showcase choice, it was the only remaining route to a lit level. It worked with no tuning.
+5. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
+   is literally named "used for light map", and there is a whole lightmap subsystem — but it is
+   a baker, and no material has a lightmap slot. Every level format that predates real-time GI
+   ships baked lighting; none of it can come in. See GAP-006.
+6. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+   main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
+   concurrent executor and a worker pool. See GAP-008.
+7. **Two-thirds of Q3's engine surface is netcode, bot AI and 1999-era platform plumbing that
    meep correctly does not have.** Of 309 distinct `trap_*` syscalls, 205 belong to subsystems
    this port deletes outright. Of the 104 that remain, 75 map onto an existing meep facility.
-   That ratio is the headline number of section 2 and it is a good one — worth stating plainly
-   before the gap register below makes things look worse than they are.
-5. *(further items land as phases complete)*
+   Worth stating plainly before the gap register makes things look worse than they are.
+8. *(further items land as phases complete)*
 
 ---
 
@@ -575,6 +587,125 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   same `NetworkError` as not serving them at all, which cost another 15 minutes of chasing a
   problem I had already fixed.
 
+### GAP-005: Physically-based light units make world scale load-bearing, and nothing says so
+
+- **Needed:** light a converted Q3 level.
+- **meep offers:** `PointLight.intensity` is **candela** and `intensity_lumens` is **lumens**,
+  with the isotropic conversion `cd = lm / 4π` — genuinely good, and the docblock on
+  `PointLight` states it plainly. The consequence is not stated anywhere: because falloff is
+  inverse-square *in scene units*, the unit a scene is authored in is now part of its lighting
+  setup.
+
+  Q3 authored in its own units, where a ceiling light sits about 300 units above the floor and
+  a room is 512 units across. Loading that geometry 1:1 gives a scene that renders essentially
+  black. The failure is silent and it does not look like a units problem — it looks like
+  materials, or a missing light system registration, or a broken emissive path.
+
+  What made it expensive is that the diagnosis is *counter-intuitive under test*: I raised
+  every light's intensity by 100×, then 1000×, then 10000×, and mean frame luminance went
+  14.7 → 15.7 → 17.1 → 25.7. A brightness knob that barely responds to a four-order-of-magnitude
+  change reads as "lights are not connected", not as "your distances are 32× too large". I went
+  looking for a broken link in `LightSystem3` before I thought to read `PointLight`'s units.
+- **Workaround:** the asset pipeline now scales all geometry by exactly 1/32 on the way out
+  (`WORLD_SCALE` in `tools/convert-map.ts`) and emits light power in lumens, and the runtime
+  does the lm → cd conversion. The simulation stays in Q3 units so `bg_pmove` is untouched —
+  see D-011. About 90 minutes end to end, of which roughly 60 was diagnosis and 30 was the fix.
+- **Severity:** major. Not a defect — the physical units are the right design — but the first
+  contact any non-metric content has with the engine is a black screen and no diagnostic.
+- **Suggested fix:** a development-mode assertion is enough. The engine already ships ~5000 of
+  them: at scene setup, if the camera frustum or scene bounds span more than a few hundred
+  units while total scene luminous flux is low, warn that the scene may not be authored in
+  metres. Failing that, one paragraph in the lighting docs saying "meep lights are photometric;
+  author your scene in metres" would have saved the hour.
+- **Evidence:** `tools/convert-map.ts` `WORLD_SCALE`, `src/client/map/loadMap.ts` lm→cd
+  conversion, DECISIONS.md D-011. Recorded at phase 1.
+
+### GAP-006: Baked lightmaps cannot be imported, only baked
+
+- **Needed:** Q3 ships every level's lighting as pre-baked 128×128 RGB lightmap pages inside
+  the BSP, with per-vertex lightmap UVs already in page space. That is the *entire* static
+  lighting of a Q3 map, and reproducing it exactly is the cheapest possible route to a
+  correct-looking level.
+- **meep offers:** the pieces look like they line up and do not.
+  `STANDARD_VERTEX_ATTRIBUTE_STRUCT` has a `uv1` channel, `StandardAttributes` documents
+  `TextureCoordinates1` as *"Used for light map"*, and there is a whole
+  `shade/renderer/lightmap/` subsystem with an atlas packer, UV rescaling and overlap checks.
+  But that subsystem is a **baker**: `GPULightMap` exposes `bake_start` / `bake_update` /
+  `bake_end` / `bake`, stores its result as YCoCg plus spherical harmonics, and generates its
+  own atlas UVs via `chunk_lightmap_geometry_uv_to_atlas`. There is no path that accepts a
+  texture plus a UV set you already have. `StandardShadeMaterial` has albedo, normal, ORM and
+  emissive slots — no lightmap slot.
+- **Workaround:** none for the lightmaps themselves; they are dropped. Static lighting is
+  instead *reconstructed* as real dynamic lights (see GAP-007 for why that was even possible),
+  which is arguably the better demo but is a different picture from Q3's. `uv1` is still
+  carried through the pipeline into the geometry so the data is not lost when a slot exists.
+  Roughly 40 minutes, most of it spent establishing that the lightmap subsystem was a baker
+  rather than an importer — the directory listing strongly suggests otherwise.
+- **Severity:** major for anyone bringing in content from another engine. Every level format
+  that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
+  today — ships baked lighting, and none of it can be brought in.
+- **Suggested fix:** a `texture_lightmap` slot on `StandardShadeMaterial` sampled with `uv1`
+  and multiplied into diffuse. The vertex channel and the attribute name already exist and
+  already say "light map"; what is missing is the consumer.
+- **Evidence:** `src/shade/renderer/lightmap/**`, `StandardAttributes.js`,
+  `StandardShadeMaterial.d.ts`. Recorded at phase 1.
+
+### GAP-007: `draw_side` exists, is documented as having no effect, and there is no double-sided path
+
+- **Needed:** Q3 shaders use `cull none` for grates, railings, foliage, banners and flags —
+  surfaces authored as a single sheet of polygons meant to be visible from both sides. They
+  are common: they appear in most maps in the OA set.
+- **meep offers:** `ShadeMaterial.draw_side` with a `ShadeDrawSide` enum, whose own docblock
+  says: *"Does not affect the actual drawing. Drawing is always done with 'Front' mode, with
+  backfaces always being culled. If you want double-sided drawing - you need to clone the
+  geometry and flip normals."*
+
+  Credit where due — that is exactly the right way to document a non-functional field, and it
+  saved me from debugging it. But a settable property that is documented to do nothing is a
+  trap with a warning sign on it rather than no trap.
+- **Workaround:** duplicate the triangles with reversed winding and flipped normals at asset
+  build time, for materials the shader conversion marked `doubleSided`. Straightforward in the
+  pipeline (it is the same vertices, reversed indices) and costs a little geometry. Not yet
+  applied — currently these surfaces are simply single-sided and disappear when viewed from
+  behind, which is visible in a few places and is filed here rather than hidden.
+- **Severity:** minor, given the docblock. It would be major without it.
+- **Suggested fix:** either implement it — the renderer has the pipeline state, and a
+  per-material cull mode is a pipeline key rather than a shader change — or remove the field
+  and the enum so it cannot be set at all.
+- **Evidence:** `src/shade/renderer/material/ShadeMaterial.d.ts`,
+  `tools/pipeline/shader-to-pbr.ts` (`doubleSided`). Recorded at phase 1.
+
+### GAP-008: Meshlet construction is synchronous, single-threaded, and on the critical path
+
+- **Needed:** load a level's geometry without stalling the frame loop.
+- **meep offers:** `meshlet_geometry_build_from_geometry(geometry)` is the only documented
+  route from a `Geometry` (attributes you built) to a `MeshletGeometry` (what the renderer
+  draws). It runs synchronously on the calling thread.
+
+  Measured, converting one map's meshes:
+
+  | map | triangles | meshes | meshlet build |
+  |---|---:|---:|---:|
+  | `aggressor` | 3,263 | 23 | 53 ms |
+  | `oa_dm1` | 7,460 | 30 | 74 ms |
+  | `am_thornish` | 198,740 | 45 | **1,246 ms** |
+
+  1.25 seconds of unbroken main-thread work. The engine has an asset-streaming story, a
+  `ConcurrentExecutor` for time-sharing, and a worker infrastructure — and the one step that
+  actually costs real time on level load uses none of them.
+- **Workaround:** none applied. It is a load-time cost and the demo tolerates it. A real game
+  would have to slice it manually, which means calling the builder per mesh and yielding
+  between meshes — feasible here only because the port controls the mesh granularity.
+- **Severity:** major. A 200k-triangle level is small; this scales linearly and a real level is
+  several times that.
+- **Suggested fix:** either an async/chunked variant that cooperates with `ConcurrentExecutor`
+  the way the terrain builder cooperates with its worker, or a documented offline format so
+  meshlet construction can happen at asset-build time and the runtime only uploads. The
+  serialization adapter (`MeshletGeometrySerializationAdapter`) suggests the second is close to
+  possible already, but nothing documents it as the intended pipeline.
+- **Evidence:** `src/client/map/loadMap.ts` timings, reported in `LoadedMap.timings.geometry`.
+  Recorded at phase 1.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
@@ -600,6 +731,42 @@ Observations that are not gaps — the facility exists and works — but cost ti
   the component and the renderer row are the same shape and why a model is not one of these;
   `Geometry.version` explains why nothing infers staleness. This is rare and it substituted
   successfully for the missing samples more than once.
+
+### Added during phase 1
+
+- **A scene with no environment map renders black, silently.** `make_default_environment`'s
+  docblock is admirably clear — *"Shade assumes global illumination... a scene with no
+  environment renders unlit. So the default is something the engine provides"* — but you only
+  read it if you already suspect the environment. What you actually see is correct geometry,
+  correct materials, correct textures, and a black screen; every instinct says material bug.
+  `EngineHarness.buildBasics` sets one up for you, so this only bites the moment you stop
+  using the harness's all-or-nothing helper and register systems yourself, which is the moment
+  you stop being a beginner. **Cost: ~25 minutes.** A dev-mode warning on the first frame
+  rendered with no environment would remove this entirely.
+
+- **The camera uses the object convention (+Z forward), not the glTF/three convention.** This
+  is a deliberate, defensible choice and `camera_sync_from_transform` documents it well,
+  including that it was *measured* (64 of 64 instances in frustum one way, 0 of 64 the other).
+  The problem is placement: that fact lives in the docblock of a function a consumer never
+  calls, and nothing on `Camera` or `Transform` mentions it. A hand-built view quaternion that
+  assumes -Z forward points the camera exactly backwards, and in a closed level that presents
+  as *a dark scene*, not a reversed one — you are outside the geometry looking at culled
+  backfaces. I diagnosed it as a lighting problem first. **Cost: ~35 minutes.** One line on
+  `Camera` would have prevented it. Using `Quaternion.lookRotation` and letting the engine own
+  the convention is the fix, and is what the port now does.
+
+- **`exports` has no `./package.json` entry**, so `require.resolve('@woosh/meep-engine/package.json')`
+  — the standard way for tooling to locate a package root — throws
+  `ERR_PACKAGE_PATH_NOT_EXPORTED`. Found by crashing a Vite config. One line to fix.
+
+- **The engine's own performance log is `console.warn`.** `FPS: 238.12, RENDER: 1.58ms,
+  SIMULATION: 0.06ms` once a second, at warn level, on by default. During the GAP-003/GAP-004
+  diagnosis the real errors scrolled out of the console behind it. `console.debug`, or off by
+  default, would be better.
+
+- **`EntityManager` has no `update`; the method is `simulate`.** Minor, but the ECS is the
+  thing a consumer touches most and the name is not the conventional one. Discovered by
+  enumerating the prototype.
 
 ---
 
@@ -632,7 +799,47 @@ Two things worth flagging early:
   materially harder during the GAP-003/GAP-004 diagnosis, because the genuine failures scrolled
   away behind it.
 
-> Numbers for a real map land in phase 1.
+### Phase 1 — converted Q3 levels
+
+Same host. Frame cost is measured by timing `entityManager.simulate()` + `graphics.render()`
+in a tight loop with the camera rotating, so it is **CPU submission cost**, not GPU frame time —
+`render()` returns once the frame is submitted. It is the number that bounds how much CPU a
+game has left, which is the one this port cares about.
+
+| map | triangles | meshes | point lights | CPU ms/frame | implied FPS |
+|---|---:|---:|---:|---:|---:|
+| `aggressor` | 3,263 | 23 | 63 | 3.96 | 253 |
+| `am_thornish` | 198,740 | 45 | 147 | 7.28 | 137 |
+
+**147 dynamic point lights cost nothing measurable.** `am_thornish` is 60× the triangles of
+`aggressor` and 2.3× the lights, for 1.8× the frame cost. The clustered lighting claim in the
+README holds up: the cost scaled with geometry, not with light count. Since Q3's static
+lighting had to be reconstructed as dynamic lights anyway (GAP-006), this is the difference
+between the port being possible and not.
+
+Simulation cost with 53 entities is **0.003 ms/frame** — below the noise floor of
+`performance.now()`. The ECS is not going to be the bottleneck.
+
+Load time, cold, from the local dev server:
+
+| map | fetch | materials + textures | meshlet build | lights | total |
+|---|---:|---:|---:|---:|---:|
+| `aggressor` | 5 ms | 39 ms | 53 ms | 14 ms | 111 ms |
+| `oa_dm1` | 4 ms | 25 ms | 74 ms | 1 ms | 104 ms |
+| `am_thornish` | 31 ms | 73 ms | **1,246 ms** | 3 ms | 1,353 ms |
+
+Meshlet construction is 92% of load time on the large map and is synchronous — see GAP-008.
+It is the only part of this table that would need work in a real title.
+
+### Asset pipeline, for scale
+
+Not meep's numbers, but they establish what the engine was fed. 4,370 files flattened from 8
+pk3s in Q3 load order; 104 `.shader` scripts yielding 2,154 entries and 1,924 unique shader
+names, with 214 name collisions across files and 4 parse warnings. The Q3 → PBR projection
+drops, in total across the OA shader set: 1,679 `tcMod`, 982 non-benign `rgbGen`, 911 `tcGen`,
+413 `alphaGen`, 93 `animMap`, 2 `deformVertexes`, 1 `videoMap`. That is the measured lossiness
+of the material conversion — every one of those is a surface that animated in Q3 and does not
+here.
 
 ---
 
@@ -658,8 +865,37 @@ Specific things that would be a loss to regress.
   defaults stop fitting. The escape hatch is present at every level.
 - **The package is honest about what is not finished.** The README states plainly that
   `NavigationMeshAgent` is a placeholder and that runtime obstacle carving is not implemented.
-  Discovering that in the README rather than three days into bot work is worth a great deal;
-  phase 5 is planned around it from the start.
+  `ShadeMaterial.draw_side` says in its own docblock that it does nothing. Discovering these in
+  the source rather than three days into the work is worth a great deal; phase 5 is planned
+  around the navigation one from the start, and GAP-007 would have been a major finding rather
+  than a minor one without the second.
+
+### Added during phase 1
+
+- **Clustered lighting delivers exactly what the README claims.** 147 dynamic point lights on
+  a 198k-triangle level cost 7.28 ms of CPU per frame; the 3.2k-triangle level with 63 lights
+  cost 3.96 ms. Light count was not a factor in either. This is the single most important thing
+  that went right in this port: q3map2 strips every `light` entity from a compiled BSP, and
+  meep cannot import Q3's baked lightmaps (GAP-006), so *the only* route to a lit level was to
+  reconstruct the lighting as real dynamic lights and hope the engine could take it. It could,
+  without tuning, without batching work on my side, and without a fallback plan.
+
+- **Building geometry from raw arrays is four calls and no ceremony.** `new Geometry()`,
+  `Attribute.from(array, itemSize, StandardAttributes.X)`, `geometry.index = ...`,
+  `meshlet_geometry_build_from_geometry(...)`. `make_box_geometry` in the primitives folder is
+  a complete worked example of exactly this. For an engine with no samples, having the
+  primitive builders written in terms of the public API — rather than reaching into internals —
+  is what made phase 1 possible at all. Whatever else changes, keep the primitives honest.
+
+- **Deep imports resolved into strict TypeScript with zero configuration.** `moduleResolution:
+  "bundler"` and nothing else. Every one of the ~30 deep paths this port imports found its
+  paired `.d.ts`, and `.d.ts.map` meant go-to-definition landed in the real JavaScript with its
+  docblocks — which, given GAP-002, is where all the documentation actually is.
+
+- **Photometric light units.** Filed as GAP-005 for the missing guidance, but the design is
+  right and worth defending: `q3map_surfacelight`'s values turned out to map to lumens almost
+  1:1 with no per-map tuning, because both are proportional to emitted power. An ad-hoc
+  0-to-1 intensity scale would have required hand-tuning every map.
 
 ---
 
