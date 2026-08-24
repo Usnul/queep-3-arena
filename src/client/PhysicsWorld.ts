@@ -32,6 +32,7 @@ import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.j
 import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
+import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderObserverSystem.js';
 import { shape_cast } from '@woosh/meep-engine/src/engine/physics/queries/shape_cast.js';
 import { overlap_shape } from '@woosh/meep-engine/src/engine/physics/queries/overlap_shape.js';
 import { PhysicsSurfacePoint } from '@woosh/meep-engine/src/engine/physics/queries/PhysicsSurfacePoint.js';
@@ -79,7 +80,15 @@ export interface PhysicsWorldStats {
 
 export class PhysicsWorld {
     readonly system: PhysicsSystem;
-    readonly stats: PhysicsWorldStats;
+
+    /** Populated by `build`; zeroed until then. */
+    stats: PhysicsWorldStats = {
+        brushes: 0,
+        bodies: 0,
+        skipped: 0,
+        hullMilliseconds: 0,
+        bodyMilliseconds: 0,
+    };
 
     /** Reused query output; `shape_cast` is an output-parameter API. */
     private readonly hit = new PhysicsSurfacePoint();
@@ -102,9 +111,43 @@ export class PhysicsWorld {
     /** Packed body id -> the same, for `overlap_shape` results. */
     private readonly hullByBody = new Map<number, BrushHull>();
 
-    constructor(ecd: EcsDataset, cm: ClipMap) {
+    private constructor() {
         this.system = new PhysicsSystem();
+    }
 
+    /**
+     * Register the system, *then* build the bodies.
+     *
+     * The order is load-bearing. Both systems observe the dataset, so an entity
+     * built before they are registered is never seen -- no warning, no error,
+     * and every query keeps answering, always with a miss. Movement then
+     * behaves exactly like a level with no collision in it, which reads as "the
+     * map failed to load" rather than "the bodies are not registered".
+     *
+     * This is why it is a factory rather than a constructor: the correct order
+     * is not expressible if construction also builds the bodies. See GAP-014.
+     */
+    static async create(
+        em: { addSystem(system: unknown): Promise<unknown> },
+        ecd: EcsDataset,
+        cm: ClipMap
+    ): Promise<PhysicsWorld> {
+        const world = new PhysicsWorld();
+
+        await em.addSystem(world.system);
+        /*
+         Both, in this order. `PhysicsSystem` links `(RigidBody, Transform)`;
+         `ColliderObserverSystem` is what turns a `Collider` component into an
+         actual shape on that body. Register only the first and every body is
+         real, present in the broadphase and completely intangible.
+        */
+        await em.addSystem(new ColliderObserverSystem(world.system));
+
+        world.build(ecd, cm);
+        return world;
+    }
+
+    private build(ecd: EcsDataset, cm: ClipMap): void {
         if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
         if (!ecd.isComponentTypeRegistered(RigidBody)) ecd.registerComponentType(RigidBody);
         if (!ecd.isComponentTypeRegistered(Collider)) ecd.registerComponentType(Collider);

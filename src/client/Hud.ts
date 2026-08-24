@@ -64,7 +64,20 @@ export interface HudState {
     readonly kills: number;
     /** Which collision backend movement is running on. */
     readonly backend: string;
+    readonly health: number;
+    readonly armor: number;
+    /** Rounds for the held weapon; negative means Q3's "infinite". */
+    readonly ammo: number;
+    /** Most recent pickup name, and when it happened, for the fade. */
+    readonly pickup: string;
+    readonly pickupAgeSeconds: number;
 }
+
+/** Q3's own thresholds: the health number turns red below 25. */
+const LOW_HEALTH = 25;
+
+/** How long a pickup name stays on screen. `cg_drawStatus`'s is 3 seconds. */
+const PICKUP_SECONDS = 3;
 
 /** Peak speed decays this fast once the player slows, in units per second. */
 const PEAK_DECAY = 40;
@@ -75,6 +88,10 @@ export class Hud {
     private readonly speedModel = new ObservedString('');
     private readonly peakModel = new ObservedString('');
     private readonly stateModel = new ObservedString('');
+    private readonly statusModel = new ObservedString('');
+    private readonly pickupModel = new ObservedString('');
+
+    private statusRoot: View | null = null;
 
     private peak = 0;
     private lastUpdate = 0;
@@ -86,8 +103,10 @@ export class Hud {
 
         this.root = EmptyView.group(
             [
+                new Label(this.pickupModel, { classList: ['queep-hud__pickup'] }),
                 new Label(this.speedModel, { classList: ['queep-hud__speed'] }),
                 new Label(this.peakModel, { classList: ['queep-hud__peak'] }),
+                new Label(this.statusModel, { classList: ['queep-hud__status'] }),
                 new Label(this.stateModel, { classList: ['queep-hud__state'] }),
             ],
             { classList: ['queep-hud'], tag: 'div', css: {} }
@@ -113,10 +132,31 @@ export class Hud {
         this.speedModel.set(`${Math.round(state.speed)}`);
         this.peakModel.set(`peak ${Math.round(this.peak)} ups`);
 
+        /*
+         Q3's status bar is health, armour, ammo, in that order and nothing
+         else. Resisting the urge to add more is part of the point: the reason
+         a Q3 HUD reads at a glance mid-fight is that there are three numbers.
+        */
+        if (state.mode !== 'fly') {
+            const ammo = state.ammo < 0 ? '--' : `${state.ammo}`;
+            const low = state.health <= LOW_HEALTH ? ' !' : '';
+            this.statusModel.set(
+                `${state.health} health${low}   ${state.armor} armor   ${ammo} ammo`
+            );
+        } else {
+            this.statusModel.set('');
+        }
+
+        if (state.pickup !== '' && state.pickupAgeSeconds < PICKUP_SECONDS) {
+            this.pickupModel.set(state.pickup);
+        } else {
+            this.pickupModel.set('');
+        }
+
         if (state.mode === 'click-to-play') {
             this.stateModel.set(
                 'click to play  ·  WASD move  ·  space jump  ·  ctrl crouch  ·  ' +
-                'mouse1 fire  ·  2/3/5/6/7 weapon'
+                'mouse1 fire  ·  1-9 or wheel weapon'
             );
         } else if (state.mode === 'fly') {
             this.stateModel.set(`${state.map}  ·  noclip`);
@@ -152,4 +192,6 @@ const HUD_CSS = `
 .queep-hud__speed { font-size: 44px; font-weight: 600; line-height: 1; }
 .queep-hud__peak  { font-size: 13px; opacity: 0.75; }
 .queep-hud__state { font-size: 12px; opacity: 0.55; margin-top: 6px; }
+.queep-hud__status { font-size: 20px; font-weight: 600; letter-spacing: 0.04em; margin-top: 8px; }
+.queep-hud__pickup { font-size: 16px; opacity: 0.85; margin-bottom: 10px; min-height: 19px; }
 `;

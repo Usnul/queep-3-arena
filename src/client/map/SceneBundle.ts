@@ -84,3 +84,47 @@ export interface SceneBundle {
     readonly entities: readonly BundleEntity[];
     readonly stats: Readonly<Record<string, number>>;
 }
+
+/* ------------------------------------------------------------------ *
+ * Models.
+ *
+ * `tools/convert-models.ts` writes a single bundle holding every static prop --
+ * pickups, ammo boxes, weapon world models. It reuses `BundleMaterial` and
+ * `BundleMesh` verbatim so the runtime's geometry and material builders are
+ * shared with the map loader rather than duplicated.
+ *
+ * Positions are in *Q3 units*, not scene metres. The simulation runs unscaled
+ * (D-011) and an item's bounding box has to agree with `bg_itemlist`'s pickup
+ * radius, so the scale is applied by the entity transform at spawn time.
+ * ------------------------------------------------------------------ */
+
+export interface BundleTag {
+    readonly name: string;
+    /** meep axes, Q3 units. */
+    readonly origin: readonly number[];
+}
+
+export interface BundleModel {
+    /** Virtual path as `bg_itemlist` names it, e.g. `models/powerups/health/medium_cross.md3`. */
+    readonly name: string;
+    readonly meshes: readonly BundleMesh[];
+    readonly mins: readonly number[];
+    readonly maxs: readonly number[];
+    readonly radius: number;
+    /** Frame-0 attachment points. Q3 hangs one model off another with these. */
+    readonly tags: readonly BundleTag[];
+}
+
+export interface ModelBundle {
+    readonly name: string;
+    readonly generator: string;
+    readonly coordinateSystem: string;
+    readonly vertexStride: number;
+    readonly vertexLayout: readonly string[];
+    readonly vertexBytes: number;
+    readonly indexBytes: number;
+    readonly materials: readonly BundleMaterial[];
+    readonly textures: Readonly<Record<string, string | null>>;
+    readonly models: readonly BundleModel[];
+    readonly stats: Readonly<Record<string, number>>;
+}

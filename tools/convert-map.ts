@@ -27,7 +27,6 @@
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import sharp from 'sharp';
 
 import {
     BspFile,
@@ -43,7 +42,7 @@ import {
 } from '../src/q3/bsp/BspFile.ts';
 import { parseEntities, entityVector, entityNumber } from '../src/q3/bsp/Entities.ts';
 import { ShaderIndex } from './pipeline/shader-index.ts';
-import { decodeTga } from './pipeline/tga.ts';
+import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
 import { tessellatePatch, type PatchVertex } from './pipeline/patch.ts';
 import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
 
@@ -158,49 +157,21 @@ function pushVertex(group: MeshGroup, v: PatchVertex): number {
     return index;
 }
 
+/**
+ * Thin adapter over the shared writer, kept so the call sites below stay short.
+ *
+ * The shared version fixed a latent bug this one had: a *repeat* lookup of a
+ * missing texture returned `''` where the first lookup returned `null`, so a
+ * texture referenced by two materials produced two different values in
+ * `scene.json` depending on which material was resolved first.
+ */
 async function convertTexture(
     index: ShaderIndex,
     virtualPath: string,
     outDir: string,
-    written: Map<string, string>
+    written: TextureCache
 ): Promise<string | null> {
-    const existing = written.get(virtualPath);
-    if (existing !== undefined) return existing;
-
-    const resolved = index.resolveTexture(virtualPath);
-    if (resolved === null) {
-        written.set(virtualPath, '');
-        return null;
-    }
-
-    const src = join(EXTRACTED, resolved);
-    const flat = virtualPath.replace(/[\\/]/g, '_');
-
-    try {
-        if (resolved.endsWith('.tga')) {
-            const decoded = decodeTga(readFileSync(src));
-            const out = `${flat}.png`;
-            await sharp(Buffer.from(decoded.rgba), {
-                raw: { width: decoded.width, height: decoded.height, channels: 4 },
-            })
-                .png({ compressionLevel: 9 })
-                .toFile(join(outDir, out));
-            written.set(virtualPath, out);
-            return out;
-        }
-
-        // JPEG and PNG pass through untouched -- the browser decodes both, and
-        // re-encoding would only lose quality.
-        const ext = resolved.slice(resolved.lastIndexOf('.'));
-        const out = `${flat}${ext}`;
-        copyFileSync(src, join(outDir, out));
-        written.set(virtualPath, out);
-        return out;
-    } catch (e) {
-        console.warn(`  texture ${virtualPath}: ${(e as Error).message}`);
-        written.set(virtualPath, '');
-        return null;
-    }
+    return writeTexture(index, EXTRACTED, virtualPath, outDir, written);
 }
 
 async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {

@@ -39,7 +39,8 @@ import {
     type PlayerState,
 } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
-import { weaponStats } from '../game/Weapons.ts';
+import { weaponStats, type WeaponId } from '../game/Weapons.ts';
+import { newInventory, type Inventory } from '../game/Items.ts';
 import type { TraceResult } from '../q3/cm/trace.ts';
 
 /**
@@ -77,15 +78,36 @@ const KEY_RIGHT = new Set(['KeyD', 'ArrowRight']);
 const KEY_JUMP = new Set(['Space']);
 const KEY_CROUCH = new Set(['ControlLeft', 'KeyC', 'ShiftLeft']);
 
-/** Weapon select, matching Q3's number-row bindings. */
-const KEY_WEAPON: ReadonlyMap<string, 'WP_MACHINEGUN' | 'WP_ROCKET_LAUNCHER' | 'WP_SHOTGUN' | 'WP_RAILGUN' | 'WP_PLASMAGUN'> =
-    new Map([
-        ['Digit2', 'WP_MACHINEGUN'],
-        ['Digit3', 'WP_SHOTGUN'],
-        ['Digit5', 'WP_ROCKET_LAUNCHER'],
-        ['Digit6', 'WP_PLASMAGUN'],
-        ['Digit7', 'WP_RAILGUN'],
-    ]);
+/**
+ * Weapon select, matching Q3's number-row bindings.
+ *
+ * The order is `weapon_t`'s, which is also the order the mouse wheel cycles --
+ * gauntlet first, then up through the list. It is not the order of increasing
+ * power, and Q3 players know it by muscle memory, so it is kept.
+ */
+const WEAPON_ORDER: readonly WeaponId[] = [
+    'WP_GAUNTLET',
+    'WP_MACHINEGUN',
+    'WP_SHOTGUN',
+    'WP_GRENADE_LAUNCHER',
+    'WP_ROCKET_LAUNCHER',
+    'WP_LIGHTNING',
+    'WP_RAILGUN',
+    'WP_PLASMAGUN',
+    'WP_BFG',
+];
+
+const KEY_WEAPON: ReadonlyMap<string, WeaponId> = new Map([
+    ['Digit1', 'WP_GAUNTLET'],
+    ['Digit2', 'WP_MACHINEGUN'],
+    ['Digit3', 'WP_SHOTGUN'],
+    ['Digit4', 'WP_GRENADE_LAUNCHER'],
+    ['Digit5', 'WP_ROCKET_LAUNCHER'],
+    ['Digit6', 'WP_LIGHTNING'],
+    ['Digit7', 'WP_RAILGUN'],
+    ['Digit8', 'WP_PLASMAGUN'],
+    ['Digit9', 'WP_BFG'],
+] as const);
 
 /**
  * Q3 sends view angles as 16-bit fixed point. Keeping the browser's mouse deltas
@@ -110,9 +132,17 @@ export class PlayerController {
     /** Set true while the pointer is locked; movement input is ignored otherwise. */
     active = false;
 
+    /**
+     * Health, armour, ammo and owned weapons.
+     *
+     * Lives here rather than in `Arena` because Q3 keeps it in `playerState_t`
+     * next to the movement state, and because weapon selection and firing both
+     * have to consult it every frame.
+     */
+    readonly inventory: Inventory = newInventory();
+
     /** Currently selected weapon. */
-    weapon: 'WP_MACHINEGUN' | 'WP_ROCKET_LAUNCHER' | 'WP_SHOTGUN' | 'WP_RAILGUN' | 'WP_PLASMAGUN' =
-        'WP_ROCKET_LAUNCHER';
+    weapon: WeaponId = 'WP_MACHINEGUN';
 
     /** True on the frames the attack button is held. */
     attacking = false;
@@ -142,7 +172,7 @@ export class PlayerController {
         ps.gravity = 800;
         ps.speed = 320;
         ps.groundEntityNum = C.ENTITYNUM_NONE;
-        ps.stats[C.STAT_HEALTH] = 100;
+        ps.stats[C.STAT_HEALTH] = this.inventory.health;
         ps.viewheight = C.DEFAULT_VIEWHEIGHT;
         ps.origin[0] = spawnQ3[0] ?? 0;
         ps.origin[1] = spawnQ3[1] ?? 0;
@@ -194,6 +224,7 @@ export class PlayerController {
         window.addEventListener('keyup', this.onKeyUp);
         window.addEventListener('blur', this.onBlur);
         this.element.addEventListener('mousedown', this.onMouseDown);
+        this.element.addEventListener('wheel', this.onWheel, { passive: false });
         document.addEventListener('mouseup', this.onMouseUp);
         document.addEventListener('mousemove', this.onMouseMove);
         document.addEventListener('pointerlockchange', this.onPointerLockChange);
@@ -207,6 +238,7 @@ export class PlayerController {
         window.removeEventListener('keyup', this.onKeyUp);
         window.removeEventListener('blur', this.onBlur);
         this.element.removeEventListener('mousedown', this.onMouseDown);
+        this.element.removeEventListener('wheel', this.onWheel);
         document.removeEventListener('mouseup', this.onMouseUp);
         document.removeEventListener('mousemove', this.onMouseMove);
         document.removeEventListener('pointerlockchange', this.onPointerLockChange);
@@ -217,7 +249,40 @@ export class PlayerController {
         if (e.code === 'Space') e.preventDefault();
 
         const w = KEY_WEAPON.get(e.code);
-        if (w !== undefined) this.weapon = w;
+        if (w !== undefined) this.selectWeapon(w);
+    };
+
+    /**
+     * `CG_WeaponSelectable`: you must own it and it must have ammo.
+     *
+     * Q3 silently ignores a select of an unusable weapon rather than beeping or
+     * switching to the nearest usable one, which matters -- pressing 5 with no
+     * rocket launcher must leave you holding what you had, mid-fight.
+     */
+    selectWeapon(weapon: WeaponId): boolean {
+        if (!this.inventory.weapons.has(weapon)) return false;
+        if ((this.inventory.ammo[weapon] ?? 0) === 0) return false;
+
+        this.weapon = weapon;
+        return true;
+    }
+
+    /** Mouse wheel, cycling through owned weapons in `weapon_t` order. */
+    private cycleWeapon(direction: number): void {
+        const at = WEAPON_ORDER.indexOf(this.weapon);
+        const start = at < 0 ? 0 : at;
+
+        for (let i = 1; i <= WEAPON_ORDER.length; i++) {
+            const next =
+                (start + direction * i + WEAPON_ORDER.length * i) % WEAPON_ORDER.length;
+            if (this.selectWeapon(WEAPON_ORDER[next]!)) return;
+        }
+    }
+
+    private readonly onWheel = (e: WheelEvent): void => {
+        if (!this.active) return;
+        e.preventDefault();
+        this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
     };
 
     private readonly onKeyUp = (e: KeyboardEvent): void => {
@@ -320,6 +385,15 @@ export class PlayerController {
         if (!this.attacking || !this.active) return;
         if (this.cooldownMs > 0) return;
         if (this.onFire === null) return;
+
+        /*
+         `PM_Weapon`: no ammo means no shot and no cooldown reset, so holding
+         the button on an empty weapon does nothing rather than dry-firing at
+         the weapon's rate. Gauntlet's ammo is -1 and stays there.
+        */
+        const ammo = this.inventory.ammo[this.weapon] ?? 0;
+        if (ammo === 0) return;
+        if (ammo > 0) this.inventory.ammo[this.weapon] = ammo - 1;
 
         const ps = this.ps;
         const eye = [ps.origin[0]!, ps.origin[1]!, ps.origin[2]! + ps.viewheight];

@@ -542,3 +542,69 @@ The ported clipmap is not dead code. It is:
 - a **shipping A/B**, behind `?trace=clipmap`.
 
 Its differential suites still demand bit-exactness and still pass.
+
+---
+
+## Breadth: items and pickups
+
+### D-033: Items are simulation, their bob and spin are presentation, and the split is Q3's own
+
+`src/game/Items.ts` holds spawning, touching, giving and respawning, in Q3 units, importing
+nothing from meep. `src/client/ItemsView.ts` holds the bobbing, the spinning and the hiding.
+That is not a tidiness preference -- it is where Q3 draws the same line. The server knows an item
+exists and where; that it bobs at `4 + cos((time + 1000) * (0.005 + entityNumber * 0.00001)) * 4`
+and spins once every 2048 ms is decided entirely in `cg_ents.c` and never leaves the client.
+
+Both rates are ported rather than chosen. They are part of how a Q3 level reads at speed: a
+rocket launcher catches the eye across a room because of the rotation, and the per-entity term in
+the bob rate is what stops a row of eight armour shards pulsing in unison.
+
+Picked-up items toggle `ShadedGeometryFlags.Visible` rather than being destroyed and rebuilt. The
+naive version costs a meshlet build per item per respawn -- on a level with 31 pickups and a
+25-second armour cycle that is a rebuild every second, for geometry that never changed.
+
+### D-034: Faithful includes the parts that look like mistakes
+
+`BG_PlayerTouchesItem` accepts a player between 50 units behind an item and 44 in front of it on
+X, and is symmetric on Y and Z. Nothing explains the asymmetry, it is almost certainly a typo,
+and it is ported verbatim with a test pinning both bounds. The same applies to health pickups
+being allowed past max health based on their *quantity* being 5 or 100 rather than on a flag.
+
+The argument for keeping them is not reverence. It is that these are the rules players learned:
+the strafe jump is a bug too, and a port that quietly fixes bugs produces a game that is
+recognisably wrong in ways nobody can name. Where a Q3 rule genuinely could not be reproduced,
+that is a gap entry, not a silent improvement.
+
+### D-035: One model bundle, lazy meshlets
+
+76 static models -- every pickup, weapon world model, ammo box and gib -- convert into a single
+`models.json` plus `models.bin`, and geometry is built on first use rather than at load.
+
+The first half is about request shape: 900 KB across 76 files is a batching problem. The second
+half is GAP-008: `meshlet_geometry_build_from_geometry` is synchronous and on the main thread, a
+typical arena spawns about 20 distinct models, and building all 113 meshes up front would spend
+most of that time on props the level never places. Measured, the lazy build costs 4-6 ms on
+`oa_dm1`.
+
+MD3's own animation is not read here. Item models are single-frame; player models are the
+vertex-morph case the brief says to replace rather than port, and they go through a separate
+converter.
+
+### D-036: The physics bodies had no colliders, and the harness that measured them hid it
+
+Recorded as a decision rather than only as GAP-014, because the *process* failure is the part
+worth not repeating. The headless divergence harness deliberately duplicates `PhysicsWorld`'s
+trace maths so that a conversion bug cannot cancel itself out of the measurement (D-029). It also
+builds its bodies by calling `PhysicsSystem.link` and `attach_collider` directly, because there
+is no ECS under Node.
+
+That second duplication was not deliberate and it is the one that cost time: it meant the
+harness never needed `ColliderObserverSystem`, so the browser path -- which does -- was
+unexercised by every test in the suite while reporting excellent numbers. Independence bought
+trustworthy measurements of the algorithm and, in the same stroke, stopped measuring the thing
+that actually ships.
+
+The fix in the code is a factory that registers both systems before building any body, so the
+order cannot be got wrong from outside. The fix in the process is that the browser build is now
+smoke-checked -- player at rest on a floor, items at `floor + 15 + 1/8` -- as part of finishing
+a phase rather than as part of looking at it.

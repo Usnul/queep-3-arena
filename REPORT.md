@@ -927,6 +927,47 @@ the expensive way.
   surfaces in the consumer's own code rather than in the `.d.ts`. Related to GAP-001.
 - **Evidence:** `src/client/PhysicsWorld.ts`. Recorded during the physics swap.
 
+### GAP-014: `PhysicsSystem` needs a second system registered, and without it every body is intangible
+
+- **Severity:** high -- the failure is total, silent, and presents as a bug in the consumer's own
+  code.
+- **What happened:** 537 static bodies, built from a level's collision brushes, and every
+  `shape_cast` against them returned a miss. Not a near miss: `fraction === 1` for a sweep
+  starting a metre above a floor and ending 128 m below it. The player fell through the world.
+  Nothing in the console, no exception, and the same code with the same shapes worked in a
+  headless harness -- which is what made it look like an ECS-timing problem rather than a
+  missing registration.
+- **The cause:** `PhysicsSystem` links `(RigidBody, Transform)`. Attaching the *collider* is a
+  different system, `ColliderObserverSystem`, and registering it is the consumer's job. Its
+  docblock says so plainly -- "Pairs with `PhysicsSystem`: register both in the EntityManager" --
+  in the class docblock of a class you have no reason to look at, because you did not know it
+  existed. There is no reference to it from `PhysicsSystem`, from `Collider`, or from
+  `attach_collider`.
+- **Why it is severe rather than annoying:** a body with no collider is not obviously broken.
+  It is in the broadphase, it has a transform, `PhysicsSystem` reports it, and every query
+  answers promptly. The only symptom is that the answer is always "nothing there", which is
+  indistinguishable from "your level failed to load", "your coordinate conversion is wrong", or
+  "your query is malformed" -- I checked all three first. The same observer also silently skips
+  an orphan collider, which its docblock justifies (avoiding console spam on authoring
+  transients) and which removes the last diagnostic that would have caught it.
+- **Workaround:** register both, body system first.
+
+  ```js
+  await em.addSystem(physics);
+  await em.addSystem(new ColliderObserverSystem(physics));
+  ```
+
+- **Cost:** ~90 minutes, all of it after the fact -- the browser build had been running with
+  intangible bodies while every measurement in section 5.4 was taken through a headless harness
+  that calls `link` and `attach_collider` directly and therefore never needed the observer. The
+  numbers are unaffected; the shipping wiring was wrong and is now verified in the browser
+  (`groundEntityNum` set, the player at rest, items dropping to `floor + 15 + 1/8`).
+- **What would fix it:** any one of three, cheapest first. A `@see ColliderObserverSystem` on
+  `PhysicsSystem` and on `Collider`. A one-line warning the first time a `Collider` component is
+  built into a dataset that has no `ColliderObserverSystem`. Or a static
+  `PhysicsSystem.register(em)` that adds both, which would make the pairing unmissable.
+- **Evidence:** `src/client/PhysicsWorld.ts` `PhysicsWorld.create`. Recorded during phase 3b.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 

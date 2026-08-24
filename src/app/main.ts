@@ -24,6 +24,10 @@ import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { BspFile } from '../q3/bsp/BspFile.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { loadMap } from '../client/map/loadMap.ts';
+import { loadModels } from '../client/map/loadModels.ts';
+import { ItemsView } from '../client/ItemsView.ts';
+import { ItemSystem, type DropTrace } from '../game/Items.ts';
+import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
 import { Hud } from '../client/Hud.ts';
@@ -85,9 +89,10 @@ async function main(): Promise<void> {
     const mapName = requestedMap();
     const baseUrl = `/assets/built/${mapName}`;
 
-    const [loaded, clipMap] = await Promise.all([
+    const [loaded, clipMap, models] = await Promise.all([
         loadMap(ecd, baseUrl),
         loadClipMap(baseUrl, mapName),
+        loadModels('/assets/built/models'),
     ]);
 
     const spawn =
@@ -125,6 +130,7 @@ async function main(): Promise<void> {
             hud.update({
                 mode: 'fly', speed: 0, onGround: false, map: mapName,
                 weapon: '', damage: 0, kills: 0, backend: 'noclip',
+                health: 0, armor: 0, ammo: -1, pickup: '', pickupAgeSeconds: 99,
             });
         });
 
@@ -132,10 +138,11 @@ async function main(): Promise<void> {
     } else {
         const clipmapOnly = useClipmapTrace();
 
-        const physicsWorld = clipmapOnly ? null : new PhysicsWorld(ecd, clipMap);
+        const physicsWorld = clipmapOnly
+            ? null
+            : await PhysicsWorld.create(em, ecd, clipMap);
 
         if (physicsWorld !== null) {
-            await em.addSystem(physicsWorld.system);
             console.log(
                 `[queep] physics: ${physicsWorld.stats.brushes} brushes -> ` +
                 `${physicsWorld.stats.bodies} static bodies ` +
@@ -153,6 +160,44 @@ async function main(): Promise<void> {
         player.attach();
 
         const arena = new Arena(ecd, clipMap);
+
+        /*
+         Items drop to the floor through the same backend movement uses, so a
+         pickup rests on the surface the player will actually stand on. Using
+         the clipmap here regardless would be simpler and subtly wrong: with the
+         physics backend the two disagree by up to the surface epsilon, which is
+         enough to leave a shard visibly sunk into a ramp.
+        */
+        const dropTrace: DropTrace = (start, mins, maxs, end, mask) => {
+            const out = createTrace();
+            if (physicsWorld !== null) {
+                physicsWorld.trace(out, start, end, mins, maxs, mask);
+            } else {
+                boxTrace(out, clipMap, start, end, mins, maxs, mask);
+            }
+            return out;
+        };
+
+        const items = new ItemSystem();
+        items.spawn(loaded.bundle.entities, dropTrace);
+
+        const itemsView = new ItemsView(ecd, models);
+        itemsView.build(items.items);
+
+        console.log(
+            `[queep] items: ${itemsView.itemCount} placed, ${itemsView.pieceCount} pieces, ` +
+            `${models.meshletMilliseconds.toFixed(0)} ms meshlets` +
+            (items.rejected.length > 0 ? `
+  rejected: ${items.rejected.join('; ')}` : '') +
+            (itemsView.unmodelled.length > 0
+                ? `
+  no model: ${itemsView.unmodelled.join(', ')}`
+                : '')
+        );
+
+        let pickupName = '';
+        let pickupAge = 99;
+        let secondAccumulator = 0;
 
         // Targets at the other spawn points: somewhere to shoot, without
         // inventing level geometry the map does not have.
@@ -173,6 +218,33 @@ async function main(): Promise<void> {
             player.update(deltaSeconds, transform);
             arena.update(deltaSeconds);
 
+            for (const event of items.update(
+                deltaSeconds,
+                player.ps.origin,
+                player.inventory,
+                true
+            )) {
+                pickupName = event.label;
+                pickupAge = 0;
+                if (event.selectWeapon !== null) {
+                    player.selectWeapon(event.selectWeapon as typeof player.weapon);
+                }
+            }
+
+            itemsView.update(items.now);
+            pickupAge += deltaSeconds;
+
+            /*
+             `ClientTimerActions` runs on a 1000 ms cadence, not per frame. Health
+             above max bleeds off one point a second; doing it per frame would
+             drain a 200-health player in three seconds at 60 fps.
+            */
+            secondAccumulator += deltaSeconds;
+            while (secondAccumulator >= 1) {
+                secondAccumulator -= 1;
+                ItemSystem.tickSecond(player.inventory);
+            }
+
             hud.update({
                 mode: player.active ? 'play' : 'click-to-play',
                 speed: player.speed,
@@ -182,10 +254,15 @@ async function main(): Promise<void> {
                 damage: arena.totalDamage,
                 kills: arena.kills,
                 backend: clipmapOnly ? 'clipmap' : 'physics',
+                health: player.inventory.health,
+                armor: player.inventory.armor,
+                ammo: player.inventory.ammo[player.weapon] ?? 0,
+                pickup: pickupName,
+                pickupAgeSeconds: pickupAge,
             });
         });
 
-        expose(engine, { loaded, clipMap, player, arena, physicsWorld });
+        expose(engine, { loaded, clipMap, player, arena, physicsWorld, items, models });
     }
 
     console.log(
