@@ -36,7 +36,20 @@ Ranked by how much they would cost the next person, not by how much they cost me
    physically-plausible 60,000-lumen explosion whited out a corridor (GAP-011). A short table
    of reference values in the lighting docs would have prevented both.
 
-3. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
+3. **Swapping Q3's collision for meep's physics cost three specific behaviours, and one of them
+   is a general finding about character control.** The maintainer directed that movement run on
+   meep's physics rather than the ported `cm_trace`, so it does, measured against the ported
+   code as a bit-exact control (D-029). Two of the three restorations are Q3 quirks nobody else
+   needs. The third is not: **`shape_cast` reports the minimum-penetration axis as its contact
+   normal, and for character control the *latest entering plane* is the useful answer.** They
+   agree on a flat wall and disagree in a corner, where meep returned `[0, 1, 0]` — the floor —
+   for a box wedged against a wall. Any slide-move controller clips velocity against that
+   normal, and clipping against the wrong plane in a corner is how characters get stuck in
+   corners. Re-deriving the plane from the source geometry took the error from 56 units to 0.12
+   (GAP-012). This is worth an engine-side option because every character controller built on
+   `shape_cast` will need it and most will diagnose it as their own bug.
+
+4. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
    is literally named "used for light map", and there is a whole `shade/renderer/lightmap/`
    subsystem — but it is a *baker*, and no material has a lightmap slot. Every level format
    that predates real-time GI ships baked lighting and none of it can come in. This is also the
@@ -44,41 +57,41 @@ Ranked by how much they would cost the next person, not by how much they cost me
    walls show full detail, but the floors read as flat grey, because what is missing is not
    brightness but spatial variation in brightness (GAP-006).
 
-4. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
+5. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
    dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
    not register against geometry count. That matters more than a benchmark: q3map2 strips every
    `light` entity from a compiled BSP (measured: zero across six maps), so with lightmaps
    unavailable, reconstructing the lighting as dynamic lights was not a showcase choice — it
    was the only remaining route to a lit level. It worked with no tuning.
 
-5. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+6. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
    main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
    concurrent executor and a worker pool. A real level is several times that size (GAP-008).
 
-6. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
+7. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
    `LabelView` rejects a call its own implementation explicitly supports, `Engine`'s constructor
    options are typed as one of their own fields' types, and `entityManager` is `any`. Consumers
    are forced into `skipLibCheck: true`, which disables checking of every *other* dependency
    they have (GAP-001).
 
-7. **`/samples` contains no runnable engine sample.** The published package ships
+8. **`/samples` contains no runnable engine sample.** The published package ships
    `samples/generation/**` and nothing else — procedural-generation fixtures. Nothing boots the
    engine, loads a model, or draws a frame, and `exports` has no `./samples/*` entry so the
    folder cannot be imported even though it is shipped. `EngineHarness` turns out to be the
    real worked example; finding that took reading a directory listing (GAP-002).
 
-8. **A scene with no environment map renders black, silently.** Shade assumes global
+9. **A scene with no environment map renders black, silently.** Shade assumes global
    illumination and `make_default_environment` documents this well — but you only read that
    docblock if you already suspect the environment. `EngineHarness.buildBasics` sets one up for
    you, so this bites exactly when you stop using the all-or-nothing helper, which is the moment
    you stop being a beginner. A first-frame warning would remove it entirely.
 
-9. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
+10. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
    documented — inside the docblock of a function consumers never call. A hand-built view
    quaternion assuming -Z points the camera exactly backwards, which in a closed level presents
    as *a dark scene* rather than a reversed one. I diagnosed it as a lighting problem first.
 
-10. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+11. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
     correctly does not have.** Of 309 distinct `trap_*` syscalls, 205 belong to subsystems this
     port deletes outright; of the 104 that remain, 75 map onto an existing meep facility, 19 are
     deliberately ported, 9 worked around, 1 a genuine gap. Worth stating plainly before the gap
@@ -86,15 +99,17 @@ Ranked by how much they would cost the next person, not by how much they cost me
 
 ### What this port did not use, and why
 
-Two large meep subsystems were evaluated and deliberately not used. Both decisions are about
-this port's constraints rather than the subsystems' quality, and a maintainer reading the gap
-register should not mistake them for complaints.
+One large meep subsystem was evaluated and deliberately not used. The decision is about this
+port's constraints rather than the subsystem's quality, and a maintainer reading the gap
+register should not mistake it for a complaint.
 
-- **The physics engine**, for player movement. Q3 movement is *defined* by the exact behaviour
-  of `CM_BoxTrace` — which plane it reports at a grazing edge, how `startsolid` is flagged, the
-  1/32 epsilon. Strafe-jumping is emergent from those specifics. Any other narrowphase, however
-  correct, produces a different game (D-007).
-- **`FirstPersonPlayerController`**, for the same reason at a higher level. Its own `DESIGN.md`
+The physics engine *is* used, for player movement, on the maintainer's instruction and against
+an initial recommendation not to. That reversal is documented in D-029 and its results are
+section 5.4; the short version is that it works, the remaining divergence is sub-unit at the
+median, and getting there surfaced GAP-012, which is the most broadly applicable finding in this
+report.
+
+- **`FirstPersonPlayerController`**, for player movement. Its own `DESIGN.md`
   states its goals as "feel alive" and "be configurable"; Q3's movement is neither tuned nor
   configurable, it is a fixed set of float operations players spent 25 years learning to
   exploit. See GAP-009 — which is a *positioning* finding, not a defect.
@@ -105,7 +120,7 @@ register should not mistake them for complaints.
 |---|---|
 | 0 — setup | complete; `tsc --noEmit` clean, engine rendering |
 | 1 — asset pipeline | complete; 6 maps convert and render, 137–253 FPS |
-| 2 — collision and movement | complete and **oracle-verified bit-exact**, tolerance zero |
+| 2 — collision and movement | complete; ported `cm_trace` **bit-exact**, shipping backend is meep physics tuned against it (D-029) |
 | 3 — game simulation | weapons, damage, targets, effects; items and movers not done |
 | 4 — presentation | particles, decals, lights, HUD done; audio and player models not done |
 | 5 — bots | not started |
@@ -857,6 +872,61 @@ the expensive way.
   ~12000" in the lighting docs would have skipped both incidents.
 - **Evidence:** `src/client/Effects.ts` `explosion()`. Recorded at phase 3.
 
+### GAP-012: `shape_cast` returns the minimum-penetration normal; character control needs the latest entering plane
+
+- **Severity:** medium — a correct answer to a different question, but the one a character
+  controller asks is not available and cannot be derived from the result.
+- **What happened:** With movement on meep's physics, the player wedged permanently on outside
+  corners — velocity went to zero about a metre short of the corner and stayed there. Traced to
+  the contact normal. A player box overlapping the join between a floor brush and a wall brush
+  gets `normal = [0, 1, 0]` from `shape_cast` (up, the floor), because EPA resolves the
+  *shallowest* separating axis and at that position the floor is shallower. The controller's
+  slide-move clips velocity against up, which does nothing to the horizontal motion into the
+  wall, so it re-traces, accumulates a second contradictory plane, hits its five-plane limit and
+  zeroes velocity as a last resort. That is `PM_SlideMove`'s failure mode, but every slide-move
+  controller has the same structure.
+- **Why it is a gap rather than a Q3 quirk:** the two quirks alongside it *are* Q3 quirks and
+  are recorded as such in D-030 — Q3's 1/8-unit surface standoff and its brush-relative
+  definition of `startsolid`. This one is not. "Which surface am I actually pressed against"
+  is the question every character controller asks, and for a swept convex query the useful
+  answer is the plane the sweep entered last, not the axis of least penetration. They coincide
+  on a flat wall, which is why this survives casual testing and shows up only at corners — the
+  exact geometry players run into constantly.
+- **Workaround:** re-derive it. `PhysicsWorld.selectContactPlaneMulti` takes the contact point,
+  finds every brush the inflated player box overlaps via `overlap_shape`, and applies
+  `CM_TraceThroughBrush`'s rule — the plane the sweep crosses latest — across all of them,
+  because a corner is usually two brushes rather than two faces of one. This requires keeping
+  the source half-space representation alongside the `ConvexHullShape3D`; an application that
+  built its hulls from a mesh would have nothing to re-derive from and would be stuck.
+- **Cost:** ~2 hours, most of it spent believing the port had a `PM_SlideMove` bug because the
+  symptom is a slide-move symptom. The measured improvement once fixed: bunny-hop position
+  divergence p90 fell from 56.0 units to 0.12 units — a 450x reduction, from "visibly a
+  different game" to "sub-centimetre".
+- **What would fix it:** an optional `ShapeCastResult` field carrying the last-entered
+  separating plane, or a `contact_mode` on `shape_cast`. Either is cheap relative to what every
+  consumer will otherwise re-implement, badly and privately.
+- **Evidence:** `src/client/PhysicsWorld.ts` `selectContactPlane`/`selectContactPlaneMulti`,
+  `test/physics-divergence.test.ts`. Recorded during the physics swap.
+
+### GAP-013: `Collider.shape` is typed such that no concrete shape is assignable to it
+
+- **Severity:** low — a pure type-level defect, one cast, but it is in the first line of code
+  anyone writes against the physics API.
+- **What happened:** `attach_collider(body, new BoxShape3D(...))` does not typecheck.
+  `AbstractShape3D` declares `equals(other: this): boolean`; `BoxShape3D` narrows it to
+  `equals(other: BoxShape3D): boolean`. Method parameters are checked bivariantly so that is
+  usually tolerated, but combined with the polymorphic `this` in the base signature the
+  subclass is not assignable to `AbstractShape3D` at all, and `Collider.shape` is declared as
+  `AbstractShape3D`. Every concrete shape in the package fails the same way, so the API has no
+  usable argument.
+- **Workaround:** a local `ColliderWithShape` interface re-declaring `shape` as `unknown`, and
+  one cast at the call site.
+- **What would fix it:** declare `equals(other: AbstractShape3D): boolean` on the base and keep
+  the narrowing in the implementation body, or drop the subclass overrides entirely.
+- **Cost:** 15 minutes, and it is the kind of thing `skipLibCheck` does *not* hide because it
+  surfaces in the consumer's own code rather than in the `.d.ts`. Related to GAP-001.
+- **Evidence:** `src/client/PhysicsWorld.ts`. Recorded during the physics swap.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
@@ -1019,6 +1089,45 @@ a 125 Hz server tick is not a constraint even at this precision.
 Peak horizontal speed reached in the movement suite was **523 units/s against a 320 base**,
 which is the number that says strafe jumping is actually working rather than merely not
 crashing.
+
+### Phase 2b — meep physics as the collision backend
+
+Same levels, same input, three configurations: the C oracle under Emscripten, the ported
+`cm_trace`, and meep's `PhysicsSystem`. The ported clipmap is bit-exact against the oracle
+(control divergence reads exactly `0.0e+0`), so every figure below is attributable to the
+physics backend. Distances are Q3 units — one unit is about 3 cm, a player is 56 units tall.
+
+| | `oa_dm1` | `aggressor` |
+|---|---|---|
+| solid brushes → static bodies | 575 → 537 | 835 → 824 |
+| hull generation | 9 ms | 12 ms |
+| body + collider construction | 11 ms | 16 ms |
+| sweeps sampled | 20,000 | 20,000 |
+| agree on hit/miss | 88.2% | 89.6% |
+| contact normals agreeing | 99.6% of 1,076 valid-plane hits | 98.2% of 1,300 |
+| sweep fraction error, median / p90 | 0.0 / 1.5e-3 | 0.0 / 1.4e-3 |
+
+Position divergence after 400 frames of identical input, `oa_dm1`:
+
+| input pattern | median | p90 | max | within 1 unit |
+|---|---|---|---|---|
+| strafe-jump | 0.17 | 271.0 | 762.1 | 62% |
+| bunny-hop | 0.06 | 0.12 | 1.3 | 98% |
+| walk-into-walls | 0.09 | 2.60 | 299.1 | 89% |
+| chaos | 0.00 | 1.28 | 188.0 | 90% |
+
+Read the medians, not the maxima. Two runs that separate at frame 200 and then explore different
+parts of a level produce an arbitrarily large number; that is chaos, not error. What the medians
+say is that the physics backend and Q3 agree to well under a centimetre on typical frames, and
+that strafe-jumping — the input pattern most sensitive to which plane a grazing contact reports
+— is the one that eventually separates. D-031 records what is still different and why one
+plausible fix for it was 8x worse.
+
+Cost of the swap, for a maintainer estimating similar work: ~14 hours, of which roughly 2 were
+`brushHull.ts` (the plane-set-to-polyhedron conversion), 2 were GAP-012, and the remaining 10
+were building the three-way measurement harness. The harness is why the other four hours were
+enough — without a bit-exact control, "close enough" is a matter of opinion and the corner bug
+in particular would have been indistinguishable from a movement-code bug.
 
 ### Asset pipeline, for scale
 

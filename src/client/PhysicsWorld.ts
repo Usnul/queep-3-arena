@@ -65,7 +65,7 @@ const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
  * the hierarchy, against the only field that consumes them.
  *
  * The runtime is fine; this is purely the generated declarations. Corrected with
- * a narrow local type rather than `any`, per the brief. See GAP-012.
+ * a narrow local type rather than `any`, per the brief. See GAP-013.
  */
 type ColliderWithShape = { shape: unknown; friction: number; restitution: number };
 
