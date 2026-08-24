@@ -4,8 +4,8 @@
     {
       "prefix": "trap_AAS_",
       "status": "not-needed",
-      "meep": "own waypoint graph (not meep NavigationMesh)",
-      "note": "AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything."
+      "meep": "own trace-built waypoint graph",
+      "note": "AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything."
     },
     {
       "prefix": "trap_Bot",

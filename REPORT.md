@@ -49,19 +49,21 @@ Ranked by how much they would cost the next person, not by how much they cost me
    (GAP-012). This is worth an engine-side option because every character controller built on
    `shape_cast` will need it and most will diagnose it as their own bug.
 
-4. **The navigation mesh is genuinely good and there is no way to get a level into it.**
-   `NavigationMesh` builds a walkable surface with agent radius, height, step and climb angle,
-   and `find_path` returns the exact any-angle geodesic across it -- Polyanya, turning at corners,
-   correct on folded surfaces. What it needs is a *manifold* mesh, and nothing in the package
-   turns arbitrary geometry into one; that step is Recast's voxelise-and-rebuild, and the builder
-   begins after it. A Quake III level offers brushes (closed convex solids that abut without
-   shared edges) and render surfaces (split per material and per leaf, duplicated at every seam),
-   and neither is manifold. Measured, as the fraction of spawn-point pairs `find_path` can
-   connect: 5% from brushes on `oa_dm1`, 0% from render surfaces, and welding does not help --
-   which is the diagnostic, because the edges genuinely do not correspond rather than
-   nearly-coinciding. The port ships a hand-rolled waypoint graph that routes 85% instead
-   (GAP-016). This is the largest "the engine has it and I could not use it" on the list, and it
-   is the one worth fixing, because the hard half of navigation is already written.
+4. **A navmesh needs a surface and a Quake III map is a pile of interpenetrating solids — and the
+   engine has more tooling for this than I first credited.** `NavigationMesh` is real and good:
+   agent radius, height, step and climb angle in, exact any-angle geodesics out. My first
+   conclusion — that nothing in the package could repair arbitrary geometry into something it
+   would accept — was **wrong**, and the corrected entry keeps the mistake because it is the
+   instructive part. `core/geom/3d/topology` is a full mesh-repair toolkit, and
+   `bt_mesh_resolve_t_junctions` documents both this exact failure and the order to call things
+   in. What was actually missing was upstream: I was feeding it *volumes*. Extracting the walkable
+   *surface* first — using Q3's own `MIN_WALK_NORMAL` and `pointContents`, about forty lines —
+   takes spawn-pair routability from 5% to 48% and yields a manifold mesh. The remaining gap is
+   real but narrow: welding cannot union overlapping coplanar patches, so the surface stays ~100
+   islands, and that needs a boolean union or Recast-style voxelisation, which the package does
+   not have. The number worth remembering is the baseline: a waypoint graph built by *tracing*
+   routes 100% of the same pairs, because a trace does not care how many surfaces the world is
+   made of (GAP-016).
 
 5. **Two APIs silently accept a wrong-but-plausible call and do nothing, and both cost an hour
    each.** `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
@@ -132,9 +134,12 @@ the gap register should not mistake either for a complaint.
   "feel alive" and "be configurable"; Q3's movement is neither tuned nor configurable -- it is a
   fixed set of float operations players spent 25 years learning to exploit. This is a
   *positioning* finding, not a defect (GAP-009).
-- **`NavigationMesh`**, for bots. Not a positioning finding: it is the right tool and it is
-  better than what replaced it. There is simply no path from a Q3 level to its input (GAP-016),
-  and that is measured rather than assumed -- `npm run navmesh-probe` reproduces the numbers.
+- **`NavigationMesh`**, for bots -- and this one I got wrong twice before getting it right.
+  It is the better tool, it is reachable from a Q3 level with a surface-extraction pass the
+  engine does not provide, and even then it routes 48% of spawn pairs where a trace-built
+  waypoint graph routes 100%, because the extracted surface is still fragmented (GAP-016). The
+  decision to ship the waypoint graph stands; the reasoning behind it is now measured rather than
+  assumed, and `npm run navmesh-probe` reproduces every number in it.
 
 The physics engine *is* used, for player movement, on the maintainer's instruction and against
 an initial recommendation not to. That reversal is documented in D-029 and its results are in
@@ -214,28 +219,28 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 
 | Q3 syscall | uses | modules | disposition | meep facility | notes |
 |---|---:|---|---|---|---|
-| `trap_AAS_AlternativeRouteGoals` | 10 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_AreaInfo` | 5 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_AreaReachability` | 21 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_AreaTravelTimeToGoalArea` | 16 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_BBoxAreas` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_EnableRoutingArea` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_EntityInfo` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_FloatForBSPEpairKey` | 6 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_Initialized` | 10 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_IntForBSPEpairKey` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_NextBSPEntity` | 12 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PointAreaNum` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PointContents` | 8 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PointReachabilityAreaIndex` | 4 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PredictClientMovement` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PredictRoute` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_PresenceTypeBoundingBox` | 5 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_Swimming` | 5 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_Time` | 3 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_TraceAreas` | 7 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_ValueForBSPEpairKey` | 16 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
-| `trap_AAS_VectorForBSPEpairKey` | 4 | game | not needed | own waypoint graph (not meep NavigationMesh) | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph rather than meep NavigationMesh, whose builder needs a manifold surface that Q3 geometry does not provide -- measured at 5% spawn-pair routability from brushes and 0% from render surfaces (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AlternativeRouteGoals` | 10 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AreaInfo` | 5 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AreaReachability` | 21 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_AreaTravelTimeToGoalArea` | 16 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_BBoxAreas` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_EnableRoutingArea` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_EntityInfo` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_FloatForBSPEpairKey` | 6 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_Initialized` | 10 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_IntForBSPEpairKey` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_NextBSPEntity` | 12 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PointAreaNum` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PointContents` | 8 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PointReachabilityAreaIndex` | 4 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PredictClientMovement` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PredictRoute` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_PresenceTypeBoundingBox` | 5 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_Swimming` | 5 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_Time` | 3 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_TraceAreas` | 7 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_ValueForBSPEpairKey` | 16 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
+| `trap_AAS_VectorForBSPEpairKey` | 4 | game | not needed | own trace-built waypoint graph | AAS deleted wholesale, per the brief. Navigation is a floor-sampled waypoint graph built by tracing rather than meep NavigationMesh: reaching the navmesh needs a walkable-surface extraction the engine does not provide, and even with one it routes 48% of spawn pairs on oa_dm1 where the trace-built graph routes 100% (GAP-016). None of these individual AAS queries is answered by anything. _(classified by prefix `trap_AAS_`)_ |
 | `trap_AddCommand` | 31 | cgame | mapped | own console command table |  |
 | `trap_AdjustAreaPortalState` | 4 | game | not needed | - | As above. |
 | `trap_AreasConnected` | 2 | game | not needed | - | Areaportal state only mattered for PVS-driven network scope. |
@@ -1035,59 +1040,80 @@ the expensive way.
 - **Cost:** ~40 minutes, most of it spent believing the *model* had not loaded.
 - **Evidence:** `src/client/Characters.ts` `clipJson`. Recorded during the character phase.
 
-### GAP-016: The navmesh is good, and there is no way to get a level into it
+### GAP-016: A navmesh needs a surface, and brush-based level geometry is a pile of solids
 
-- **Severity:** high for anyone with existing level geometry, which is most people with a level.
-- **What exists:** `NavigationMesh` is a real facility and a good one. It builds a walkable
-  surface from a `BinaryTopology` with agent radius, height, step height, step distance and climb
-  angle, and `find_path` returns the exact any-angle geodesic across it -- Polyanya, turning at
-  obstacle corners, subdivided at face boundaries, intrinsic to the surface so it is correct on
-  folded and sloped meshes. It is better than what this port ended up building, in every respect
-  except the one that decides the matter.
-- **What is missing:** the builder wants a **manifold** surface -- triangles sharing vertices
-  along shared edges, so adjacency is a topological fact rather than a geometric coincidence.
-  Nothing in the package turns arbitrary geometry into one. That step is voxelise-and-rebuild
-  (Recast's rasterise / region / contour / polygonise), and `navmesh_build_topology` begins
-  *after* it.
-- **Why that is fatal here:** a Quake III level offers two representations and neither is
-  manifold.
-  - **Brushes** are closed convex polyhedra with their own vertices. Two floor brushes that abut
-    share a plane and a line segment, not endpoints, so the topology sees two islands and every
-    doorway is a cliff.
-  - **Render surfaces** are split per material *and* per BSP leaf, with duplicated vertices at
-    every seam -- more numerous than the brush boundaries, so it is worse rather than better.
-- **Measured**, by `npm run navmesh-probe`, as the fraction of ordered spawn-point pairs
-  `find_path` can connect:
+- **Severity:** medium, and narrower than the first version of this entry claimed. **That version
+  was wrong and is withdrawn**; what follows replaces it, with the correction kept because how I
+  got it wrong is the useful part.
+- **What I claimed, and why it was wrong.** I fed the brush solids to `NavigationMesh`, got 5% of
+  spawn pairs routable, tried grid-snapping the coordinates to weld them, got 5% again, and wrote
+  that nothing in the package could turn arbitrary geometry into a manifold surface. That is
+  false. `core/geom/3d/topology` is an extensive mesh-repair toolkit --
+  `bt_merge_vertices_by_distance`, `bt_mesh_fuse_duplicate_edges`, `bt_mesh_resolve_t_junctions`,
+  `bt_mesh_kill_degenerate_faces`, `bt_mesh_compact`, `bt_mesh_split_pinched_vertices`,
+  `bt_mesh_close_boundary_holes`, plus `bt_mesh_validate` and `bt_mesh_is_manifold` to check the
+  result -- and `bt_mesh_resolve_t_junctions`'s own docblock states both the problem ("faces of
+  differing sizes... touch only at a single vertex, so edge-based neighbour queries treat them as
+  DISCONNECTED") and the recipe ("call AFTER an initial vertex-merge/edge-fuse, then FUSE
+  again... the mesh must be triangulated"). My hand-rolled grid snap was a worse substitute for a
+  better tool that was already there, and `bt_mesh_vertex_merge_distance` even documents why the
+  naive version fails: below the float32 step a tolerance silently degenerates into an exact-bits
+  match and leaves the surface cracked.
+- **Running the real repair on the solids changes nothing**, and that is also not a tool failure.
+  `bt_mesh_resolve_t_junctions` reports *zero* splits, because it splits **boundary** edges -- ones
+  with exactly one face -- and a soup of closed convex brushes has none. Every edge already has two
+  faces. The tool was given the wrong kind of input, by me.
+- **The actual missing step is upstream of all of it.** A navmesh wants a *surface*; a Quake III
+  map is a set of interpenetrating *volumes*. A floor brush is not a floor -- it is a sealed box
+  whose top happens to be one, with the wall brush beside it buried in its side. Extracting the
+  surface takes two filters, both of them Q3's own numbers: `MIN_WALK_NORMAL` (0.7) for "is this
+  triangle a floor", the same constant `PM_GroundTrace` uses, and `pointContents` for "is the
+  space just above it solid". That is about forty lines, and it moves the result from 5% to 48%.
+- **What remains genuinely missing**, and is the gap: welding cannot *union* overlapping coplanar
+  patches. Two floor brushes that overlap contribute two surfaces occupying the same space; they
+  do not abut, so no vertex merge joins them. After extraction and full repair the surface is
+  still ~100 islands with the largest at 25%, and while the builder bridges those well, it cannot
+  invent connectivity that is not in its input. Closing that needs a boolean union, or the voxel
+  rasterisation Recast uses precisely to avoid needing one. `bt_mesh_sample_interior_grid_points`,
+  `bt_mesh_surface_ray_parity` and `bt_mesh_segment_penetrates_surface` are the inside/outside
+  primitives such a pass would be built from; I did not attempt it.
+- **Measured**, by `npm run navmesh-probe`, on `oa_dm1` (spawn-pair routability):
 
-  | source | `oa_dm1` | `aggressor` |
-  |---|---|---|
-  | brush hulls | 2/42 (5%) | 30/72 (42%) |
-  | brush hulls, welded to 1 unit | 2/42 (5%) | 26/72 (36%) |
-  | render surfaces | 0/42 (0%) | 0/72 (0%) |
+  | input | `oa_dm1` | `aggressor` | after repair |
+  |---|---|---|---|
+  | solid brushes | 5% | 32% | unchanged — 0 T-junction splits, still non-manifold |
+  | render surfaces | 0% | 0% | unchanged — navmesh builds *empty*, in either winding |
+  | **walkable faces** | **48%** | **28%** | unchanged — 267 and 185 splits, `manifold: true` |
+  | *waypoint graph, same metric* | *100%* | *100%* | |
 
-  Welding does not help, which is the diagnostic: the problem is not near-coincident vertices, it
-  is that the edges genuinely do not correspond. `aggressor` does better than `oa_dm1` because it
-  is flatter and more of its brushes happen to align.
-- **Workaround:** a floor-sampled waypoint graph with A*, built by tracing the same collision the
-  player moves through (`src/game/Waypoints.ts`, D-051). It routes 85% of item-to-item pairs on
-  `oa_dm1` and 95% on `aggressor` -- better than the navmesh manages here, and much worse than
-  what the navmesh would manage given a mesh it could use. Paths turn at grid nodes rather than at
-  corners, so bots take visibly polygonal routes.
-- **What would fix it:** a Recast-equivalent front end -- voxelise a triangle soup against the
-  agent's dimensions and emit the manifold surface `navmesh_build_topology` already knows what to
-  do with. The hard half of navigation is already written; what is missing is the half that turns
-  a level into its input. Failing that, saying so in the navmesh docs would save the next person
-  the two hours it took to find out empirically.
-- **A second, smaller defect in the same API:** the generated `.d.ts` types
-  `NavigationMesh.build`'s *options object* as `BinaryTopology`. The JSDoc puts
-  `@param {BinaryTopology} source` on a destructured parameter and the generator hoists that
-  type onto the whole object, so the documented call does not typecheck and `source` is reported
-  as an unknown property of the type it is a property of. `navmesh_build_topology` has it too.
-  Same family as GAP-001; one cast each.
-- **Cost:** ~2 hours, and worth it: the alternative was shipping a hand-rolled waypoint graph
-  while a better facility sat unused in the package, with no evidence either way.
-- **Evidence:** `tools/navmesh-probe.ts`, which reproduces the table above in one command.
-  Recorded during the bot phase.
+  Repair does not move the walkable-faces number, but it is what makes the surface manifold, and
+  a non-manifold input can make `find_path` read a released vertex and **throw** from four frames
+  inside Polyanya rather than report no path — 17 of 72 pairs on `aggressor`'s raw brushes. The
+  probe counts those rather than propagating them.
+- **One result I could not explain, and am recording rather than dressing up.** On `aggressor`,
+  repairing the render surfaces produces a nearly perfect input — 8 islands over 3,301 faces, the
+  largest holding 99% of them — and the navmesh still builds **zero faces**. Not a bad navmesh: an
+  empty one, with no error, no warning and no diagnostic. It is not winding (reversing changes
+  nothing) and it is not connectivity (99% in one island). Render geometry is the wrong input on
+  Q3 grounds anyway, so I stopped there, but "this input silently yields an empty navmesh" is
+  worth a caller-facing complaint from the builder.
+- **The finding worth taking away** is the last row. A waypoint graph built by *tracing* -- asking
+  the collision system "can a player-sized box get from here to there" -- routes every spawn pair,
+  because a trace does not care whether the world is one surface or a hundred overlapping ones.
+  For brush-based level geometry the collision query is a better source of navigation connectivity
+  than the geometry is, and it is available to anyone whose engine has a shape cast.
+- **Two smaller notes on the same API.** The generated `.d.ts` types `NavigationMesh.build`'s
+  *options object* as `BinaryTopology` -- the JSDoc puts `@param {BinaryTopology} source` on a
+  destructured parameter and the generator hoists it onto the whole object -- so the documented
+  call does not typecheck; `navmesh_build_topology` has it too, and it is GAP-001's family. And
+  `find_path` throwing out of Polyanya on unrepaired input would be better as a documented
+  precondition or a validation call at build time, since `bt_mesh_validate` already exists.
+- **What would help most:** a worked example that says "extract your walkable surface, then repair
+  it in this order, then build". Every piece of that is in the package; the order is not written
+  down anywhere a consumer will find it before they need it.
+- **Cost:** ~2 hours to get it wrong, ~1 hour to get it right after the maintainer pointed at
+  `bt_mesh_append` and `bt_merge_verts_by_distance`. The tooling was never the problem.
+- **Evidence:** `tools/navmesh-probe.ts`, which reproduces the whole table in one command.
 
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.

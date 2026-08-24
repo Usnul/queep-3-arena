@@ -65,9 +65,11 @@ One finding in the report is reproducible on its own:
 npm run navmesh-probe
 ```
 
-which tries to build meep's `NavigationMesh` from a Quake III level three different ways and
-reports how many spawn-point pairs it can route between. The answer is 0–5%, and GAP-016
-explains why.
+which builds meep's `NavigationMesh` from a Quake III level three different ways — solid
+brushes, render surfaces, and an extracted walkable surface — repairs each with the engine's
+topology toolkit, and reports how many spawn-point pairs `find_path` can route between. The
+answers are 5%, 0% and 48%, against 100% for the waypoint graph this port ships. GAP-016 explains
+what that difference is, and includes a claim I got wrong twice before getting it right.
 
 ## What works
 

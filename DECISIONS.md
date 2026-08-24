@@ -1025,3 +1025,47 @@ Three fixes, each of which would have been enough alone and all of which are rig
 are compacted away, tag nodes are authored with their frame-0 rest pose rather than identity (so
 their channels are not no-ops, and the unposed model is correct in any viewer), and a `TORSO_*`
 clip is not emitted for a character with no torso.
+
+---
+
+### D-058: The navmesh evaluation was wrong twice, and the corrected version changed the decision's reasoning but not the decision
+
+D-051 recorded the waypoint graph as the replacement for AAS. GAP-016 recorded *why* meep's
+`NavigationMesh` was not used, and the first two versions of that reasoning were both wrong. The
+maintainer pointed at `bt_mesh_append` and `bt_merge_verts_by_distance` and observed that meep's
+topology tooling is world-class, which it is.
+
+**First error: I said the package had no way to repair arbitrary geometry into a manifold
+surface.** It has an extensive one, in `core/geom/3d/topology` -- merge by distance, fuse duplicate
+edges, resolve T-junctions, kill degenerate faces, split pinched vertices, close boundary holes,
+compact, plus validation. I had hand-rolled a grid-snapping weld instead, which is strictly worse:
+`bt_mesh_vertex_merge_distance`'s docblock even explains why the naive version fails, because
+below the float32 step a tolerance degenerates into an exact-bits match. The tool I needed was
+there, and its docblock described my exact problem and the order to call things in.
+
+**Second error: running the real repair on brush solids changed nothing, and I nearly recorded
+that as the tool failing.** `bt_mesh_resolve_t_junctions` reported zero splits. That is correct
+behaviour -- it splits *boundary* edges, ones with a single face, and a soup of closed convex
+brushes has none. The input was wrong, not the tool.
+
+**What was actually missing** was upstream of any of it, and is obvious in hindsight: a navmesh
+wants a *surface*, and a Q3 map is interpenetrating *volumes*. Extracting the walkable surface --
+`MIN_WALK_NORMAL` for "is this a floor", `pointContents` for "is it buried", about forty lines and
+both numbers Q3's own -- takes spawn-pair routability from 5% to 48%, and the repair then yields
+`manifold: true` after 267 T-junction splits.
+
+**The decision stands, on better evidence.** 48% against the trace-built graph's 100% on the same
+metric, because welding cannot union overlapping coplanar patches and the extracted surface stays
+about a hundred islands. Closing that needs a boolean union or Recast-style voxelisation, which
+is genuinely not in the package.
+
+Two process notes, since the failure was mine both times:
+
+- **I compared on mismatched metrics.** The withdrawn version put the navmesh's *spawn-pair* 5%
+  next to the waypoint graph's *item-pair* 85%, which flattered the graph. The probe now measures
+  both on spawn pairs, and the graph's real number on that metric is 100% -- so the conclusion
+  survived, but it survived by luck rather than by rigour.
+- **"The engine cannot do X" deserves a higher bar than "I could not do X with the engine."** Two
+  hours of trying is not the same as a gap, and the first version of GAP-016 asserted the former
+  from the latter. The entry now leads with the correction, because a report whose errors are
+  visible is worth more than one that is merely confident.
