@@ -1620,16 +1620,17 @@ the expensive way.
   (`PhysicsTrace.alreadyRuledOn`). meep still does the sweep. This needs the source half-spaces
   kept alongside the `ConvexHullShape3D`, which a port from BSP brushes has and an application
   whose hulls came from a mesh does not.
-- **What it costs at runtime** (`npm run bench-match`): one trace on the shipping path costs
-  4.53 µs against 0.42 µs for the ported clipmap answering the whole question; `shape_cast` alone
-  is 3.49 µs of it and `traceBrushList`, which produces the fraction, plane and solidity flags, is
-  0.29 µs. A six-bot deathmatch is 356 µs a frame on meep's physics and 31 µs on the clipmap, for
-  an identical match.
+- **What it costs at runtime** (`npm run bench-match`, re-taken on meep 3.2.0): one trace on the
+  `?move=q3` path costs 3.72 µs against 0.29 µs for the ported clipmap answering the whole
+  question; `shape_cast` alone is 3.05 µs of it and `traceBrushList`, which produces the fraction,
+  plane and solidity flags, is 0.21 µs. A six-bot deathmatch on `oa_dm1` is 185 µs a frame on the
+  shipping path and 32 µs on the clipmap, for the same match.
 
-  That 11× is **the cost of this port's decision to keep Q3's arithmetic while running on meep's
+  That ratio is **the cost of this port's decision to keep Q3's arithmetic while running on meep's
   broadphase**, and it should be read that way rather than as a price the engine imposes. A
   consumer using `KinematicMover` pays for one sweep, not for a sweep plus an overlap plus a
-  re-derivation.
+  re-derivation — which is exactly what the shipping path does now, at 6.0 queries a frame against
+  the 30.4 this entry was written about.
 - **What would still be worth having**, stated as a small API request rather than as a gap: a
   directional term on the result — the separating-axis distance at `t = 0` signed against the
   sweep direction, which the query already computes and discards. It would let a consumer
@@ -1900,10 +1901,20 @@ Observations that are not gaps — the facility exists and works — but cost ti
 
 ## 5. Performance
 
+> **On dating.** Numbers here were taken across five sessions and two engine versions, and the
+> movement path was replaced part way through. Every table has since been re-taken on meep 3.2.0
+> with the shipping configuration **except the frame-rate and CPU-per-frame figures**, which need
+> a browser rendering frames and could not be: the browser available for the re-take could not be
+> brought to the foreground, so its page stayed hidden, `requestAnimationFrame` never fired, and
+> meep's `Ticker` suspends itself at `start()` when `document.visibilityState` is `hidden`
+> (D-077). Those rows say so where they appear rather than being quietly carried forward.
+
 ### Phase 0 baseline — empty lit scene
 
 Host: Windows 11, Chrome, WebGPU on `nvidia/lovelace`. Scene is `EngineHarness.buildBasics()`
-with terrain on, water off, one directional light with a 2048 shadowmap.
+with terrain on, water off, one directional light with a 2048 shadowmap. **meep 3.0.2, at phase
+0, and not re-taken** — see the note under phase 1 for why the frame-rate figures in this section
+could not be.
 
 | metric | value |
 |---|---|
@@ -1934,7 +1945,15 @@ in a tight loop with the camera rotating, so it is **CPU submission cost**, not 
 `render()` returns once the frame is submitted. It is the number that bounds how much CPU a
 game has left, which is the one this port cares about.
 
-| map | triangles | meshes | point lights | CPU ms/frame | implied FPS |
+> **These two frame-cost rows are from meep 3.0.2, before the movement rewrite and before the
+> lightgrid lighting, and they have not been re-taken.** Taking them needs frames, and the
+> browser available in the session that would have re-taken them could not be brought to the
+> foreground, so its page stayed hidden, `requestAnimationFrame` never fired and meep's `Ticker`
+> stayed suspended from `start()` — the engine's own overlay reporting `SIMULATION: 0.00ms`
+> throughout (D-077). Quoting them undated would have been worse than quoting them dated. Every
+> other table in this section has been re-taken on 3.2.0.
+
+| map | triangles | meshes | point lights *(then)* | CPU ms/frame | implied FPS |
 |---|---:|---:|---:|---:|---:|
 | `aggressor` | 3,263 | 23 | 63 | 3.96 | 253 |
 | `am_thornish` | 198,740 | 45 | 147 | 7.28 | 137 |
@@ -1943,21 +1962,34 @@ game has left, which is the one this port cares about.
 `aggressor` and 2.3× the lights, for 1.8× the frame cost. The clustered lighting claim in the
 README holds up: the cost scaled with geometry, not with light count. Since Q3's static
 lighting had to be reconstructed as dynamic lights anyway (GAP-006), this is the difference
-between the port being possible and not.
+between the port being possible and not. Those maps now carry 329 and 90 lights respectively
+(D-078) and the load-time table below was re-taken with them; what has not been re-measured is
+whether the *frame* cost moved, and on the evidence of the original scaling it should not have.
 
-Simulation cost with 53 entities is **0.003 ms/frame** — below the noise floor of
-`performance.now()`. The ECS is not going to be the bottleneck.
+Simulation cost with 53 entities was **0.003 ms/frame** — below the noise floor of
+`performance.now()`, and from the same un-re-taken pass as the two rows above. The ECS is not
+going to be the bottleneck.
 
-Load time, cold, from the local dev server:
+Load time, cold, from the local dev server. **Re-taken on meep 3.2.0 with the lightgrid
+lighting**, and now covering all six maps rather than three:
 
-| map | fetch | materials + textures | meshlet build | lights | total |
-|---|---:|---:|---:|---:|---:|
-| `aggressor` | 5 ms | 39 ms | 53 ms | 14 ms | 111 ms |
-| `oa_dm1` | 4 ms | 25 ms | 74 ms | 1 ms | 104 ms |
-| `am_thornish` | 31 ms | 73 ms | **1,246 ms** | 3 ms | 1,353 ms |
+| map | triangles | lights | fetch | materials + textures | meshlet build | lights | total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `oa_dm7` | 2,947 | 38 | 9 ms | 38 ms | 53 ms | 26 ms | 126 ms |
+| `aggressor` | 3,263 | 90 | 8 ms | 43 ms | 86 ms | 3 ms | 140 ms |
+| `oa_dm1` | 7,532 | 33 | 11 ms | 54 ms | 84 ms | 1 ms | 150 ms |
+| `oa_dm4` | 4,089 | 44 | 21 ms | 62 ms | 64 ms | 3 ms | 150 ms |
+| `oa_dm5` | 107,414 | 39 | 32 ms | 52 ms | **685 ms** | 2 ms | 771 ms |
+| `am_thornish` | 198,740 | 329 | 50 ms | 71 ms | **1,156 ms** | 8 ms | 1,285 ms |
 
-Meshlet construction is 92% of load time on the large map and is synchronous — see GAP-008.
-It is the only part of this table that would need work in a real title.
+Meshlet construction is 89% of load time on the largest map and is synchronous — see GAP-008.
+It is the only column here that would need work in a real title, and it is the only one that
+tracks triangle count at all: everything else is within a factor of three across a 67× range of
+geometry.
+
+Instantiating the lights is not a cost worth a column — 8 ms for 329 of them on `am_thornish`,
+1 ms for 33 on `oa_dm1`. The 26 ms on `oa_dm7` is one sample and does not reproduce; it is left
+in rather than quietly re-run until it behaved.
 
 ### Phase 2 — collision and movement
 
@@ -2061,43 +2093,44 @@ are here because the difference is the point.
 | | `oa_dm1` | | `aggressor` | |
 |---|---:|---:|---:|---:|
 | movement + collision | Q3 motor on `KinematicMover` | ported `bg_pmove` on the clipmap | Q3 motor on `KinematicMover` | ported `bg_pmove` on the clipmap |
-| static body construction | 18 ms | — | 12 ms | — |
-| navigation graph build | 154 ms | 31 ms | 109 ms | 23 ms |
-| **simulation, per frame** | **178 µs** | 35 µs | **266 µs** | 25 µs |
+| static body construction | 18 ms | — | 13 ms | — |
+| navigation graph build | 146 ms | 27 ms | 106 ms | 21 ms |
+| **simulation, per frame** | **185 µs** | 32 µs | **262 µs** | 24 µs |
 | traces per frame (6 bots) | **6.0** | same by construction | **6.0** | same by construction |
-| distance walked, all bots | 27,727 | 31,073 | 24,391 | 25,003 |
+| distance walked, all bots | 28,685 | 31,073 | 24,391 | 25,003 |
 | shots fired | **374** | 110 | **220** | 420 |
 | pickups taken | **16** | 10 | **16** | 16 |
 
 The trace count is the number to read: **6.0 a frame against the 30.4 the old arrangement needed**,
 because `KinematicMover` resolves a move in one recover-slide-ground sequence where
 `PM_SlideMove` through `PhysicsTrace` issued a sweep per bump plus a ground trace plus the
-per-brush re-derivation. Frame cost halved on `oa_dm1` (356 µs → 178) even though each remaining
-query does more work.
+per-brush re-derivation. Frame cost roughly halved on `oa_dm1` (356 µs → 185) even though each
+remaining query does more work.
 
 For the record, the arrangement this replaced — `bg_pmove` driving meep's physics through
 `PhysicsTrace`, measured on 3.0.2: 356 µs and 30.4 traces a frame on `oa_dm1`, 248 µs and 25.2 on
 `aggressor`.
 
 The two backends produce the same match — the bots walk the same distance to within 3%, take the
-same pickups, fire the same number of shots — and one costs **eleven times** what the other does.
-A whole deathmatch at 356 µs a frame is still nothing next to a 16.7 ms budget, so this is not a
-performance problem for this port. It is a *finding*, and it wanted decomposing:
+same pickups, fire a comparable number of shots — and one costs **six to eleven times** what the
+other does (185 µs against 32 on `oa_dm1`, 262 against 24 on `aggressor`). A whole deathmatch at
+either figure is nothing next to a 16.7 ms budget, so this is not a performance problem for this
+port. It is a *finding*, and it wanted decomposing:
 
 | one trace on `oa_dm1`, meep 3.2.0 | |
 |---|---:|
-| `PhysicsTrace.trace` — the `?move=q3` path | 3.69 µs |
+| `PhysicsTrace.trace` — the `?move=q3` path | 3.72 µs |
 | `boxTrace` — ported clipmap, answering the entire question | 0.29 µs |
-| of that path: `shape_cast` alone | 3.06 µs |
-| of that path: `overlap_shape` alone | 1.15 µs |
-| of that path: `traceBrushList` over 8 brushes | 0.22 µs |
+| of that path: `shape_cast` alone | 3.05 µs |
+| of that path: `overlap_shape` alone | 1.12 µs |
+| of that path: `traceBrushList` over 8 brushes | 0.21 µs |
 
 Mean of 20,000 calls after a 2,000-call warm-up, shapes cached exactly as `PhysicsTrace` caches
 them, so this is not measuring allocation.
 
 **The part that decides the answer is the cheapest line in the table.** `traceBrushList` is the
 ported `CM_TraceThroughBrush`: it produces the fraction, the contact plane, `startsolid` and
-`allsolid`, and it costs 0.22 µs. `shape_cast` costs fourteen times that to find which body is
+`allsolid`, and it costs 0.21 µs. `shape_cast` costs fourteen times that to find which body is
 nearest, and its own fraction and normal are then discarded on every blocking contact (GAP-019,
 GAP-012). The complete ported clipmap — BSP tree descent, leaf gather, every brush test — answers
 the whole question for less than a tenth of what `shape_cast` costs on its own.
@@ -2129,43 +2162,55 @@ Two things follow, and the maintainer should weigh them separately:
   The residual engine-side ask is small and stands: a directional term on the sweep result — the
   separating-axis distance at `t = 0` signed against the sweep direction, already computed and
   discarded — would let a consumer distinguish "resting against" from "moving into" without the
-  second `overlap_shape` query, which is the 1.18 µs row.
+  second `overlap_shape` query, which is the 1.12 µs row.
 
-The ratio is also worse in the match (11×) than in the microbenchmark (7×), and the reason is
-worth a sentence: the expensive branch of `PhysicsTrace` is the one taken at a *resting* contact,
-where `shape_cast` reports `t ≈ 0` and the whole per-brush re-derivation — `overlap_shape`, the
-neighbour gather, the per-brush re-derivation — has to run to decide what kind of contact it is.
-A player standing on a floor is in that branch on every frame. The microbenchmark's mid-air
-sweeps mostly are not.
+Two ratios in this section point in opposite directions and it is worth being explicit about
+which is which. **Per trace**, the `?move=q3` path costs 13× the clipmap (3.72 µs against 0.29).
+**Per frame**, the shipping path costs 6× the clipmap on `oa_dm1` (185 µs against 32) — better
+than the per-trace figure, because `KinematicMover` asks 6.0 questions a frame where
+`PM_SlideMove` asked 30.4. Fewer, more expensive queries beat many cheap ones here, and that is
+the argument for the solver in one line.
+
+One more thing about where the per-trace cost goes: the expensive branch of `PhysicsTrace` is the
+one taken at a *resting* contact, where `shape_cast` reports `t ≈ 0` and the whole per-brush
+re-derivation — `overlap_shape`, the neighbour gather, `traceBrushList` — has to run to decide
+what kind of contact it is. A player standing on a floor is in that branch every frame; the
+microbenchmark's mid-air sweeps mostly are not, so the per-trace number above understates it.
 
 ### Phases 3b-5 — items, movers, characters, audio, bots
 
 Same host. Load-time figures are from `oa_dm1`, which is a small map; `am_thornish` is the large
-one and is called out where it differs.
+one and is called out where it differs. Re-taken on meep 3.2.0 except where a row says otherwise.
 
 | stage | cost | note |
 |---|---|---|
-| static bodies from brushes | 8-22 ms | 529 bodies on `oa_dm1` |
+| static bodies from brushes | 18-30 ms | 529 bodies on `oa_dm1`, 10 ms of it hull generation |
 | items: place and build | 36-88 ms | 31 pickups, 55 drawn pieces, meshlets built lazily |
 | movers | <1 ms | 6 brush entities, 6 kinematic bodies |
-| navigation graph | 165 ms | 766 nodes, 1,957 links, 205 drops -- built through the *physics* trace, which is why it is not the 31 ms the clipmap takes |
+| navigation graph | 146-289 ms | 783 nodes, 1,975 links, 211 drops -- built through the *physics* trace, which is why it is not the 27 ms the clipmap takes. The range is headless to browser on the same map |
 | characters | ~40 ms each, async | 15 models, 3 to 10 mesh nodes each; fetched and built off the critical path |
 | sound bank | one fetch | 97 names over 77 files, 8.0 MB |
 
 Per frame, measured by driving the simulation directly:
 
-| | cost |
-|---|---|
-| 6 bots: perception, tree, `Pmove`, character placement (browser, with models) | 1.3-1.8 ms |
-| 6 bots: the same simulation with no presentation layer (`npm run bench-match`) | 0.36 ms |
-| of which planning, when it runs | one BFS plus one A* per bot, at most every 0.25 s |
+| | cost | taken on |
+|---|---|---|
+| 6 bots: perception, tree, `Pmove`, character placement (browser, with models) | 1.3-1.8 ms | 3.0.2, ported `bg_pmove`; **not re-taken** |
+| 6 bots: the same simulation with no presentation layer (`npm run bench-match`) | **0.185 ms** on `oa_dm1`, 0.262 ms on `aggressor` | 3.2.0, `KinematicMover` |
+| the same, on the ported path (`?move=q3`) | 0.032 ms / 0.024 ms | 3.2.0 |
+| of which planning, when it runs | one BFS plus one A* per bot, at most every 0.25 s | |
 
-Those two rows are the same code and differ by a factor of four, which is worth stating plainly:
-roughly three quarters of "bot cost" in the browser is `Character.place` writing 30 rigged parts'
-worth of `Transform`s and the clip player consuming them, not AI. The headless figure is the
-honest cost of the *simulation*; the browser figure is the cost of the simulation plus drawing
-six animated characters, and a maintainer reading "bots cost 1.8 ms" should know which one they
-are looking at.
+The headless row was 0.36 ms when the bots ran `bg_pmove` through `PhysicsTrace`; moving them
+onto `KinematicMover` roughly halved it, for the reason the phase 6 table gives — 6.0 traces a
+frame instead of 30.4.
+
+The browser row is the one that could not be re-taken, and the gap between the two rows is why
+it is still here rather than deleted. They are the same simulation code and they differed by a
+factor of four: roughly three quarters of "bot cost" in the browser was `Character.place` writing
+30 rigged parts' worth of `Transform`s and the clip player consuming them, not AI. That ratio is
+the point, and it does not depend on which solver is underneath. A maintainer reading "bots cost
+1.8 ms" should know they are reading the cost of drawing six animated characters as much as of
+thinking for them.
 
 The bot cost is worth two further notes. It started at 3.7 ms a frame for *six stationary bots*,
 all of it A* failing to route to the same unreachable item every frame -- a reachability pass

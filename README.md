@@ -98,10 +98,13 @@ what that difference is, and includes a claim I got wrong twice before getting i
 
 ## What works
 
-- **Six OpenArena maps** convert and render at 137–253 FPS, with lighting reconstructed as
-  dynamic lights from the map's own `.shader` data. Four of the six come out well lit; `oa_dm5`
-  and `oa_dm7` do not, because their lighting was authored as `light` entities that q3map2
-  deletes at compile time. That is measured rather than estimated — see GAP-006.
+- **Six OpenArena maps** convert and render at 137–253 FPS (measured on meep 3.0.2), with
+  lighting reconstructed as dynamic lights from two sources: the map's own `.shader` data, and
+  the BSP lightgrid q3map2 bakes. The second exists because the first is not enough — `oa_dm5`
+  reconstructed to zero lights over 107,414 triangles and `oa_dm7` left 70 of 79 player positions
+  under a lux, because their lighting was authored as `light` entities that q3map2 deletes at
+  compile time. Fitting lights to the lightgrid closes that: all six maps are now lit, asserted
+  in lux at every spawn point and pickup. See GAP-006 and D-078.
 - **Movement** is Q3's motor on meep's kinematic solver: `PM_Accelerate`, `PM_Friction` and
   `PM_CmdScale` produce a desired velocity, and meep's `KinematicMover` resolves it. Strafe
   jumping survives because it lives entirely in the acceleration function and never touches a
