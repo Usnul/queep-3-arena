@@ -40,6 +40,14 @@ import type { BrushHull } from '../q3/cm/brushHull.ts';
 /** Scene units per Q3 unit. */
 const WORLD_SCALE = 1 / 32;
 
+/**
+ * How close to `t = 0` counts as "blocked where it stands", in metres.
+ *
+ * With the epsilon in the shape rather than in the answer, a contact at the
+ * start of the sweep really is at zero; this is float noise, not a tuning knob.
+ */
+const CONTACT_TOLERANCE = 1e-7;
+
 /** Identity rotation; every level body is axis-aligned in world space. */
 const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 
@@ -89,25 +97,21 @@ export class PhysicsTrace {
     }
 
     /**
-     * The player box, grown by twice the surface epsilon.
+     * The player box, optionally grown, in meep axes.
      *
-     * `overlap_shape` answers "which bodies does this shape intersect", and a
-     * player standing correctly is *not* intersecting anything -- Q3's epsilon
-     * keeps a 1/8 unit gap between the box and every surface it rests on. Asking
-     * with the exact box therefore returns nothing at precisely the moment the
-     * answer is needed. Inflating it by the gap turns "touching" into
-     * "overlapping" so the neighbouring brushes at a corner are found.
+     * @param grow extra half-extent on every side, in Q3 units.
      */
-    private inflatedBoxShape(
+    private boxShape(
         mins: ArrayLike<number>,
-        maxs: ArrayLike<number>
+        maxs: ArrayLike<number>,
+        grow = 0
     ): BoxShape3D {
-        const grow = SURFACE_CLIP_EPSILON * 2;
+        // Half-extents in meep axes: Q3 x -> x, Q3 z -> y, Q3 y -> z.
         const hx = Math.max(1e-4, ((maxs[0]! - mins[0]!) * 0.5 + grow) * WORLD_SCALE);
         const hy = Math.max(1e-4, ((maxs[2]! - mins[2]!) * 0.5 + grow) * WORLD_SCALE);
         const hz = Math.max(1e-4, ((maxs[1]! - mins[1]!) * 0.5 + grow) * WORLD_SCALE);
 
-        const key = `i${hx},${hy},${hz}`;
+        const key = `${grow}|${hx},${hy},${hz}`;
         let shape = this.boxCache.get(key);
 
         if (shape === undefined) {
@@ -118,21 +122,18 @@ export class PhysicsTrace {
         return shape;
     }
 
-    private boxShape(mins: ArrayLike<number>, maxs: ArrayLike<number>): BoxShape3D {
-        // Half-extents in meep axes: Q3 x -> x, Q3 z -> y, Q3 y -> z.
-        const hx = Math.max(1e-4, (maxs[0]! - mins[0]!) * 0.5 * WORLD_SCALE);
-        const hy = Math.max(1e-4, (maxs[2]! - mins[2]!) * 0.5 * WORLD_SCALE);
-        const hz = Math.max(1e-4, (maxs[1]! - mins[1]!) * 0.5 * WORLD_SCALE);
-
-        const key = `${hx},${hy},${hz}`;
-        let shape = this.boxCache.get(key);
-
-        if (shape === undefined) {
-            shape = BoxShape3D.from(hx, hy, hz);
-            this.boxCache.set(key, shape);
-        }
-
-        return shape;
+    /**
+     * The box `overlap_shape` has to be asked with, grown by twice the epsilon.
+     *
+     * `overlap_shape` answers "which bodies does this shape intersect", and a
+     * player standing correctly is *not* intersecting anything -- Q3's epsilon
+     * keeps a 1/8 unit gap between the box and every surface it rests on. Asking
+     * with the exact box therefore returns nothing at precisely the moment the
+     * answer is needed. Inflating it turns "touching" into "overlapping" so the
+     * neighbouring brushes at a corner are found.
+     */
+    private inflatedBoxShape(mins: ArrayLike<number>, maxs: ArrayLike<number>): BoxShape3D {
+        return this.boxShape(mins, maxs, SURFACE_CLIP_EPSILON * 2);
     }
 
 
@@ -348,7 +349,37 @@ export class PhysicsTrace {
         out.contents = 0;
         out.entityNum = 1023;
 
-        const shape = this.boxShape(minsQ3, maxsQ3);
+        /*
+         **The swept box carries Q3's epsilon.**
+
+         `CM_TraceThroughBrush` does not stop the box where it touches a
+         surface. It offsets every plane outward by `SURFACE_CLIP_EPSILON` --
+         `f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2)` -- so a trace stops an
+         eighth of a unit short, and a resting player floats in that gap. For a
+         box against a plane, offsetting the plane by e is the same as growing
+         the box by e, so the epsilon belongs in the shape.
+
+         It used to be subtracted from the answer instead: sweep the exact box,
+         then pull the contact back by `e / length`. That is the same thing only
+         when the sweep *reaches* the surface. A move that ends a twentieth of a
+         unit short of the floor does not reach it, so `shape_cast` correctly
+         reported no hit at all -- and Q3 blocks that move, because its offset
+         plane is already crossed.
+
+         The consequence was that a falling player never landed. The last
+         fraction of the fall was always unobstructed, so the move completed,
+         the player ended up *below* Q3's resting height, and the next frame
+         bounced them back up at the speed they arrived with. Measured on
+         `oa_dm1`: the clipmap settles at z = -119.875 with zero velocity;
+         this settled nowhere, oscillating forever at +/-78 units a second.
+
+         Nobody saw a bouncing player, because the bounce is under a tenth of a
+         unit and the camera is at eye height. What everybody saw was
+         `groundEntityNum` stuck at `ENTITYNUM_NONE`, which is what
+         `Character.legsFor` reads to choose `LEGS_JUMP` -- so every bot in the
+         level stood with its legs tucked up, hovering. See D-064.
+        */
+        const shape = this.boxShape(minsQ3, maxsQ3, SURFACE_CLIP_EPSILON);
 
         if (length < 1e-7) {
             /*
@@ -416,10 +447,9 @@ export class PhysicsTrace {
          bit-exact agreement for 9 frames of falling, then permanent divergence
          at the moment of landing.
         */
-        const backoff = SURFACE_CLIP_EPSILON * WORLD_SCALE;
-        let fraction = Math.min(1, Math.max(0, (this.hit.t - backoff) / length));
+        let fraction = Math.min(1, Math.max(0, this.hit.t / length));
 
-        if (this.hit.t <= backoff) {
+        if (this.hit.t <= CONTACT_TOLERANCE) {
             out.contents = 1;
             out.entityNum = 1022;
             out.endpos[0] = startQ3[0]!;
@@ -447,7 +477,7 @@ export class PhysicsTrace {
                 out.startsolid =
                     overlap_shape(
                         this.system,
-                        shape as unknown as never,
+                        this.boxShape(minsQ3, maxsQ3) as unknown as never,
                         { x: sx, y: sy, z: sz },
                         NO_ROTATION,
                         this.overlaps,
@@ -503,7 +533,7 @@ export class PhysicsTrace {
             */
             if (
                 !shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, undefined, true) ||
-                (this.hit.t <= backoff && this.alreadyRuledOn(this.hit.entity))
+                (this.hit.t <= CONTACT_TOLERANCE && this.alreadyRuledOn(this.hit.entity))
             ) {
                 /*
                  Nothing else is in the way -- or the only thing that is, is a
@@ -526,7 +556,7 @@ export class PhysicsTrace {
                 return;
             }
 
-            fraction = Math.min(1, Math.max(0, (this.hit.t - backoff) / length));
+            fraction = Math.min(1, Math.max(0, this.hit.t / length));
         }
 
         out.fraction = fraction;

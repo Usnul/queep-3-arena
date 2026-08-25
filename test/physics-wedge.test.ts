@@ -35,6 +35,14 @@
  * to make progress are not visible in one trace. So the second half of this file
  * asks the dynamic question -- run pmove and see whether the player *goes*
  * anywhere -- with the same clipmap control.
+ *
+ * And *that* was still not enough, because it only ever asked about players who
+ * are moving. The third question is the simplest one in the game and the one
+ * nobody thinks to ask: stand still, and are you standing on the ground? A
+ * player who never lands looks fine from every angle except the one that
+ * matters -- `groundEntityNum` stays `ENTITYNUM_NONE`, so the animation code
+ * plays the jump clip, and every bot in the level hovers with its legs tucked
+ * up. That shipped for the entire life of the physics backend.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -49,7 +57,7 @@ import {
     type Pmove, type PlayerState,
 } from '../src/q3/pmove/types.ts';
 import * as C from '../src/q3/pmove/constants.ts';
-import { ClipMap, MASK_PLAYERSOLID } from '../src/q3/cm/ClipMap.ts';
+import { ClipMap, MASK_PLAYERSOLID, SURFACE_CLIP_EPSILON } from '../src/q3/cm/ClipMap.ts';
 import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
 import { buildWaypoints, type TraceLike } from '../src/game/Waypoints.ts';
 import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
@@ -112,7 +120,24 @@ function scan(mapName: string): Scan {
     const worst: string[] = [];
 
     for (const node of graph.nodes) {
-        const o = node.origin;
+        /*
+         At the height a player actually rests, which is not the height the
+         sampler reports.
+
+         `CM_TraceThroughBrush` leaves a `SURFACE_CLIP_EPSILON` gap under a
+         resting box, so a standing player's origin is floor + 24 + 1/8. The
+         sampler returns floor + 24 exactly, which puts the box *touching* the
+         floor plane -- a state pmove reaches only transiently and corrects
+         immediately, and one where the two backends genuinely disagree:
+         measured, 93% of sweeps agree from the flush position on `oa_dm1` and
+         86% on `aggressor`. Lift by the epsilon and it is 100.00% of 6128 and
+         4896 sweeps respectively, with zero disagreements.
+
+         So this asks about the position players occupy. The flush position is
+         not swept under the rug -- `PM_CorrectAllSolid`'s handling of it is
+         what the `walking` block below exercises, from a lift of zero.
+        */
+        const o = [node.origin[0]!, node.origin[1]!, node.origin[2]! + SURFACE_CLIP_EPSILON];
 
         let blockedClip = 0;
         let blockedPhysics = 0;
@@ -330,5 +355,134 @@ describe.each(['oa_dm1', 'aggressor'])('walking [%s]', (name) => {
             `${stuck.length} of ${runs} walks stall on meep physics but not on the clipmap` +
             (stuck.length > 0 ? `\n  ${stuck.slice(0, 6).join('\n  ')}` : '')
         ).toBe(0);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The simplest question: stand still, and do you land?
+ * ------------------------------------------------------------------ */
+
+/** Long enough to fall a few units and settle, at 125 fps. */
+const SETTLE_FRAMES = 60;
+
+/** Dropped from here, so landing is exercised rather than assumed. */
+const DROP = 4;
+
+/** Hold no keys at all and report the state pmove settles into. */
+function settle(
+    origin: readonly number[],
+    trace: Pmove['trace'],
+    pointcontents: Pmove['pointcontents']
+): PlayerState {
+    const ps = spawn(origin);
+    const pm = makePmove(ps, trace, pointcontents);
+
+    for (let f = 0; f < SETTLE_FRAMES; f++) {
+        pm.cmd.serverTime = (f + 1) * MSEC;
+        pm.cmd.angles[0] = 0;
+        pm.cmd.angles[1] = 0;
+        pm.cmd.angles[2] = 0;
+        pm.cmd.buttons = 0;
+        pm.cmd.weapon = 1;
+        pm.cmd.moves[FORWARDMOVE] = 0;
+        pm.cmd.moves[RIGHTMOVE] = 0;
+        pm.cmd.moves[UPMOVE] = 0;
+        runPmove(pm);
+    }
+
+    return ps;
+}
+
+describe.each(['oa_dm1', 'aggressor'])('standing [%s]', (name) => {
+    const built = existsSync(join(process.cwd(), 'assets', 'built', name, 'collision.bsp'));
+
+    it.skipIf(!built)('lands, and knows it has landed', () => {
+        const map = load(name);
+        const physics = new HeadlessPhysics(map.cm);
+
+        const clipTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
+            boxTrace(r, map.cm, s, e, mn, mx, mask);
+        const physTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
+            physics.trace(r, s, e, mn, mx, mask);
+
+        const stride = Math.max(1, Math.floor(map.graph.nodes.length / 60));
+        const floating: string[] = [];
+        let judged = 0;
+
+        for (let n = 0; n < map.graph.nodes.length; n += stride) {
+            const o = Array.from(map.graph.nodes[n]!.origin);
+            o[2] = o[2]! + DROP;
+
+            /*
+             The control decides which spots are fair to judge. Some of what the
+             floor sampler finds is above a pit or a ledge, and a player dropped
+             there is *supposed* to still be falling after half a second.
+            */
+            const control = settle(o, clipTrace, () => 0);
+            if (control.groundEntityNum === C.ENTITYNUM_NONE) continue;
+
+            judged += 1;
+
+            const test = settle(o, physTrace, (p) => physics.pointContents(p));
+            if (test.groundEntityNum !== C.ENTITYNUM_NONE) continue;
+
+            floating.push(
+                `${o.map((v) => v.toFixed(0)).join(',')}: clipmap rests at ` +
+                `z=${control.origin[2]!.toFixed(2)}, physics at ${test.origin[2]!.toFixed(2)} ` +
+                `still moving at ${test.velocity[2]!.toFixed(0)} u/s`
+            );
+        }
+
+        expect(judged).toBeGreaterThan(30);
+        expect(
+            floating.length,
+            `${floating.length} of ${judged} dropped players never land on meep physics` +
+            (floating.length > 0 ? `\n  ${floating.slice(0, 5).join('\n  ')}` : '')
+        ).toBe(0);
+    });
+
+    /*
+     And the height, because "grounded" and "grounded in the right place" are
+     different claims. Q3 rests a player exactly `SURFACE_CLIP_EPSILON` above the
+     surface, and everything downstream reads that number: the model's feet are
+     drawn `mins[2]` below the origin, so a resting height that is off by a unit
+     is a character sunk or floating by a unit.
+    */
+    it.skipIf(!built)('rests where Q3 rests', () => {
+        const map = load(name);
+        const physics = new HeadlessPhysics(map.cm);
+
+        const clipTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
+            boxTrace(r, map.cm, s, e, mn, mx, mask);
+        const physTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
+            physics.trace(r, s, e, mn, mx, mask);
+
+        const stride = Math.max(1, Math.floor(map.graph.nodes.length / 60));
+        let worst = 0;
+        let worstAt = '';
+        let judged = 0;
+
+        for (let n = 0; n < map.graph.nodes.length; n += stride) {
+            const o = Array.from(map.graph.nodes[n]!.origin);
+            o[2] = o[2]! + DROP;
+
+            const control = settle(o, clipTrace, () => 0);
+            if (control.groundEntityNum === C.ENTITYNUM_NONE) continue;
+
+            const test = settle(o, physTrace, (p) => physics.pointContents(p));
+            if (test.groundEntityNum === C.ENTITYNUM_NONE) continue;
+
+            judged += 1;
+            const gap = Math.abs(test.origin[2]! - control.origin[2]!);
+            if (gap > worst) {
+                worst = gap;
+                worstAt = o.map((v) => v.toFixed(0)).join(',');
+            }
+        }
+
+        expect(judged).toBeGreaterThan(30);
+        // A quarter of a unit is two surface epsilons; anything more is visible.
+        expect(worst, `worst resting-height error ${worst.toFixed(3)} units at ${worstAt}`)
+            .toBeLessThan(0.25);
     });
 });

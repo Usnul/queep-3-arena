@@ -1372,3 +1372,100 @@ a genuine 45-degree dead end that stops the clipmap just as dead.
 `tools/trace-compare.ts` is the instrument the fix was found with, kept because the next report of
 this kind will start the same way: a screenshot, a coordinate, and no idea which of a hundred
 traces per frame is the wrong one.
+
+---
+
+### D-064: The falling player who never lands, and why three reports were all this
+
+Reported: characters hovering above the ground. Before that, characters half-buried. Before that, a
+bot standing in mid-air. Two of those I answered by moving the model, which was wrong twice --
+once in each direction -- and the third by fixing something real that was not this.
+
+The actual defect is one line of geometry, and it had been in the physics backend since the swap.
+
+**Q3 stops a box before it touches.** `CM_TraceThroughBrush` offsets every plane outward by
+`SURFACE_CLIP_EPSILON`: `f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2)`. A trace stops an eighth of a
+unit short of the surface and a resting player floats in that gap. The backend reproduced this by
+subtracting the epsilon from the answer -- sweep the exact box, then pull the contact back by
+`e / length`.
+
+Those are the same thing only when the sweep reaches the surface. **A move that ends a twentieth of
+a unit above the floor does not reach it**, so `shape_cast` correctly reported no hit, and Q3 blocks
+that move because its offset plane is already crossed.
+
+Measured, `oa_dm1`, a player dropped four units and left alone. Frame 12, the move `(0, 0, -0.602)`:
+
+| | fraction | ends at |
+|---|---|---|
+| clipmap | 0.8724 | -119.875, velocity zeroed, `groundEntityNum = 0` |
+| physics | 1.0000 | -119.952, velocity **-78**, `groundEntityNum = ENTITYNUM_NONE` |
+
+The next frame it bounced back up at +78 and it never stopped. Across 60 sampled standing positions
+on `oa_dm1`, **63 of 64 dropped players never landed**; on `aggressor`, 61 of 62.
+
+**Nobody ever saw a bouncing player**, because the bounce is under a tenth of a unit and the camera
+sits at eye height. What everybody saw was the consequence: `groundEntityNum` stuck at
+`ENTITYNUM_NONE` is what `Character.legsFor` reads to choose `LEGS_JUMP`, so every bot in the level
+stood with its legs tucked up. Hovering. And with the model dropped 24 units by the placement bug
+that D-062 fixed, the same tucked-up pose read as half-buried instead.
+
+**The fix is to put the epsilon where Q3 puts it.** For a box against a plane, offsetting the plane
+outward by `e` is the same as growing the box by `e`, so the swept shape carries it and the
+fraction is `hit.t / length` with nothing subtracted.
+
+| `oa_dm1` | before | after |
+|---|---|---|
+| trace hit/miss agreement | 99.9% | **100.0%** |
+| sweeps the clipmap blocks and physics does not | 12 | **0** |
+| fraction abs error, median / p90 | 0 / 1.3e-3 | 0 / **5.3e-8** |
+| chaos p90 / max / within 1u | 0.18 / 188 / 91% | **0.00** / **0.1** / **100%** |
+| walk-into-walls p90 | 0.22 | **0.11** |
+| dropped players that never land | 63 of 64 | **0** |
+
+`aggressor` likewise reaches 100.0% hit/miss, and strafe-jump p90 falls from 79.1 to 9.2. The
+fraction error dropping to 1e-8 is the headline: the sweep now returns Q3's number rather than an
+approximation of it.
+
+**What got worse, stated plainly.** Contact normals on `oa_dm1` went from 100.0% to 99.5%, with five
+sweeps where the physics blocks and the clipmap does not. And the static wedge scan started failing
+at the sampler's own positions. That second one is worth the detail:
+
+| start height | sweeps agreeing, `oa_dm1` | `aggressor` |
+|---|---|---|
+| flush (floor + 24) | 93.1% | 86.0% |
+| resting (floor + 24 + 1/8) | **100.00%** of 6128 | **100.00%** of 4896 |
+
+The flush position is the one the floor sampler reports and the one no player occupies: the box is
+interpenetrating the floor plane by exactly the epsilon, which pmove corrects on the first frame.
+Growing the swept box makes that degenerate state worse and every reachable state exact. So the
+static scan now samples at the resting height and says why, and the flush case stays covered by the
+`walking` block, which starts from it deliberately and relies on `PM_CorrectAllSolid` to recover.
+
+**On how this was found, because the method is the point.**
+
+Three reports in a row were answered by moving a model and asking the user whether it looked right.
+That is not a method. The user said so, and was right.
+
+What replaced it: the browser was unavailable -- the preview pane does not composite, so
+`MeshSystem3` never loads a model and `AnimationSystem3` never poses one, and no amount of driving
+the page from the console gets a number out of it. So every question had to be turned into one Node
+could answer. Drop a player, wait sixty frames, ask `groundEntityNum`. That is four lines, it
+reproduces on both maps, and it fails 63 times out of 64.
+
+Two tests came out of it and both are in `physics-wedge.test.ts`:
+
+- **`lands, and knows it has landed`** -- the clipmap decides which sampled positions are fair to
+  judge, since some are over pits where falling is correct.
+- **`rests where Q3 rests`** -- because "grounded" and "grounded in the right place" are different
+  claims, and the model's feet are drawn from the origin, so a resting height off by a unit is a
+  character floating by a unit.
+
+And the placement claim finally got a test. `Character.place` was the wrong shape to check: it
+builds an ECS entity and fetches a glTF. The arithmetic is now `sceneFromQ3`, exported and pure, so
+`characters.test` can compose it with the asset's own measured foot offset and assert the feet land
+on the floor for all fifteen characters. Reverting D-062's fix makes it fail with "expected -24.19
+to be greater than -2", which is the half-burying, in a test, in a second.
+
+Neither half of that claim is checkable alone. The asset test says the feet hang 24 units below the
+model's origin. The placement code says the origin goes at `ps.origin`. Both were separately true
+and correct while the characters were visibly wrong, because nothing multiplied them together.

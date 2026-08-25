@@ -92,6 +92,25 @@ function clipJson(name: string): Record<string, unknown> {
     };
 }
 
+/**
+ * A Q3 origin in scene coordinates, in metres.
+ *
+ * Exported and pure because it is half of a claim that has been wrong twice:
+ * *where a character's feet end up*. The other half is a property of the built
+ * asset -- how far below its own origin the model's feet hang -- and neither
+ * half is checkable on its own. `characters.test` composes the two and asserts
+ * the feet land on the floor.
+ *
+ * Q3 is Z-up in units; meep is Y-up in metres: `(x, y, z) -> (x, z, -y) / 32`.
+ */
+export function sceneFromQ3(originQ3: ArrayLike<number>): [number, number, number] {
+    return [
+        originQ3[0]! * WORLD_SCALE,
+        originQ3[2]! * WORLD_SCALE,
+        -originQ3[1]! * WORLD_SCALE,
+    ];
+}
+
 export class Character {
     readonly entity: number;
     readonly transform: Transform;
@@ -151,11 +170,8 @@ export class Character {
      * measures the first of those from the converted glTF. See D-062.
      */
     place(originQ3: ArrayLike<number>, yawDegrees: number): void {
-        this.transform.position.set(
-            originQ3[0]! * WORLD_SCALE,
-            originQ3[2]! * WORLD_SCALE,
-            -originQ3[1]! * WORLD_SCALE
-        );
+        const [x, y, z] = sceneFromQ3(originQ3);
+        this.transform.position.set(x, y, z);
 
         const yaw = (yawDegrees * Math.PI) / 180;
         this.transform.rotation._fromAxisAngle(0, 1, 0, yaw);

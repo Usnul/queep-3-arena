@@ -29,6 +29,8 @@ import { join } from 'node:path';
 
 import { parseMd3 } from '../tools/pipeline/md3.ts';
 import { parseAnimationConfig } from '../tools/convert-characters.ts';
+import { sceneFromQ3 } from '../src/client/Characters.ts';
+import { SURFACE_CLIP_EPSILON } from '../src/q3/cm/ClipMap.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built', 'characters');
 const PLAYERS = join(process.cwd(), 'assets', 'extracted', 'models', 'players');
@@ -382,6 +384,37 @@ describe.each(ALL)('the emitted glTF [%s]', (name) => {
         expect(lowest, `${name} stands with its lowest vertex at ${lowest.toFixed(1)}`)
             .toBeLessThan(-16);
         expect(lowest).toBeGreaterThan(-30);
+
+        /*
+         And now the half that matters, which neither the asset nor the
+         placement code can be checked for on its own: put this character where
+         a standing player is and ask where its feet land.
+
+         A player resting on a floor at `z = 0` has `ps.origin[2] = 24 + 1/8` --
+         the box is 24 units deep and `CM_TraceThroughBrush` leaves a
+         `SURFACE_CLIP_EPSILON` gap. `Character.place` puts the model's own
+         origin exactly there, because a Q3 player MD3 is authored with its
+         origin at `ps.origin` and `CG_Player` copies `lerpOrigin` in with no
+         adjustment. So the feet must come out at the floor.
+
+         This is the assertion that was missing when a docblock claiming the
+         opposite went unchallenged and every bot rendered buried to the waist
+         (D-062). It is one line of arithmetic and it spans the converter, the
+         asset and the renderer's input.
+        */
+        const floorZ = 0;
+        const restingOrigin = [0, 0, floorZ + 24 + SURFACE_CLIP_EPSILON];
+        const [, modelY] = sceneFromQ3(restingOrigin);
+
+        // Back to Q3 units, where the measurement above lives.
+        const feetZ = modelY * 32 + lowest;
+
+        expect(
+            feetZ - floorZ,
+            `${name}'s feet land ${(feetZ - floorZ).toFixed(2)} units from the floor ` +
+            `(origin ${restingOrigin[2]!.toFixed(3)}, lowest vertex ${lowest.toFixed(2)})`
+        ).toBeLessThan(6);
+        expect(feetZ - floorZ).toBeGreaterThan(-2);
     });
 });
 

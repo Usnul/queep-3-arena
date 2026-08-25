@@ -1302,6 +1302,43 @@ the expensive way.
   walk-into-walls p90 1.77 → 0.22, and zero sweeps where the physics passes through something the
   clipmap blocks. See D-063.
 
+### GAP-020: There is no way to ask a swept query to stop short of contact
+
+- **Severity:** medium — a one-line need with no expression in the API, whose absence is invisible
+  until something downstream integrates the error.
+- **What happened:** characters hovering above the floor, reported by a player. Underneath it, a
+  falling player who never landed: Q3 stops a box `SURFACE_CLIP_EPSILON` (1/8 unit) short of a
+  surface, so a move ending a twentieth of a unit above the floor is *blocked* in Q3 and *clear*
+  in `shape_cast` — which is the correct answer to the question `shape_cast` was asked. The player
+  overshot the resting height by a tenth of a unit, bounced back up at landing speed, and repeated
+  forever. `groundEntityNum` never left `ENTITYNUM_NONE`, so the animation code played the jump
+  clip, so every bot in the level stood with its legs tucked up. 63 of 64 dropped players never
+  landed.
+- **Why a standoff is not a quirk:** every character controller needs one. Resting a body exactly
+  on a surface makes the next frame's query start in contact, and then the controller has to
+  distinguish "resting" from "blocked" with no information to do it with. Q3 solved it in 1999 by
+  offsetting the planes; every engine solves it somehow. What is missing is a way to *say* it to
+  the query.
+- **Workaround:** put the epsilon in the shape. For a box against a plane, offsetting the plane
+  outward by `e` is exactly growing the box by `e`, so the sweep uses a box inflated by
+  `SURFACE_CLIP_EPSILON` and the fraction is `hit.t / length` with nothing subtracted. This is
+  correct and it is also *not obviously* correct — the first implementation subtracted the epsilon
+  from the resulting fraction, which is the same thing whenever the sweep reaches the surface and
+  silently different when it stops just short. That asymmetry is the whole bug.
+- **Cost of the workaround:** the inflated box is a second `BoxShape3D` per size, and it makes
+  `shape_cast` report `t = 0` for every surface the body rests against, in every direction —
+  which is what GAP-019's machinery then has to sort out. The two gaps compound: an engine that
+  offered a standoff parameter would remove most of the need for the per-brush re-derivation as
+  well.
+- **What would fix it:** a `standoff` (or `skin_width`) parameter on `shape_cast` — contact
+  reported when the swept shape comes within `standoff` of a body rather than when it touches.
+  PhysX, Bullet and Unity all expose some form of this, under various names, because character
+  controllers all need it. It is a subtraction on an existing comparison.
+- **Evidence:** `src/client/PhysicsTrace.ts` (`boxShape`'s `grow`, and the `trace` docblock),
+  `test/physics-wedge.test.ts` (the `standing` block). Measured improvement on `oa_dm1`: trace
+  hit/miss agreement 99.9% → 100.0%, fraction absolute error p90 1.3e-3 → 5.3e-8, chaos
+  divergence p90 0.18 → 0.00 with every frame inside one unit. See D-064.
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.
