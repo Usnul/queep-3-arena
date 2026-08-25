@@ -138,7 +138,7 @@ export class ShaderIndex {
                 albedo: this.resolveTexture(key) === null ? null : key,
                 albedoBlend: 'opaque',
                 emissive: null,
-                emissiveIntensity: 0,
+                emissiveLuminance: 0,
                 roughness: 0.85,
                 metallic: 0,
                 transparency: 'opaque',

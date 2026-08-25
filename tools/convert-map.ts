@@ -166,7 +166,7 @@ interface SceneMaterial {
     /** The Q3 blend the albedo image was written for. */
     readonly albedoBlend: ImageBlend;
     readonly emissive: string | null;
-    readonly emissiveIntensity: number;
+    readonly emissiveLuminance: number;
     readonly roughness: number;
     readonly metallic: number;
     readonly transparency: string;
@@ -182,6 +182,38 @@ function q3ToMeep(x: number, y: number, z: number): [number, number, number] {
 /** Axis swap without the scale, for normals and other directions. */
 function q3ToMeepDirection(x: number, y: number, z: number): [number, number, number] {
     return [x, z, -y];
+}
+
+/**
+ * Summed triangle area of a mesh group, in scene square metres.
+ *
+ * Exact rather than the bounding-box proxy `recordLightSample` uses, because
+ * this one divides a luminous flux: a factor of two in the area is a factor of
+ * two in how bright a light fixture looks.
+ */
+function groupArea(g: MeshGroup): number {
+    let area = 0;
+
+    for (let i = 0; i + 2 < g.indices.length; i += 3) {
+        const p = [g.indices[i]!, g.indices[i + 1]!, g.indices[i + 2]!].map((v) => [
+            g.positions[v * 3]!,
+            g.positions[v * 3 + 1]!,
+            g.positions[v * 3 + 2]!,
+        ]);
+
+        const u = [p[1]![0]! - p[0]![0]!, p[1]![1]! - p[0]![1]!, p[1]![2]! - p[0]![2]!];
+        const v = [p[2]![0]! - p[0]![0]!, p[2]![1]! - p[0]![1]!, p[2]![2]! - p[0]![2]!];
+
+        area +=
+            0.5 *
+            Math.hypot(
+                u[1]! * v[2]! - u[2]! * v[1]!,
+                u[2]! * v[0]! - u[0]! * v[2]!,
+                u[0]! * v[1]! - u[1]! * v[0]!
+            );
+    }
+
+    return area;
 }
 
 /** Read one BSP draw vertex into a `PatchVertex`. */
@@ -328,7 +360,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                     albedo: pbr.albedo === null ? null : textureKey(pbr.albedo, pbr.albedoBlend),
                     albedoBlend: pbr.albedoBlend,
                     emissive: pbr.emissive,
-                    emissiveIntensity: pbr.emissiveIntensity,
+                    emissiveLuminance: pbr.emissiveLuminance,
                     roughness: pbr.roughness,
                     metallic: pbr.metallic,
                     transparency: pbr.transparency,
@@ -573,10 +605,17 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     const lights: SceneLight[] = [];
     const CLUSTER_RADIUS = 96 * WORLD_SCALE; // 96 Q3 units, in scene metres
 
+    /**
+     * Luminance, in cd/m2, for each material that emitted light. See the block
+     * below the clustering loop.
+     */
+    const emissiveLuminance = new Map<number, number>();
+
     for (const [shaderNum, g] of groups) {
         const pbr = pbrByShaderNum[shaderNum]!;
         if (pbr.surfaceLight <= 0) continue;
 
+        const before = lights.length;
         const claimed: boolean[] = new Array(g.lightSamples.length).fill(false);
 
         for (let i = 0; i < g.lightSamples.length; i++) {
@@ -617,6 +656,39 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 // Cutoff radius, in metres.
                 radius: Math.min(60, 6 + pbr.surfaceLight / 120),
             });
+        }
+
+        /*
+         The fixture's own face, in the same units as the light coming out of it.
+
+         meep adds `material.emissive` straight into the shading result --
+         `outgoing_light = diffuse + specular + emissive` -- so it is a
+         luminance, in cd/m2, sitting beside a diffuse term computed from lights
+         in candela. `q3map_surfacelight / 1000` was neither: it put a ceiling
+         panel at 0.3 while the wall it lit sat at several cd/m2, so every light
+         fixture in the game was *darker than what it illuminated*.
+
+         The port already decides how much light a surface emits -- that is the
+         cluster above, `surfaceLight` lumens of it -- so the fixture's face has
+         a right answer rather than a taste: a Lambertian emitter radiating flux
+         F over area A has luminance F / (pi * A). Emissive and point light stop
+         being two unrelated guesses and become two views of one emission.
+
+         It comes out conservative against real fixtures, which is a good sign
+         that nothing here is inflated: `base_light/ceil1_38` lands at 96 cd/m2
+         and `gothic_light/ironcrosslt2_20000` at 1,600, against roughly 2,000
+         to 8,000 for the diffuser of an office ceiling panel.
+        */
+        const clusters = lights.length - before;
+        let area = 0;
+        for (const model of modelGroups) {
+            const mg = model.get(shaderNum);
+            if (mg !== undefined) area += groupArea(mg);
+        }
+
+        if (area > 0) {
+            const flux = Math.max(clusters, 1) * Math.min(pbr.surfaceLight, 20000);
+            emissiveLuminance.set(g.materialIndex, flux / (Math.PI * area));
         }
     }
 
@@ -746,6 +818,19 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
      then has to be written twice. An emissive is always `opaque`: it is the
      colour an additive pass added, and that pass's alpha would only dim it.
     */
+    /*
+     A surface on a brush entity -- a lit door panel -- has geometry but no
+     cluster, because only the world model places lights. `Math.max(clusters, 1)`
+     above gives it one fixture's worth of flux over its own area, which is the
+     same statement for a surface the light pass never reached.
+    */
+    for (let i = 0; i < materials.length; i++) {
+        const luminance = emissiveLuminance.get(i);
+        if (luminance !== undefined && materials[i]!.emissive !== null) {
+            materials[i] = { ...materials[i]!, emissiveLuminance: luminance };
+        }
+    }
+
     for (const m of materials) {
         if (m.albedo !== null) {
             textureFor[m.albedo] = await convertTexture(

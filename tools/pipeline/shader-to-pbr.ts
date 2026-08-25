@@ -139,7 +139,7 @@ export interface PbrMaterial {
     /** The Q3 blend the albedo image was authored for. See {@link ImageBlend}. */
     readonly albedoBlend: ImageBlend;
     readonly emissive: string | null;
-    readonly emissiveIntensity: number;
+    readonly emissiveLuminance: number;
     readonly roughness: number;
     readonly metallic: number;
     readonly transparency: TransparencyMode;
@@ -522,26 +522,37 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
     const metallic = DEFAULT_METALLIC;
 
     /*
-     `q3map_surfacelight` is in the light compiler's own units, where 1000-2000 is
-     a normal ceiling light. Dividing by 1000 puts a typical emitter near 1-2,
-     which reads correctly against meep's PBR range without a per-shader tuning
-     pass.
+     One candela per square metre, and that is a placeholder rather than a
+     measurement.
 
-     A shader with an additive pass and no `q3map_surfacelight` still glows: the
-     pass adds its own colour at full strength in Q3, and the light compiler was
-     simply never told about it. Unit intensity is that, restated. Gating the
-     emissive on a *light compiler* directive is what left every beam and flame in
-     the port carrying a glow map the runtime then declined to bind.
+     meep adds `material.emissive` straight into the shading result beside a
+     diffuse term computed from photometric lights, so the field is a *luminance*
+     and a shader on its own gives no way to know one. `convert-map.ts` does have
+     a way -- it decides how much flux each `q3map_surfacelight` surface emits, so
+     it can divide that by the surface's own area -- and it overwrites this for
+     every declared emitter it places a light for.
+
+     What is left here is the case with no declaration at all: an additive pass on
+     a beam, a flame, a powerup shell. Q3 drew those at full strength into an LDR
+     framebuffer, which says "about as bright as a fully lit wall" and nothing
+     more precise. On this port's own maps a lit wall runs roughly 1 to 6 cd/m2
+     -- 9 to 58 lux at the places a player stands, times a Q3 texture's albedo,
+     over pi -- so unit luminance is the bottom of that band and is where an
+     undeclared glow sits until something measures it.
+
+     An earlier version divided `q3map_surfacelight` by 1000 and called the result
+     an intensity. It was not in any unit: it put a ceiling panel at 0.3 while the
+     wall it lit sat at several cd/m2, which is how the port ended up with light
+     fixtures darker than what they illuminated.
     */
-    const emissiveIntensity =
-        surfaceLight > 0 ? Math.min(surfaceLight / 1000, 8) : emissive === null ? 0 : 1;
+    const emissiveLuminance = emissive === null ? 0 : 1;
 
     return {
         name: entry.name,
         albedo,
         albedoBlend,
         emissive,
-        emissiveIntensity,
+        emissiveLuminance,
         roughness,
         metallic,
         transparency,

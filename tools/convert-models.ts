@@ -177,7 +177,7 @@ function toBundleMaterial(
         albedo,
         albedoBlend: pbr.albedoBlend,
         emissive,
-        emissiveIntensity: pbr.emissiveIntensity ?? 0,
+        emissiveLuminance: pbr.emissiveLuminance ?? 0,
         roughness: pbr.roughness,
         metallic: pbr.metallic,
         transparency: pbr.transparency,
@@ -313,7 +313,7 @@ async function convertModels(): Promise<void> {
                 if (albedoKey === null) untexturedSurfaces += 1;
 
                 let emissiveKey: string | null = null;
-                if (pbr.emissive !== null && pbr.emissiveIntensity > 0) {
+                if (pbr.emissive !== null && pbr.emissiveLuminance > 0) {
                     emissiveKey = pbr.emissive;
                     textures[emissiveKey] = await writeTexture(
                         index,

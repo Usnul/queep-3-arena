@@ -122,12 +122,12 @@ export async function buildMaterials(
                 console.warn(`[queep] ${m.name}: blended with no albedo texture; drawn as nothing`);
             }
 
-            if (emissive !== null && m.emissiveIntensity > 0) {
+            if (emissive !== null && m.emissiveLuminance > 0) {
                 material.texture_emissive = emissive;
                 material.emissive_factor = new Color(
-                    m.emissiveIntensity,
-                    m.emissiveIntensity,
-                    m.emissiveIntensity
+                    m.emissiveLuminance,
+                    m.emissiveLuminance,
+                    m.emissiveLuminance
                 );
             }
 

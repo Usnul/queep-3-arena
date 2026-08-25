@@ -46,7 +46,7 @@ export interface BundleMaterial {
     readonly albedo: string | null;
     readonly albedoBlend: TextureBlendName;
     readonly emissive: string | null;
-    readonly emissiveIntensity: number;
+    readonly emissiveLuminance: number;
     readonly roughness: number;
     readonly metallic: number;
     readonly transparency: TransparencyName;

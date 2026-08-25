@@ -2897,3 +2897,76 @@ against 42.
 were changed too: a straight vertical prop with a plain wrap, `corr(model z, t) = -1.00`. The other
 props are irregular unwraps and correlate weakly in the same direction, which is what an irregular
 unwrap should do and is not evidence on its own.
+
+### D-085: The light fixtures were dimmer than what they lit, because the emissive was in no unit
+
+The maintainer, with a screenshot of a wall light: *"there are for example these light fixtures,
+that should probably have emissiveness, but don't appear to have it."*
+
+They had it. `base_light/ceil1_38` was emitting **0.3**, and the wall it was lighting sat at
+several. So the fixture was there, bound, and darker than its own pool of light.
+
+**meep adds `material.emissive` straight into the shading result** --
+`outgoing_light = reflected_light.diffuse + reflected_light.specular + total_emissive_radiance`,
+in `chunk_shade_standard_material_direct` and in both OIT forward variants. The diffuse term on
+the other side of that `+` is computed from lights whose intensity is candela, over a scene
+authored in metres. So `emissive` is a **luminance**, in cd/m2, and the port was filling it with
+`q3map_surfacelight / 1000`, capped at 8 -- a number in no unit at all, arrived at by asking what
+looked reasonable in a range that was never the range.
+
+Measured against the port's own lighting: the maps run 8.7 to 57.6 lux at the places a player
+stands (D-078), which through a Q3 texture's albedo puts an ordinary lit wall at roughly 1 to 6
+cd/m2. Eleven of the fourteen declared emitters in the shipping set were below that. A light
+fixture cannot be dimmer than the wall it illuminates, and that is a statement about physics
+rather than about taste, which is what made it fixable rather than tunable.
+
+**The port already decides how much light comes out of these surfaces.** `q3map_surfacelight` is
+passed through as lumens, one cluster's worth per fixture (D-012, D-078). A Lambertian emitter
+radiating flux F over area A has luminance `F / (pi * A)`, so the fixture's face has a right answer
+derived from the light already placed on it. Emissive and point light stop being two unrelated
+guesses and become two views of one emission.
+
+Areas are summed from the triangles rather than from the bounding-box proxy `recordLightSample`
+uses for placement, because this one *divides* a flux and a factor of two in the area is a factor
+of two in how bright the fixture looks.
+
+| | before | after |
+|---|---:|---:|
+| `base_light/ceil1_38` (oa_dm1) | 0.3 | **95.5** |
+| `gothic_light/skulllight01` (oa_dm4) | 0.3 | **111.6** |
+| `gothic_light/ironcrosslt2_20000` (oa_dm4) | 8 | **1,591** |
+| `evil8_lights/evil8_rlight` (aggressor) | 0.95 | **1,122** |
+| `base_light/light5_15k` (am_thornish) | 8 | **9,549** |
+| `sfx/flame2`, a torch (oa_dm1) | 3.787 | **5,963** |
+
+The right-hand column is conservative against the real world, which is the sign worth having that
+nothing here is inflated: the diffuser of an office ceiling panel runs 2,000 to 8,000 cd/m2, and
+`ceil1_38` lands at 96. Where a value is still low -- `bubctf1/e8_launchpad1` at 2.2, `lavahell` at
+5.6 -- it is low because the port's *light* reconstruction gave that surface very little flux for
+its area, and the two now say the same thing. That is D-078's calibration to revisit, not this one.
+
+**The undeclared case keeps a placeholder, and it is now labelled as one.** A beam, a flame or a
+powerup shell with an additive pass and no `q3map_surfacelight` carries no photometric information
+at all; Q3 drew it at full strength into an LDR framebuffer, which says "about as bright as a fully
+lit wall" and nothing more precise. One cd/m2 is the bottom of the 1-to-6 band this port's own lit
+surfaces occupy, and `shader-to-pbr.ts` now says that in those words instead of dividing a
+light-compiler directive by a thousand.
+
+**`emissiveIntensity` is `emissiveLuminance` throughout.** The old name is most of why the old
+value survived: an "intensity" invites a 0-to-1 reading and there is nothing to check it against,
+where a luminance has a unit and can be wrong.
+
+**What was checked, and the risk that was not.** `materials.test.ts` asserts the derivation rather
+than the numbers: a material's luminance divided by one cluster's worth over its own area has to
+come back a whole number -- the count of fixtures the light pass gave it -- which no divisor
+satisfies by accident. Eleven of its thirteen cases fail against the old formula, and the two that
+pass are `oa_dm5`, which has no `q3map_surfacelight` anywhere and lights entirely from the grid.
+A second check refuses to let any declared emitter sit below the undeclared placeholder.
+
+The risk that cannot be checked from here is exposure. The renderer is HDR with histogram
+auto-exposure and ACES, so these values do not clip -- the emissive G-buffer is RGBE9995 and
+saturates at 65,408 cd/m2, comfortably above the highest of them -- and the metering reads the
+70th to 95th percentile of screen luminance, so a small bright fixture falls in the excluded top
+five per cent rather than dragging the whole frame down. That is an argument from the shader
+source, not from a frame: a wall of lights filling the view would still stop the aperture down,
+which is what a camera does and may not be what a Quake III level wants.

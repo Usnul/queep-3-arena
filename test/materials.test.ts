@@ -146,7 +146,15 @@ textures/liquids/lavahell
 
         expect(m.transparency, 'lava is opaque geometry with a glow on top').toBe('opaque');
         expect(m.emissive).toBe('textures/liquids/lavafloor');
-        expect(m.emissiveIntensity).toBeCloseTo(0.666, 3);
+
+        /*
+         The projection knows the surface emits and does not know how brightly:
+         a luminance needs the surface's area and the flux placed on it, and
+         neither is a property of the shader. The map converter supplies it,
+         and the bundle invariant below checks that it did.
+        */
+        expect(m.surfaceLight).toBe(666);
+        expect(m.emissiveLuminance, 'the placeholder, in cd/m2').toBe(1);
     });
 
     /*
@@ -276,7 +284,7 @@ textures/sfx/beam
         expect(m.surfaceLight).toBe(0);
         expect(m.emissive).toBe('textures/sfx/beam');
         expect(
-            m.emissiveIntensity,
+            m.emissiveLuminance,
             'gating the glow on a light-compiler directive is what unbound every beam'
         ).toBe(1);
     });
@@ -285,12 +293,12 @@ textures/sfx/beam
      The runtime binds the emissive only when the intensity is above zero, so a
      material naming one at zero is a glow map that never reaches the GPU.
     */
-    it('never names an emissive it then gives zero intensity', () => {
+    it('never names an emissive it then gives zero luminance', () => {
         for (const name of MAPS) {
             const scene = JSON.parse(readFileSync(join(BUILT, name, 'scene.json'), 'utf8'));
             for (const m of scene.materials) {
                 if (m.emissive === null) continue;
-                expect(m.emissiveIntensity, `${name}: ${m.name} names an emissive`).toBeGreaterThan(
+                expect(m.emissiveLuminance, `${name}: ${m.name} names an emissive`).toBeGreaterThan(
                     0
                 );
             }
@@ -360,7 +368,7 @@ models/weapons/nailgun/nailgun
 }`);
 
         expect(m.emissive).toBe('models/weapons/nailgun/glow');
-        expect(m.emissiveIntensity).toBe(1);
+        expect(m.emissiveLuminance).toBe(1);
     });
 });
 
@@ -761,4 +769,149 @@ describe('texture coordinates keep Q3s orientation', () => {
             ).toBeGreaterThan(0.6);
         }
     );
+});
+
+/*
+ * The emissive, which is a luminance in cd/m2 sitting beside a diffuse term
+ * computed from photometric lights -- meep adds them together and says so:
+ * `outgoing_light = diffuse + specular + emissive`.
+ *
+ * It was `q3map_surfacelight / 1000`, which is not in any unit. That put a
+ * ceiling panel at 0.3 while the wall it lit sat at several cd/m2, so every
+ * light fixture in the game was dimmer than what it illuminated, and the field
+ * was called an intensity so nothing said otherwise (D-085).
+ */
+describe('a light fixture is as bright as the light it emits', () => {
+    interface Bundle {
+        readonly materials: readonly {
+            name: string;
+            emissive: string | null;
+            emissiveLuminance: number;
+            surfaceLight: number;
+        }[];
+        readonly meshes: readonly {
+            material: number;
+            vertexOffset: number;
+            indexOffset: number;
+            indexCount: number;
+        }[];
+        readonly vertexStride: number;
+        readonly vertexBytes: number;
+        readonly indexBytes: number;
+    }
+
+    /** Summed triangle area per material index, in scene square metres. */
+    function areaByMaterial(map: string, bundle: Bundle): Map<number, number> {
+        const bin = readFileSync(join(BUILT, map, 'geometry.bin'));
+        const base = bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength);
+        const verts = new Float32Array(base, 0, bundle.vertexBytes / 4);
+        const indices = new Uint32Array(base, bundle.vertexBytes, bundle.indexBytes / 4);
+        const stride = bundle.vertexStride;
+
+        const area = new Map<number, number>();
+
+        for (const mesh of bundle.meshes) {
+            let sum = 0;
+            for (let i = 0; i < mesh.indexCount; i += 3) {
+                const p = [0, 1, 2].map((k) => {
+                    const o = (mesh.vertexOffset + indices[mesh.indexOffset + i + k]!) * stride;
+                    return [verts[o]!, verts[o + 1]!, verts[o + 2]!];
+                });
+                const u = [
+                    p[1]![0]! - p[0]![0]!,
+                    p[1]![1]! - p[0]![1]!,
+                    p[1]![2]! - p[0]![2]!,
+                ];
+                const v = [
+                    p[2]![0]! - p[0]![0]!,
+                    p[2]![1]! - p[0]![1]!,
+                    p[2]![2]! - p[0]![2]!,
+                ];
+                sum +=
+                    0.5 *
+                    Math.hypot(
+                        u[1]! * v[2]! - u[2]! * v[1]!,
+                        u[2]! * v[0]! - u[0]! * v[2]!,
+                        u[0]! * v[1]! - u[1]! * v[0]!
+                    );
+            }
+            area.set(mesh.material, (area.get(mesh.material) ?? 0) + sum);
+        }
+
+        return area;
+    }
+
+    /*
+     A Lambertian emitter radiating flux F over area A has luminance F / (pi A),
+     and the port decides F itself: one cluster's worth of `q3map_surfacelight`
+     lumens per fixture. So the luminance divided by that of a single cluster has
+     to come back as *how many clusters the material got* -- a whole number, and
+     at least one. Nothing about a magic divisor satisfies that by accident.
+    */
+    /** Declared emitters seen per map, so the aggregate check below can be sure. */
+    const checked = new Map<string, number>();
+
+    it.each(MAPS)('derives it from the flux it placed, not from a divisor [%s]', (map) => {
+        const bundle = JSON.parse(
+            readFileSync(join(BUILT, map, 'scene.json'), 'utf8')
+        ) as Bundle;
+        const area = areaByMaterial(map, bundle);
+
+        let declared = 0;
+
+        bundle.materials.forEach((m, i) => {
+            if (m.surfaceLight <= 0 || m.emissive === null) return;
+
+            const a = area.get(i);
+            if (a === undefined || a === 0) return;
+
+            declared += 1;
+
+            const perCluster = Math.min(m.surfaceLight, 20000) / (Math.PI * a);
+            const clusters = m.emissiveLuminance / perCluster;
+
+            expect(
+                Math.abs(clusters - Math.round(clusters)),
+                `${map}: ${m.name} is ${m.emissiveLuminance.toFixed(1)} cd/m2 over ${a.toFixed(1)} m2, which is ${clusters.toFixed(3)} fixtures' worth`
+            ).toBeLessThan(1e-3);
+
+            expect(Math.round(clusters), `${map}: ${m.name} fixture count`).toBeGreaterThanOrEqual(
+                1
+            );
+        });
+
+        checked.set(map, declared);
+    });
+
+    /*
+     `oa_dm5` is the map whose author lit it with `light` entities: it has no
+     `q3map_surfacelight` shader anywhere and reconstructs entirely from the
+     lightgrid (Q-006). So the count is asserted over the set rather than per
+     map, which is what stops the check above from quietly checking nothing.
+    */
+    it('has declared emitters to check in the first place', () => {
+        const total = [...checked.values()].reduce((a, b) => a + b, 0);
+
+        expect(checked.size, 'every map was visited').toBe(MAPS.length);
+        expect(total, 'declared emitters across the set').toBeGreaterThan(10);
+        expect(checked.get('oa_dm5'), 'oa_dm5 lights from the grid alone').toBe(0);
+    });
+
+    /*
+     And the floor the whole thing exists to hold: a surface that Q3 declared as
+     a light source must not be dimmer than the placeholder given to a beam
+     nobody declared anything about. `surfaceLight / 1000` failed this on eleven
+     of the fourteen declared emitters in the set.
+    */
+    it.each(MAPS)('never leaves a declared emitter below the undeclared floor [%s]', (map) => {
+        const bundle = JSON.parse(
+            readFileSync(join(BUILT, map, 'scene.json'), 'utf8')
+        ) as Bundle;
+
+        const dim = bundle.materials
+            .filter((m) => m.surfaceLight > 0 && m.emissive !== null && m.emissiveLuminance < 1)
+            .map((m) => `${m.name} at ${m.emissiveLuminance.toFixed(2)} cd/m2`);
+
+        expect(dim, `${map}: declared lights dimmer than an undeclared glow`).toEqual([]);
+    });
 });

@@ -50,7 +50,7 @@ interface Material {
     readonly name: string;
     readonly albedo: string | null;
     readonly emissive: string | null;
-    readonly emissiveIntensity: number;
+    readonly emissiveLuminance: number;
     readonly roughness: number;
     readonly metallic: number;
     readonly transparency: string;
