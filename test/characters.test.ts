@@ -321,6 +321,68 @@ describe.each(ALL)('the emitted glTF [%s]', (name) => {
         }
     });
 
+    /*
+     Where the model's origin sits is a fact about the *asset*, and the code
+     that places characters has to agree with it. `Character.place` used to
+     subtract 24 from the height, on the belief that a player model stands on
+     its own origin; it does not, and every bot rendered buried to the waist.
+
+     So this measures the thing the placement code depends on, from the file it
+     actually loads: stand the character in `LEGS_IDLE` and find its lowest
+     vertex. In Q3 that is the sole of a foot, and it must come out near -24 --
+     the same -24 the collision box measures down from `ps.origin`, because the
+     two are the same point. Re-origining the converter to put the feet at zero
+     would move this to about 0 and fail loudly, which is the point.
+    */
+    it.skipIf(loaded === null)('stands on its origin minus the box height, not on its origin', () => {
+        const { gltf, bin } = loaded!;
+
+        const meshNode = gltf.nodes.find((n) => n.name === 'legs_mesh_node')!;
+        const skin = gltf.skins[meshNode.skin!]!;
+        const ibm = readAccessor(gltf, bin, skin.inverseBindMatrices) as Float32Array;
+
+        const idle = gltf.animations.find((a) => a.name === 'LEGS_IDLE')!;
+
+        let lowest = Infinity;
+
+        /*
+         Every primitive, not just the first. An MD3 part is a list of surfaces
+         and most characters have one, so `primitives[0]` looks like the whole
+         model right up until `neko`, whose legs are five surfaces and whose
+         first one is a piece of the head-dress sitting well above the waist.
+        */
+        for (const primitive of gltf.meshes[meshNode.mesh!]!.primitives) {
+            const bind = readAccessor(gltf, bin, primitive.attributes['POSITION']!) as Float32Array;
+            const jointOf = readAccessor(gltf, bin, primitive.attributes['JOINTS_0']!) as Uint16Array;
+
+            for (let v = 0; v < bind.length / 3; v++) {
+                const joint = jointOf[v * 4]!;
+                const { translation, rotation } = sampled(gltf, bin, idle, skin.joints[joint]!, 0);
+                if (translation === null || rotation === null) continue;
+
+                // `jointMatrix * (IBM * bindPosition)`, as above.
+                const o = joint * 16;
+                const [, ry] = applyQuat(
+                    rotation,
+                    0,
+                    bind[v * 3]! + ibm[o + 12]!,
+                    bind[v * 3 + 1]! + ibm[o + 13]!,
+                    bind[v * 3 + 2]! + ibm[o + 14]!
+                );
+
+                lowest = Math.min(lowest, ry + translation[1]!);
+            }
+        }
+
+        /*
+         The band is the measured spread over all sixteen characters, which runs
+         from `skelebot` at -25.1 to `liz` at -19.0 -- she hovers -- widened a
+         little. It is nowhere near zero, and that is the assertion that matters.
+        */
+        expect(lowest, `${name} stands with its lowest vertex at ${lowest.toFixed(1)}`)
+            .toBeLessThan(-16);
+        expect(lowest).toBeGreaterThan(-30);
+    });
 });
 
 describe('sarge, end to end', () => {

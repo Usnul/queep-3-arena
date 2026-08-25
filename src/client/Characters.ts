@@ -135,15 +135,25 @@ export class Character {
     /**
      * Q3 position and yaw.
      *
-     * A player model's origin is at its feet in Q3 and `ps.origin` is 24 units
-     * above them, so the model is dropped by the box's own `mins[2]`. Getting
-     * that wrong buries a character to the knees, which reads as a collision
-     * bug rather than a placement one.
+     * **No height correction.** A player MD3 is authored with its local origin
+     * at `ps.origin` -- 24 units *above* the feet, the same point the collision
+     * box measures its `-24` from -- so the model goes where the origin goes.
+     * `CG_Player` agrees: it copies `cent->lerpOrigin` straight into
+     * `legs.origin` with no adjustment, and `CG_PlayerShadow` looks for the
+     * floor by tracing from `origin[2] - 24`.
+     *
+     * This used to subtract that 24, on the belief that a player model's origin
+     * is at its feet, and buried every bot to the waist. The assets say
+     * otherwise and are not ambiguous about it: `lower.md3`'s `LEGS_IDLE` frame
+     * has `mins[2]` between -25.1 and -19.0 across all sixteen characters, mean
+     * -23.9, and `tag_head` lands 20 to 29 units above the origin rather than
+     * the 44 to 53 it would if the origin were on the ground. `characters.test`
+     * measures the first of those from the converted glTF. See D-062.
      */
     place(originQ3: ArrayLike<number>, yawDegrees: number): void {
         this.transform.position.set(
             originQ3[0]! * WORLD_SCALE,
-            (originQ3[2]! - 24) * WORLD_SCALE,
+            originQ3[2]! * WORLD_SCALE,
             -originQ3[1]! * WORLD_SCALE
         );
 

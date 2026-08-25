@@ -1223,3 +1223,57 @@ in eight is a wedge. `oa_dm1` had one before the fix and has none after; `aggres
 The divergence harness could not have caught this. It measures *displacement under scripted
 input*, and a wedge is a place you have to already be standing in. Two harnesses measuring
 different things, and the gap between them was the bug.
+
+---
+
+### D-062: A player model's origin is the player's origin, and the assets say so
+
+Reported: enemies appear half-buried in the ground.
+
+`Character.place` subtracted 24 from the height before placing the model, on the stated belief that
+"a player model's origin is at its feet in Q3 and `ps.origin` is 24 units above them". The first
+half of that is false. A Q3 player MD3 is authored with its local origin *at* `ps.origin` -- the
+same point the collision box measures its `-24` and `+32` from -- so subtracting the 24 sinks the
+model by exactly the distance from the origin to the feet, and the feet end up 24 units under the
+floor. On a 56-unit model that is the waist.
+
+`CG_Player` never adjusts it either: `VectorCopy( cent->lerpOrigin, legs.origin )`. The same fact
+appears from the other side in `CG_PlayerShadow`, which finds the ground by tracing down from
+`origin[2] - 24`.
+
+The assets are unambiguous, which is what makes this worth writing down rather than just fixing.
+Standing each character in `LEGS_IDLE` and reading `lower.md3`'s frame bounds:
+
+| | `mins[2]` |
+|---|---|
+| `skelebot` | -25.1 |
+| `major` | -25.1 |
+| `tony` | -24.9 |
+| `beret` | -24.9 |
+| `sarge` | -24.8 |
+| `neko` | -24.8 |
+| `kyonshi` | -24.7 |
+| `penguin` | -24.7 |
+| `sergei` | -24.5 |
+| `assassin` | -24.3 |
+| `merman` | -24.2 |
+| `gargoyle` | -23.6 |
+| `sorceress` | -22.8 |
+| `smarine` | -22.6 |
+| `liz` | -19.0 (she hovers) |
+
+Mean -23.9 over sixteen models including `angelyss`, which the port does not ship. `tag_head` says
+it a second way: 20 to 29 units above the origin, where a feet-origin model would put it at 44 to
+53.
+
+**The guard is in `characters.test.ts` and measures the converted glTF, not the MD3.** It stands
+each character in `LEGS_IDLE`, skins frame 0 by hand, and asserts the lowest vertex is below -16
+and above -30. That band is the measured spread widened a little; the assertion that matters is
+that it is nowhere near zero, so re-origining the converter to put feet on the ground would fail
+loudly rather than silently moving every character.
+
+Writing it caught a second thing. The first version read `primitives[0]`, which is the whole model
+for thirteen characters and is a piece of `neko`'s head-dress for `neko`, whose legs are five
+surfaces -- so it reported her lowest vertex at +0.6 and failed. The existing end-to-end test has
+the same narrowness and gets away with it because it only runs on `sarge`. A test that reads one
+surface of a multi-surface format is measuring whichever model the author happened to open.
