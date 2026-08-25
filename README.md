@@ -3,10 +3,15 @@
 Quake III Arena / OpenArena gameplay ported to [meep](https://meep.company-named.com/), a
 WebGPU/ECS engine.
 
-**Faithful in simulation, meep-native in presentation.** Movement (`bg_pmove.c`), collision
-(`cm_*`), balance numbers and map layout are ported precisely. Everything else — particles,
-decals, animation, audio, materials, lighting, UI, bots — uses meep's own systems, and looks
-and behaves differently from Q3 as a result. That drift is intentional.
+**Ported in spirit, not in body.** Balance numbers and map layout are exact. Movement keeps Q3's
+*motor* — the acceleration, friction and command-scale functions that make strafe jumping work —
+and hands collision resolution to meep's own kinematic solver, so contact behaviour differs from
+Q3 by design (D-071). Everything else — particles, decals, animation, audio, materials, lighting,
+UI, bots — uses meep's systems and looks and behaves differently as a result. That drift is the
+point of the exercise, not a shortfall in it.
+
+The ported `bg_pmove.c` and `cm_*` are still here, bit-exact against the C, as the reference the
+shipping path is measured against.
 
 The point of the exercise is the engineering report in [REPORT.md](REPORT.md).
 
@@ -116,8 +121,10 @@ what that difference is, and includes a claim I got wrong twice before getting i
   positional one-shots for weapons, impacts, items, movers, jump pads and footsteps; looping
   sources that follow what owns them, from map ambience to a rocket's fly sound; and the map's
   own background track.
-- **Bots** on meep's behaviour trees, running the *same* `Pmove` the player does — they route,
-  fight, take items, and one has been observed strafe-jumping.
+- **Bots** on meep's behaviour trees — they route, fight, take items, and one has been observed
+  strafe-jumping. They still run the ported `bg_pmove`, so since D-071 the player and the bots
+  move on different solvers; that is a known inconsistency and the next change, not a design
+  position.
 - **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
   GPU decals and clustered lights.
 
