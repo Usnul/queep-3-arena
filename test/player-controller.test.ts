@@ -306,7 +306,11 @@ class Rig {
     frame(dt = TICK, movers: readonly Mover[] = []): void {
         this.player.update(dt, this.camera);
 
-        const step = this.footsteps.update(this.player.speed, this.player.onGround, dt);
+        const step = this.footsteps.update(
+            this.player.ps.bobCycle,
+            this.player.onGround,
+            this.player.ducked
+        );
         if (step !== null) this.steps.push(step);
 
         this.world.movers = movers as Mover[];
@@ -652,9 +656,24 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> readouts [%s]', (solv
         );
         expect(walked, 'must be moving for footsteps to mean anything').toBeGreaterThan(100);
 
+        /*
+         `PM_Footsteps` fires once per 128 units of `ps->bobCycle`, advanced at
+         `bobmove * msec` -- 0.4 running -- so a stride is 320 ms and a second of
+         running is three footsteps. Q3's truncation costs a few percent of that
+         at any frame rate (`trunc(old + 3.2)` adds 3 at this rig's 8 ms tick),
+         which is the difference between 3.1 strides and 2.9.
+
+         Asserted on **both** solvers, which is the point of the range being
+         tight: the shipping path retired `PM_Footsteps` and maintains the cycle
+         itself, so this case is the only thing standing between the two paths
+         and a gait that quietly disagrees. It ran at 6 to 7 a second before
+         D-082, which is what "the footsteps are too frequent" was.
+        */
         const stepped = rig.steps.filter((s) => s === 'step').length;
         expect(stepped, `footsteps in one second at ~${walked.toFixed(0)} u/s`)
-            .toBeGreaterThan(2);
+            .toBeGreaterThanOrEqual(2);
+        expect(stepped, `footsteps in one second at ~${walked.toFixed(0)} u/s`)
+            .toBeLessThanOrEqual(4);
         expect(rig.steps.filter((s) => s === 'land').length, 'landings while running')
             .toBe(0);
 
@@ -969,6 +988,40 @@ describe('the two paths agree on the bookkeeping [oa_dm1]', () => {
                 .toBeCloseTo(q3.player.ps.viewangles[1]!, 6);
             expect(meep.player.onGround, `onGround after ${key}`).toBe(q3.player.onGround);
         }
+    });
+
+    it('walks the same gait, though only one of them still runs `PM_Footsteps`', () => {
+        /*
+         `ps->bobCycle` drives the footstep sounds and the view weapon's sway,
+         and the kinematic path retired the function that advances it (D-071).
+         `PlayerController` maintains it there instead, with the C's own
+         arithmetic and the C's own truncation -- so the two paths are comparable
+         tick for tick, and this is what says so. Reconstructing the cycle from
+         some other quantity is what D-081 and D-082 were.
+        */
+        const { meep, q3 } = pair();
+
+        for (const rig of [meep, q3]) {
+            rig.activate();
+            rig.devices.release();
+            rig.devices.hold('w');
+            rig.run(200);
+        }
+
+        expect(meep.player.ps.bobCycle, 'bobCycle after 200 running frames')
+            .toBe(q3.player.ps.bobCycle);
+        expect(meep.steps.filter((e) => e === 'step').length, 'footsteps')
+            .toBe(q3.steps.filter((e) => e === 'step').length);
+
+        // ...and stopping parks both at the start of a stride, not mid-swing.
+        for (const rig of [meep, q3]) {
+            rig.activate();
+            rig.devices.release();
+            rig.run(120);
+        }
+
+        expect(meep.player.ps.bobCycle, 'bobCycle at rest').toBe(0);
+        expect(q3.player.ps.bobCycle, 'bobCycle at rest').toBe(0);
     });
 
     it('fires the same number of shots for the same held trigger', () => {

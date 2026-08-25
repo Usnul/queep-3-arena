@@ -81,9 +81,11 @@ the strongest argument in this report for the maintainer's instinct over mine.
    out. `engine/physics/character/` would have been found. See GAP-021.
 
 
-3. **Four APIs accept a wrong-but-plausible call, do nothing, and report success at every
+3. **Five APIs accept a wrong-but-plausible call, do nothing, and report success at every
    diagnostic you reach for.** Roughly four hours in total, spread so thinly that none of them
-   ever looked like the same problem twice — which is exactly why they belong together.
+   ever looked like the same problem twice — which is exactly why they belong together. The fifth
+   was added in phase 7 and had been live and unnoticed since phase 3, which is the pattern
+   demonstrating itself.
 
    - `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
      `ColliderObserverSystem` the consumer must also register. Register only the first and every
@@ -104,6 +106,13 @@ the strongest argument in this report for the maintainer's instinct over mine.
      well, but you only read that docblock if you already suspect the environment, and
      `EngineHarness.buildBasics` sets one up for you — so it bites at the moment you stop using
      the all-or-nothing helper, which is the moment you stop being a beginner.
+   - A decal projects along its own **+Z**, into the surface, so a projector built by looking
+     along the surface normal points exactly backwards and the composite's angle fade rejects it.
+     The entity exists, the component is right, the texture loads, the atlas patch is acquired,
+     the GPU record is packed, `record_count` is non-zero — and nothing is painted, ever
+     (GAP-023). This one is the engine's least fault of the five: the convention *is* documented,
+     precisely, in the shader chunk that implements it. It is not on `Decal`, and it is not on
+     `DecalSystem3`.
 
    Every one of these is a first-use warning or a `@see`. The pattern is worth naming as a class:
    *the engine is very good at loud, specific failures* (section 7) *and has no story at all for
@@ -341,10 +350,10 @@ finding, not a footnote to it.
 | 1 — asset pipeline | complete | 6 maps, 76 props, 15 characters, 97 sound names; `npm run check` |
 | 2 — collision and movement | complete | ported `cm_trace` **bit-exact** against a WASM oracle; shipping backend is meep physics measured against it, median divergence now exactly zero (`npm run divergence`) |
 | 3 — game simulation | complete | weapons, damage, items, movers, triggers, jump pads, teleporters; 27 unit tests against the OA gamecode's own numbers |
-| 4 — presentation | complete | particles, decals, lights, HUD, characters, positional audio; `test/presentation.test.ts` (40 tests). The phase-6 shortfall — the lighting reconstruction failing outright on 2 of 6 maps — was closed in phase 7 by fitting lights to the BSP lightgrid, and all six maps are now asserted rather than three (item 7, GAP-006, D-078) |
+| 4 — presentation | complete | particles, decals, lights, HUD, characters, positional audio; `test/presentation.test.ts` (40 tests) and `test/first-person.test.ts` (30). Signed off twice on things that were not true, and both are now tests: the lighting reconstruction failed outright on 2 of 6 maps until the BSP lightgrid closed it (item 7, GAP-006, D-078), and **the decals had never once been drawn** — rejected on the GPU by an inverted projection axis, with every CPU-side observable reporting success (GAP-023, D-079). The crosshair and the first-person weapon did not exist at all until they were asked for (D-080) |
 | 5 — bots | complete, with the cuts in D-055 | behaviour trees on a floor-sampled navigation graph; `test/match.test.ts` runs a 30-second six-bot match headlessly on the shipping backend |
 | 6 — report | complete | this document, written continuously; matrix re-derived and exit criteria re-verified in that phase |
-| 7 — after the report | ongoing, maintainer-directed | the browser build verified on every map and mode since the movement rewrite (D-077); the seam between the new solver and the game covered end to end, which found D-075; the lightgrid route that closes the phase-4 shortfall (D-078) |
+| 7 — after the report | ongoing, maintainer-directed | the browser build verified on every map and mode since the movement rewrite (D-077); the seam between the new solver and the game covered end to end, which found D-075; the lightgrid route that closes the phase-4 shortfall (D-078); the three things the player looks at and could not see — impact decals, a reticle, and the gun in their hands (D-079, D-080), and then the two reasons the gun shook once it was there (D-081) and the gait counter both of them should have been reading (D-082) |
 
 **Phases 4 and 5 were re-verified in phase 6**, because both had originally been signed off by
 looking at the running application and this project's record with that method is poor (item 13).
@@ -694,9 +703,9 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_R_AddLightToScene` | 40 | cgame, q3_ui, ui | mapped | Light + LightSystem3 (clustered) | `src/client/Effects.ts`<br>`src/client/map/loadMap.ts` | Q3 dlights were a fixed pool of 32 and had to be budgeted. Clustered lighting removes the cap, which this port depends on twice over: once for effects, and once because the level's static lighting had to be reconstructed as dynamic lights (GAP-006). |
 | `trap_R_AddPolyToScene` | 15 | cgame, q3_ui, ui | workaround | GPU decals and particles instead of triangle soup | `src/client/Effects.ts`<br>`src/client/Effects.ts` | Immediate-mode triangle soup: bullet marks, blood, sprites, rail ribbons. Marks and blood become `Decal`s, the rest become particles. meep has a `Trail3D` that would do a rail ribbon and it was not needed -- a rocket trail is smoke, not a ribbon. No path in this port rebuilds a `Geometry` per frame. |
 | `trap_R_AddPolysToScene` | 2 | cgame | workaround | as above | `src/client/Effects.ts` | As above. |
-| `trap_R_AddRefEntityToScene` | 121 | cgame, q3_ui, ui | mapped | ShadedGeometry / SGMesh entities | `src/client/map/loadMap.ts`<br>`src/client/Characters.ts` | Q3's immediate-mode scene list becomes retained ECS entities, which is the biggest structural change on the client side: nothing is re-submitted per frame, and an item that stops existing is an entity that stops existing. |
+| `trap_R_AddRefEntityToScene` | 121 | cgame, q3_ui, ui | mapped | ShadedGeometry / SGMesh entities | `src/client/map/loadMap.ts`<br>`src/client/Characters.ts`<br>`src/client/ViewWeapon.ts` | Q3's immediate-mode scene list becomes retained ECS entities, which is the biggest structural change on the client side: nothing is re-submitted per frame, and an item that stops existing is an entity that stops existing. The view weapon is the case where that costs something -- Q3 re-submits it every frame with `RF_DEPTHHACK` and `RF_FIRST_PERSON`, and a retained entity has neither, so the gun clips into walls and is only kept out of the shadow pass (D-080). |
 | `trap_R_ClearScene` | 17 | cgame, q3_ui, ui | not needed | retained scene | -- | Immediate-mode artifact. |
-| `trap_R_DrawStretchPic` | 48 | cgame, q3_ui, ui | mapped | meep UI views | `src/client/Hud.ts`<br>`src/client/Hud.ts` | The entire Q3 HUD and menu draw model is this one call, and it becomes retained `View`s that update when their model changes. The port needed only text, so the image half of the call has no counterpart here. |
+| `trap_R_DrawStretchPic` | 48 | cgame, q3_ui, ui | mapped | meep UI views | `src/client/Hud.ts`<br>`src/client/Hud.ts` | The entire Q3 HUD and menu draw model is this one call, and it becomes retained `View`s that update when their model changes. Both halves are used: text through `LabelView`, and the crosshair -- `CG_DrawCrosshair`'s single `trap_R_DrawStretchPic` -- as a masked element sized and tinted per frame (D-080). |
 | `trap_R_GetViewPosition` | 3 | cgame | mapped | camera Transform | `src/app/main.ts`<br>`src/client/PlayerController.ts` | The camera entity's `Transform` is the view position, and the sound listener rides it. |
 | `trap_R_LFX_ParticleEffect` | 24 | cgame | mapped | ParticleEmitterSystem3 / Particular | `src/client/Effects.ts` | OA's LFX particle extension, replaced outright per brief section 2. |
 | `trap_R_LerpTag` | 6 | cgame | mapped | glTF node hierarchy + AnimationSystem3 clip player | `tools/convert-characters.ts`<br>`src/client/Characters.ts` | MD3 tags become animated nodes in the converted glTF: `tag_torso` is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player, and the three-part model survives as a node hierarchy rather than as three models composed per frame (D-043). |
@@ -704,13 +713,13 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_R_LoadWorldMap` | 3 | cgame | mapped | offline BSP to scene bundle, then a runtime load | `src/client/map/loadMap.ts`<br>`tools/convert-map.ts` | One `ShadedGeometry` entity per material group and one `Light` per reconstructed light source. The lossy part is not the geometry, it is the lighting: q3map2 strips every `light` entity from a compiled BSP and meep cannot import the baked lightmap (GAP-006), so the lighting is reconstructed from the surface-light shaders and the entity lump. |
 | `trap_R_ModelBounds` | 11 | cgame, ui | mapped | AABB3 from the scene bundle | *not exercised.* Item placement drops each pickup with a real trace instead, and there are no model previews because there are no menus. | Q3 uses it to size the item bob and the 2D model previews in the menus. |
 | `trap_R_RegisterFont` | 10 | cgame, ui | mapped | engine/asset/loaders/font + UI text | *not exercised.* meep's `View` hierarchy renders as DOM, so HUD text is styled with CSS and the engine's font loader is never reached. A HUD that had to live inside the 3D scene would have needed it. | Q3 fonts are pre-rendered glyph atlases. |
-| `trap_R_RegisterModel` | 124 | cgame, q3_ui, ui | mapped | AssetManager + GLTFSceneBundleAssetLoader | `src/app/main.ts`<br>`src/client/map/loadModels.ts` | Two paths, because two kinds of model. Characters go through `GLTFSceneBundleAssetLoader` and `load_model_scene_bundle`, after MD3 vertex-morph frames are decomposed into a skeleton offline (D-042) -- meep has no morph-target path. Item and weapon models skip the loader entirely: they are static, so the pipeline emits one packed vertex buffer for all 76 of them and the runtime builds `ShadedGeometry` from slices of it, which is one fetch instead of 76. |
+| `trap_R_RegisterModel` | 124 | cgame, q3_ui, ui | mapped | AssetManager + GLTFSceneBundleAssetLoader | `src/app/main.ts`<br>`src/client/map/loadModels.ts` | Two paths, because two kinds of model. Characters go through `GLTFSceneBundleAssetLoader` and `load_model_scene_bundle`, after MD3 vertex-morph frames are decomposed into a skeleton offline (D-042) -- meep has no morph-target path. Item and weapon models skip the loader entirely: they are static, so the pipeline emits one packed vertex buffer for all 82 of them and the runtime builds `ShadedGeometry` from slices of it, which is one fetch instead of 82. Six of the 82 are the weapons' hands models, which carry no geometry and are converted for the `tag_weapon` that places a first-person weapon (D-080). |
 | `trap_R_RegisterShader` | 117 | cgame | workaround | offline .shader to PBR conversion, then StandardShadeMaterial | `tools/pipeline/shader-to-pbr.ts`<br>`src/client/map/bundle.ts` | Per brief section 2, and lossy by design: 1,679 `tcMod`, 982 non-benign `rgbGen`, 911 `tcGen`, 413 `alphaGen`, 93 `animMap` and 2 `deformVertexes` stages are dropped across the OA shader set. Counted rather than estimated -- see section 5. |
 | `trap_R_RegisterShaderNoMip` | 464 | cgame, q3_ui, ui | mapped | meep UI image view | *not exercised.* The HUD here is text -- numbers, a speedometer, a pickup line -- built from `LabelView`. No 2D image is drawn anywhere, so the facility was never reached. | 464 call sites, almost all 2D HUD and menu icons. |
 | `trap_R_RegisterSkin` | 22 | cgame, q3_ui, ui | workaround | offline .skin resolution into glTF materials | `tools/convert-characters.ts` | Q3's `.skin` maps a surface name to a shader and is chosen at runtime. There is no runtime material table here: `convert-characters.ts` reads the `.skin` file, resolves each surface to a converted PBR material and bakes it into the glTF. Switching skins at runtime is therefore not possible in this port -- a real capability lost, rather than a translation. |
 | `trap_R_RemapShader` | 7 | cgame, ui | not needed | swap material reference | -- | Used for team colours and teleport effects; a material swap. |
 | `trap_R_RenderScene` | 16 | cgame, q3_ui, ui | mapped | Engine graphics loop | `src/app/main.ts` | The harness owns the loop; the game is a tick handler on it. |
-| `trap_R_SetColor` | 183 | cgame, q3_ui, ui | mapped | UI element tint | *not exercised.* HUD colour here is CSS -- a class swap when health drops below 25, a fade on the pickup line. Nothing tints a UI element through the engine. | 183 call sites, all 2D. |
+| `trap_R_SetColor` | 183 | cgame, q3_ui, ui | mapped | UI element tint | *not exercised.* No engine call corresponds: a meep UI element is a DOM node and its colour is CSS. Q3's own colouring rule is reproduced in one place -- `CG_GetColorForHealth` behind the crosshair's image mask, in `src/client/crosshair.ts` (D-080) -- and it reaches the element as a style write rather than through the engine. | 183 call sites, all 2D. |
 | `trap_R_inPVS` | 1 | cgame | not needed | - | -- | As above. |
 | `trap_RankActive` | 1 | game | not needed | - | -- | Q3 online rankings service, dead since 2002. _(classified by prefix `trap_Rank`)_ |
 | `trap_RankBegin` | 1 | game | not needed | - | -- | Q3 online rankings service, dead since 2002. _(classified by prefix `trap_Rank`)_ |
@@ -763,7 +772,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 
 ## 3. Gap register
 
-Twenty-one entries, two withdrawn. Severities were normalised in phase 6 onto the brief's own
+Twenty-two entries, two withdrawn. Severities were normalised in phase 6 onto the brief's own
 vocabulary — three had drifted onto an ad-hoc `high`/`medium`/`low` scale, which makes a register
 unsortable and this document is meant to become a backlog — and then two of them were reduced
 again after review. Both reductions are visible below rather than edited away.
@@ -772,7 +781,7 @@ again after review. Both reductions are visible below rather than edited away.
 |---|---|---|
 | **blocker** | GAP-014, GAP-017 | the port could not ship with this unaddressed. Both are silent: the application builds, runs, reports success at every diagnostic, and does not work. |
 | **major** | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-008, GAP-012, GAP-015, GAP-016 | cost real time, or would cost any consumer real time on adoption. |
-| **minor** | GAP-009, GAP-013, GAP-019, GAP-021, GAP-022 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 and GAP-021 are positioning and discoverability findings rather than defects, and GAP-019 is a Q3-fidelity constraint. GAP-022 is minor *here* and major for the solver's own positioning: this port had a parallel mover simulation to read the platform delta from, and a consumer with ordinary animated kinematic platforms would have nothing. |
+| **minor** | GAP-009, GAP-013, GAP-019, GAP-021, GAP-022, GAP-023 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 and GAP-021 are positioning and discoverability findings rather than defects, and GAP-019 is a Q3-fidelity constraint. GAP-022 is minor *here* and major for the solver's own positioning: this port had a parallel mover simulation to read the platform delta from, and a consumer with ordinary animated kinematic platforms would have nothing. |
 | **papercut** | GAP-010, GAP-011 | noticed, worked around in minutes, recorded so the pattern is visible. |
 | **withdrawn** | GAP-007, GAP-020 | was a gap, is not. Both entries keep the mistake, because how a wrong conclusion was reached is usually the part a maintainer can act on. |
 | *(not the engine's)* | GAP-018 | mine: Quake III winds its triangles clockwise and nothing complained. Kept because the silence is the finding. |
@@ -1783,6 +1792,55 @@ is what `KinematicMover` does and what GAP-021 is about.
   `test/player-controller.test.ts` ("lets a plat carry the player standing on it"). Found in
   phase 7 while writing that test; see D-075.
 
+### GAP-023: which way a decal points is a convention, and it is written down where nobody looks
+
+- **Needed:** paint an impact mark on the surface a bullet just hit. The port has the surface, the
+  trace normal and meep's `Decal`; all that is left is to orient the projection volume.
+- **meep offers:** the facility, and it works. A `Decal` plus a `Transform` is the whole API, the
+  system acquires its own image loader, the atlas reference-counts by URL so a thousand identical
+  bullet holes pack one patch, and the composite writes albedo, normal, roughness, metalness and
+  emission into the G-buffer before anything is lit. Nothing here is missing. What is missing is
+  one sentence about **which local axis a decal projects along**, in either of the two places a
+  consumer touches: `Decal`'s docblock describes what a decal is and lists eleven fields, and
+  `DecalSystem3`'s explains the G-buffer design, the every-frame record rebuild and why decals
+  never reach transparent surfaces. Neither says +Z, and neither says the surface faces the other
+  way.
+
+  It *is* written down. `chunk_decal_surface_frame` states it in the first line of its docblock,
+  explains that the projection direction and the surface normal are opposites, names the two call
+  sites in the engine's own game that establish the convention, and says outright that getting the
+  sign backwards "rejects every decal in the game, silently". That is a genuinely excellent piece
+  of documentation. It is in a WGSL code chunk, four directories below the component, and it is
+  read by someone debugging the shader — which is to say, after.
+- **What the failure looks like:** nothing. Not a warning, not a black quad, not a decal in the
+  wrong place. `outward` is `-axis_z`, the fade is
+  `smoothstep(0.35, 0.6, dot(face_normal, outward))`, an inverted projector scores exactly -1, and
+  the composite's per-pixel loop `continue`s. Every CPU-side observable reports success: the entity
+  is linked, `DecalSystem3.decals` has the entry, the texture resolves, `record_count` counts it,
+  and `records` holds a well-formed matrix. This port shipped it that way through two phases and
+  counted it in its own status table.
+
+  The fade cannot warn, and that is a design consequence rather than an oversight: reaching zero is
+  also how a decal grazing a wall is skipped, so "fade is zero" is a normal condition, not an
+  error. Anything that fires here would fire constantly in ordinary use.
+- **Workaround:** one negation, once you know. `_lookRotation(-nx, -ny, -nz, ...)`.
+- **Severity:** minor. The cost is confidence rather than hours — the fix is a character — but it
+  is the fifth member of the class item 3 names, and the only one where the engine had already
+  written the answer down. That is what makes it the useful one: the gap is not knowledge, it is
+  *placement*.
+- **Suggested fix:** two lines of JSDoc on `Decal`, saying the component's `Transform` is the
+  projection volume, that it projects along its local +Z, and `@see chunk_decal_surface_frame`.
+  A `@see` on `DecalSystem3.link` would cost nothing either. Worth considering as well: the old
+  forward-plus path used local **+Y** as the decal axis (`FP_SHADER_CHUNK_APPLY_DECALS`), so
+  anyone arriving from it carries a convention that is now wrong on a different axis, with the
+  same silence.
+- **Evidence:** `src/engine/graphics3/decal/chunk_decal_surface_frame.js`,
+  `src/engine/graphics3/decal/shader_decal_composite.js` (the `if (fade <= 0.0) { continue; }`),
+  `src/engine/graphics/ecs/decal/v2/Decal.js`, `src/engine/graphics3/DecalSystem3.js`,
+  `src/engine/graphics/render/forward_plus/materials/FP_SHADER_CHUNK_APPLY_DECALS.js`. Port side:
+  `src/client/Effects.ts::mark`, `test/first-person.test.ts`, D-079. Found in phase 7, by being
+  asked why there were no bullet holes.
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.
@@ -1799,6 +1857,17 @@ Observations that are not gaps — the facility exists and works — but cost ti
 - **Class-per-file with the filename as the export name makes the source navigable.** Finding
   the decal system meant `ls engine/graphics3/ | grep -i decal`. With 5953 modules and no
   index, this convention is doing a lot of work.
+- **Systems run before application tick handlers, and nothing says which pose you are holding.**
+  `Engine` subscribes `entityManager.update` to the ticker in its own constructor, so every system
+  has already run by the time an application handler does — which means the camera entity's
+  `Transform` and the camera the frame is drawn with are never the same value while the player is
+  turning. That is a perfectly reasonable arrangement and there is no bug in it; the cost is that
+  `graphics.camera.camera` and the camera entity look interchangeable from the outside and are a
+  tick apart, so anything welded to the view — a first-person weapon, a screen-space marker, a
+  reticle drawn in 3D — is wrong by one tick of mouse movement and reads as shaking. Found the
+  expensive way (D-081). A sentence in `camera_sync_from_transform`'s docblock, which already
+  exists to say the surprising thing about camera conventions, would cover it.
+
 - **The docblocks explain *why*, not *what*.** `ShadedGeometrySystem3`'s header explains why
   the component and the renderer row are the same shape and why a model is not one of these;
   `Geometry.version` explains why nothing infers staleness. This is rare and it substituted

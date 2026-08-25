@@ -516,45 +516,46 @@ export class AudioBank {
 }
 
 /**
- * `CG_PlayerAnimation`'s footstep timing, which is not a timer.
+ * `PM_Footsteps`' own footfall test, and the landing that is not one of them.
  *
- * Q3 fires a footstep from the *animation*, at two fixed points in the leg
- * cycle, so steps speed up with the run rather than drifting against it. There
- * is no animation driving the local player here -- it is a first-person camera
- * -- so the cycle is reconstructed from distance travelled, which is the same
- * quantity the animation is a function of.
+ * **This used to fire every 48 units travelled**, on the reasoning in the
+ * docblock it replaces: that the step cycle is a function of distance, because
+ * the leg animation is. The animation is not -- `LEGS_RUN` plays at its own
+ * frame rate -- and neither is the cycle. `PM_Footsteps` advances
+ * `ps->bobCycle` by `bobmove * msec`, so a running player takes a step every
+ * 320 ms whatever their speed, and the distance version fired every 150 ms at
+ * Q3's own run speed and faster the faster you went. See D-081 and D-082.
  *
- * 96 units is the stride `LEGS_RUN` covers in one cycle at Q3's run speed.
+ * What is left here is the two things reading a counter cannot do for itself:
+ * the crossing test, and the landing. Q3 fires the step when `bobCycle` crosses
+ * **64 or 192** -- the peaks of the two arches, not their ends -- which is what
+ * `((old + 64) ^ (bobCycle + 64)) & 128` says, and it is why the sound lands
+ * with the gun at the top of its sway rather than the bottom.
  */
 export class Footsteps {
-    private distance = 0;
+    private previousCycle = 0;
     private wasOnGround = true;
 
-    /** Q3 units between steps. Two per cycle, so half the stride. */
-    private static readonly STRIDE = 48;
-
     /**
+     * @param bobCycle `ps.bobCycle`, maintained by whichever solver is running.
+     * @param ducked `PMF_DUCKED`; Q3 advances a ducked player's cycle faster and
+     *   plays no footstep from it at all, because a crouched player is sneaking.
      * @returns `'step'`, `'land'` or `null` for this frame.
      */
-    update(speed: number, onGround: boolean, deltaSeconds: number): 'step' | 'land' | null {
+    update(bobCycle: number, onGround: boolean, ducked: boolean): 'step' | 'land' | null {
         const landed = onGround && !this.wasOnGround;
         this.wasOnGround = onGround;
 
-        if (landed) {
-            this.distance = 0;
-            return 'land';
-        }
+        const previous = this.previousCycle;
+        this.previousCycle = bobCycle;
 
+        if (landed) return 'land';
         if (!onGround) return null;
 
-        this.distance += speed * deltaSeconds;
+        // The crossing, exactly as the C spells it: bit 128 of the cycle plus 64
+        // is set across [64, 191], so a change in it is a crossing of 64 or 192.
+        if ((((previous + 64) ^ (bobCycle + 64)) & 128) === 0) return null;
 
-        if (this.distance >= Footsteps.STRIDE) {
-            this.distance -= Footsteps.STRIDE;
-            // Below a walk, Q3 plays no footstep at all.
-            return speed > 60 ? 'step' : null;
-        }
-
-        return null;
+        return ducked ? null : 'step';
     }
 }

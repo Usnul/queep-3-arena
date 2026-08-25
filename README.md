@@ -48,6 +48,7 @@ own `engine.devices` rather than DOM listeners — see GAP-017 for why that is n
 | `?move=q3` | runs the ported `bg_pmove.c` whole -- slide-move, ground trace and all -- instead of Q3's motor on meep's `KinematicMover` |
 | `?trace=clipmap` | runs collision on the ported `cm_trace` instead of meep's physics, for an A/B; implies `?move=q3` |
 | `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
+| `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Defaults to id's own 4, which is a dot |
 
 ## Verification
 
@@ -133,6 +134,12 @@ what that difference is, and includes a claim I got wrong twice before getting i
   (D-073).
 - **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
   GPU decals and clustered lights.
+- **The first-person view** — the crosshair and the gun in your hands — is Q3's artwork and Q3's
+  arithmetic on meep's own UI and mesh paths: `gfx/2d/crosshair[a-j]` tinted by
+  `CG_GetColorForHealth`, and the weapon placed at the offset its hands model's `tag_weapon`
+  authored, bobbing on `CG_CalculateWeaponPosition`'s sway. What it does not have is the two
+  render flags Q3 leans on — `RF_DEPTHHACK`, so the gun clips into a wall you press against, and
+  `RF_MINLIGHT`, so a dark room gets a dark gun (D-080).
 
 Every one of those has an edge it does not reach, and each is written down rather than left to
 be discovered: see [DECISIONS.md](DECISIONS.md) D-041, D-045 and D-055 for what movers,

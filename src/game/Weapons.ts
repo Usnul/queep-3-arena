@@ -32,7 +32,7 @@ export type WeaponId = keyof typeof balance.weapons;
 export const MASK_SHOT = CONTENTS.SOLID | CONTENTS.BODY | CONTENTS.CORPSE;
 
 /** `g_combat.c`: the fraction of damage armour takes before health does. */
-const ARMOR_PROTECTION = 0.66;
+export const ARMOR_PROTECTION = 0.66;
 
 export interface WeaponStats {
     readonly hitscan?: boolean;
@@ -74,7 +74,16 @@ export interface Damageable {
 export interface WeaponEvents {
     muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId): void;
     bulletImpact(originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void;
-    explosion(originQ3: ArrayLike<number>, radiusQ3: number): void;
+    /**
+     * `normalQ3` is the surface the missile struck, for the scorch mark. Absent
+     * where there is no surface -- a rocket that hit a player in mid-air, or a
+     * body detonating -- and the presentation falls back to Q3's up.
+     */
+    explosion(
+        originQ3: ArrayLike<number>,
+        radiusQ3: number,
+        normalQ3?: ArrayLike<number>
+    ): void;
     hit(target: Damageable, damage: number): void;
     /** A projectile was created; the presentation layer attaches a trail. */
     projectileSpawned(projectile: Projectile): void;
@@ -274,7 +283,18 @@ export class WeaponSystem {
                     p.origin[2]! + (t_end[2]! - p.origin[2]!) * hitFraction
                 );
 
-                this.detonate(p, impact, hitTarget);
+                /*
+                 The wall's own normal, and only when the wall is what stopped
+                 the missile: a rocket that caught a player in the open struck
+                 no surface, and `trace.planeNormal` there is whatever the last
+                 unblocked trace left behind.
+                */
+                this.detonate(
+                    p,
+                    impact,
+                    hitTarget,
+                    hitTarget === null ? trace.planeNormal : undefined
+                );
                 this.projectiles.splice(i, 1);
                 continue;
             }
@@ -287,12 +307,13 @@ export class WeaponSystem {
     private detonate(
         projectile: Projectile,
         atQ3: Vec3,
-        directHit: Damageable | null
+        directHit: Damageable | null,
+        surfaceQ3?: ArrayLike<number>
     ): void {
         const stats = weaponStats(projectile.weapon);
 
         this.events.projectileGone(projectile);
-        this.events.explosion(atQ3, stats.splashRadius ?? 100);
+        this.events.explosion(atQ3, stats.splashRadius ?? 100, surfaceQ3);
 
         if (directHit !== null) {
             this.damage(directHit, stats.damage);

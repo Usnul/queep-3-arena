@@ -91,10 +91,10 @@ the GPLv2/CC inputs above and carries their terms.
 | `assets/download/` | `fetch-assets.mjs` | the untouched upstream archive |
 | `assets/extracted/` | `extract-pk3.mjs` | flattened pk3 contents in Q3 load order, plus `manifest.json` recording the origin pk3 of every file |
 | `assets/built/<map>/` | `convert-map.ts` | `scene.json` (materials, mesh table, submodel table, lights, entities), `geometry.bin`, `textures/`, and the untouched `collision.bsp` |
-| `assets/built/models/` | `convert-models.ts` | one bundle of every static prop -- pickups, weapon world models, ammo, gibs -- as `models.json` plus `models.bin` |
+| `assets/built/models/` | `convert-models.ts` | one bundle of every static prop -- pickups, weapon world models, ammo, gibs -- as `models.json` plus `models.bin`, plus the weapons' `*_hand.md3`, which carry no geometry and are converted for the `tag_weapon` that places a first-person weapon (D-080) |
 | `assets/built/characters/<name>/` | `convert-characters.ts` | player models as skinned glTF: `<name>.gltf`, `<name>.bin`, textures. The skeleton is *inferred* from MD3's vertex-morph frames (DECISIONS.md D-042) and is not present in the source data |
 | `assets/built/sound/` | `convert-sounds.ts` | the WAVs the port triggers and the OGG music the maps name, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded. Half the list comes from the gamecode and half is read out of the built maps' `target_speaker` and `worldspawn` keys, so this runs *after* `convert-map.ts` |
-| `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals |
+| `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals, and `gfx/2d/crosshair[a-j]`. Each is converted for the Q3 blend it was authored against rather than copied, which for an impact mark means discarding the colour and keeping the luminance as coverage (D-079) |
 
 ---
 

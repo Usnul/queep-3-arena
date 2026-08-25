@@ -347,7 +347,7 @@
     "trap_R_RegisterModel": {
       "status": "mapped",
       "meep": "AssetManager + GLTFSceneBundleAssetLoader",
-      "note": "Two paths, because two kinds of model. Characters go through `GLTFSceneBundleAssetLoader` and `load_model_scene_bundle`, after MD3 vertex-morph frames are decomposed into a skeleton offline (D-042) -- meep has no morph-target path. Item and weapon models skip the loader entirely: they are static, so the pipeline emits one packed vertex buffer for all 76 of them and the runtime builds `ShadedGeometry` from slices of it, which is one fetch instead of 76.",
+      "note": "Two paths, because two kinds of model. Characters go through `GLTFSceneBundleAssetLoader` and `load_model_scene_bundle`, after MD3 vertex-morph frames are decomposed into a skeleton offline (D-042) -- meep has no morph-target path. Item and weapon models skip the loader entirely: they are static, so the pipeline emits one packed vertex buffer for all 82 of them and the runtime builds `ShadedGeometry` from slices of it, which is one fetch instead of 82. Six of the 82 are the weapons' hands models, which carry no geometry and are converted for the `tag_weapon` that places a first-person weapon (D-080).",
       "evidence": [
         "src/app/main.ts::load_model_scene_bundle",
         "src/client/map/loadModels.ts::export async function loadModels"
@@ -385,10 +385,11 @@
     "trap_R_AddRefEntityToScene": {
       "status": "mapped",
       "meep": "ShadedGeometry / SGMesh entities",
-      "note": "Q3's immediate-mode scene list becomes retained ECS entities, which is the biggest structural change on the client side: nothing is re-submitted per frame, and an item that stops existing is an entity that stops existing.",
+      "note": "Q3's immediate-mode scene list becomes retained ECS entities, which is the biggest structural change on the client side: nothing is re-submitted per frame, and an item that stops existing is an entity that stops existing. The view weapon is the case where that costs something -- Q3 re-submits it every frame with `RF_DEPTHHACK` and `RF_FIRST_PERSON`, and a retained entity has neither, so the gun clips into walls and is only kept out of the shadow pass (D-080).",
       "evidence": [
         "src/client/map/loadMap.ts::ShadedGeometry",
-        "src/client/Characters.ts::SGMesh"
+        "src/client/Characters.ts::SGMesh",
+        "src/client/ViewWeapon.ts::ShadedGeometry"
       ]
     },
     "trap_R_AddPolyToScene": {
@@ -442,15 +443,15 @@
       "status": "mapped",
       "meep": "UI element tint",
       "note": "183 call sites, all 2D.",
-      "unused": "HUD colour here is CSS -- a class swap when health drops below 25, a fade on the pickup line. Nothing tints a UI element through the engine."
+      "unused": "No engine call corresponds: a meep UI element is a DOM node and its colour is CSS. Q3's own colouring rule is reproduced in one place -- `CG_GetColorForHealth` behind the crosshair's image mask, in `src/client/crosshair.ts` (D-080) -- and it reaches the element as a style write rather than through the engine."
     },
     "trap_R_DrawStretchPic": {
       "status": "mapped",
       "meep": "meep UI views",
-      "note": "The entire Q3 HUD and menu draw model is this one call, and it becomes retained `View`s that update when their model changes. The port needed only text, so the image half of the call has no counterpart here.",
+      "note": "The entire Q3 HUD and menu draw model is this one call, and it becomes retained `View`s that update when their model changes. Both halves are used: text through `LabelView`, and the crosshair -- `CG_DrawCrosshair`'s single `trap_R_DrawStretchPic` -- as a masked element sized and tinted per frame (D-080).",
       "evidence": [
         "src/client/Hud.ts::LabelView",
-        "src/client/Hud.ts::EmptyView"
+        "src/client/Hud.ts::queep-hud__crosshair"
       ]
     },
     "trap_R_LerpTag": {

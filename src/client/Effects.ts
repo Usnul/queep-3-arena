@@ -32,6 +32,11 @@ import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/parti
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
 
+const TAU = Math.PI * 2;
+
+/** Q3's up, for an explosion with no surface to report. */
+const UP_Q3: readonly number[] = [0, 0, 1];
+
 /** Q3 (Z-up, units) -> meep (Y-up, metres). */
 function toMeep(q3: ArrayLike<number>): [number, number, number] {
     return [q3[0]! * WORLD_SCALE, q3[2]! * WORLD_SCALE, -q3[1]! * WORLD_SCALE];
@@ -86,6 +91,48 @@ function track(name: string, itemSize: number, positions: number[], data: number
 
 const SCALE = ParticleParameters.Scale;
 const COLOR = ParticleParameters.Color;
+
+/**
+ * A unit vector perpendicular to `n`, rotated `roll` radians about it.
+ *
+ * This is the `up` hint a look rotation needs, and rolling it is how a decal
+ * gets `CG_ImpactMark`'s random spin: `_lookRotation` derives the other two axes
+ * from the forward and the up, so turning the up about the forward turns the
+ * whole frame about it.
+ *
+ * The seed axis switches on `|n.y|` for the usual reason -- an up hint parallel
+ * to the forward has no cross product, and meep's own fallback for that case
+ * nudges the forward vector instead, which would tilt the projector off the
+ * surface it is being aimed at.
+ */
+function perpendicular(
+    nx: number,
+    ny: number,
+    nz: number,
+    roll: number
+): [number, number, number] {
+    const sx = Math.abs(ny) > 0.99 ? 1 : 0;
+    const sy = Math.abs(ny) > 0.99 ? 0 : 1;
+
+    // t = normalize(seed x n), b = n x t: an orthonormal basis of n's plane.
+    let tx = sy * nz - 0 * ny;
+    let ty = 0 * nx - sx * nz;
+    let tz = sx * ny - sy * nx;
+
+    const tl = Math.hypot(tx, ty, tz);
+    tx /= tl;
+    ty /= tl;
+    tz /= tl;
+
+    const bx = ny * tz - nz * ty;
+    const by = nz * tx - nx * tz;
+    const bz = nx * ty - ny * tx;
+
+    const c = Math.cos(roll);
+    const s = Math.sin(roll);
+
+    return [tx * c + bx * s, ty * c + by * s, tz * c + bz * s];
+}
 
 export class Effects {
     private readonly ecd: EcsDataset;
@@ -144,8 +191,17 @@ export class Effects {
      * Three parts, in Q3's own proportions: a bright short flash, an expanding
      * fireball, and smoke that outlives both. `radiusQ3` is the weapon's
      * `splashRadius`, so the visual matches the damage.
+     *
+     * `normalQ3` is the surface the missile struck, and it exists so that the
+     * scorch mark lands on the wall a rocket actually hit. It used to be assumed
+     * to be straight up, which projects the mark downwards: correct for a floor,
+     * and nothing at all on the far more common wall shot.
      */
-    explosion(originQ3: ArrayLike<number>, radiusQ3: number): void {
+    explosion(
+        originQ3: ArrayLike<number>,
+        radiusQ3: number,
+        normalQ3: ArrayLike<number> = UP_Q3
+    ): void {
         const [x, y, z] = toMeep(originQ3);
         const radius = radiusQ3 * WORLD_SCALE;
 
@@ -246,8 +302,12 @@ export class Effects {
             2.5
         );
 
-        // A scorch mark that outlives the explosion.
-        this.mark(originQ3, [0, 0, 1], radiusQ3 * 0.5, 'mark_burn', 0.35);
+        /*
+         A scorch mark that outlives the explosion. Half the splash radius is
+         60 units for a rocket, which is `CG_MissileHitWall`'s own 64 for the
+         burn mark to within the difference between the two weapons that use it.
+        */
+        this.mark(originQ3, normalQ3, radiusQ3 * 0.5, 'mark_burn', 0.35, Math.random() * TAU);
     }
 
     /* ------------------------------------------------------------------ *
@@ -294,7 +354,8 @@ export class Effects {
             0.5
         );
 
-        this.mark(originQ3, normalQ3, 6, 'mark_bullet', 0.6);
+        // `CG_MissileHitWall`'s radius for WP_MACHINEGUN.
+        this.mark(originQ3, normalQ3, 8, 'mark_bullet', 0.6, Math.random() * TAU);
     }
 
     /* ------------------------------------------------------------------ *
@@ -304,18 +365,33 @@ export class Effects {
     /**
      * Project a decal onto whatever is at `originQ3`.
      *
-     * A decal's `Transform` *is* its projection volume: the box is oriented by
-     * the rotation and sized by the scale, and everything inside it receives the
-     * texture. So the mark is placed slightly *behind* the surface along its
-     * normal and given depth, rather than being laid flat on it -- a
-     * zero-thickness box projects onto nothing.
+     * A decal's `Transform` *is* its projection volume: the box is the unit cube
+     * the rotation orients and the scale sizes, and every opaque surface inside
+     * it receives the texture. So the mark is a box straddling the surface
+     * rather than a quad laid on it -- a zero-thickness box projects onto
+     * nothing.
+     *
+     * **The box points its +Z *into* the surface, not along the normal**, and
+     * that is the whole of what was wrong with this function for two phases.
+     * meep's composite takes the decal's outward direction as `-axis_z` and
+     * fades on `smoothstep(0.35, 0.6, dot(face_normal, outward))`, so a
+     * projector built by looking *along* the surface normal scores a dot of
+     * exactly -1 on the surface it was aimed at, fades to zero, and is skipped.
+     * Not one decal in this port had ever been drawn. There is no error and no
+     * warning for it, because a fade reaching zero is also how a decal grazing a
+     * wall at a shallow angle is skipped -- see `chunk_decal_surface_frame`,
+     * whose docblock says all of this and is the only place that does.
+     *
+     * `radiusQ3` is `CG_ImpactMark`'s radius, so the numbers at the call sites
+     * are Q3's own; the box is twice that across.
      */
     mark(
         originQ3: ArrayLike<number>,
         normalQ3: ArrayLike<number>,
-        sizeQ3: number,
+        radiusQ3: number,
         texture: string,
-        alpha: number
+        alpha: number,
+        rollRadians: number
     ): void {
         const n = dirToMeep(normalQ3);
         const len = Math.hypot(n[0], n[1], n[2]);
@@ -325,7 +401,7 @@ export class Effects {
         const ny = n[1] / len;
         const nz = n[2] / len;
 
-        const size = sizeQ3 * WORLD_SCALE;
+        const size = radiusQ3 * 2 * WORLD_SCALE;
         const [x, y, z] = toMeep(originQ3);
 
         const decal = new Decal();
@@ -338,12 +414,21 @@ export class Effects {
         decal.metalness = 0;
         decal.priority = 0;
 
+        /*
+         The roll `CG_ImpactMark` passes as `random()*360`. Q3 spins every mark
+         about its own axis so that a wall taking a magazine of machinegun fire
+         does not end up tiled with the same stamp, and the whole cost of it here
+         is choosing which perpendicular to hand the look rotation as `up`.
+        */
+        const [ux, uy, uz] = perpendicular(nx, ny, nz, rollRadians);
+
         const transform = new Transform();
-        // Sit the projection box centred on the surface so it catches geometry
-        // on both sides of a thin wall face.
-        transform.position.set(x + nx * size * 0.25, y + ny * size * 0.25, z + nz * size * 0.25);
+        // Centred on the surface, so the box has equal depth on both sides of it
+        // and catches geometry either way -- a thin wall face, or a floor whose
+        // trace endpoint sits a hair inside it.
+        transform.position.set(x, y, z);
         transform.scale.set(size, size, size);
-        transform.rotation._lookRotation(nx, ny, nz, Math.abs(ny) > 0.99 ? 1 : 0, Math.abs(ny) > 0.99 ? 0 : 1, 0);
+        transform.rotation._lookRotation(-nx, -ny, -nz, ux, uy, uz);
 
         const entity = new Entity();
         entity.add(transform).add(decal).build(this.ecd);

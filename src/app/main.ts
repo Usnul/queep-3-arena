@@ -49,13 +49,29 @@ import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
-import { Hud } from '../client/Hud.ts';
+import { CROSSHAIR_DEFAULT, Hud } from '../client/Hud.ts';
+import { ViewWeapon } from '../client/ViewWeapon.ts';
 import { Arena } from '../client/Arena.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
     return new URLSearchParams(window.location.search).get('map') ?? 'oa_dm1';
+}
+
+/**
+ * `?crosshair=N` picks one of Q3's ten, exactly as `cg_drawCrosshair` does.
+ *
+ * Defaults to Q3's own default, which is a dot rather than the cross most
+ * people picture. All ten convert, so disagreeing with id about that is a
+ * query parameter rather than a rebuild.
+ */
+function requestedCrosshair(): number {
+    const raw = new URLSearchParams(window.location.search).get('crosshair');
+    if (raw === null) return CROSSHAIR_DEFAULT;
+
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : CROSSHAIR_DEFAULT;
 }
 
 /** `?fly=1` swaps the player for a noclip camera, for inspecting conversions. */
@@ -272,7 +288,7 @@ async function main(): Promise<void> {
     if (!ecd.isComponentTypeRegistered(SoundListener)) ecd.registerComponentType(SoundListener);
     cameraEntity.add(transform).add(camera).add(new SoundListener()).build(ecd);
 
-    const hud = new Hud();
+    const hud = new Hud({ crosshair: requestedCrosshair() });
     hud.link(engine.viewStack);
 
     if (flyMode()) {
@@ -355,6 +371,14 @@ async function main(): Promise<void> {
 
         const itemsView = new ItemsView(ecd, models, audio);
         itemsView.build(items.items);
+
+        /*
+         The gun in the player's own hands. Built here rather than inside
+         `PlayerController` because it is presentation and that class is
+         simulation, and because it needs the model library, which the controller
+         has no other reason to know about.
+        */
+        const viewWeapon = new ViewWeapon(ecd, models);
 
         console.log(
             `[queep] items: ${itemsView.itemCount} placed, ${itemsView.pieceCount} pieces, ` +
@@ -618,6 +642,28 @@ async function main(): Promise<void> {
         // the callback parameter has no inferred type -- see GAP-001.
         engine.ticker.onTick.add((deltaSeconds: number) => {
             player.update(deltaSeconds, transform);
+            /*
+             `graphics.camera.camera.transform`, and **not** `transform`.
+
+             They hold different poses, always. `CameraSystem3` copies the camera
+             entity onto Shade's camera during `entityManager.update`, which the
+             `Engine` constructor subscribed to this same ticker ahead of
+             everything here -- so by the time this line runs, the frame's camera
+             is the pose `player.update` wrote *last* tick, and `transform` is the
+             pose it wrote a moment ago. A gun placed from the second is a whole
+             tick of mouse movement away from the view it is welded to, and swings
+             across the screen by however far you just turned (D-081).
+            */
+            viewWeapon.update(graphics.camera.camera.transform, deltaSeconds, {
+                weapon: player.weapon,
+                speed: player.speed,
+                // The same counter the footstep sounds read, three lines of
+                // frame apart: Q3 has one gait, not two.
+                bobCycle: player.ps.bobCycle,
+                // No gun for a corpse. Q3 switches to a death camera instead,
+                // which this port has no equivalent of.
+                visible: !player.dead,
+            });
             arena.update(deltaSeconds);
 
             // Retire the emitter entities whose one-shot finished last frame.
@@ -687,7 +733,11 @@ async function main(): Promise<void> {
 
             /* ---- player audio ---- */
 
-            const step = footsteps.update(player.speed, player.onGround, deltaSeconds);
+            const step = footsteps.update(
+                player.ps.bobCycle,
+                player.onGround,
+                player.ducked
+            );
             if (step === 'step') audio.play('player/footstep', player.ps.origin);
             else if (step === 'land') audio.play('player/land', player.ps.origin);
 
@@ -735,6 +785,7 @@ async function main(): Promise<void> {
         expose(engine, {
             loaded, clipMap, player, arena, physicsWorld, items, models,
             movers, moversView, characters, audio, mapSound, graph, botRuntime,
+            viewWeapon,
         });
     }
 

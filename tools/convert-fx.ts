@@ -36,30 +36,69 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
 const OUT = join(ROOT, 'assets', 'built', 'fx');
 
+/**
+ * How Q3 blended this image, which is the whole of what the conversion has to
+ * undo.
+ *
+ * meep's particles and decals both want straight RGBA -- colour, and coverage
+ * in the alpha -- so an image Q3 drew through some other blend equation has to
+ * be restated in those terms rather than copied across. The name is the Q3
+ * blend rather than the operation performed, because the blend is the fact and
+ * the operation is the consequence.
+ *
+ * - `add`: `blendfunc add`. The image is opaque and black means transparent, so
+ *   luminance becomes coverage and the colour is kept -- a bright core stays
+ *   bright.
+ * - `darken`: `blendfunc gl_zero gl_one_minus_src_color`, which every Q3 impact
+ *   mark uses. The result is `dst * (1 - src)`, and for the greyscale images
+ *   these all are that is *exactly* a black decal with coverage `luminance(src)`
+ *   -- `src.rgb * a + dst * (1 - a)` with `src.rgb = 0`, `a = luminance`. So the
+ *   colour is discarded rather than kept, which is the difference between a
+ *   scorch mark and a white blob.
+ * - absent: `blendfunc blend`, or a particle sprite with its own alpha. The
+ *   file already says what meep wants.
+ */
+type FxBlend = 'add' | 'darken';
+
 interface FxTexture {
     /** Output name, used by the effects layer. */
     readonly name: string;
     /** Source paths in Q3 load order; the first that exists wins. */
     readonly sources: readonly string[];
-    /**
-     * Q3 stored several of these as opaque images meant to be drawn additively,
-     * where black is transparent. A decal or a normally-blended particle needs a
-     * real alpha channel, so luminance is promoted to alpha.
-     */
-    readonly luminanceToAlpha?: boolean;
+    /** The Q3 blend this image was authored for; see {@link FxBlend}. */
+    readonly blend?: FxBlend;
 }
+
+/**
+ * Q3's crosshairs, `gfx/2d/crosshair[a-j]`.
+ *
+ * All ten, because `cg_drawCrosshair` is a number from 0 to 9 and picking one
+ * of them here would move a player preference into the build. They are 128x128
+ * white-on-transparent TGAs with a real alpha channel and cost 2 KB apiece.
+ */
+const CROSSHAIRS: readonly FxTexture[] = Array.from({ length: 10 }, (_, i) => {
+    const letter = String.fromCharCode('a'.charCodeAt(0) + i);
+    return { name: `crosshair${letter}`, sources: [`gfx/2d/crosshair${letter}.tga`] };
+});
 
 const TEXTURES: readonly FxTexture[] = [
     // Particles.
     { name: 'smoke', sources: ['gfx/misc/smokepuff3.tga', 'gfx/misc/smokepuff2b.tga'] },
-    { name: 'flare', sources: ['gfx/misc/flare.jpg'], luminanceToAlpha: true },
-    { name: 'tracer', sources: ['gfx/misc/tracer2.jpg'], luminanceToAlpha: true },
+    { name: 'flare', sources: ['gfx/misc/flare.jpg'], blend: 'add' },
+    { name: 'tracer', sources: ['gfx/misc/tracer2.jpg'], blend: 'add' },
 
-    // Decals. Q3's mark textures are alpha-masked already.
-    { name: 'mark_bullet', sources: ['gfx/damage/bullet_mrk.jpg'], luminanceToAlpha: true },
-    { name: 'mark_burn', sources: ['gfx/damage/burn_med_mrk.tga'] },
+    /*
+     Decals. Three of the four are `gl_zero gl_one_minus_src_color` marks and
+     convert to black-with-coverage; `plasma_mrk` is the one Q3 drew with a
+     plain `blendfunc blend` and is the one whose own RGBA is already right.
+     `scripts/decals.shader` is the record of which is which.
+    */
+    { name: 'mark_bullet', sources: ['gfx/damage/bullet_mrk.jpg'], blend: 'darken' },
+    { name: 'mark_burn', sources: ['gfx/damage/burn_med_mrk.tga'], blend: 'darken' },
     { name: 'mark_plasma', sources: ['gfx/damage/plasma_mrk.tga'] },
-    { name: 'mark_hole', sources: ['gfx/damage/hole_lg_mrk.tga'] },
+    { name: 'mark_hole', sources: ['gfx/damage/hole_lg_mrk.tga'], blend: 'darken' },
+
+    ...CROSSHAIRS,
 ];
 
 async function convertOne(fx: FxTexture): Promise<boolean> {
@@ -89,18 +128,25 @@ async function convertOne(fx: FxTexture): Promise<boolean> {
         height = raw.info.height;
     }
 
-    if (fx.luminanceToAlpha === true) {
+    if (fx.blend !== undefined) {
         /*
-         Q3 drew these additively, so the image is opaque and "transparent" means
-         black. Promoting luminance to alpha turns that into something a
-         normally-blended particle or a decal can use, and keeping the colour
-         means a bright core stays bright.
+         Both blends read coverage out of the image's own brightness; they differ
+         only in whether the colour survives it. See `FxBlend`.
         */
+        const keepColour = fx.blend === 'add';
+
         for (let i = 0; i < rgba.length; i += 4) {
             const r = rgba[i]!;
             const g = rgba[i + 1]!;
             const b = rgba[i + 2]!;
+
             rgba[i + 3] = Math.min(255, Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b));
+
+            if (!keepColour) {
+                rgba[i] = 0;
+                rgba[i + 1] = 0;
+                rgba[i + 2] = 0;
+            }
         }
     }
 

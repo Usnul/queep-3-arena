@@ -409,9 +409,19 @@ describe('the effects the code asks for exist', () => {
         const source = readFileSync(join(process.cwd(), 'src', 'client', 'Effects.ts'), 'utf8');
         const named = [...source.matchAll(/'\/assets\/built\/([^']+\.png)'/g)].map((m) => m[1]!);
 
-        expect(named.length, 'fx textures referenced').toBeGreaterThanOrEqual(4);
+        /*
+         The decals name their texture by leaf, because `mark` builds the URL --
+         so a scan for whole paths sees the particle sprites and none of the
+         marks, and used to assert "every fx texture" while checking three of
+         seven. `first-person.test.ts` is what checks their *contents*; this is
+         what checks they are on disk at all.
+        */
+        const marks = [...source.matchAll(/'(mark_[a-z_]+)'/g)].map((m) => `fx/${m[1]!}.png`);
 
-        for (const path of new Set(named)) {
+        expect(named.length, 'fx sprites referenced').toBeGreaterThanOrEqual(4);
+        expect(marks.length, 'decal marks referenced').toBeGreaterThanOrEqual(2);
+
+        for (const path of new Set([...named, ...marks])) {
             expect(existsSync(join(BUILT, path)), `${path} is named in Effects.ts and absent`)
                 .toBe(true);
         }

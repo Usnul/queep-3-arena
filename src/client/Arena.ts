@@ -243,8 +243,12 @@ export class Arena implements WeaponEvents {
         this.audio?.play('impact/bullet', originQ3);
     }
 
-    explosion(originQ3: ArrayLike<number>, radiusQ3: number): void {
-        this.effects.explosion(originQ3, radiusQ3);
+    explosion(
+        originQ3: ArrayLike<number>,
+        radiusQ3: number,
+        normalQ3?: ArrayLike<number>
+    ): void {
+        this.effects.explosion(originQ3, radiusQ3, normalQ3);
         this.audio?.play('impact/rocket', originQ3);
     }
 

@@ -80,6 +80,30 @@ export function itemByClassname(classname: string): ItemDef | null {
     return BY_CLASSNAME.get(classname) ?? null;
 }
 
+/**
+ * The weapon pickups, by their `WP_*` tag.
+ *
+ * Weapons only. `giTag` is not unique across the table -- every ammo box shares
+ * its weapon's tag, which is how `Add_Ammo` knows what it feeds -- so a map over
+ * the whole list would answer `WP_ROCKET_LAUNCHER` with whichever of the two
+ * came last.
+ */
+const WEAPON_BY_TAG = new Map<string, ItemDef>();
+for (const item of ITEMS) {
+    if (item.type === 'IT_WEAPON') WEAPON_BY_TAG.set(item.tag, item);
+}
+
+/**
+ * The weapon pickup for a `WP_*` id, which is also where its model lives.
+ *
+ * `CG_RegisterWeapon` reaches the same entry the same way -- it walks
+ * `bg_itemlist` for the `IT_WEAPON` whose `giTag` matches -- and everything the
+ * presentation needs for a weapon hangs off `item->world_model[0]`.
+ */
+export function weaponItemByTag(tag: string): ItemDef | null {
+    return WEAPON_BY_TAG.get(tag) ?? null;
+}
+
 /* ---- player inventory ---- */
 
 export interface Inventory {

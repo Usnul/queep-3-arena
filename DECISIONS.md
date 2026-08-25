@@ -2373,3 +2373,298 @@ by the fit.
 **Light colour now reaches the runtime.** `BundleLight.color` is optional: absent means the
 tungsten default a surface light has always had, present means the colour q3map2 baked into that
 cell. A room lit red in Q3 is lit red here.
+
+## What the player could not see
+
+### D-079: Not one decal had ever been drawn, and the thing that stopped them was a sign
+
+The port has had impact marks since phase 3. `Effects.mark` builds them, `bulletImpact` and
+`explosion` call it, a 2,048-entry ring retires the oldest, `DecalSystem3` is registered in
+`main`, the textures are on disk, and the report counts the whole arrangement as phase-4
+complete. None of it was ever on screen.
+
+**The fade.** meep's decal composite takes a decal's *outward* direction as `-axis_z` -- a decal
+projects along its own +Z, **into** the surface -- and fades on
+`smoothstep(0.35, 0.6, dot(face_normal, outward))`. `Effects.mark` oriented the projector by
+looking *along* the surface normal, which makes `outward` the exact opposite of the surface it
+was aimed at, scores a dot of -1, and fades to zero. The composite's inner loop `continue`s on
+that, so every decal in the game was skipped, silently, on every frame, on every surface.
+
+The CPU side is indistinguishable from a working one, and that is the part worth keeping: the
+entity exists, the component is correct, the texture loads, the atlas patch is acquired, the GPU
+record is packed, and `DecalSystem3.record_count` reports 2 for two shots either way. Every
+observable this port could reach said the decals were fine.
+
+There is nothing to blame for the sign but the code that got it wrong. meep documents the
+convention exactly, in `chunk_decal_surface_frame`, in a docblock that also explains why the fade
+doubles as the grazing-angle rejection and therefore cannot warn about it. What it does not do is
+say it anywhere a consumer looks -- `Decal` and `DecalSystem3` are both silent on which way a
+decal points -- and that is filed as GAP-023 rather than offered as an excuse.
+
+**The textures, which were wrong in a second and independent way.** Q3 draws every impact mark
+with `blendfunc gl_zero gl_one_minus_src_color`: the result is `dst * (1 - src)`, so a *bright*
+texel darkens the wall most. `convert-fx.ts` had `mark_bullet` sharing the additive sprites'
+conversion -- keep the colour, promote luminance to alpha -- and `mark_burn` and `mark_hole`
+copied across untouched, alpha channel and all.
+
+Had the fade been right, that would have drawn white blobs where bullets hit and a two-metre
+**opaque black square** centred on every explosion, because those two TGAs are fully opaque and
+carry the mark in their colour. The first bug was hiding the second, and fixing only the sign
+would have looked like a regression.
+
+The conversion is now stated in terms of the Q3 blend each image was authored for, because for
+these images that blend has an exact restatement: `dst * (1 - src)` with a greyscale source *is*
+`src.rgb * a + dst * (1 - a)` with `src.rgb = 0` and `a = luminance(src)`. Black, at coverage
+equal to brightness. `plasma_mrk` is the one Q3 drew with a plain `blendfunc blend` and is the one
+whose own RGBA was already right; `scripts/decals.shader` is the record of which is which.
+
+**Two smaller things fixed on the way, both of them Q3's own behaviour.**
+
+- An explosion's scorch mark was projected straight down, because `explosion()` had no surface to
+  work from and assumed Q3's up. Correct on a floor and invisible on a wall, which is the more
+  common rocket. `WeaponEvents.explosion` now carries the impact normal, taken from the trace that
+  stopped the missile and absent when nothing did -- a rocket that caught a player in the open
+  struck no surface, and `trace.planeNormal` there is whatever the last unblocked trace left
+  behind.
+- `CG_ImpactMark` spins every mark by `random() * 360`. Without it a wall taking a magazine of
+  machinegun fire is tiled with the same stamp at the same angle. The roll is a parameter rather
+  than a call to `Math.random` inside `mark`, so the placement stays testable.
+
+The mark sizes are now `CG_MissileHitWall`'s, read as the radii they are in the C. They were being
+passed as radii and consumed as diameters, so every mark was half the size Q3 draws -- which
+nobody could have noticed, since none of them drew.
+
+**What the test does, and what it deliberately does not.** `test/first-person.test.ts` asserts the
+*fade*, computed from the decal's own matrix through a transcription of
+`chunk_decal_surface_frame`, over eight surface orientations including both poles the look
+rotation special-cases. It asserts 1, not "greater than zero": the fade is a smoothstep, so a
+projector sixty degrees out still scores above zero and would draw a smeared ghost. It also
+asserts that the box encloses the point it was placed at, that the mark textures are black
+wherever they cover, and that they are not uniformly opaque -- which is the black-square failure
+stated as a number.
+
+A test that counted decal entities would have passed throughout the two phases this was broken.
+That is the whole reason none of these assertions counts anything.
+
+### D-080: A crosshair and a gun, on Q3's own numbers rather than on taste
+
+Neither existed. The HUD had a speedometer, a status line and no reticle; the player held nothing.
+Both are the kind of feature where the arrangement is obvious and every constant is a judgement
+call, so every constant here is read out of the C or out of the shipped assets.
+
+**The crosshair** is `CG_DrawCrosshair`, which is three rules and an image:
+
+- `gfx/2d/crosshair[a-j]`, all ten converted, because `cg_drawCrosshair` is a number from 0 to 9
+  and choosing one at build time moves a player preference into the pipeline. The default is id's
+  own **4**, which resolves to `crosshaire` and is a single dot -- not the cross most people
+  picture, and what both Q3 and OpenArena ship. `?crosshair=N` disagrees without a rebuild.
+- `cg_crosshairSize 24` against the 640x480 virtual screen `CG_AdjustFrom640` maps from, so 5% of
+  the viewport height. Q3 scales width by `width/640` and height by `height/480` independently,
+  which stretches the reticle on anything that is not 4:3; the height scale is used for both axes
+  here, so it is Q3's size at 4:3 and round everywhere else.
+- `cg_crosshairHealth`, which defaults on, tinting through `CG_GetColorForHealth`. Armour counts
+  toward the colour only as far as it can absorb -- `health * p / (1 - p)` at `ARMOR_PROTECTION`
+  -- so it is a damage indicator rather than an armour readout, and a crosshair on 1 health and
+  200 armour is red.
+- The `ITEM_BLOB_TIME` pulse on a pickup, which snaps to normal size at the instant of the pickup
+  and grows to double over the next fifth of a second. That is backwards from what "pulse"
+  suggests, and it is what the C does.
+
+It is a DOM element with the crosshair as a CSS *mask* over a solid fill, which is what puts the
+tint somewhere `cg_crosshairHealth` can reach without a second copy of the image. Sizes and
+colours are written to `style` directly rather than through an `ObservedString`, and that turned
+out to matter for a reason nothing predicted: `LabelView` writes its text through `frameThrottle`,
+so in a document that is permanently hidden -- which is every browser this project has been able
+to drive (D-077) -- the HUD's *text* cannot be observed and the crosshair's geometry can.
+
+**The view weapon** is `CG_AddViewWeapon`, minus the renderer.
+
+Where it sits is measured rather than chosen. Q3 draws a hands model at the view origin and hangs
+the weapon off its `tag_weapon`, so that tag *is* the offset from the eye, per weapon, authored by
+the people who made the game. `convert-models.ts` now converts the `*_hand.md3` files for it; in
+OpenArena they carry no geometry at all -- the arms Q3 shipped are gone, and what is left is the
+tag and the animation frames -- so six of them cost 0 triangles and buy 6 tags. Seven weapons ship
+none, which is not a defect: `CG_RegisterWeapon` falls back to
+`models/weapons2/shotgun/shotgun_hand.md3` for exactly that case and so does `ViewWeapon`. They
+are filtered out of the converter's `missing` list and printed on their own line instead, because
+an expected absence in a list whose job is to be read is noise.
+
+The result for the machinegun is 6.16 units in front of the eye, 5.83 to the right and 7.80 below
+it, and the test asserts that against the MD3 rather than against a screenshot. The sign on the
+middle component is the one that would survive review if it were wrong, because a gun in the left
+hand looks deliberate.
+
+The bob is `CG_CalculateWeaponPosition` -- the walk sway, whose roll and yaw invert on alternate
+steps, and the idle drift on a one-second sine whose `xyspeed + 40` scale is what keeps a standing
+player's gun alive.
+
+**The paragraph that follows is superseded by D-081 and kept because the mistake in it is the
+useful part.** Reconstructing the cycle from distance was the right instinct -- Q3 does fire the
+bob and the footfall from one counter -- aimed at the wrong quantity, and the gun ran at twice
+Q3's rate as a result.
+
+Q3 drives both from `ps->bobCycle`, which the ported `bg_pmove.c` maintains and
+the shipping movement path (D-071) does not; reading it would have given a gun that bobs under
+`?move=q3` and is dead still otherwise. It is reconstructed from distance travelled instead, over
+the same `FOOTSTEP_STRIDE` the footstep sounds already use, so the dip and the footfall are one
+event -- which is what they are in Q3, where one counter fires both.
+
+**Three things Q3 does that this does not, all of them the renderer.** `RF_DEPTHHACK` squashes the
+gun's depth range so it can never poke through a wall; this draws through the scene's own G-buffer
+pass, so the gun clips into geometry you stand against exactly as any other object would.
+`RF_MINLIGHT` puts a floor under the gun's lighting; nothing here corresponds, so a dark room gets
+a dark gun. `RF_FIRST_PERSON` keeps it out of mirrors and out of the shadow pass, and only the
+second half matters here -- that is one flag, and it is cleared, because a view model half a metre
+from the eye otherwise throws its own shadow across the scene whenever a light is behind the
+player. The landing dip is not ported either, for a different reason: it is scaled by
+`cg.landChange`, which comes from the `EV_FALL_SHORT`/`MEDIUM`/`FAR` split, and nothing in this
+port carries a landing's severity.
+
+**What was verified live, and what was not.** D-077's ceiling still holds: the browser pane is
+permanently `document.visibilityState === 'hidden'`, `requestAnimationFrame` never fires, and no
+frame is ever simulated or drawn. But the tick signal can be sent by hand from the console, and
+everything downstream of it then runs for real. Ten ticks on `oa_dm1` build the machinegun's two
+pieces from the real bundle and place them 6.16 forward, 5.83 right and 7.80 below the real camera
+transform; the crosshair sizes to 36 px in a 720 px viewport and tints white, then yellow at 70
+health and red at 20; firing into four different walls produces four marks whose outward
+directions are those walls' own normals, and `DecalSystem3` packs every one of them.
+
+What still cannot be checked from here is a rendered pixel, and no screenshot is offered in place
+of one.
+
+### D-081: The gun jerked, and it was two mistakes with the same shape
+
+Reported as "the weapon moves with jerks" the session after D-080 shipped it. Two causes, and
+neither is in the placement arithmetic the tests were written against -- both are about *which
+value* that arithmetic was handed.
+
+**The camera the gun was welded to was not the camera the frame was drawn with.**
+
+`Engine`'s constructor subscribes `entityManager.update` to the ticker. Every application handler
+is added later, so every application handler runs *after* every system. `CameraSystem3` copies the
+camera entity's `Transform` onto Shade's camera during that update -- and what it copies is
+therefore the pose `PlayerController.update` wrote at the end of the **previous** tick.
+`ViewWeapon` was handed the camera entity's transform, immediately after `player.update` had
+written this tick's pose into it.
+
+So the gun was placed from pose N and the frame was drawn from pose N-1, every frame, for ever.
+The displacement is exactly the mouse movement of one tick. Measured on `oa_dm1` by feeding ten
+irregular frame times and ten irregular mouse deltas and taking the angle between the gun's barrel
+and the forward of the camera Shade would draw with:
+
+| mouse delta this tick | barrel to rendered forward |
+|---:|---:|
+| 12 deg | 12.95 deg |
+| 4 deg | 4.07 deg |
+| 20 deg | 20.09 deg |
+
+The gun swung across the screen by however far the player had just turned, frame after frame, in
+whatever irregular pattern the hand and the frame rate produced between them. A flick threw it off
+the side. After the fix the same ten frames give a spread of **0.082 degrees**, and all of that is
+the idle drift, which is meant to be there.
+
+The fix is not a reordering. Ordering is what made this possible in the first place, and a comment
+saying "call this before that" is a rule that gets broken by the next person to touch the tick
+loop. `ViewWeapon` is now handed `graphics.camera.camera.transform` -- the renderer's own camera --
+which is written by exactly one thing, `CameraSystem3`, inside `entityManager.update`, and is
+therefore settled before any application handler runs no matter where in one this is called. The
+requirement is stated where the parameter is declared rather than where the call happens.
+
+**And Q3's bob is a clock, not an odometer.**
+
+`PM_Footsteps` advances `ps->bobCycle` by `bobmove * msec` -- a fixed 0.4 per millisecond running,
+0.5 ducked -- so one arch takes 320 ms whatever the player's speed. Sprinting does not bob you
+faster; it moves you further per bob, and `LEGS_RUN` plays at its own frame rate to match.
+
+D-080 reconstructed the cycle from *distance travelled* instead, sharing `FOOTSTEP_STRIDE` with the
+footstep sounds on the reasoning that Q3 fires both from one counter -- which is true, and was the
+right instinct pointed at the wrong quantity. At Q3's own 320 unit/s run speed 48 units per step
+comes out at 6.7 arches a second against the C's 3.1, and a strafe-jump chain at 500+ went half as
+fast again. What reads as a bob at 3 Hz reads as a shiver at 7.
+
+`WeaponBob` is now `PM_Footsteps`' own arithmetic run from the same inputs -- grounded, asking to
+move, ducked, and the frame time -- which needs neither `ps.bobCycle` (the shipping movement path
+does not maintain it, D-071) nor a reconstruction. Measured live at 320 unit/s: three turning
+points a second, 3.56 degrees of yaw, and 0.27 degrees of movement per 8 ms with no step anywhere
+larger. Two new accessors carry the gates the cycle needs: `PlayerController.moving`, which is the
+*command* rather than the velocity because Q3 stops the cycle when the keys come up rather than
+when the sliding stops, and `ducked`, which is `PMF_DUCKED` rather than the crouch key because
+`PM_CheckDuck` refuses to stand you up under a ceiling.
+
+The counter is held as a float where the C holds an integer. `bobCycle` is a byte because it goes
+on the wire, and truncating it is visible in the sine at 300 fps; nothing here is transmitted, so
+the artefact is not reproduced.
+
+**What this says about the tests written in D-080.** They asserted the placement arithmetic -- that
+the barrel comes out along the view it was given, that the offset lands in the right hand -- and
+every one of them still passes, unchanged, on code that shook so badly it was the first thing
+anyone said about it. They were the right assertions about the wrong scope: correct given the
+inputs, and silent about whether the inputs were the right ones. The cases added here are about the
+*rates and the frames* rather than the geometry: an arch every 320 ms at three different speeds, a
+cycle that stops with the keys rather than with the velocity, and a sway whose largest step over a
+second is bounded by its own analytic slope -- 0.4 degrees, against the 6.4 a parity flip landing
+off the zero would inject.
+
+**Still open, and not changed here.** `Footsteps` in `Audio.ts` has the same defect: it plays a
+footstep every 48 units travelled, so at run speed it fires every 150 ms against Q3's 320. Its
+docblock justifies the distance reconstruction as "the same quantity the animation is a function
+of", and that premise is what is wrong -- `bobCycle` is a function of time. Fixing it is the same
+three lines and it halves the footstep rate at a run, which is an audible gameplay change nobody
+asked for; it is flagged rather than folded in.
+
+*Asked for, and done in D-082 -- where it turned out not to be three lines, because the right fix
+was to stop keeping a second copy of the counter at all.*
+
+### D-082: The gait is one counter again, and it lives where Q3 keeps it
+
+D-081 fixed the view weapon's bob and left the footstep sounds running at the rate that had been
+wrong the whole time, on the grounds that halving the footstep rate is an audible change nobody
+had asked for. The maintainer asked for it. This is that, and it is bigger than the three lines
+predicted -- because doing it properly meant putting the counter back where Q3 keeps it instead of
+fixing a second copy of it.
+
+**Q3 has one gait.** `PM_Footsteps` maintains `ps->bobCycle`, and everything downstream reads it:
+the footstep events come from the crossing test inside that same function, `CG_OffsetFirstPersonView`
+takes the view bob from `cg.bobfracsin`, and `CG_CalculateWeaponPosition` takes the gun's sway from
+the same. One clock, three consumers.
+
+This port had grown three answers to the question. `Footsteps` counted distance in
+`Audio.ts`. `WeaponBob` counted distance again in `ViewWeapon.ts`. And the ported `bg_pmove.c`
+maintained the real `ps.bobCycle` faithfully -- which nothing read, because the shipping movement
+path (D-071) does not run `PM_Footsteps` and so left the field at zero forever.
+
+So the counter moved to `PlayerController`, which is the port's stand-in for `PmoveSingle` on the
+kinematic path. `updateBobCycle` is `PM_Footsteps` minus the leg animations, which belong to a
+character the local player does not have, and minus the event queue, which this port does not have
+either. It runs **only** on the kinematic path; the ported path already does it, and doing it twice
+would double the rate.
+
+The arithmetic is the C's including the truncation. `bobCycle` is a byte on Q3's wire, so
+`trunc(old + bobmove * msec)` drops the fraction of a cycle a frame does not fill rather than
+carrying it -- at this rig's 8 ms tick, `0.4 * 8 = 3.2` advances the counter by 3, which is a 6%
+rate loss that Q3 also pays. Reproducing it is what makes the two movement paths comparable tick
+for tick, and `player-controller.test.ts` now compares them: after 200 running frames both report
+the **same** `bobCycle` and the same number of footsteps, and both park at 0 when the keys come up.
+
+**What changed audibly.** A running player took a step every 150 ms and now takes one every 320 ms.
+Measured in the browser on `oa_dm1` by wrapping the sound bank rather than the class: one second of
+holding forward asked for `player/footstep` **three** times, against six or seven before.
+
+**Three details of the C that came back with it, none of which the distance version could express.**
+
+- The cycle is gated on `pm->cmd.forwardmove || pm->cmd.rightmove` -- on *asking* to move, not on
+  moving. Release the keys at a sprint and Q3 stops the gait immediately rather than letting it
+  coast out with the velocity. Below 5 units it also resets the counter to zero, so the next stride
+  starts level instead of wherever the last one was interrupted.
+- A ducked player's cycle runs *faster* (`bobmove = 0.5`) and plays **no footstep at all**. Both
+  halves are Q3's: the bob is a gait and the silence is stealth. The old version had neither, and a
+  crouched player padded along at full volume.
+- The footstep fires where `bobCycle` crosses **64 or 192** -- the peaks of the two arches, not
+  their ends. `((old + 64) ^ (bobCycle + 64)) & 128` is the whole test, and its consequence is that
+  the sound lands with the gun at the top of its sway rather than the bottom. That is not what a
+  foot does and it is what Q3 does.
+
+`FOOTSTEP_STRIDE` is gone rather than corrected. There is no stride length in this any more: 320 ms
+at Q3's 320 unit/s run speed works out at 102 units of ground per step, against the 48 the old
+constant asserted, and the reason it is not a constant is that it is not a property of the gait --
+it is what the gait and the speed happen to multiply out to.

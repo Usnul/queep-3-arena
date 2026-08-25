@@ -59,11 +59,48 @@ export type { PhysicsTraceBackend };
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
 
+/**
+ * `PM_Footsteps`' cycle rates, per millisecond, with Q3's own comments on them:
+ * "faster speeds bob faster" and "ducked characters bob much faster". There is a
+ * third, 0.3 for `BUTTON_WALKING`, and nothing in this port binds a walk key.
+ */
+const BOBMOVE_RUN = 0.4;
+const BOBMOVE_DUCKED = 0.5;
+
 interface TransformLike {
     position: { set(x: number, y: number, z: number): void };
-    rotation: {
-        _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown;
-    };
+    rotation: RotationLike;
+}
+
+interface RotationLike {
+    _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown;
+}
+
+/**
+ * Point a meep rotation along Q3 view angles.
+ *
+ * Exported rather than inlined into `writeCamera` because the view weapon is
+ * placed in this frame and the test that checks where it lands has to build the
+ * same one. A hand-copied axis swap in the test would be a test of the copy
+ * (D-076), and this is the swap that has been the subject of two bugs.
+ *
+ * Q3 forward is `(cos(yaw)cos(pitch), sin(yaw)cos(pitch), -sin(pitch))` with
+ * pitch positive *downwards*, mapped through the same `(x, y, z) -> (x, z, -y)`
+ * the geometry went through. The result puts the view direction on the
+ * rotation's local **+Z**, which is Shade's own camera convention -- there is no
+ * inversion anywhere, and `camera_sync_from_transform` exists in meep to say so.
+ */
+export function orientToQ3Angles(viewanglesQ3: ArrayLike<number>, out: RotationLike): void {
+    const pitchRad = (viewanglesQ3[0]! * Math.PI) / 180;
+    const yawRad = (viewanglesQ3[1]! * Math.PI) / 180;
+
+    const cp = Math.cos(pitchRad);
+
+    const fx = Math.cos(yawRad) * cp;
+    const fy = Math.sin(yawRad) * cp;
+    const fz = -Math.sin(pitchRad);
+
+    out._lookRotation(fx, fz, -fy, 0, 1, 0);
 }
 
 /*
@@ -453,11 +490,55 @@ export class PlayerController {
             runPmove(this.pmove);
         } else {
             this.movement.step(this.pmove, this.crouching, deltaSeconds);
+            /*
+             ...and then the one thing `PM_Footsteps` did that the replacement
+             does not. Q3's whole gait -- the footstep sounds, the view bob and
+             the gun's sway -- is one counter on `playerState_t`, and the
+             kinematic path (D-071) retired the function that turns it. Left
+             unmaintained it sits at zero for the whole game, so a client reading
+             it gets a player who never takes a step; a client reconstructing it
+             from something else gets a second answer that can disagree with the
+             ported path, and did (D-081).
+            */
+            this.updateBobCycle(msec);
         }
 
         this.fireIfReady(msec);
 
         this.writeCamera(cameraTransform);
+    }
+
+    /**
+     * `PM_Footsteps`' cycle, for the path that no longer runs `PM_Footsteps`.
+     *
+     * The arithmetic is the C's, including the truncation: `bobCycle` is a byte
+     * on Q3's wire, so the fraction of a cycle a frame does not fill is dropped
+     * rather than carried, and reproducing that is what keeps the two movement
+     * paths agreeing on a quantity a test can compare. It costs a little rate at
+     * high frame rates, and it costs Q3 the same.
+     *
+     * Only the leg animations are missing from the port -- `PM_ContinueLegsAnim`
+     * belongs to a character this player does not have -- and the events, which
+     * this port raises from `Footsteps` rather than from an event queue.
+     */
+    private updateBobCycle(msec: number): void {
+        const ps = this.ps;
+        const cmd = this.pmove.cmd;
+
+        // Airborne leaves the position in the cycle intact but does not advance.
+        if (ps.groundEntityNum === C.ENTITYNUM_NONE) return;
+
+        if (cmd.moves[FORWARDMOVE] === 0 && cmd.moves[RIGHTMOVE] === 0) {
+            // Come to rest at the start of a stride, so the next one is level.
+            if (this.movementSpeed < 5) ps.bobCycle = 0;
+            return;
+        }
+
+        const bobmove = (ps.pm_flags & C.PMF_DUCKED) !== 0
+            ? BOBMOVE_DUCKED
+            : BOBMOVE_RUN;
+
+        ps.bobCycle = Math.trunc(ps.bobCycle + bobmove * msec) & 255;
     }
 
     /** Horizontal speed, Q3 units/s -- whichever solver produced it. */
@@ -516,18 +597,7 @@ export class PlayerController {
         );
 
         // `ps.viewangles` is in degrees, Q3 convention: pitch positive is *down*.
-        const pitchRad = (ps.viewangles[0]! * Math.PI) / 180;
-        const yawRad = (ps.viewangles[1]! * Math.PI) / 180;
-
-        const cp = Math.cos(pitchRad);
-
-        // Q3 forward is (cos(yaw)cos(pitch), sin(yaw)cos(pitch), -sin(pitch)),
-        // mapped through the same axis swap the geometry went through.
-        const fx = Math.cos(yawRad) * cp;
-        const fy = Math.sin(yawRad) * cp;
-        const fz = -Math.sin(pitchRad);
-
-        t.rotation._lookRotation(fx, fz, -fy, 0, 1, 0);
+        orientToQ3Angles(ps.viewangles, t.rotation);
     }
 
     /** Horizontal speed in Q3 units per second, for the debug readout. */
@@ -557,6 +627,31 @@ export class PlayerController {
 
     get onGround(): boolean {
         return this.ps.groundEntityNum !== C.ENTITYNUM_NONE;
+    }
+
+    /**
+     * Is the player *asking* to move, which is what `PM_Footsteps` gates on.
+     *
+     * Not `speed > 0`: Q3 stops advancing the bob cycle the moment the keys come
+     * up, so a slide to a halt stops bobbing straight away rather than coasting.
+     * Read off the command rather than the input, so it is false while the
+     * pointer is unlocked and false for a corpse, both of which the command fill
+     * already handles.
+     */
+    get moving(): boolean {
+        const moves = this.pmove.cmd.moves;
+        return moves[FORWARDMOVE] !== 0 || moves[RIGHTMOVE] !== 0;
+    }
+
+    /**
+     * `PMF_DUCKED`, which is the solver's answer rather than the key's.
+     *
+     * `PM_CheckDuck` refuses to stand you up under a ceiling, so the flag and
+     * the crouch key disagree for as long as you are stuck under one -- and it
+     * is the flag the animation and the bob rate follow.
+     */
+    get ducked(): boolean {
+        return (this.ps.pm_flags & C.PMF_DUCKED) !== 0;
     }
 
     /**

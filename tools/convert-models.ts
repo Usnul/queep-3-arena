@@ -74,20 +74,66 @@ interface Accum {
     indexCursor: number;
 }
 
-/** Every model an item can spawn, from the generated balance table. */
-function itemModelPaths(): string[] {
+interface BalanceItem {
+    readonly type: string;
+    readonly tag: string;
+    readonly models: string[];
+}
+
+function balanceItems(): readonly BalanceItem[] {
     const balance = JSON.parse(
         readFileSync(join(ROOT, 'src', 'game', 'balance.generated.json'), 'utf8')
-    ) as { items: { models: string[] }[] };
+    ) as { items: BalanceItem[] };
 
+    return balance.items;
+}
+
+/** Every model an item can spawn, from the generated balance table. */
+function itemModelPaths(): string[] {
     const seen = new Set<string>();
-    for (const item of balance.items) {
+    for (const item of balanceItems()) {
         for (const m of item.models) {
             if (m.toLowerCase().endsWith('.md3')) seen.add(m.replace(/\\/g, '/'));
         }
     }
 
     return [...seen].sort();
+}
+
+/**
+ * The hands models, which carry no geometry and are converted for one number.
+ *
+ * `CG_RegisterWeapon` builds the path by swapping the weapon's world model's
+ * extension for `_hand.md3`, and `CG_AddViewWeapon` draws that at the view
+ * origin and hangs the weapon off its `tag_weapon`. So that tag *is* where a Q3
+ * first-person weapon sits relative to the eye, per weapon, measured rather than
+ * guessed -- which is the only reason these are here. OpenArena's are
+ * surface-less: the arms Q3 shipped are gone and what is left is the tag and the
+ * animation frames.
+ *
+ * Six of the thirteen weapons ship none, and that is not a defect: the C falls
+ * back to `models/weapons2/shotgun/shotgun_hand.md3` for exactly that case, and
+ * so does `ViewWeapon`. They are therefore filtered here rather than reported as
+ * missing -- an expected absence in the `missing` list is noise in a list whose
+ * whole job is to be read.
+ */
+function handModelPaths(): { paths: string[]; fallbacks: string[] } {
+    const paths = new Set<string>();
+    const fallbacks: string[] = [];
+
+    for (const item of balanceItems()) {
+        if (item.type !== 'IT_WEAPON') continue;
+
+        const world = (item.models[0] ?? '').replace(/\\/g, '/');
+        if (!world.toLowerCase().endsWith('.md3')) continue;
+
+        const hand = `${world.slice(0, -'.md3'.length)}_hand.md3`;
+
+        if (existsSync(join(EXTRACTED, hand))) paths.add(hand);
+        else fallbacks.push(item.tag);
+    }
+
+    return { paths: [...paths].sort(), fallbacks };
 }
 
 /**
@@ -180,7 +226,8 @@ async function convertModels(): Promise<void> {
     const textureDir = join(outDir, 'textures');
     mkdirSync(textureDir, { recursive: true });
 
-    const paths = [...new Set([...itemModelPaths(), ...EXTRA_MODELS])].sort();
+    const hands = handModelPaths();
+    const paths = [...new Set([...itemModelPaths(), ...hands.paths, ...EXTRA_MODELS])].sort();
 
     const accum: Accum = { vertices: [], indices: [], vertexCursor: 0, indexCursor: 0 };
 
@@ -297,7 +344,11 @@ async function convertModels(): Promise<void> {
         `models: ${bundle.stats['models']} models, ${bundle.stats['meshes']} meshes, ` +
         `${bundle.stats['triangles']} tris, ${bundle.stats['materials']} materials, ` +
         `${bundle.stats['texturesWritten']} textures` +
-        (missingModels.length > 0 ? `\n  missing: ${missingModels.join(', ')}` : '')
+        (missingModels.length > 0 ? `\n  missing: ${missingModels.join(', ')}` : '') +
+        (hands.fallbacks.length > 0
+            ? `\n  no hands model, using the shotgun's tag_weapon (as the C does): ` +
+              hands.fallbacks.join(', ')
+            : '')
     );
 }
 
