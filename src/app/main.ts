@@ -111,6 +111,48 @@ function usePortedPmove(): boolean {
     return move === 'q3' || useClipmapTrace();
 }
 
+/**
+ * Run one phase of the frame, and do not let it take the rest of the frame with it.
+ *
+ * meep's `Signal.dispatch` wraps every handler in `try { ... } catch (e) {
+ * console.error("Failed to dispatch handler", _f, e) }`. That is a reasonable
+ * thing for a signal to do -- one bad listener should not stop the others -- but
+ * this application is *one* listener holding the whole frame, so a throw anywhere
+ * in it silently deletes everything below the throw, every frame, for the rest of
+ * the session. The player still walks, because `player.update` is the first line;
+ * the pickups stop spinning and stop being pickable, because they are the sixth;
+ * and the only trace is one `console.error` that says which *function* failed and
+ * nothing about which part of it.
+ *
+ * So the frame is a list of named phases. A phase that throws is reported once by
+ * name, with a repeat count so a per-frame failure does not bury the console, and
+ * the phases after it still run. Half a frame is worth more than none of one, and
+ * a named half is worth more than either.
+ */
+function frameStages(): (name: string, body: () => void) => void {
+    const failures = new Map<string, number>();
+
+    return (name: string, body: () => void): void => {
+        try {
+            body();
+        } catch (e) {
+            const count = (failures.get(name) ?? 0) + 1;
+            failures.set(name, count);
+
+            if (count === 1) {
+                console.error(
+                    `[queep] frame phase '${name}' threw; the phases after it still ran`,
+                    e
+                );
+            } else if (count === 100) {
+                console.error(
+                    `[queep] frame phase '${name}' has now thrown 100 times; no longer reporting it`
+                );
+            }
+        }
+    };
+}
+
 async function main(): Promise<void> {
     const engine = await EngineHarness.bootstrap();
 
@@ -638,10 +680,12 @@ async function main(): Promise<void> {
             arena.weapons.fire(player.weapon, eye, angles, 0, (Math.random() * 0xffff) | 0);
         };
 
+        const phase = frameStages();
+
         // `onTick` is documented as `Signal<number>` but is emitted as `any`, so
         // the callback parameter has no inferred type -- see GAP-001.
         engine.ticker.onTick.add((deltaSeconds: number) => {
-            player.update(deltaSeconds, transform);
+            phase('player', () => player.update(deltaSeconds, transform));
             /*
              `graphics.camera.camera.transform`, and **not** `transform`.
 
@@ -654,104 +698,117 @@ async function main(): Promise<void> {
              tick of mouse movement away from the view it is welded to, and swings
              across the screen by however far you just turned (D-081).
             */
-            viewWeapon.update(graphics.camera.camera.transform, deltaSeconds, {
-                weapon: player.weapon,
-                speed: player.speed,
-                // The same counter the footstep sounds read, three lines of
-                // frame apart: Q3 has one gait, not two.
-                bobCycle: player.ps.bobCycle,
-                // No gun for a corpse. Q3 switches to a death camera instead,
-                // which this port has no equivalent of.
-                visible: !player.dead,
-            });
-            arena.update(deltaSeconds);
+            phase('view weapon', () =>
+                viewWeapon.update(graphics.camera.camera.transform, deltaSeconds, {
+                    weapon: player.weapon,
+                    speed: player.speed,
+                    // The same counter the footstep sounds read, three lines of
+                    // frame apart: Q3 has one gait, not two.
+                    bobCycle: player.ps.bobCycle,
+                    // No gun for a corpse. Q3 switches to a death camera instead,
+                    // which this port has no equivalent of.
+                    visible: !player.dead,
+                })
+            );
+
+            phase('arena', () => arena.update(deltaSeconds));
 
             // Retire the emitter entities whose one-shot finished last frame.
-            audio.update();
+            phase('audio', () => audio.update());
 
-            for (const event of items.update(
-                deltaSeconds,
-                player.ps.origin,
-                player.inventory,
-                true
-            )) {
-                pickupName = event.label;
-                pickupAge = 0;
-                // `Touch_Item` plays the pickup sound to the picker only, dry.
-                audio.playLocal(`item/${event.item.def.classname}`);
-                if (event.selectWeapon !== null) {
-                    player.selectWeapon(event.selectWeapon as typeof player.weapon);
+            phase('items', () => {
+                for (const event of items.update(
+                    deltaSeconds,
+                    player.ps.origin,
+                    player.inventory,
+                    true
+                )) {
+                    pickupName = event.label;
+                    pickupAge = 0;
+                    // `Touch_Item` plays the pickup sound to the picker only, dry.
+                    audio.playLocal(`item/${event.item.def.classname}`);
+                    if (event.selectWeapon !== null) {
+                        player.selectWeapon(event.selectWeapon as typeof player.weapon);
+                    }
                 }
-            }
 
-            itemsView.update(items.now);
-            pickupAge += deltaSeconds;
+                itemsView.update(items.now);
+                pickupAge += deltaSeconds;
+            });
 
             /* ---- bots ---- */
 
-            botRuntime.update(deltaSeconds, deltaSeconds * 1000, items.items);
+            phase('bots', () =>
+                botRuntime.update(deltaSeconds, deltaSeconds * 1000, items.items)
+            );
 
             /* ---- the player's own mortality ---- */
 
-            if (player.inventory.health <= 0 && respawnIn < 0) {
-                respawnIn = 2;
-                arena.explosion(player.ps.origin, 90);
-                audio.play('impact/flesh', player.ps.origin);
-            }
-
-            if (respawnIn >= 0) {
-                respawnIn -= deltaSeconds;
-                if (respawnIn < 0) {
-                    /*
-                     `ClientSpawn`, minus the spawn-point selection Q3 does with
-                     `SelectSpawnPoint` -- which scores every point by distance
-                     from the nearest enemy so you do not materialise in front
-                     of one. A random point is the honest simplification.
-                    */
-                    const spawnPoint =
-                        botSpawns[(Math.random() * botSpawns.length) | 0] ?? [0, 0, 0];
-
-                    player.ps.origin[0] = spawnPoint[0]!;
-                    player.ps.origin[1] = spawnPoint[1]!;
-                    player.ps.origin[2] = spawnPoint[2]! + 9;
-                    player.ps.velocity[0] = 0;
-                    player.ps.velocity[1] = 0;
-                    player.ps.velocity[2] = 0;
-
-                    const fresh = newInventory();
-                    player.inventory.health = fresh.health;
-                    player.inventory.armor = 0;
-                    player.inventory.weapons.clear();
-                    for (const w of fresh.weapons) player.inventory.weapons.add(w);
-                    for (const key of Object.keys(player.inventory.ammo)) {
-                        delete player.inventory.ammo[key];
-                    }
-                    Object.assign(player.inventory.ammo, fresh.ammo);
-                    player.selectWeapon('WP_MACHINEGUN');
+            phase('mortality', () => {
+                if (player.inventory.health <= 0 && respawnIn < 0) {
+                    respawnIn = 2;
+                    arena.explosion(player.ps.origin, 90);
+                    audio.play('impact/flesh', player.ps.origin);
                 }
-            }
+
+                if (respawnIn >= 0) {
+                    respawnIn -= deltaSeconds;
+                    if (respawnIn < 0) {
+                        /*
+                         `ClientSpawn`, minus the spawn-point selection Q3 does with
+                         `SelectSpawnPoint` -- which scores every point by distance
+                         from the nearest enemy so you do not materialise in front
+                         of one. A random point is the honest simplification.
+                        */
+                        const spawnPoint =
+                            botSpawns[(Math.random() * botSpawns.length) | 0] ?? [0, 0, 0];
+
+                        player.ps.origin[0] = spawnPoint[0]!;
+                        player.ps.origin[1] = spawnPoint[1]!;
+                        player.ps.origin[2] = spawnPoint[2]! + 9;
+                        player.ps.velocity[0] = 0;
+                        player.ps.velocity[1] = 0;
+                        player.ps.velocity[2] = 0;
+
+                        const fresh = newInventory();
+                        player.inventory.health = fresh.health;
+                        player.inventory.armor = 0;
+                        player.inventory.weapons.clear();
+                        for (const w of fresh.weapons) player.inventory.weapons.add(w);
+                        for (const key of Object.keys(player.inventory.ammo)) {
+                            delete player.inventory.ammo[key];
+                        }
+                        Object.assign(player.inventory.ammo, fresh.ammo);
+                        player.selectWeapon('WP_MACHINEGUN');
+                    }
+                }
+            });
 
             /* ---- player audio ---- */
 
-            const step = footsteps.update(
-                player.ps.bobCycle,
-                player.onGround,
-                player.ducked
-            );
-            if (step === 'step') audio.play('player/footstep', player.ps.origin);
-            else if (step === 'land') audio.play('player/land', player.ps.origin);
+            phase('player audio', () => {
+                const step = footsteps.update(
+                    player.ps.bobCycle,
+                    player.onGround,
+                    player.ducked
+                );
+                if (step === 'step') audio.play('player/footstep', player.ps.origin);
+                else if (step === 'land') audio.play('player/land', player.ps.origin);
 
-            if (player.weapon !== lastWeapon) {
-                lastWeapon = player.weapon;
-                audio.playLocal('weapon/change');
-            }
+                if (player.weapon !== lastWeapon) {
+                    lastWeapon = player.weapon;
+                    audio.playLocal('weapon/change');
+                }
+            });
 
             /* ---- movers, and everything they do to the player ---- */
 
-            const world = effects.apply(player, movers, deltaSeconds);
-            moversView.update();
+            phase('movers', () => {
+                const world = effects.apply(player, movers, deltaSeconds);
+                moversView.update();
 
-            if (world.damage > 0) player.inventory.health -= world.damage;
+                if (world.damage > 0) player.inventory.health -= world.damage;
+            });
 
             /*
              `ClientTimerActions` runs on a 1000 ms cadence, not per frame. Health
