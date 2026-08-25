@@ -52,6 +52,15 @@ const SIDE_BACK = 1;
 const SIDE_ON = 2;
 
 export interface BrushHull {
+    /**
+     * Index of the brush this came from, in the clipmap it was built against.
+     *
+     * Carried so the contact-plane rule can be answered by the *ported*
+     * `CM_TraceThroughBrush` rather than re-derived from `planes`. Re-deriving
+     * it is how the physics backend ended up handing pmove the floor's normal
+     * for a horizontal move -- see `traceBrushList`.
+     */
+    readonly brush: number;
     /** Flat `(x, y, z)` per vertex, in Q3 coordinates. */
     readonly vertices: Float32Array;
     /** Three indices per triangle, wound CCW as seen from outside. */
@@ -320,6 +329,7 @@ export function brushToHull(cm: ClipMap, brushIndex: number): BrushHull | null {
     }
 
     return {
+        brush: brushIndex,
         vertices: new Float32Array(vertices),
         indices: new Uint32Array(indices),
         contents: cm.brushContents[brushIndex]!,

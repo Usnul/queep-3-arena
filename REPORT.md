@@ -960,6 +960,15 @@ the expensive way.
   symptom is a slide-move symptom. The measured improvement once fixed: bunny-hop position
   divergence p90 fell from 56.0 units to 0.12 units — a 450x reduction, from "visibly a
   different game" to "sub-centimetre".
+- **Postscript, and it is the more useful half.** The mitigation described above was, for the
+  entire life of the browser build, *not running in it*. The lookup it depends on was declared,
+  read, and never populated outside the test harness, so the shipping build took the fallback --
+  this gap's own wrong answer -- on every single contact. What a player reported was being wedged
+  in open space, unable to move sideways: `PM_SlideMove` clipping a horizontal move against a
+  floor normal, twice, and projecting the result onto the line between. If nothing else in this
+  report is taken away: **a workaround that only the tests exercise is not a workaround**, and the
+  more faithfully a harness reproduces the engine, the more completely it can hide that. See
+  D-061.
 - **What would fix it:** an optional `ShapeCastResult` field carrying the last-entered
   separating plane, or a `contact_mode` on `shape_cast`. Either is cheap relative to what every
   consumer will otherwise re-implement, badly and privately.

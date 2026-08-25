@@ -671,18 +671,21 @@ function traceThroughTree(
  * other value tests that submodel's brush list directly, as `CM_ClipHandleToModel`
  * arranges in the C.
  */
-export function boxTrace(
-    out: TraceResult,
-    cm: ClipMap,
+/**
+ * Set up the shared trace workspace for one sweep.
+ *
+ * Lifted out of `boxTrace` verbatim so `traceBrushList` can reuse it. The
+ * arithmetic is unchanged, including every `f32` rounding step, because the
+ * differential suites hold `boxTrace` to bit-exactness against the C and this
+ * is the code they were holding.
+ */
+function setupTraceWork(
     start: ArrayLike<number>,
     end: ArrayLike<number>,
     mins: ArrayLike<number>,
     maxs: ArrayLike<number>,
-    brushmask: number,
-    model = 0
+    brushmask: number
 ): void {
-    cm.checkcount += 1;
-
     tw.trace.allsolid = false;
     tw.trace.startsolid = false;
     tw.trace.fraction = 1;
@@ -696,11 +699,6 @@ export function boxTrace(
     tw.trace.surfaceFlags = 0;
     tw.trace.contents = 0;
     tw.trace.entityNum = 0;
-
-    if (cm.numNodes === 0) {
-        copyTrace(out, tw.trace);
-        return;
-    }
 
     tw.contents = brushmask;
 
@@ -744,6 +742,114 @@ export function boxTrace(
             tw.boundsMax[i] = f32(tw.start[i]! + tw.sizeMax[i]!);
         }
     }
+}
+
+/** The `isPoint`/`extents` half, which only a swept trace needs. */
+function setupSweepExtents(): void {
+    if (tw.sizeMin[0] === 0 && tw.sizeMin[1] === 0 && tw.sizeMin[2] === 0) {
+        tw.isPoint = true;
+        tw.extents[0] = 0;
+        tw.extents[1] = 0;
+        tw.extents[2] = 0;
+    } else {
+        tw.isPoint = false;
+        tw.extents[0] = tw.sizeMax[0]!;
+        tw.extents[1] = tw.sizeMax[1]!;
+        tw.extents[2] = tw.sizeMax[2]!;
+    }
+}
+
+/** Regenerate `endpos` from the caller's original, unrecentred start and end. */
+function finishTrace(
+    out: TraceResult,
+    start: ArrayLike<number>,
+    end: ArrayLike<number>
+): void {
+    if (tw.trace.fraction === 1) {
+        tw.trace.endpos[0] = end[0]!;
+        tw.trace.endpos[1] = end[1]!;
+        tw.trace.endpos[2] = end[2]!;
+    } else {
+        for (let i = 0; i < 3; i++) {
+            tw.trace.endpos[i] = f32(
+                start[i]! + f32(tw.trace.fraction * f32(end[i]! - start[i]!))
+            );
+        }
+    }
+
+    copyTrace(out, tw.trace);
+}
+
+/**
+ * `CM_TraceThroughBrush` over an explicit list of brushes, and nothing else.
+ *
+ * The physics backend needs this. meep's `shape_cast` answers "which body, and
+ * how far"; *which face of that body the contact belongs to* is a Q3 rule, and
+ * the rule is not "the plane with the greatest entry fraction" -- it is that,
+ * **plus** the leave-fraction test that decides whether the brush blocks the
+ * sweep at all. Re-deriving only the first half means every brush the box merely
+ * passes near contributes a candidate plane, so a player walking along a floor
+ * gets handed the floor's normal for a horizontal move. `PM_SlideMove` clips
+ * against it, achieves nothing, retries, accumulates a second plane, and clamps
+ * the player's velocity to the line where the two meet. The symptom is an
+ * invisible obstacle you can slide along and not cross.
+ *
+ * Running the ported brush test instead makes the answer identical to the
+ * clipmap's by construction rather than by careful re-reading -- which is what
+ * D-030 claimed and did not deliver.
+ *
+ * @param brushes brush indices to test; duplicates are harmless.
+ */
+export function traceBrushList(
+    out: TraceResult,
+    cm: ClipMap,
+    brushes: ArrayLike<number>,
+    count: number,
+    start: ArrayLike<number>,
+    end: ArrayLike<number>,
+    mins: ArrayLike<number>,
+    maxs: ArrayLike<number>,
+    brushmask: number
+): void {
+    cm.checkcount += 1;
+
+    setupTraceWork(start, end, mins, maxs, brushmask);
+    setupSweepExtents();
+
+    for (let i = 0; i < count; i++) {
+        const brushnum = brushes[i]!;
+        if (brushnum < 0 || brushnum >= cm.numBrushes) continue;
+
+        if (cm.brushCheckcount[brushnum] === cm.checkcount) continue;
+        cm.brushCheckcount[brushnum] = cm.checkcount;
+
+        if ((cm.brushContents[brushnum]! & tw.contents) === 0) continue;
+
+        traceThroughBrush(cm, brushnum);
+        if (tw.trace.fraction === 0) break;
+    }
+
+    finishTrace(out, start, end);
+}
+
+export function boxTrace(
+    out: TraceResult,
+    cm: ClipMap,
+    start: ArrayLike<number>,
+    end: ArrayLike<number>,
+    mins: ArrayLike<number>,
+    maxs: ArrayLike<number>,
+    brushmask: number,
+    model = 0
+): void {
+    cm.checkcount += 1;
+
+    setupTraceWork(start, end, mins, maxs, brushmask);
+
+    if (cm.numNodes === 0) {
+        copyTrace(out, tw.trace);
+        return;
+    }
 
     if (start[0] === end[0] && start[1] === end[1] && start[2] === end[2]) {
         // Position test.
@@ -753,17 +859,7 @@ export function boxTrace(
             positionTest(cm);
         }
     } else {
-        if (tw.sizeMin[0] === 0 && tw.sizeMin[1] === 0 && tw.sizeMin[2] === 0) {
-            tw.isPoint = true;
-            tw.extents[0] = 0;
-            tw.extents[1] = 0;
-            tw.extents[2] = 0;
-        } else {
-            tw.isPoint = false;
-            tw.extents[0] = tw.sizeMax[0]!;
-            tw.extents[1] = tw.sizeMax[1]!;
-            tw.extents[2] = tw.sizeMax[2]!;
-        }
+        setupSweepExtents();
 
         if (model !== 0) {
             traceSubmodel(cm, model);
@@ -783,20 +879,7 @@ export function boxTrace(
         }
     }
 
-    // Generate endpos from the original, unmodified start/end.
-    if (tw.trace.fraction === 1) {
-        tw.trace.endpos[0] = end[0]!;
-        tw.trace.endpos[1] = end[1]!;
-        tw.trace.endpos[2] = end[2]!;
-    } else {
-        for (let i = 0; i < 3; i++) {
-            tw.trace.endpos[i] = f32(
-                start[i]! + f32(tw.trace.fraction * f32(end[i]! - start[i]!))
-            );
-        }
-    }
-
-    copyTrace(out, tw.trace);
+    finishTrace(out, start, end);
 }
 
 /** A submodel has its own brush list rather than a place in the tree. */

@@ -1157,3 +1157,69 @@ The character check tests the *converter's* invariant rather than an absolute th
 `skelebot`'s own MD3 has mixed winding -- 57% clockwise on the legs, 74% on the head. Q3 renders
 it with the same artefacts. Asserting "reversed relative to the source" holds for well-authored
 content and badly-authored content alike.
+
+---
+
+### D-061: The invisible obstacle, and three ways the harness was not measuring the game
+
+Reported: a spot where the player could not move left or right and could only creep forwards and
+back along an invisible line. That is exactly what `PM_SlideMove` does when handed two
+contradictory contact planes -- clip against the first, achieve nothing, retry, accumulate the
+second, project onto the line where they meet. Three planes and it stops dead.
+
+Three separate defects, each of which alone was enough.
+
+**1. The contact-plane rule was never actually consulted in the browser.** `PhysicsWorld`
+declared `hullByEntity` and `hullByBody`, read them in the plane selection, and **never wrote
+them**. Every lookup missed, so every contact normal fell back to `shape_cast`'s
+minimum-penetration axis -- precisely the wrong answer GAP-012 is about, and which for a player
+standing on a floor is frequently *the floor*. A horizontal move clipped against a horizontal
+plane does nothing, so pmove retried and wedged. The headless harness *did* populate those maps,
+which is why every measurement in this document looked healthy while the browser build had no Q3
+contact semantics at all.
+
+**2. The rule itself was only half implemented.** `planeFromHull` took the plane with the greatest
+entry fraction over a brush's planes, which is the first half of `CM_TraceThroughBrush`. The
+second half -- the leave fraction, and the `enterFrac < leaveFrac` test that decides whether the
+brush blocks *at all* -- was missing. Without it, every brush the box merely passes near
+contributes a candidate.
+
+The fix for both is to stop re-deriving it. `trace.ts` now exports `traceBrushList`, which runs
+the ported, oracle-verified `CM_TraceThroughBrush` over an explicit brush list, and the physics
+backend calls it. The answer is identical to the clipmap's by construction rather than by careful
+re-reading -- which is what D-030 claimed and did not deliver.
+
+**3. The harness was measuring different geometry.** `HeadlessPhysics` built hulls from *every*
+brush including brush entities, at their authored positions; `PhysicsWorld` builds model 0 and
+gives movers kinematic bodies. So the harness had doors and buttons welded into the world.
+
+**All three are the same failure**, and it is the one D-036 already named: the harness carried its
+own copy of the trace so that a coordinate bug could not cancel itself out of the measurement.
+That reasoning was thin -- the real independence is the bit-exact clipmap control, which is a
+genuinely separate path -- and the duplication has now hidden three bugs. The query half is
+extracted into `PhysicsTrace` and shared. Body *construction* still differs, because one goes
+through the ECS and the other cannot; the query does not.
+
+**Measured, `oa_dm1`, before and after:**
+
+| | before | after |
+|---|---|---|
+| contact normals agreeing with Q3 | 99.6% | **100.0%** |
+| bunny-hop, max divergence | 1.3 | **0.2** |
+| bunny-hop, within 1 unit | 98% | **100%** |
+| bunny-hop, first divergence > 1 unit | frame 134 | **never** |
+| strafe-jump p90 | 271.0 | **121.3** |
+| chaos p90 | 1.28 | **0.18** |
+| hit/miss agreement | 88.2% | 88.7% |
+
+Those are the harness's numbers, and they moved only a little, because the harness was already
+running the good path. The browser build is the one that changed.
+
+**The regression guard is geometric rather than dynamic.** `test/physics-wedge.test.ts` asks the
+question the symptom actually poses: at every standing position the floor sampler can find, can
+the player leave? A spot the clipmap says is open in eight directions and the physics says is shut
+in eight is a wedge. `oa_dm1` had one before the fix and has none after; `aggressor` has none.
+
+The divergence harness could not have caught this. It measures *displacement under scripted
+input*, and a wedge is a place you have to already be standing in. Two harnesses measuring
+different things, and the gap between them was the bug.
