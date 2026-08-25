@@ -46,6 +46,7 @@ import {
     PlayerController,
     type InputDevices,
     type PointerMoveHandler,
+    type WheelHandler,
 } from '../src/client/PlayerController.ts';
 import { STAND_MAXS, STAND_MINS, CROUCH_MAXS } from '../src/client/MeepMove.ts';
 import { Footsteps } from '../src/client/Audio.ts';
@@ -97,7 +98,7 @@ class Devices implements InputDevices {
     readonly keyDown = new Signal<(event: KeyboardEvent) => void>();
     readonly pointerMove = new Signal<PointerMoveHandler>();
     readonly pointerDown = new Signal<(position: unknown, event: unknown) => void>();
-    readonly wheel = new Signal<(delta: unknown, event: WheelEvent) => void>();
+    readonly wheel = new Signal<WheelHandler>();
 
     readonly mouseButtonLeft = new Switch();
 
@@ -295,6 +296,15 @@ class Rig {
     /** A mouse movement, in pixels, through the device the engine would use. */
     look(dx: number, dy: number): void {
         this.devices.pointerMove.emit((h) => h(null, null, { x: dx, y: dy }));
+    }
+
+    /**
+     * One wheel notch, dispatched the way `PointerDevice#eventHandlerWheel`
+     * dispatches it: `send3(delta, position, event)`, with the delta already
+     * `sign()`ed per axis. `y` is +1 for a scroll down, -1 for up.
+     */
+    wheel(y: number, x = 0): void {
+        this.devices.wheel.emit((h) => h({ x, y, z: 0 }, { x: 0, y: 0 }, new Event('wheel')));
     }
 
     /**
@@ -765,6 +775,80 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> weapon [%s]', (solver
         expect(rig.shots.length, 'shots in one second').toBeGreaterThanOrEqual(9);
         expect(rig.shots.length, 'the trigger is not free').toBeLessThanOrEqual(11);
         expect(before - rig.player.inventory.ammo[rig.player.weapon]!).toBe(rig.shots.length);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The mouse wheel
+ *
+ * D-076, and the same hole as the three above: a device signal whose shape the
+ * port guessed at. `PointerDevice` dispatches `wheel.send3(delta, position,
+ * event)`, the controller was written against `(delta, event)`, so the handler
+ * read the pointer position as the event and threw on `preventDefault`. Because
+ * meep's `Signal` swallows handler throws into `console.error`, the only symptom
+ * in the game was a weapon that would not change.
+ *
+ * Solver-independent, so it runs once rather than on both paths.
+ * ------------------------------------------------------------------ */
+
+describe('PlayerController -> weapon cycling', () => {
+    /** Three owned weapons, so that "up" and "down" have different answers. */
+    const rigWithThree = (): Rig => {
+        const rig = new Rig('oa_dm1', 'meep').settle();
+        rig.activate();
+
+        rig.player.inventory.weapons.add('WP_SHOTGUN');
+        rig.player.inventory.ammo.WP_SHOTGUN = 10;
+        expect(rig.player.weapon, 'the spawn weapon').toBe('WP_MACHINEGUN');
+
+        return rig;
+    };
+
+    it('takes the delta the device sends, and does not touch the event', () => {
+        const rig = rigWithThree();
+
+        // The throw this covers happened before any weapon changed, so the
+        // weapon assertion is the real one -- a green `not.toThrow` on its own
+        // would also pass against a handler that did nothing at all.
+        expect(() => rig.wheel(1)).not.toThrow();
+        expect(rig.player.weapon, 'one notch down').toBe('WP_SHOTGUN');
+    });
+
+    it('cycles forward down the weapon order and back up it', () => {
+        const rig = rigWithThree();
+
+        rig.wheel(1);
+        expect(rig.player.weapon).toBe('WP_SHOTGUN');
+
+        rig.wheel(-1);
+        expect(rig.player.weapon).toBe('WP_MACHINEGUN');
+
+        rig.wheel(-1);
+        expect(rig.player.weapon).toBe('WP_GAUNTLET');
+    });
+
+    it('skips weapons the player does not own, and wraps', () => {
+        const rig = rigWithThree();
+
+        // Past the shotgun there is nothing owned until the order wraps.
+        rig.wheel(1);
+        rig.wheel(1);
+        expect(rig.player.weapon, 'wrapped past six unowned weapons').toBe('WP_GAUNTLET');
+    });
+
+    it('leaves the weapon alone on a horizontal scroll', () => {
+        const rig = rigWithThree();
+
+        rig.wheel(0, 1);
+        expect(rig.player.weapon, 'sideways is not a weapon change').toBe('WP_MACHINEGUN');
+    });
+
+    it('ignores the wheel until the pointer is locked', () => {
+        const rig = rigWithThree();
+        rig.deactivate();
+
+        rig.wheel(1);
+        expect(rig.player.weapon, 'unlocked').toBe('WP_MACHINEGUN');
     });
 });
 

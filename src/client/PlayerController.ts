@@ -171,6 +171,17 @@ export type PointerMoveHandler = (
     delta: { readonly x: number; readonly y: number }
 ) => void;
 
+/**
+ * `(delta, position, event)`. The delta is the device's own normalisation of the
+ * wheel event -- each axis is already `sign()`ed to -1, 0 or +1, because raw
+ * `WheelEvent` deltas differ in both magnitude and unit between browsers.
+ */
+export type WheelHandler = (
+    delta: { readonly x: number; readonly y: number; readonly z: number },
+    position: unknown,
+    event: unknown
+) => void;
+
 export interface InputDevices {
     readonly keyboard: {
         readonly keys: Readonly<Record<string, InputSwitch | undefined>>;
@@ -183,7 +194,7 @@ export interface InputDevices {
         readonly on: {
             readonly move: InputSignal<PointerMoveHandler>;
             readonly down: InputSignal<(position: unknown, event: unknown) => void>;
-            readonly wheel: InputSignal<(delta: unknown, event: WheelEvent) => void>;
+            readonly wheel: InputSignal<WheelHandler>;
         };
     };
 }
@@ -377,10 +388,18 @@ export class PlayerController {
         }
     }
 
-    private readonly onWheel = (_delta: unknown, e: WheelEvent): void => {
+    /**
+     * The device suppresses the wheel event before it dispatches, so there is no
+     * `preventDefault` to call here -- and nothing to call it on: the handler is
+     * passed `(delta, position, event)`, and the event comes third.
+     */
+    private readonly onWheel: WheelHandler = (delta): void => {
         if (!this.active) return;
-        e.preventDefault();
-        this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+
+        // A purely horizontal or zero scroll is not a weapon change.
+        if (delta.y === 0) return;
+
+        this.cycleWeapon(delta.y);
     };
 
     /** First click takes the pointer lock; every click after it fires. */
