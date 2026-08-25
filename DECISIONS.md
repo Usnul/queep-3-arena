@@ -1746,3 +1746,88 @@ and not each other, because Q3's target selection scores every client and this o
 runs. The cut is now asserted directly in its own test — with no player, nobody fires — so the
 report's claim and the code cannot drift apart, and implementing bot-versus-bot selection will
 fail that test and force the report to be updated.
+
+### D-070: The two loudest findings in the report were overreach, and the engine's own solver is why
+
+Raised by the maintainer, in these terms: *"You decided not to use the physics engine for
+collisions, and not to use kinematic controller, and now you bitch that the shapecast query is not
+as amazing as you had hoped."*
+
+One third of that is wrong and two thirds land. Taking them in order.
+
+**"You decided not to use the physics engine for collisions."** This one is backwards, and the
+record is clear: the port *does* use meep's physics for collision, and it does so on the
+maintainer's own instruction, against an initial recommendation not to (D-029). That is the whole
+reason `PhysicsTrace` exists.
+
+**"...and not to use the kinematic controller."** True, and the consequence is worse than the
+observation. `engine/control/first-person/collision/KinematicMover.js` is 635 lines of kinematic
+character solver. Its constructor takes `skin = 0.005` — the standoff GAP-020 asserted had "no
+expression in the API". Its first step is depenetration via `overlap()` plus
+`compute_penetration`, which is public, exhaustively documented, and is exactly the start-solid
+recovery GAP-019 asserted a `shape_cast`-based backend "silently removes". Beside it,
+`DESIGN_COLLISION.md` is 365 lines that set out recover → slide → stairs → ground → settle, with a
+constants table citing Quake `numbumps 4`, Quake 3 `MIN_WALK_NORMAL 0.7`, Quake `SV_FlyMove`
+crease handling and Fauerby's `veryCloseDistance ~0.005` for the skin. It names the exact symptom
+this port reported -- "Band-test + active snap ... is what structurally kills the landing
+**bounce**" -- as a solved problem.
+
+I never opened any of it. GAP-009, at phase 2, evaluated `FirstPersonPlayerController`, concluded
+correctly that a feel-first configurable controller cannot host `bg_pmove`, and wrote that up --
+and in the same paragraph *named* `KinematicMover` before treating the directory as decided. Two
+phases later I filed its capabilities as absent from the engine.
+
+**"...and now you bitch that the shapecast query is not as amazing as you had hoped."** Fair on
+the framing, and the framing was doing real damage: both entries were `blocker`, they were the
+top-ranked item in the executive summary, and the claim attached to them was that *every* consumer
+building a character controller would hit all three. That claim is false. Every consumer who
+builds one out of the raw query layer while ignoring the solver will hit them.
+
+**What changed.**
+
+- **GAP-020 is withdrawn.** Not softened -- withdrawn. It asked for a `standoff` parameter on
+  `shape_cast` and cited PhysX, Bullet and Unity as precedent. The precedent actually cuts the
+  other way: `CharacterController.skinWidth` is on Unity's *controller*, not on
+  `Physics.SphereCast`, and meep has made the same call deliberately and documented it.
+- **GAP-019 drops from blocker to minor** and is reframed as what it actually is: Q3's per-brush
+  interval rule cannot be expressed through `shape_cast`, which matters *because this port is
+  required to reproduce Q3's arithmetic exactly*. That is a constraint the brief imposed and I
+  accepted; it is not a defect in a query that correctly answers a different question. The
+  `allsolid` bullet is corrected outright, since `compute_penetration` is the answer.
+- **GAP-021 is new** and carries the residue that is genuinely the engine's: a solver whose own
+  docblock says it is controller-agnostic, and whose imports confirm it -- `Vector3`, `Ray3`,
+  `Transform`, `Collider`, `compute_penetration`, `PhysicsSurfacePoint`, nothing from the
+  controller -- is namespaced at `engine/control/first-person/collision/`, and the most useful
+  collision document in the package sits beside it. A consumer who has ruled out the first-person
+  controller has been handed a path that says those files are not for them. The fix is a directory
+  move plus a re-export.
+- **The executive summary is re-ranked again.** The first-run experience returns to the top; the
+  new item 2 is this failure, stated as what a maintainer can act on.
+- **Section 5's 11× is reattributed.** It is not "what the gaps cost". It is what it costs to keep
+  Quake III's arithmetic while running on meep's broadphase -- a trade this port chose.
+
+**Would `KinematicMover` have been used?** For the slide-move itself, no, and that is worth being
+precise about rather than conceding wholesale: `move()` *is* the slide loop -- recover, sweep,
+clip, crease, dead-stop -- and replacing `PM_SlideMove` is exactly what the brief forbids. So the
+correct outcome of reading it in phase 2 would have been a GAP-009-shaped positioning entry: *the
+engine has a good kinematic solver and a Q3 port cannot use it, because the solver is the
+algorithm and Q3's algorithm is the deliverable.* That is a useful finding. What I filed instead
+was two claims of absence about things that were present.
+
+Three of the port's individual pieces would still have changed: `compute_penetration` answers
+`PM_CorrectAllSolid` directly, the `skin` option would have removed GAP-020 before it was written,
+and the constants table would have been the most useful page in the package during phase 2b.
+
+**The pattern, since this is now the third instance.** A conclusion about one component was
+allowed to cover its neighbours: a stale docblock cost double-sided surfaces for the whole port
+(D-060 / GAP-007), a wrong reading of `NavigationMesh` took two rounds to correct (D-058 /
+GAP-016), and rejecting a controller cost six hours and two wrong fixes (this entry). None was
+caught by a test, because they are failures to look rather than failures to check. The mitigation
+that would actually have worked is dull: when an entry is about to claim the engine *cannot* do
+something, read the directory, not the file.
+
+**What is deliberately not done.** The collision backend is not being rewritten onto
+`compute_penetration` now. It is measured at 100.0% hit/miss agreement with a bit-exact control
+and zero median divergence, the change would be unmeasured churn during a reporting phase, and the
+honest record of what the port would have looked like is more valuable here than the port looking
+different. Recorded as the alternative, in GAP-019 and GAP-021, rather than silently taken.

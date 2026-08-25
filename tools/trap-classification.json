@@ -54,7 +54,7 @@
     "trap_Trace": {
       "status": "hybrid",
       "meep": "PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush",
-      "note": "The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019) or its surface standoff (GAP-020). `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against.",
+      "note": "The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019). The standoff is not an engine gap -- meep's own KinematicMover carries one as a `skin` option, which GAP-020 asserted otherwise and is withdrawn for; see GAP-021. `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against.",
       "evidence": [
         "src/client/PhysicsTrace.ts::contactPlane",
         "src/q3/cm/trace.ts::export function traceBrushList",

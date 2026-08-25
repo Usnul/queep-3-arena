@@ -27,77 +27,49 @@ the port needed, the port worked around it and the workaround is written down he
 
 Ranked by how much they would cost the next person, not by how much they cost me.
 
-**Re-ranked from scratch in phase 6.** The previous ranking was written before GAP-019 and
-GAP-020 existed, and those two changed the shape of the document rather than adding to it: they
-are the most expensive findings here, they compound with GAP-012, and together they are the
-reason the shipping build runs meep's physics *in front of* Q3's collision code rather than
-instead of it. Appending them at the bottom would have been the wrong answer to the question this
-section is supposed to answer.
+**Re-ranked from scratch in phase 6, then corrected again after review.** The phase 6 ranking
+put "building a character controller on `shape_cast`" first, on the strength of GAP-019 and
+GAP-020. That was wrong and the correction is worth stating before the list rather than after it:
+meep ships `KinematicMover`, a kinematic character solver with a `skin` standoff, a public
+`compute_penetration` depenetration step, Quake-lineage crease handling and a 365-line design
+document — and I never opened it, because in phase 2 I had evaluated the *controller* it sits
+beside, correctly rejected that, and let the rejection cover the directory. GAP-020 is withdrawn.
+GAP-019 shrinks to a Q3-fidelity constraint. What replaces them at the top of this list is not
+those findings; it is the first-run experience, which was always the item with the widest reach.
+The full correction is GAP-021.
 
-1. **Building a character controller on `shape_cast` costs three findings, in a fixed order, and
-   each one presents as your own bug.** This is the single most expensive thing in this report —
-   about six hours across a session, arriving as four separate player-visible failures rather than
-   as anything a measurement flagged — and it is the one a maintainer can act on with the widest
-   effect, because *every* consumer who builds a character controller will hit all three.
-
-   - **There is no way to ask a swept query to stop short of contact** (GAP-020). Every character
-     controller needs a standoff; Q3 offsets its planes by 1/8 unit, and every engine solves it
-     somehow. `shape_cast` has no parameter for it. Subtracting the epsilon from the returned
-     fraction is the obvious workaround, it is what this port did first, and it is *silently
-     different* whenever the sweep stops just short of a surface rather than reaching it. The
-     result: falling players who never land. 63 of 64 dropped players never reached the ground,
-     `groundEntityNum` never left `ENTITYNUM_NONE`, so the animation code played the jump clip, so
-     every bot in the level rendered with its legs tucked up. Three unrelated-looking bug reports,
-     one cause. The correct workaround is to inflate the swept shape instead — which is correct,
-     is not obviously correct, and makes the next problem worse.
-   - **`shape_cast` answers "does the swept volume touch this body"; movement code asks "does this
-     brush block this move"** (GAP-019). These disagree systematically at exactly the distance a
-     character controller lives at, because *resting on a surface means being sub-epsilon away
-     from it*. A query that reports intersection without reporting whether the intersection
-     opposes the sweep fires on every contact, in every direction, forever. `skip_initial_overlaps`
-     is the right idea and is not enough: a surface you are 1/8 unit from is not overlapping, it is
-     reached at a very small positive `t`, and clamping that to zero is what wedges the player. A
-     player stood in an open corridor with velocity climbing to 320 units a second against a
-     position that never changed. The result also cannot express `allsolid` — "began inside and
-     never gets out" versus "began inside but the sweep leaves" — and pmove's recovery path is
-     gated on precisely that distinction.
-   - **`shape_cast` reports the minimum-penetration axis as its contact normal; character control
-     needs the latest entering plane** (GAP-012). They agree on a flat wall and disagree in a
-     corner, where meep returned `[0, 1, 0]` — the floor — for a box wedged against a wall. Any
-     slide-move controller clips velocity against that normal, and clipping against the wrong
-     plane in a corner is how characters get stuck in corners.
-
-   **What the workaround costs, now that it has a number.** Q3's own per-brush test is re-imposed
-   over the brushes `overlap_shape` finds, so the shipping configuration is meep's broadphase and
-   sweep in front of Q3's narrowphase rule. Measured (`npm run bench-match`): one trace costs
-   4.53 µs on the shipping path against 0.42 µs for the ported clipmap answering the entire
-   question; `shape_cast` alone is 3.49 µs of it and `traceBrushList` — the ported code that
-   actually produces the fraction, the plane, `startsolid` and `allsolid` — is 0.29 µs. A whole
-   six-bot deathmatch costs 356 µs a frame on meep's physics and 31 µs on the ported clipmap, for
-   an identical match. **The part that decides the answer is the cheapest line in the table.**
-   That is not a criticism of `shape_cast`'s implementation, which is doing strictly more work;
-   it is the price of the two gaps, and closing them would collapse three queries into one.
-
-   The workaround also needs the source half-spaces kept alongside the `ConvexHullShape3D`. An
-   application whose hulls came from a mesh has nothing to re-derive from and would have to give
-   up or reimplement the broadphase.
-
-   **What would fix it:** a `standoff` / `skin_width` parameter on `shape_cast` (a subtraction on
-   an existing comparison), a directional blocking predicate (the separating-axis distance at
-   `t = 0` signed against the sweep direction — already computed, currently discarded), an
-   `initially_overlapping` flag, and an option for the latest-entering-plane normal. All four are
-   information the query already has.
-
-2. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
-   spent on graphics.** Second only because it is a smaller number than the first, but it is the
-   *cheapest* item on this list to fix and the only one that hits 100% of consumers on day one.
-   The engine itself came up cleanly and rendered at 230 FPS on the first frame it drew. The time
+1. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
+   spent on graphics.** The cheapest item on this list to fix and the only one that hits 100% of
+   consumers on day one. The engine itself came up cleanly and rendered at 230 FPS on the first frame it drew. The time
    went to integration defects a consumer hits in a fixed order and cannot skip: an optional peer
    dependency that is a mandatory top-level import in the de-facto entry point (BUG-2), worker
    bundles addressed at a web-root path no application has and with no parameter to correct it
    (BUG-4), and a missing `./package.json` export that breaks the standard way of locating a
    package root (BUG-3). Each is individually a one-line fix. Together they are the entire
    first-run experience.
+
+2. **A whole layer can be missed because of a decision about the layer next to it, and the
+   package's own naming makes that easy.** This one cost this port about six hours and two wrong
+   fixes, and most of the blame is mine — but the part that is not is cheap to fix and would stop
+   it happening to the next person. meep ships `KinematicMover`: 635 lines of kinematic character
+   solver, controller-agnostic by its own docblock and by its imports, with a `skin` standoff, a
+   `compute_penetration` recover step, Quake-lineage crease handling (`MAX_CLIP_PLANES = 5`,
+   `numbumps 4`, `MIN_WALK_NORMAL 0.7`), and a 365-line `DESIGN_COLLISION.md` beside it setting
+   out the whole recover → slide → stairs → ground → settle sequence with a referenced constants
+   table.
+
+   It lives at `engine/control/first-person/collision/`. In phase 2 I evaluated
+   `FirstPersonPlayerController`, correctly concluded a feel-first opinionated controller cannot
+   host `bg_pmove` (GAP-009), wrote that up — *naming `KinematicMover` in the same paragraph* —
+   and treated the directory as decided. Two phases later I filed its capabilities as absent from
+   the engine, in what became GAP-019 and GAP-020. GAP-020 is now withdrawn outright; GAP-019 is
+   a Q3-fidelity constraint rather than an engine gap.
+
+   The engine-facing ask is one directory move plus a re-export: a solver that depends on nothing
+   in the controller should not be namespaced inside it, and the most useful collision document
+   in the package should not be filed under the one component a reader may already have ruled
+   out. `engine/physics/character/` would have been found. See GAP-021.
+
 
 3. **Four APIs accept a wrong-but-plausible call, do nothing, and report success at every
    diagnostic you reach for.** Roughly four hours in total, spread so thinly that none of them
@@ -127,7 +99,22 @@ section is supposed to answer.
    *the engine is very good at loud, specific failures* (section 7) *and has no story at all for
    silent ones.*
 
-4. **Photometric lighting is the right design and has no guidance, and world scale is silently
+4. **`shape_cast` returns the minimum-penetration normal, and a slide-move controller needs the
+   plane it entered last.** They agree on a flat wall and disagree at a corner, where meep
+   returned `[0, 1, 0]` — the floor — for a box wedged against a wall. Clip velocity against that
+   and the horizontal motion into the wall survives untouched; re-trace, accumulate a second
+   contradictory plane, hit the five-plane limit, and the player stops dead about a metre short of
+   the corner. Two hours, most of it spent believing the port had a `PM_SlideMove` bug, because a
+   slide-move symptom is what it looks like. Re-deriving the plane from source geometry took
+   bunny-hop divergence from 56.0 units to 0.12 — a 450× reduction (GAP-012).
+
+   Kept in this list, at this height and no higher, after the correction described above: the API
+   observation is factual and the workaround needs source half-spaces the engine does not keep,
+   but "every consumer will re-implement this privately" was not true, and a consumer using
+   `KinematicMover` rather than the raw query may not meet it at all.
+
+
+5. **Photometric lighting is the right design and has no guidance, and world scale is silently
    load-bearing.** `PointLight.intensity` is candela and falloff is inverse-square in scene units.
    The consequence is undocumented: content authored in any unit other than metres renders black,
    with no diagnostic. Diagnosing it cost about 90 minutes and was actively misleading — raising
@@ -138,7 +125,7 @@ section is supposed to answer.
    overcast, direct sun — in the lighting docs would have prevented both, and would also be the
    only place that tells a consumer world scale matters.
 
-5. **Generated `.d.ts` files do not typecheck, and it is systematic rather than incidental.**
+6. **Generated `.d.ts` files do not typecheck, and it is systematic rather than incidental.**
    664 errors across 152 declaration files on this project's own import surface with
    `skipLibCheck: false`. 533 of them are one mechanical fault — a JSDoc type referenced without
    a matching import in the emitted `.d.ts`, plus JSDoc pseudo-types (`int`, `Class`, bare `T`)
@@ -148,7 +135,7 @@ section is supposed to answer.
    code: `LabelView` rejects a call its own implementation explicitly supports, and `Collider.shape`
    is typed such that no concrete shape is assignable to it (BUG-5, GAP-001, GAP-013).
 
-6. **Baked lightmaps cannot be imported, only baked — and the workaround succeeds on four of six
+7. **Baked lightmaps cannot be imported, only baked — and the workaround succeeds on four of six
    maps and fails on two, unpredictably.** The vertex channel exists, the attribute is literally
    named "used for light map", and there is a whole `shade/renderer/lightmap/` subsystem — but it
    is a *baker*, and no material has a lightmap slot (GAP-006). Every level format that predates
@@ -162,7 +149,7 @@ section is supposed to answer.
    *unpredictably* is worse than one that fails uniformly, because nothing tells you which content
    it will fail on.
 
-7. **Clustered lighting is as good as advertised, and this port is alive because of it.** 147
+8. **Clustered lighting is as good as advertised, and this port is alive because of it.** 147
    dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
    not register against geometry count. That matters more than a benchmark: with lightmaps
    unavailable and every `light` entity stripped at compile time, reconstructing the lighting as
@@ -171,7 +158,7 @@ section is supposed to answer.
    Ranked this high because a maintainer needs to know which properties are load-bearing before
    optimising near them.
 
-8. **The physics engine runs headless, and that property is worth more than any single feature in
+9. **The physics engine runs headless, and that property is worth more than any single feature in
    the package.** `PhysicsSystem`, `shape_cast` and `overlap_shape` need no graphics device, no
    `Engine`, no entity manager and no DOM. That is what made a three-way differential harness
    against a WASM oracle possible, and it is why "a real match is playable" is a test — six bots
@@ -180,7 +167,7 @@ section is supposed to answer.
    player-reported bugs in this project's record was, in principle, catchable in CI because of it;
    that they were not is this port's failure and is item 12.
 
-9. **A navmesh needs a surface and a Quake III map is a pile of interpenetrating solids — and the
+10. **A navmesh needs a surface and a Quake III map is a pile of interpenetrating solids — and the
    engine has more tooling for this than I first credited.** `NavigationMesh` is real and good:
    agent radius, height, step and climb angle in, exact any-angle geodesics out. My first
    conclusion — that nothing in the package could repair arbitrary geometry into something it
@@ -196,7 +183,7 @@ section is supposed to answer.
    routes 100% of the same pairs, because a trace does not care how many surfaces the world is
    made of (GAP-016).
 
-10. **Nothing runnable ships, and no document says which systems you have to register.** The
+11. **Nothing runnable ships, and no document says which systems you have to register.** The
     published package contains `samples/generation/**` and nothing else — no sample boots the
     engine, loads a model or draws a frame, and `exports` has no `./samples/*` entry so the folder
     cannot be imported even though it is shipped (GAP-002). `EngineHarness` turns out to be the
@@ -205,11 +192,11 @@ section is supposed to answer.
     → what breaks silently if you forget.** That table is derivable from the existing constructors
     and would have prevented items 3a and part of 3b outright.
 
-11. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+12. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
     main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
     concurrent executor and a worker pool. A real level is several times that size (GAP-008).
 
-12. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+13. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
     correctly does not have — and the honest count of what the engine actually carried is smaller
     than this report used to claim.** Of 309 distinct `trap_*` syscalls, 227 belong to subsystems
     this port deletes outright. Of the rest: **31 map onto a meep facility the port actually
@@ -224,7 +211,7 @@ section is supposed to answer.
     matrix now requires every disposition claiming shipped code to cite `path::token` in this
     repository, and `--check` fails if the file or the token is gone. Section 2 lists what moved.
 
-13. **The measurement was good and the summary statistic was wrong, which is a lesson about
+14. **The measurement was good and the summary statistic was wrong, which is a lesson about
     verification rather than about meep.** The physics backend was signed off at 88% sweep
     agreement with a bit-exact control, and a player was frozen in an open corridor. The
     disagreements were rare and every single one of them was catastrophic rather than small —
@@ -235,7 +222,16 @@ section is supposed to answer.
     `am_thornish`, the largest map in the build, has no `info_player_deathmatch` at all, so it had
     been running with zero bots and respawning the player at the world origin.
 
-14. **Smaller things that each cost under an hour and would each cost the next person the same.**
+    The same review that produced this report found the sharper version of the lesson, and it is
+    not about measurement at all: **a conclusion about one component was allowed to cover its
+    neighbours, three times.** A stale docblock cost double-sided surfaces (GAP-007). A wrong
+    reading of `NavigationMesh` cost two rounds of analysis before the corrected entry (GAP-016).
+    Rejecting `FirstPersonPlayerController` cost the six hours in item 2, because the directory it
+    lives in also contains the solver (GAP-021). Every one of those was a decision to stop reading,
+    and none of them was flagged by any test, because they are failures to look rather than
+    failures to check.
+
+15. **Smaller things that each cost under an hour and would each cost the next person the same.**
     The camera uses the object convention (+Z forward), documented inside the docblock of a
     function consumers never call — a hand-built view quaternion assuming −Z points the camera
     exactly backwards, which in a closed level presents as *a dark scene* rather than a reversed
@@ -267,7 +263,9 @@ an initial recommendation not to. That reversal is documented in D-029 and its r
 section 5. The short version is that it works -- divergence from the C oracle is zero at the
 median on all four input patterns across both measured maps, and the ported control reads
 exactly zero in the same run -- and that getting there cost three findings, GAP-012, GAP-019
-and GAP-020, which are the three most expensive entries in this report. It also did not let the ported collision code be deleted:
+and GAP-020 — of which GAP-020 has since been withdrawn and GAP-019 substantially reduced, after
+review established that the engine ships a kinematic character solver this port never opened
+(GAP-021). It also did not let the ported collision code be deleted:
 `PhysicsTrace` runs Q3's own per-brush test on the brushes meep finds, so the shipping
 configuration is meep's broadphase and sweep in front of Q3's narrowphase rule. That is the
 finding, not a footnote to it.
@@ -334,7 +332,7 @@ rather than by good intentions. Every disposition that claims something was buil
 The corrections were not cosmetic. `trap_Trace` and `trap_CM_BoxTrace` were `ported`, written
 before the physics swap and never revisited; they are now `hybrid`, because the shipping
 backend is meep's broadphase and sweep with Q3's per-brush rule behind it and *both* halves are
-load-bearing (GAP-019, GAP-020). `trap_R_LightForPoint` was the matrix's only `GAP` and pointed
+load-bearing (GAP-019; GAP-020 has since been withdrawn). `trap_R_LightForPoint` was the matrix's only `GAP` and pointed
 at a gap-register entry that does not exist; it is not a gap at all, and why is worth reading.
 `trap_R_RegisterSkin` and `trap_R_RegisterShader` were `mapped` and are `workaround`s — both
 are resolved offline, and runtime skin switching is a capability this port simply does not
@@ -682,7 +680,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_SetUserinfo` | 9 | game | not needed | - | -- | Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields. |
 | `trap_SnapVector` | 6 | cgame, game | ported | - | `src/q3/pmove/pmove.ts` | Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation -- removing it changes strafe-jump speed. |
 | `trap_StringContains` | 2 | game | not needed | String.includes | -- | botlib string helper. |
-| `trap_Trace` | 29 | game | hybrid | PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush | `src/client/PhysicsTrace.ts`<br>`src/q3/cm/trace.ts`<br>`src/game/PmoveHost.ts` | The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019) or its surface standoff (GAP-020). `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against. |
+| `trap_Trace` | 29 | game | hybrid | PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush | `src/client/PhysicsTrace.ts`<br>`src/q3/cm/trace.ts`<br>`src/game/PmoveHost.ts` | The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019). The standoff is not an engine gap -- meep's own KinematicMover carries one as a `skin` option, which GAP-020 asserted otherwise and is withdrawn for; see GAP-021. `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against. |
 | `trap_TraceCapsule` | 1 | game | not needed | - | -- | OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018. |
 | `trap_UnifyWhiteSpaces` | 4 | game | not needed | - | -- | botlib chat helper. |
 | `trap_UnlinkEntity` | 17 | game | mapped | ECS entity removal | `src/client/Effects.ts`<br>`src/client/Audio.ts` | Removal is the unlink -- for the renderer, the physics broadphase and the audio emitter set alike -- which is why an expired decal, a finished one-shot and a detonated rocket are all retired the same way, one frame late, out of the owning system's update. |
@@ -700,22 +698,33 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 
 ## 3. Gap register
 
-Twenty entries, one withdrawn. Severities were normalised in phase 6 onto the brief's own
-vocabulary — three of them had drifted onto an ad-hoc `high`/`medium`/`low` scale, which makes a
-register unsortable and this document is meant to become a backlog.
+Twenty-one entries, two withdrawn. Severities were normalised in phase 6 onto the brief's own
+vocabulary — three had drifted onto an ad-hoc `high`/`medium`/`low` scale, which makes a register
+unsortable and this document is meant to become a backlog — and then two of them were reduced
+again after review. Both reductions are visible below rather than edited away.
 
 | severity | entries | what it means here |
 |---|---|---|
-| **blocker** | GAP-014, GAP-017, GAP-019, GAP-020 | the port could not ship with this unaddressed. All four are silent: the application builds, runs, reports success at every diagnostic, and does not work. |
+| **blocker** | GAP-014, GAP-017 | the port could not ship with this unaddressed. Both are silent: the application builds, runs, reports success at every diagnostic, and does not work. |
 | **major** | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-008, GAP-012, GAP-015, GAP-016 | cost real time, or would cost any consumer real time on adoption. |
-| **minor** | GAP-009, GAP-013 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 is a positioning finding about what `FirstPersonPlayerController` is *for*, not a defect. |
+| **minor** | GAP-009, GAP-013, GAP-019, GAP-021 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 and GAP-021 are positioning and discoverability findings rather than defects, and GAP-019 is a Q3-fidelity constraint. |
 | **papercut** | GAP-010, GAP-011 | noticed, worked around in minutes, recorded so the pattern is visible. |
-| **withdrawn** | GAP-007 | was a gap, is not, and the entry keeps the mistake because how it was got wrong is the useful part. |
+| **withdrawn** | GAP-007, GAP-020 | was a gap, is not. Both entries keep the mistake, because how a wrong conclusion was reached is usually the part a maintainer can act on. |
 | *(not the engine's)* | GAP-018 | mine: Quake III winds its triangles clockwise and nothing complained. Kept because the silence is the finding. |
 
-The four blockers are the ranking in section 1's item 1 and item 3. Read together they are one
-finding: **meep fails loudly and specifically when it fails at all** (section 7 says so with
-examples) **and has no story whatsoever for the case where a plausible call quietly does nothing.**
+**On the two reductions.** GAP-019 and GAP-020 were filed as blockers, in a group described as
+something *every* consumer building a character controller would hit. That was overreach, and
+GAP-021 sets out why: meep ships `KinematicMover`, a kinematic character solver with the standoff
+GAP-020 said was missing and the depenetration step GAP-019 said could not be expressed. A
+consumer building a character controller should use it. This port could not, because `move()`
+*is* the slide loop and the brief makes `PM_SlideMove` fidelity non-negotiable — which is a
+constraint this port chose, not a defect in the engine. Both entries are kept in full: a report
+that quietly downgraded its two loudest findings would be less useful than one that shows the
+argument.
+
+The two remaining blockers are section 1's item 3. Read together they are one finding: **meep
+fails loudly and specifically when it fails at all** (section 7 says so with examples) **and has
+no story whatsoever for the case where a plausible call quietly does nothing.**
 
 ### GAP-001: Published `.d.ts` files do not typecheck on their own
 
@@ -1086,6 +1095,13 @@ the expensive way.
   otherwise unusually good at this — see the `NavigationMeshAgent` and `draw_side` notes.
 - **Evidence:** `src/engine/control/first-person/DESIGN.md` §1, `src/q3/pmove/pmove.ts`,
   DECISIONS.md D-007. Recorded at phase 2.
+- **What this entry then caused, added after review.** Read the `meep offers` bullet above: it
+  names `KinematicMover` in passing and moves on. That was the right conclusion about the
+  *controller* and the wrong scope. `KinematicMover` is controller-agnostic, it carries the
+  standoff and the depenetration step that GAP-020 and GAP-019 later asserted were missing from
+  the engine, and `DESIGN_COLLISION.md` sits beside it. Treating one correct rejection as covering
+  a whole directory cost about six hours and two wrong fixes two phases later. GAP-021 is the
+  correction, and this entry is where the mistake starts.
 
 ### GAP-010: Particle parameter names are string-typed and case-trapped
 
@@ -1144,8 +1160,9 @@ the expensive way.
   *shallowest* separating axis and at that position the floor is shallower. The controller's
   slide-move clips velocity against up, which does nothing to the horizontal motion into the
   wall, so it re-traces, accumulates a second contradictory plane, hits its five-plane limit and
-  zeroes velocity as a last resort. That is `PM_SlideMove`'s failure mode, but every slide-move
-  controller has the same structure.
+  zeroes velocity as a last resort. That is `PM_SlideMove`'s failure mode, and it is the shape of
+  every plane-accumulating slide-move — meep's own `KinematicMover` accumulates the same five
+  (`MAX_CLIP_PLANES`, "matching Quake's") and dead-stops on the third contradictory one.
 - **Why it is a gap rather than a Q3 quirk:** the two quirks alongside it *are* Q3 quirks and
   are recorded as such in D-030 — Q3's 1/8-unit surface standoff and its brush-relative
   definition of `startsolid`. This one is not. "Which surface am I actually pressed against"
@@ -1173,8 +1190,21 @@ the expensive way.
   more faithfully a harness reproduces the engine, the more completely it can hide that. See
   D-061.
 - **What would fix it:** an optional `ShapeCastResult` field carrying the last-entered
-  separating plane, or a `contact_mode` on `shape_cast`. Either is cheap relative to what every
-  consumer will otherwise re-implement, badly and privately.
+  separating plane, or a `contact_mode` on `shape_cast`.
+- **Scope, corrected after review, and it is narrower than this entry first claimed.** The
+  original wording said every consumer would otherwise re-implement this "badly and privately".
+  That was overreach of the same kind that GAP-021 documents: meep has already implemented a
+  character solver once, publicly, in `KinematicMover`, and it approaches the corner case from
+  the other end — a `compute_penetration` recover pass before each move plus a `skin` clearance,
+  so the sweep does not start from an overlapping pose, which is the condition under which the
+  minimum-penetration normal is least informative. I have not measured whether that fully avoids
+  the wedge; what I can say is that the engine is not silent on the problem, and a consumer using
+  the solver is not obviously exposed to it.
+
+  What survives unaltered is the API observation, which is factual: `shape_cast` returns the
+  minimum-penetration normal, there is no option for the last-entered plane, and a consumer
+  building directly on the query — as this port must, because `bg_pmove` owns the slide-move — has
+  to re-derive it from source geometry the engine does not keep.
 - **Evidence:** `src/client/PhysicsTrace.ts` `contactPlane`, `test/physics-divergence.test.ts`.
   Recorded during the physics swap.
 
@@ -1446,18 +1476,24 @@ the expensive way.
 
 ---
 
-### GAP-019: `shape_cast` answers "does the swept volume touch this body"; movement code asks "does this brush block this move"
+### GAP-019: Q3's per-brush blocking rule cannot be expressed through `shape_cast`
 
-- **Severity:** blocker — the two predicates disagree systematically at exactly the distances a
-  character controller lives at, and the disagreement is not a tolerance to tune. It is
-  load-bearing: taken at face value it stops the player dead, permanently.
-- **What happened:** two reports in one session. A player stuck in an open corridor with velocity
-  climbing to 320 units a second against a position that never changed, and a bot apparently
-  standing in mid-air against a wall — which is not what it was doing, it had stopped falling.
-  Both were the backend reporting `t = 0` for sweeps the clipmap says are free.
-- **The mechanism, measured rather than reasoned.** `CM_TraceThroughBrush` is a signed-distance
-  interval test over a brush's half-spaces, with a ±`SURFACE_CLIP_EPSILON` (1/8 unit) term on both
-  ends. At `oa_dm1` (704.91, 686.92, 24.93), moving one frame at (2.56, 0.58, 0), brush 414 gives:
+> **Substantially corrected after review.** The first version of this entry was filed as a
+> `blocker`, claimed that *every* consumer building a character controller would hit it, and
+> claimed that `shape_cast` "silently removes the escape hatch the movement code was written to
+> rely on" because `PhysicsSurfacePoint` cannot express `allsolid`. All three claims were wrong,
+> and they were wrong because I built a character controller out of the raw query layer while the
+> engine ships a kinematic mover for exactly that job — one this report had already *named*, in
+> GAP-009, and then never opened. The correction is GAP-021. What is left below is real, and it is
+> much smaller than what was here before.
+
+- **Severity:** minor. A Q3-fidelity constraint with a working workaround, not an absence in the
+  engine. The engine's answer to character collision is `KinematicMover`, and it is a good one;
+  it is simply not an answer `bg_pmove` can use.
+- **What is actually true.** `CM_TraceThroughBrush` is a signed-distance interval test over a
+  brush's half-spaces with a ±`SURFACE_CLIP_EPSILON` (1/8 unit) term on both ends, and it returns
+  "this brush does not block" for cases where the swept volume demonstrably touches the brush. At
+  `oa_dm1` (704.91, 686.92, 24.93), moving one frame at (2.56, 0.58, 0), brush 414 gives:
 
   | plane | `d1` | `d2` | |
   |---|---|---|---|
@@ -1467,100 +1503,156 @@ the expensive way.
   `enterFrac < leaveFrac` is `0 < -0.078`, which is false, so the brush **does not block** — with
   the box seven thousandths of a unit from one of its faces and moving into it. `shape_cast` sees
   the swept volume graze that face and reports a hit, correctly, to a different question.
-- **Why it is a gap rather than a Q3 quirk:** the epsilon is a Q3 quirk and is recorded as one
-  (D-030). The structural fact underneath is not. *Every* surface a character rests on or slides
-  along is sub-epsilon away — that is what resting means — so a query that reports intersection
-  without reporting whether the intersection opposes the sweep will fire on every contact, in
-  every direction, forever. `skip_initial_overlaps` is the right idea and is not enough: it skips
-  candidates already overlapping at `t = 0` (all of them — it `continue`s rather than `break`s,
-  which is the correct choice), but a surface you are resting 1/8 unit from is not overlapping. It
-  is reached at a very small positive `t`, and clamping that to zero is what wedges the player.
-- **The result also cannot express `allsolid`.** Q3 separates "began inside a brush the sweep
-  leaves" from "began inside and never gets out", and pmove's recovery path
-  (`PM_CorrectAllSolid`) is gated on the second. `PhysicsSurfacePoint` has no field for it, so a
-  backend built on `shape_cast` silently removes the escape hatch the movement code was written
-  to rely on.
-- **Workaround:** run the ported brush test over the brushes `overlap_shape` finds, and when
-  `shape_cast` names a body whose brush that trace has already cleared, treat the contact as
-  answered rather than as a blocker (`PhysicsTrace.alreadyRuledOn`). meep still does the sweep.
-  Like GAP-012 this needs the source half-spaces kept alongside the `ConvexHullShape3D` — an
-  application whose hulls came from a mesh has nothing to re-derive from and would have to give
-  up or reimplement the broadphase.
-- **What it costs to not fix:** the honest alternative is to hand the whole sweep to the ported
-  trace over a swept-volume gather, which would make static collision exactly Q3's and reduce
-  meep's physics to a broadphase for this use. It would measure better than the workaround. That
-  is the real price of the gap: for character control specifically, the engine's own sweep stops
-  being the thing you use it for.
-- **And it now has a number** (`npm run bench-match`, added in phase 6). One trace on the shipping
-  path costs **4.53 µs**; the ported clipmap answers the entire question — tree descent, leaf
-  gather, every brush test — in **0.42 µs**. `shape_cast` alone is 3.49 µs of the shipping path,
-  `overlap_shape` 1.18, and `traceBrushList`, which is the code that actually produces the
-  fraction, the plane, `startsolid` and `allsolid`, is **0.29**. A six-bot deathmatch costs 356 µs
-  a frame on meep's physics and 31 µs on the clipmap, for an identical match. The part of the
-  shipping path that decides the answer is the cheapest line in it, and the query in front of it
-  is doing work that is then discarded on every blocking contact. None of that is a criticism of
-  `shape_cast`'s implementation — it is doing strictly more, generally — but it is what the gap
-  costs at runtime, every frame, in addition to the four hours it cost to find.
-- **What would fix it:** a directional predicate on the result — the separating-axis distance at
-  `t = 0` signed against the sweep direction would be enough, since it is already computed — plus
-  an `initially_overlapping` flag so a consumer can implement `allsolid` semantics. Both are
-  information the query already has and discards.
-- **Cost:** ~4 hours, and it took two rounds: the first fix (`allsolid`, and the position test)
-  was necessary, correct, and moved the failure rather than removing it. Recorded because that is
-  the shape of this class of bug — several independent places where a Q3 semantic was approximated
-  rather than reproduced, each individually plausible, failing together.
+
+  Taken at face value that stops the player dead: a report of a player stuck in an open corridor
+  with velocity climbing to 320 units a second against a position that never changed, and a bot
+  apparently standing in mid-air against a wall, which was not what it was doing — it had stopped
+  falling.
+- **Why this is a Q3 constraint and not a general one.** The brief makes `bg_pmove` fidelity
+  non-negotiable, and pmove is written against that exact predicate. Any other narrowphase
+  produces different contact fractions, therefore different clip planes, therefore different
+  strafe jumps. That is a constraint this port chose to honour; it is not a defect in a query
+  that answers a different, reasonable question correctly. **A consumer who does not need Q3's
+  arithmetic does not have this problem, and should be using `KinematicMover` (GAP-021).**
+- **What I got wrong about `allsolid`, specifically.** The first version said Q3 separates "began
+  inside a brush the sweep leaves" from "began inside and never gets out", that pmove's recovery
+  path (`PM_CorrectAllSolid`) is gated on the second, and that a backend built on `shape_cast`
+  therefore loses the escape hatch. The first two sentences are right. The third is false:
+  `compute_penetration` is **public**, is documented at length, returns the minimum translation
+  that separates two shapes, and is precisely the depenetration primitive that case needs. The
+  engine's own `DESIGN_COLLISION.md` calls it "a **core step** ... because `compute_penetration`
+  is public", and names the start-solid case as what it is for. I did not find it, and I asserted
+  its absence rather than checking.
+- **Workaround (unchanged, and still correct for this port):** run the ported brush test over the
+  brushes `overlap_shape` finds, and when `shape_cast` names a body whose brush that trace has
+  already cleared, treat the contact as answered rather than as a blocker
+  (`PhysicsTrace.alreadyRuledOn`). meep still does the sweep. This needs the source half-spaces
+  kept alongside the `ConvexHullShape3D`, which a port from BSP brushes has and an application
+  whose hulls came from a mesh does not.
+- **What it costs at runtime** (`npm run bench-match`): one trace on the shipping path costs
+  4.53 µs against 0.42 µs for the ported clipmap answering the whole question; `shape_cast` alone
+  is 3.49 µs of it and `traceBrushList`, which produces the fraction, plane and solidity flags, is
+  0.29 µs. A six-bot deathmatch is 356 µs a frame on meep's physics and 31 µs on the clipmap, for
+  an identical match.
+
+  That 11× is **the cost of this port's decision to keep Q3's arithmetic while running on meep's
+  broadphase**, and it should be read that way rather than as a price the engine imposes. A
+  consumer using `KinematicMover` pays for one sweep, not for a sweep plus an overlap plus a
+  re-derivation.
+- **What would still be worth having**, stated as a small API request rather than as a gap: a
+  directional term on the result — the separating-axis distance at `t = 0` signed against the
+  sweep direction, which the query already computes and discards. It would let a consumer
+  distinguish "resting against" from "moving into" without a second query. That is genuinely
+  useful and genuinely minor.
+- **Cost:** ~4 hours, in two rounds. Recorded because the shape of it generalises: several
+  independent places where a Q3 semantic was approximated rather than reproduced, each
+  individually plausible, failing together. But a fair share of those four hours is attributable
+  to GAP-021 rather than to the engine.
 - **Evidence:** `src/client/PhysicsTrace.ts` (`trace`, `contactPlane`, `alreadyRuledOn`),
   `test/physics-wedge.test.ts` (the `walking` half), `tools/trace-compare.ts`. Measured
   improvement: trace hit/miss agreement 88.7% → 99.9%, strafe-jump p90 121.3 → 34.0,
   walk-into-walls p90 1.77 → 0.22, and zero sweeps where the physics passes through something the
-  clipmap blocks. See D-063.
+  clipmap blocks. See D-063, and D-070 for the correction.
 
-### GAP-020: There is no way to ask a swept query to stop short of contact
+### GAP-020 (withdrawn): the swept query has no standoff, because the standoff belongs one layer up
 
-- **Severity:** blocker, in combination with GAP-019 — a one-line need with no expression in the API, whose absence is invisible
-  until something downstream integrates the error.
-- **What happened:** characters hovering above the floor, reported by a player. Underneath it, a
-  falling player who never landed: Q3 stops a box `SURFACE_CLIP_EPSILON` (1/8 unit) short of a
-  surface, so a move ending a twentieth of a unit above the floor is *blocked* in Q3 and *clear*
-  in `shape_cast` — which is the correct answer to the question `shape_cast` was asked. The player
-  overshot the resting height by a tenth of a unit, bounced back up at landing speed, and repeated
-  forever. `groundEntityNum` never left `ENTITYNUM_NONE`, so the animation code played the jump
-  clip, so every bot in the level stood with its legs tucked up. 63 of 64 dropped players never
-  landed.
-- **Why a standoff is not a quirk:** every character controller needs one. Resting a body exactly
-  on a surface makes the next frame's query start in contact, and then the controller has to
-  distinguish "resting" from "blocked" with no information to do it with. Q3 solved it in 1999 by
-  offsetting the planes; every engine solves it somehow. What is missing is a way to *say* it to
-  the query.
-- **Workaround:** put the epsilon in the shape. For a box against a plane, offsetting the plane
-  outward by `e` is exactly growing the box by `e`, so the sweep uses a box inflated by
-  `SURFACE_CLIP_EPSILON` and the fraction is `hit.t / length` with nothing subtracted. This is
-  correct and it is also *not obviously* correct — the first implementation subtracted the epsilon
-  from the resulting fraction, which is the same thing whenever the sweep reaches the surface and
-  silently different when it stops just short. That asymmetry is the whole bug.
-- **Cost of the workaround:** the inflated box is a second `BoxShape3D` per size, and it makes
-  `shape_cast` report `t = 0` for every surface the body rests against, in every direction —
-  which is what GAP-019's machinery then has to sort out. The two gaps compound: an engine that
-  offered a standoff parameter would remove most of the need for the per-brush re-derivation as
-  well.
-- **What would fix it:** a `standoff` (or `skin_width`) parameter on `shape_cast` — contact
-  reported when the swept shape comes within `standoff` of a body rather than when it touches.
-  PhysX, Bullet and Unity all expose some form of this, under various names, because character
-  controllers all need it. It is a subtraction on an existing comparison.
-- **Evidence:** `src/client/PhysicsTrace.ts` (`boxShape`'s `grow`, and the comment above the
-  fraction computation, which in phase 6 still described the removed approach and has been
-  corrected), `test/physics-wedge.test.ts` (the `standing` block). Measured improvement on
-  `oa_dm1`: trace hit/miss agreement 99.9% → 100.0%, fraction absolute error p90 1.3e-3 →
-  5.3e-8, chaos divergence p90 0.18 → 0.00 with every frame inside one unit. See D-064.
-- **A note on how this was found, because it generalises.** Nothing in the measurement harness
-  flagged it. Agreement with the C oracle was already 99.9% and the fraction error was 1.3e-3 —
-  a thousandth of a Q3 unit, three hundredths of a millimetre, indistinguishable from noise on
-  any summary statistic. That error was not noise: it was a systematic bias in one direction,
-  integrated by a controller that fed its own output back in, and it produced a player who could
-  not land. **A rare, systematic, single-signed error is invisible to every percentile and fatal
-  to a feedback loop**, which is the argument for the standoff being an engine concern rather
-  than a consumer's: a consumer measuring their own controller will not see it until something
-  downstream is already broken.
+> **Withdrawn.** The original entry said there was "no way to ask a swept query to stop short of
+> contact", that "every character controller needs a standoff ... what is missing is a way to
+> *say* it to the query", and asked for a `standoff` / `skin_width` parameter on `shape_cast`,
+> citing PhysX, Bullet and Unity. It was filed as a `blocker`.
+>
+> The engine has the parameter. It is called `skin`, it defaults to `0.005 m`, and it is a
+> constructor option on `KinematicMover` — the kinematic character solver meep ships, which this
+> report had already named in GAP-009 before dismissing the directory it lives in. The engine's
+> `DESIGN_COLLISION.md` lists it in a constants table with its lineage (`Fauerby
+> veryCloseDistance ~0.005`) alongside `MIN_WALK_NORMAL 0.7` from Quake 3 and `numbumps 4` from
+> Quake. The same document names the exact symptom I reported — "Band-test + active snap ... is
+> what structurally kills the landing **bounce**" — as a solved problem.
+>
+> So the design decision the entry asked for has been made, deliberately, in the other direction:
+> the standoff lives in the mover rather than in the query, which is where PhysX and Unity put it
+> too (`CharacterController.skinWidth` is on the controller, not on `Physics.SphereCast`). The
+> entry was not describing a gap. It was describing a layer I had chosen not to use and then not
+> read. See GAP-021.
+
+**What actually happened, kept because the failure is instructive.** Q3 stops a box
+`SURFACE_CLIP_EPSILON` (1/8 unit) short of a surface, so a move ending a twentieth of a unit
+above the floor is *blocked* in Q3 and *clear* in `shape_cast`. This port's first implementation
+subtracted the epsilon from the returned fraction, which is the same thing whenever the sweep
+reaches the surface and silently different when it stops just short. The player overshot the
+resting height by a tenth of a unit, bounced back up at landing speed, and repeated forever.
+`groundEntityNum` never left `ENTITYNUM_NONE`, so the animation code played the jump clip, so
+every bot in the level stood with its legs tucked up. 63 of 64 dropped players never landed.
+
+The fix is to put the epsilon in the *shape*: for a box against a plane, offsetting the plane
+outward by `e` is exactly growing the box by `e`, so the sweep uses a box inflated by
+`SURFACE_CLIP_EPSILON` and the fraction is `hit.t / length` with nothing subtracted.
+
+**The one part of this that is still worth a maintainer's attention** is not the missing
+parameter, it is the failure mode: a rare, systematic, single-signed error is invisible to every
+percentile and fatal to a feedback loop. Agreement with the C oracle was already 99.9% and the
+fraction error was 1.3e-3 — three hundredths of a millimetre — at the moment nothing could land.
+That is an argument for the standoff being solved *somewhere the consumer will find it*, which
+is what `KinematicMover` does and what GAP-021 is about.
+
+- **Severity:** withdrawn. Was `blocker`; was not a gap.
+- **Evidence:** `src/client/PhysicsTrace.ts` (`boxShape`'s `grow`), `test/physics-wedge.test.ts`
+  (the `standing` block), and against it
+  `src/engine/control/first-person/collision/KinematicMover.js` (the `skin` option) and
+  `src/engine/control/first-person/DESIGN_COLLISION.md` §7. Measured improvement on `oa_dm1`:
+  trace hit/miss agreement 99.9% → 100.0%, fraction absolute error p90 1.3e-3 → 5.3e-8, chaos
+  divergence p90 0.18 → 0.00. See D-064, and D-070 for the withdrawal.
+
+### GAP-021 (mostly mine, not the engine's): the kinematic character solver is namespaced inside a controller it does not depend on
+
+- **Severity:** minor, and the engine-facing half is one directory move.
+- **What happened.** This port spent about six hours, across four player-reported failures,
+  building slide-move plumbing on top of `shape_cast` and `overlap_shape`: a standoff, a
+  start-solid recovery path, a contact-plane rule, a "did this actually block" predicate. meep
+  ships `KinematicMover`, 635 lines, which does the first two of those and is explicit about its
+  lineage — `MAX_CLIP_PLANES = 5` "matching Quake's", crease handling "Quake `SV_FlyMove`",
+  `minWalkNormal = 0.7` "Matches Quake3 `MIN_WALK_NORMAL`", four slide iterations "Quake
+  `numbumps` 4". Beside it is `DESIGN_COLLISION.md`, 365 lines, which sets out the whole
+  recover → slide → stairs → ground → settle sequence, with a constants table and reference
+  lineage for each value.
+
+  I did not read either. Two things caused that, and only the second is the engine's:
+
+  1. **GAP-009.** I evaluated `FirstPersonPlayerController`, correctly concluded it was a
+     feel-first opinionated controller that cannot host `bg_pmove`, and wrote that up. In the
+     same entry I *named* `KinematicMover` — "a `KinematicMover` with stair and ramp handling" —
+     and then treated the whole `engine/control/first-person/**` tree as decided. Two phases
+     later I filed its capabilities as missing from the engine. That is my error, it is the third
+     time in this report that a conclusion about one thing was allowed to cover its neighbours
+     (see GAP-007 and GAP-016), and it is the most expensive of the three.
+  2. **The path.** `KinematicMover`'s own docblock says "The mover is controller-agnostic: it
+     knows about a capsule pose, a desired velocity, and the physics world." Its imports confirm
+     it: `Vector3`, `Ray3`, `Transform`, `Collider`, `compute_penetration`,
+     `PhysicsSurfacePoint` — nothing from the controller. It nonetheless lives at
+     `engine/control/first-person/collision/KinematicMover.js`, and the most useful collision
+     document in the package lives at `engine/control/first-person/DESIGN_COLLISION.md`. A
+     consumer who has decided the first-person controller is not for them has been given a
+     path that says those files are not for them either.
+- **Would it have been used?** For the slide-move itself, no: `move()` *is* the slide loop, and
+  replacing `PM_SlideMove` is precisely what the brief forbids. That is a GAP-009-shaped
+  positioning finding and it should have been written up as one. But `compute_penetration` would
+  have answered `PM_CorrectAllSolid` directly, the `skin` option would have removed GAP-020 in
+  its entirety, and `DESIGN_COLLISION.md`'s constants table would have been the single most
+  useful page in the package for this port's hardest phase. Reading 1,000 lines would have saved
+  several hours and two wrong fixes.
+- **Suggested fix:** move the solver and its design document to
+  `engine/physics/character/` (or `engine/control/character/`) and leave a re-export behind. The
+  class already has no controller dependency, so this is a path change, not a refactor. Anyone
+  searching the package for how to move a character should reach a directory named for that,
+  not for one specific controller's implementation detail.
+- **Second, smaller ask:** `DESIGN_COLLISION.md` is written as a build plan ("Phase 1 implements
+  steps 1-2"), so a reader who does find it has to work out how much of it is shipped.
+  `KinematicMover`'s docblock says "Phase 1" too, while implementing step-up and ground
+  categorisation that the plan puts in phases 2-3. A one-line status header would resolve that.
+- **Evidence:** `src/engine/control/first-person/collision/KinematicMover.js`,
+  `src/engine/control/first-person/DESIGN_COLLISION.md`,
+  `src/engine/physics/narrowphase/compute_penetration.js`, and REPORT GAP-009 (where I named the
+  class and moved on). Recorded in phase 6, after review. See D-070.
 
 ## 4. Ergonomics
 
@@ -1770,8 +1862,9 @@ Same levels, same input, three configurations: the C oracle under Emscripten, th
 (control divergence reads exactly `0.0e+0`), so every figure below is attributable to the
 physics backend. Distances are Q3 units — one unit is about 3 cm, a player is 56 units tall.
 
-**These are the phase 6 numbers, after GAP-019 and GAP-020 were fixed.** The phase 2b figures
-they replace are kept below them, because the delta is the entire argument for both gap entries.
+**These are the phase 6 numbers, after the standoff and the per-brush rule were corrected**
+(GAP-020, GAP-019). The phase 2b figures they replace are kept below them, because the delta is
+what those two entries are ultimately about — and it stands whatever the entries are graded at.
 Reproduce with `npm run divergence`.
 
 | | `oa_dm1` | `aggressor` |
@@ -1816,8 +1909,9 @@ bunny-hop 0.06 / 0.12 / 98%, walk-into-walls 0.09 / 2.60 / 89%, chaos 0.00 / 1.2
 Cost of the swap, for a maintainer estimating similar work: ~14 hours to get it shipping, of
 which roughly 2 were `brushHull.ts` (the plane-set-to-polyhedron conversion), 2 were GAP-012, and
 the remaining 10 were building the three-way measurement harness — **plus a further ~6 hours in a
-later session** for GAP-019 and GAP-020, which is the part worth flagging to anyone estimating
-this work. The first fourteen hours produced something that measured well and could not be
+later session** for the standoff and the per-brush rule, which is the part worth flagging to
+anyone estimating this work — and which GAP-021 argues should have been closer to one hour with
+the engine's own solver read rather than assumed absent. The first fourteen hours produced something that measured well and could not be
 played; the last six are what made it playable, and they arrived as four separate bug reports
 from someone in front of the screen rather than from any number in the table above.
 
@@ -1872,15 +1966,23 @@ Two things follow, and the maintainer should weigh them separately:
   fixed contents mask. Special-purpose beats general-purpose; that is what special-purpose is
   for. The number is here because a maintainer sizing "should the engine offer a character
   controller" needs to know the shape of the trade.
-- **It is a cost attributable to the two gaps.** If `shape_cast` had a `standoff` parameter
-  (GAP-020) and a directional blocking predicate (GAP-019), the second and third rows of that
-  table would not be needed and the shipping path would be one query rather than three. The
-  ratio would not close to 1:1, but the argument for using the engine's physics at all would
-  stop needing a footnote.
+- **It is the cost of this port's own constraint, not a price the engine imposes.** An earlier
+  version of this paragraph attributed the 11× to two gaps and said closing them would collapse
+  three queries into one. That was wrong in a way worth correcting rather than deleting: meep
+  ships `KinematicMover`, whose whole job is to be the one query, with the standoff and the
+  depenetration built in. A consumer using it pays for a sweep. This port cannot use it, because
+  `move()` *is* the slide loop and the brief makes `PM_SlideMove` fidelity non-negotiable — so
+  what the 11× measures is **what it costs to keep Quake III's arithmetic while running on meep's
+  broadphase**, which is a trade this port chose. See GAP-021.
+
+  The residual engine-side ask is small and stands: a directional term on the sweep result — the
+  separating-axis distance at `t = 0` signed against the sweep direction, already computed and
+  discarded — would let a consumer distinguish "resting against" from "moving into" without the
+  second `overlap_shape` query, which is the 1.18 µs row.
 
 The ratio is also worse in the match (11×) than in the microbenchmark (7×), and the reason is
 worth a sentence: the expensive branch of `PhysicsTrace` is the one taken at a *resting* contact,
-where `shape_cast` reports `t ≈ 0` and the whole GAP-019 machinery — `overlap_shape`, the
+where `shape_cast` reports `t ≈ 0` and the whole per-brush re-derivation — `overlap_shape`, the
 neighbour gather, the per-brush re-derivation — has to run to decide what kind of contact it is.
 A player standing on a floor is in that branch on every frame. The microbenchmark's mid-air
 sweeps mostly are not.
@@ -2108,7 +2210,11 @@ does not say so. Filed, and withdrawn as a gap, as GAP-007.
   choice for a physics query. It is the wrong answer for character control, which is a gap in the
   API surface rather than a defect in the implementation.
 - **`shape_cast` reporting contact for a graze** (GAP-019) is likewise correct for the question it
-  is asked. The gap is that a character controller needs a different question.
+  is asked, and the engine's answer for a character controller that needs a different question is
+  `KinematicMover`. The original entry treated this as a defect; it is not one (GAP-021).
+- **`shape_cast` having no standoff parameter** was filed as GAP-020 and is withdrawn. The
+  standoff exists, as `KinematicMover`'s `skin` option, which is where PhysX and Unity put theirs
+  too.
 - **The per-second FPS line on `console.warn`** is a design decision, not a bug, but it is the
   wrong channel: `FPS: 238.12, RENDER: 1.58ms, SIMULATION: 0.06ms` every second at warn level
   buries real warnings, and it did during the GAP-003/GAP-004 diagnosis. `console.info`, or off
@@ -2301,13 +2407,18 @@ it, "my scene is black" and "my scene is white" are both unactionable, and both 
 scale silently load-bearing, which nothing says anywhere.
 
 **No document about the semantics of the physics queries**, as opposed to their signatures.
-`shape_cast` returns the minimum-penetration normal (GAP-012), reports contact for a graze
-against a resting surface (GAP-019), has no standoff parameter (GAP-020), and `skip_initial_overlaps`
-`continue`s rather than `break`s. All four are correct, defensible choices, and all four were
-established by reading the implementation. A page on "what these queries mean, and what a
-character controller needs that they do not give you" would be the difference between a consumer
-diagnosing the engine and diagnosing themselves — which is what happened here, twice, at a cost
-of about six hours.
+`shape_cast` returns the minimum-penetration normal (GAP-012), reports contact for a graze against
+a resting surface, has no standoff, and `skip_initial_overlaps` `continue`s rather than `break`s.
+All four are correct, defensible choices, and all four were established by reading the
+implementation.
+
+The document that answers most of this **exists** and is good: `DESIGN_COLLISION.md`, 365 lines,
+with a constants table citing Quake 3, Source and Fauerby for each value. It is filed at
+`engine/control/first-person/DESIGN_COLLISION.md`, under a component I had already ruled out, and
+I never opened it (GAP-021). So the ask here is not "write the page" — it is **put the page where
+someone looking for it will be**, next to the queries or next to a `character/` directory. That
+one move would have saved this port about six hours and two wrong fixes, and it is the single
+highest-value item in this section.
 
 **No note that `Animation`, and things like it, take JSON rather than components.** BUG-1 is a
 one-line `@see`.

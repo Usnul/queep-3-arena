@@ -15,11 +15,17 @@
  * per frame, how much is meep's physics and how much is the ported Q3 rule
  * running in front of it?
  *
- * That split is the price of GAP-019 and GAP-020, and until it had a number it
- * was an argument. `PhysicsTrace` calls `shape_cast` and `overlap_shape`, and
- * then calls `traceBrushList` -- the ported `CM_TraceThroughBrush` -- over the
- * brushes those two found. Running the same match on the pure clipmap backend
- * gives the other end of the scale.
+ * That split is what it costs to keep Quake III's arithmetic while running on
+ * meep's broadphase, and until it had a number it was an argument.
+ * `PhysicsTrace` calls `shape_cast` and `overlap_shape`, and then calls
+ * `traceBrushList` -- the ported `CM_TraceThroughBrush` -- over the brushes
+ * those two found. Running the same match on the pure clipmap backend gives the
+ * other end of the scale.
+ *
+ * Read it as the price of a constraint this port accepted rather than as a
+ * price the engine imposes: a consumer who does not need Q3's exact contact
+ * fractions should be using meep's own `KinematicMover`, which is one query.
+ * See GAP-021 and D-070.
  *
  * Usage:  node tools/bench-match.ts [map...]
  */

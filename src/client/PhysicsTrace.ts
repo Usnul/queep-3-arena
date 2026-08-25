@@ -452,7 +452,13 @@ export class PhysicsTrace {
 
          The epsilon is now in the *shape*: `boxShape` grows the swept box by
          `SURFACE_CLIP_EPSILON`, which for a box against a plane is exactly
-         offsetting the plane outward by the same amount. See GAP-020 and D-064.
+         offsetting the plane outward by the same amount. See D-064.
+
+         Worth knowing, and found only after this was written: meep's own
+         `KinematicMover` takes exactly this as a `skin` constructor option,
+         defaulting to 0.005 m. The standoff was never missing from the engine,
+         only from the query layer this port builds on. GAP-020 asserted
+         otherwise and is withdrawn; D-070 has the correction.
         */
         let fraction = Math.min(1, Math.max(0, this.hit.t / length));
 
