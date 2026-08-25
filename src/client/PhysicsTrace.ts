@@ -432,20 +432,27 @@ export class PhysicsTrace {
         }
 
         /*
-         Back the contact off by SURFACE_CLIP_EPSILON.
+         Nothing is subtracted here, and that is the fix rather than an omission.
 
-         This is the single most important tuning parameter of the physics
-         swap, and it is not a fudge -- it is Q3's own behaviour. `CM_TraceThroughBrush`
-         computes `f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2)`, so a Q3 trace
-         always stops 1/8 unit short of the surface and a resting player floats
-         in a 1/8 unit gap.
+         Q3's `CM_TraceThroughBrush` computes `f = (d1 - SURFACE_CLIP_EPSILON) /
+         (d1 - d2)`, so a Q3 trace always stops 1/8 unit short of the surface and
+         a resting player floats in a 1/8 unit gap. `shape_cast` stops exactly at
+         contact, which sounds better and is catastrophic: the player lands
+         flush, that resting contact blocks every subsequent sweep at `t = 0`,
+         and the player freezes one frame after touching down.
 
-         `shape_cast` stops exactly at contact, which sounds better and is
-         catastrophic: the player lands flush on the floor, that resting contact
-         then blocks every subsequent sweep at `t = 0`, and the player freezes in
-         place one frame after touching down. Measured before this line existed:
-         bit-exact agreement for 9 frames of falling, then permanent divergence
-         at the moment of landing.
+         The first version of this subtracted the epsilon from the fraction
+         *here*. That is the same thing whenever the sweep reaches the surface
+         and silently different when it stops just short -- a move ending a
+         twentieth of a unit above the floor is blocked in Q3 and clear in
+         `shape_cast`, so the player overshot the resting height, bounced back up
+         at landing speed, and never landed at all. 63 of 64 dropped players
+         never reached the ground, and because `groundEntityNum` stayed
+         `ENTITYNUM_NONE` every bot in the level rendered with its legs tucked up.
+
+         The epsilon is now in the *shape*: `boxShape` grows the swept box by
+         `SURFACE_CLIP_EPSILON`, which for a box against a plane is exactly
+         offsetting the plane outward by the same amount. See GAP-020 and D-064.
         */
         let fraction = Math.min(1, Math.max(0, this.hit.t / length));
 

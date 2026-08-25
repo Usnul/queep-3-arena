@@ -42,6 +42,7 @@ import { MapSound } from '../client/MapSound.ts';
 import { Bot } from '../game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../client/Bots.ts';
 import { buildWaypoints, linkMapPortals } from '../game/Waypoints.ts';
+import { spawnPoints } from '../game/Spawns.ts';
 import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
 import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
@@ -222,10 +223,15 @@ async function main(): Promise<void> {
             : '')
     );
 
-    const spawn =
-        loaded.bundle.entities.find((e) => e.classname === 'info_player_deathmatch') ??
-        loaded.bundle.entities.find((e) => e.classname === 'info_player_start') ??
-        null;
+    /*
+     Where anyone enters the level. Not a filter for `info_player_deathmatch`:
+     `am_thornish` has none, and reading it that way gave that map no bots and a
+     respawn at the world origin. See `spawnPoints`.
+    */
+    const entrances = spawnPoints(loaded.bundle.entities);
+    const spawn = entrances.points[0] ?? null;
+
+    console.log(`[queep] spawns: ${entrances.points.length} from ${entrances.kind}`);
 
     const camera = new Camera();
     camera.active.set(true);
@@ -430,9 +436,7 @@ async function main(): Promise<void> {
 
         /* ---- bots ---- */
 
-        const botSpawns = loaded.bundle.entities
-            .filter((e) => e.classname === 'info_player_deathmatch')
-            .map((e) => e._originQ3);
+        const botSpawns = entrances.points.map((e) => e._originQ3);
 
         const botWorld: BotWorld = {
             graph,
@@ -571,11 +575,7 @@ async function main(): Promise<void> {
          the AI in the way.
         */
         if (new URLSearchParams(window.location.search).get('targets') === '1') {
-            for (const s of loaded.bundle.entities
-                .filter((e) => e.classname === 'info_player_deathmatch')
-                .slice(1, 5)) {
-                arena.addTarget(s._originQ3);
-            }
+            for (const s of entrances.points.slice(1, 5)) arena.addTarget(s._originQ3);
         }
 
         player.onDryFire = () => {

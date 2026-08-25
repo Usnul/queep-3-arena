@@ -27,7 +27,7 @@
  * `CS_MUSIC` and `CG_StartMusic` hands to `trap_S_StartBackgroundTrack`.
  *
  * Both were listed as mapped in the trap matrix long before either was built.
- * See D-065.
+ * See D-066.
  */
 
 import type { BundleEntity } from './map/SceneBundle.ts';

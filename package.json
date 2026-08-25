@@ -33,6 +33,8 @@
     "convert-characters": "node tools/convert-characters.ts",
     "convert-sounds": "node tools/convert-sounds.ts",
     "assets": "node tools/convert-models.ts && node tools/convert-characters.ts && node tools/convert-sounds.ts",
-    "navmesh-probe": "node tools/navmesh-probe.ts"
+    "navmesh-probe": "node tools/navmesh-probe.ts",
+    "bench-match": "node tools/bench-match.ts",
+    "divergence": "node tools/measure-divergence.ts"
   }
 }

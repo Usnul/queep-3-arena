@@ -89,11 +89,76 @@ function classify(name, spec) {
 
 const STATUS_LABEL = {
     'mapped': 'mapped',
+    'hybrid': 'hybrid',
     'ported': 'ported',
     'workaround': 'workaround',
     'gap': 'GAP',
     'not-needed': 'not needed',
 };
+
+/**
+ * Dispositions that assert something was *built*, and therefore have to name
+ * where.
+ *
+ * This is the phase 6 audit rule, and it exists because the matrix drifted:
+ * four sound syscalls were marked `mapped` against a component the port never
+ * constructed (D-066). A note that describes an intended design reads exactly
+ * like one that describes a shipped one, so the note is no longer the evidence.
+ * A path in this repository is, because a path can be checked.
+ */
+const MUST_CITE = new Set(['ported', 'hybrid', 'workaround']);
+
+/**
+ * Verify every `evidence` citation resolves.
+ *
+ * Format is `path::token`; the token must appear literally in the file. A bare
+ * `path::` asserts only that the file exists, which is right for a whole-file
+ * citation such as an offline converter.
+ *
+ * @returns {string[]} human-readable failures
+ */
+function checkEvidence(spec) {
+    const problems = [];
+
+    for (const [name, entry] of Object.entries(spec.entries)) {
+        const evidence = entry.evidence ?? [];
+
+        if (MUST_CITE.has(entry.status) && evidence.length === 0) {
+            problems.push(`${name}: status '${entry.status}' asserts shipped code and cites none`);
+        }
+
+        if (entry.status === 'mapped' && evidence.length === 0 && entry.unused === undefined) {
+            problems.push(
+                `${name}: 'mapped' with no evidence and no 'unused' reason -- ` +
+                `say either where it is used or why it is not`
+            );
+        }
+
+        if (evidence.length > 0 && entry.unused !== undefined) {
+            problems.push(`${name}: cites evidence *and* claims to be unused`);
+        }
+
+        for (const citation of evidence) {
+            const split = citation.indexOf('::');
+            const path = split === -1 ? citation : citation.slice(0, split);
+            const token = split === -1 ? '' : citation.slice(split + 2);
+
+            let text;
+            try {
+                text = readFileSync(resolve(ROOT, path), 'utf8');
+            } catch {
+                problems.push(`${name}: ${path} does not exist`);
+                continue;
+            }
+
+            if (token !== '' && !text.includes(token)) {
+                problems.push(`${name}: ${path} no longer contains '${token}'`);
+            }
+        }
+    }
+
+    return problems;
+}
 
 function main() {
     const args = process.argv.slice(2);
@@ -127,6 +192,10 @@ function main() {
         }
 
         tally[c.status] = (tally[c.status] ?? 0) + 1;
+        if (c.status === 'mapped') {
+            const key = (c.evidence ?? []).length > 0 ? 'mapped-built' : 'mapped-unused';
+            tally[key] = (tally[key] ?? 0) + 1;
+        }
         rows.push({ name, rec, c });
     }
 
@@ -138,21 +207,27 @@ function main() {
     md += `Occurrence counts include the prototype and the syscall-stub definition, so a syscall used once shows a count of 3.\n\n`;
 
     md += '| status | count | meaning |\n|---|---:|---|\n';
-    md += `| \`mapped\` | ${tally['mapped'] ?? 0} | a meep facility does the job |\n`;
+    md += `| \`mapped\`, exercised | ${tally['mapped-built'] ?? 0} | a meep facility does the job, and this port calls it |\n`;
+    md += `| \`mapped\`, not exercised | ${tally['mapped-unused'] ?? 0} | the facility exists and would do the job; this port never needed it |\n`;
+    md += `| \`hybrid\` | ${tally['hybrid'] ?? 0} | a meep facility does part of the job and ported Q3 code does the rest |\n`;
     md += `| \`ported\` | ${tally['ported'] ?? 0} | reimplemented faithfully in TypeScript; deliberately *not* mapped onto meep |\n`;
     md += `| \`workaround\` | ${tally['workaround'] ?? 0} | meep has no direct facility; solved outside the engine |\n`;
     md += `| \`GAP\` | ${tally['gap'] ?? 0} | no reasonable answer; see gap register |\n`;
     md += `| \`not needed\` | ${tally['not-needed'] ?? 0} | the whole subsystem is out of scope (netcode, botlib, CD keys, cinematics) |\n`;
     md += '\n';
 
-    md += '| Q3 syscall | uses | modules | disposition | meep facility | notes |\n';
-    md += '|---|---:|---|---|---|---|\n';
+    md += '| Q3 syscall | uses | modules | disposition | meep facility | where it lives | notes |\n';
+    md += '|---|---:|---|---|---|---|---|\n';
     for (const { name, rec, c } of rows) {
         const mods = [...rec.modules].sort().join(', ');
         const note = c.viaPrefix === undefined
             ? c.note
             : `${c.note} _(classified by prefix \`${c.viaPrefix}\`)_`;
-        md += `| \`${name}\` | ${rec.count} | ${mods} | ${STATUS_LABEL[c.status]} | ${c.meep} | ${note} |\n`;
+        const cited = c.evidence ?? [];
+        const where = cited.length > 0
+            ? cited.map((e) => `\`${e.split('::')[0]}\``).join('<br>')
+            : c.unused === undefined ? '--' : `*not exercised.* ${c.unused}`;
+        md += `| \`${name}\` | ${rec.count} | ${mods} | ${STATUS_LABEL[c.status]} | ${c.meep} | ${where} | ${note} |\n`;
     }
 
     if (outPath !== null) {
@@ -179,6 +254,19 @@ function main() {
         process.stdout.write(md);
     }
 
+    const evidenceProblems = checkEvidence(spec);
+
+    if (evidenceProblems.length > 0) {
+        console.error(`\nEVIDENCE (${evidenceProblems.length}):`);
+        for (const p of evidenceProblems) console.error(`  ${p}`);
+        console.error(
+            '\nEvery `ported`, `hybrid` or `workaround` entry must cite a path in this\n' +
+            'repository, and every `mapped` entry must cite one or say why it is not\n' +
+            'exercised. See D-066.'
+        );
+        process.exit(1);
+    }
+
     if (unclassified.length > 0) {
         console.error(`\nUNCLASSIFIED (${unclassified.length}):`);
         for (const n of unclassified) console.error(`  ${n}  (${traps.get(n).count} uses)`);
@@ -186,7 +274,11 @@ function main() {
         process.exit(1);
     }
 
-    console.error(`ok: ${names.length} syscalls, all classified`);
+    const cited =
+        (tally['mapped-built'] ?? 0) + (tally['hybrid'] ?? 0) +
+        (tally['ported'] ?? 0) + (tally['workaround'] ?? 0);
+
+    console.error(`ok: ${names.length} syscalls, all classified, ${cited} cited in code`);
 }
 
 main();

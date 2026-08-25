@@ -38,7 +38,7 @@
  * firing ten times a second should not build and destroy an entity per shot.
  * Two code paths for one concept was the greater cost, and the saving was not
  * what it looked like: a one-shot emitter reaches the same `playEvent` the
- * direct call did, one link later. See D-064.
+ * direct call did, one link later. See D-065.
  *
  * Random variants are picked here rather than by a `RandomContainerAudioClip`,
  * which is the more faithful arrangement: Q3 picks the index itself

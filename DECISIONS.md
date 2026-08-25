@@ -806,7 +806,7 @@ exactly the kind of thing that first appears on the fourteenth.
 
 ### D-046: One-shots through sopra directly, not `AudioEmitter` components
 
-**Reversed by D-064.** Kept as written, because the argument below is the one that had to be
+**Reversed by D-065.** Kept as written, because the argument below is the one that had to be
 answered and the answer turned out to be about consistency rather than about cost.
 
 Q3's sound model for everything a weapon, a pickup or a door does is
@@ -867,7 +867,7 @@ while a file on disk that nothing names is not.
 
 Half the list is curated and the other half is read out of the built maps, because half of it is
 per-map data rather than gamecode: `target_speaker` names its own ambience and `worldspawn` names
-its own music (D-065). Both halves are named by the same `soundName` the runtime derives names
+its own music (D-066). Both halves are named by the same `soundName` the runtime derives names
 with, so a map's string and the copied file cannot drift apart. Two names come back missing on
 every run -- `oa_dm1` and `oa_dm5` ask for `music/sonic6.ogg` and `music/sonic3.ogg`, Q3-original
 tracks OA does not ship -- and that is the manifest doing its job rather than a fault to fix.
@@ -1483,7 +1483,7 @@ and correct while the characters were visibly wrong, because nothing multiplied 
 
 ---
 
-### D-064: Every sound is an `AudioEmitter`, and the one-shot exception was not worth its second code path
+### D-065: Every sound is an `AudioEmitter`, and the one-shot exception was not worth its second code path
 
 D-046 argued that a one-shot should skip the component layer and call `sopra.playOneShot` directly,
 because an `AudioEmitter` per machinegun round means an entity built and destroyed ten times a
@@ -1504,7 +1504,7 @@ that came up afterwards. Where does the bus id go. What stops this. Which of the
 `distanceMax`. And -- the one that mattered -- when a loop is finally needed, does it go through the
 component route, in which case the file now has both, or does it get a third thing. The port had
 already answered that badly once, by claiming four looping-sound syscalls were mapped to a
-component nothing built (D-065).
+component nothing built (D-066).
 
 The one thing the component route genuinely needs and the direct route did not is a way to know
 when a sound has ended, because `AudioEmitterSystem.unlink` stops a direct instance -- an entity
@@ -1528,7 +1528,7 @@ The two axes Q3 varies -- positioned or not, finite or looping -- are exactly th
 routes on. That is not a coincidence to be clever about; it is the reason one component expresses
 all four.
 
-### D-065: The trap matrix said four sound calls were mapped, and three of them were not
+### D-066: The trap matrix said four sound calls were mapped, and three of them were not
 
 `trap_S_AddLoopingSound`, `trap_S_AddRealLoopingSound`, `trap_S_StopLoopingSound` and
 `trap_S_UpdateEntityPosition` were all marked `mapped`, against "looping sound emitter" and

@@ -52,99 +52,144 @@
   ],
   "entries": {
     "trap_Trace": {
-      "status": "ported",
-      "meep": "-",
-      "note": "cm_trace.c ported verbatim. pmove fidelity depends on exact brush-plane sweep semantics, start-solid handling and the 1/32 epsilon; meep narrowphase gives different contact normals."
+      "status": "hybrid",
+      "meep": "PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush",
+      "note": "The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019) or its surface standoff (GAP-020). `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against.",
+      "evidence": [
+        "src/client/PhysicsTrace.ts::contactPlane",
+        "src/q3/cm/trace.ts::export function traceBrushList",
+        "src/game/PmoveHost.ts::createPmoveHost"
+      ]
     },
     "trap_TraceCapsule": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": "Capsule traces are used for player-vs-player in ioq3; OA defaults to bbox."
+      "note": "OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018."
     },
     "trap_PointContents": {
       "status": "ported",
       "meep": "-",
-      "note": "Brush contents lookup. No meep equivalent - contents are Q3 semantics (lava/slime/water/playerclip/trigger)."
+      "note": "Brush contents lookup, and the one collision call the physics swap did not touch. Contents are Q3 semantics -- lava, slime, water, playerclip, trigger, and the exact bitmask pmove tests -- and a rigid body has no concept of them, so the clipmap is still loaded and still queried on the physics backend. That is why `PhysicsTrace` takes a `ClipMap`.",
+      "evidence": [
+        "src/q3/cm/trace.ts::export function pointContents",
+        "src/game/PmoveHost.ts::pointContents"
+      ]
     },
     "trap_CM_BoxTrace": {
-      "status": "ported",
-      "meep": "-",
-      "note": "Same clipmap, client side."
+      "status": "hybrid",
+      "meep": "PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush",
+      "note": "Same clipmap, client side; same hybrid as `trap_Trace`.",
+      "evidence": [
+        "src/client/PhysicsTrace.ts::shape_cast",
+        "src/q3/cm/trace.ts::export function boxTrace"
+      ]
     },
     "trap_CM_CapsuleTrace": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": ""
+      "note": "OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018."
     },
     "trap_CM_TransformedBoxTrace": {
-      "status": "ported",
-      "meep": "-",
-      "note": "Needed for moving brush models (doors, plats)."
+      "status": "hybrid",
+      "meep": "kinematic RigidBody found by shape_cast; ported translation on the clipmap backend",
+      "note": "Needed for moving brush models (doors, plats). On the physics backend the mover is a kinematic body and the world trace already finds it -- Q3's whole `SV_ClipMoveToEntities` loop collapses into the one query, which is the clearest single win of the swap. The clipmap backend keeps `entityClip.ts`, `SV_ClipMoveToEntities` reduced to translation, because every OA mover has zero angles.",
+      "evidence": [
+        "src/q3/cm/entityClip.ts::clipToEntities",
+        "src/client/PhysicsWorld.ts::addMover"
+      ]
     },
     "trap_CM_TransformedCapsuleTrace": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": ""
+      "note": "OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018."
     },
     "trap_CM_PointContents": {
       "status": "ported",
       "meep": "-",
-      "note": ""
+      "note": "Submodel form of the same call; `pointContents` takes the model index.",
+      "evidence": [
+        "src/q3/cm/trace.ts::export function pointContents"
+      ]
     },
     "trap_CM_TransformedPointContents": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": ""
+      "note": "Only reached for contents inside a *rotating* brush model. Every mover in the OA maps this port ships has zero angles, so the transform degenerates and the untransformed call answers it."
     },
     "trap_CM_LoadMap": {
       "status": "ported",
       "meep": "-",
-      "note": "cm_load.c ported: brushes, leafs, patch collision. Separate from the render-side BSP conversion."
+      "note": "cm_load.c ported: planes, nodes, leafs, brushes, brushsides, submodels. Read straight out of the BSP rather than from a converted format, so the runtime, the WASM oracle and the divergence harness all read the same bytes. Patch collision is *not* ported (D-017).",
+      "evidence": [
+        "src/q3/cm/ClipMap.ts::export class ClipMap",
+        "src/q3/bsp/BspFile.ts::export class BspFile"
+      ]
     },
     "trap_CM_InlineModel": {
       "status": "ported",
       "meep": "-",
-      "note": ""
+      "note": "Submodel index into the clipmap; both `boxTrace` and `pointContents` take one.",
+      "evidence": [
+        "src/q3/cm/ClipMap.ts::models"
+      ]
     },
     "trap_CM_NumInlineModels": {
       "status": "ported",
       "meep": "-",
-      "note": ""
+      "note": "As above.",
+      "evidence": [
+        "src/q3/cm/ClipMap.ts::models"
+      ]
     },
     "trap_CM_TempBoxModel": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": ""
+      "note": "Q3 wraps a bare AABB in a throwaway clip model so one trace path can handle it. The clipmap backend translates the sweep instead; the physics backend already has a body."
     },
     "trap_CM_TempCapsuleModel": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": ""
+      "note": "OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018."
     },
     "trap_SetBrushModel": {
-      "status": "ported",
+      "status": "hybrid",
       "meep": "kinematic RigidBody per submodel brush",
-      "note": "Binds an entity to BSP submodel *N. On the physics backend the submodel becomes KinematicVelocity bodies; on the clipmap backend, entityClip.ts is SV_ClipMoveToEntities reduced to translation."
+      "note": "Binds an entity to BSP submodel *N. On the physics backend each of the submodel's brushes becomes a `KinematicVelocity` body whose `Transform` the mover simulation writes, and the broadphase refits without being asked. On the clipmap backend the same submodel is an offset passed to `clipToEntities`.",
+      "evidence": [
+        "src/game/Movers.ts::submodel",
+        "src/client/PhysicsWorld.ts::addMover",
+        "src/q3/cm/entityClip.ts::ClippedEntity"
+      ]
     },
     "trap_SnapVector": {
       "status": "ported",
       "meep": "-",
-      "note": "Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation."
+      "note": "Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation -- removing it changes strafe-jump speed.",
+      "evidence": [
+        "src/q3/pmove/pmove.ts::snapVector"
+      ]
     },
     "trap_EntitiesInBox": {
-      "status": "mapped",
-      "meep": "core/bvh2 BVH3 box query",
-      "note": "Q3 areagrid replaced by meep BVH. Semantics differ (Q3 returns absmin/absmax overlaps), so a thin adapter re-tests AABBs."
+      "status": "workaround",
+      "meep": "own AABB list; no broadphase",
+      "note": "Q3's areagrid, used for trigger and item touch tests. The port keeps its own arrays of triggers, movers and items and tests AABBs directly: at the entity counts a deathmatch map has -- 31 items and 6 brush entities on `oa_dm1` -- a broadphase costs more than it saves. Recorded as a facility that exists and was correctly not used.",
+      "evidence": [
+        "src/game/Movers.ts::function boxesOverlap",
+        "src/game/Items.ts::update"
+      ]
     },
     "trap_EntityContact": {
-      "status": "ported",
-      "meep": "-",
-      "note": "Exact contact against the clipmap, not a broadphase test."
+      "status": "workaround",
+      "meep": "own AABB test",
+      "note": "Q3 tests a bounding box against an entity's *brushes*. The port tests the trigger's AABB, which is exact for the axis-aligned trigger brushes OA ships and would be wrong for a rotated or non-convex one.",
+      "evidence": [
+        "src/game/Movers.ts::function boxesOverlap"
+      ]
     },
     "trap_EntityContactCapsule": {
-      "status": "ported",
+      "status": "not-needed",
       "meep": "-",
-      "note": ""
+      "note": "OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018."
     },
     "trap_CM_MarkFragments": {
       "status": "not-needed",
@@ -153,13 +198,21 @@
     },
     "trap_LinkEntity": {
       "status": "mapped",
-      "meep": "ECS + BVH insert",
-      "note": "Server-side spatial linking becomes BVH residency."
+      "meep": "ECS entity build + index residency",
+      "note": "Server-side spatial linking becomes ECS residency: building an entity with a `Transform` and a drawable or a body is what puts it into the relevant index, and nothing has to be told twice.",
+      "evidence": [
+        "src/client/ItemsView.ts::build",
+        "src/client/PhysicsWorld.ts::addStaticHull"
+      ]
     },
     "trap_UnlinkEntity": {
       "status": "mapped",
-      "meep": "ECS + BVH remove",
-      "note": ""
+      "meep": "ECS entity removal",
+      "note": "Removal is the unlink -- for the renderer, the physics broadphase and the audio emitter set alike -- which is why an expired decal, a finished one-shot and a detonated rocket are all retired the same way, one frame late, out of the owning system's update.",
+      "evidence": [
+        "src/client/Effects.ts::removeEntity",
+        "src/client/Audio.ts::destroyEmitter"
+      ]
     },
     "trap_InPVS": {
       "status": "not-needed",
@@ -232,49 +285,59 @@
       "note": ""
     },
     "trap_GetUserinfo": {
-      "status": "mapped",
-      "meep": "plain config object",
-      "note": "Userinfo string becomes a typed settings object."
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields."
     },
     "trap_SetUserinfo": {
-      "status": "mapped",
-      "meep": "plain config object",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields."
     },
     "trap_GetServerinfo": {
-      "status": "mapped",
-      "meep": "plain config object",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields."
     },
     "trap_SetConfigstring": {
-      "status": "mapped",
-      "meep": "ECS singleton components",
-      "note": "Configstrings are a replication cache; locally they are just game state."
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Configstrings are a replication cache. With no replication the port reads the same worldspawn and entity keys directly -- `CS_MUSIC`, for instance, is `MapSound` reading the `music` key off worldspawn."
     },
     "trap_GetConfigstring": {
-      "status": "mapped",
-      "meep": "ECS singleton components",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Configstrings are a replication cache. With no replication the port reads the same worldspawn and entity keys directly -- `CS_MUSIC`, for instance, is `MapSound` reading the `music` key off worldspawn."
     },
     "trap_GetConfigString": {
-      "status": "mapped",
-      "meep": "ECS singleton components",
-      "note": "UI-side spelling of the same call."
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Configstrings are a replication cache. With no replication the port reads the same worldspawn and entity keys directly -- `CS_MUSIC`, for instance, is `MapSound` reading the `music` key off worldspawn."
     },
     "trap_GetUsercmd": {
       "status": "mapped",
-      "meep": "engine/input plus own usercmd_t builder",
-      "note": ""
+      "meep": "engine/input devices plus own usercmd_t builder",
+      "note": "Q3's `usercmd_t` is kept exactly -- 16-bit angles, byte moves, button bits -- because pmove reads it. What meep supplies is the layer beneath: `keyboard.keys.<name>.is_down` is a live switch with no held-key bookkeeping, and `pointer.on.move` hands over the pointer-lock delta already extracted as its third argument.",
+      "evidence": [
+        "src/client/PlayerController.ts::cmd.moves",
+        "src/client/PlayerController.ts::is_down"
+      ]
     },
     "trap_GetUserCmd": {
       "status": "mapped",
-      "meep": "engine/input plus own usercmd_t builder",
-      "note": "cgame-side spelling."
+      "meep": "engine/input devices plus own usercmd_t builder",
+      "note": "cgame-side spelling of the same call.",
+      "evidence": [
+        "src/client/PlayerController.ts::cmd.moves"
+      ]
     },
     "trap_SetUserCmdValue": {
       "status": "mapped",
       "meep": "own usercmd_t builder",
-      "note": ""
+      "note": "Weapon selection, which in Q3 rides on the usercmd rather than being a command of its own.",
+      "evidence": [
+        "src/client/PlayerController.ts::selectWeapon"
+      ]
     },
     "trap_Send": {
       "status": "not-needed",
@@ -284,52 +347,83 @@
     "trap_R_RegisterModel": {
       "status": "mapped",
       "meep": "AssetManager + GLTFSceneBundleAssetLoader",
-      "note": "MD3 converted to glTF offline. Player models need a skeleton inferred from the vertex-morph frames first (D-042); meep has no morph-target path."
+      "note": "Two paths, because two kinds of model. Characters go through `GLTFSceneBundleAssetLoader` and `load_model_scene_bundle`, after MD3 vertex-morph frames are decomposed into a skeleton offline (D-042) -- meep has no morph-target path. Item and weapon models skip the loader entirely: they are static, so the pipeline emits one packed vertex buffer for all 76 of them and the runtime builds `ShadedGeometry` from slices of it, which is one fetch instead of 76.",
+      "evidence": [
+        "src/app/main.ts::load_model_scene_bundle",
+        "src/client/map/loadModels.ts::export async function loadModels"
+      ]
     },
     "trap_R_RegisterSkin": {
-      "status": "mapped",
-      "meep": "material swap on ShadedGeometry",
-      "note": "Q3 .skin maps surface name to shader; becomes a material table applied per primitive entity."
+      "status": "workaround",
+      "meep": "offline .skin resolution into glTF materials",
+      "note": "Q3's `.skin` maps a surface name to a shader and is chosen at runtime. There is no runtime material table here: `convert-characters.ts` reads the `.skin` file, resolves each surface to a converted PBR material and bakes it into the glTF. Switching skins at runtime is therefore not possible in this port -- a real capability lost, rather than a translation.",
+      "evidence": [
+        "tools/convert-characters.ts::skin"
+      ]
     },
     "trap_R_RegisterShader": {
-      "status": "mapped",
-      "meep": "StandardShadeMaterial",
-      "note": "Offline .shader to PBR conversion per brief section 2."
+      "status": "workaround",
+      "meep": "offline .shader to PBR conversion, then StandardShadeMaterial",
+      "note": "Per brief section 2, and lossy by design: 1,679 `tcMod`, 982 non-benign `rgbGen`, 911 `tcGen`, 413 `alphaGen`, 93 `animMap` and 2 `deformVertexes` stages are dropped across the OA shader set. Counted rather than estimated -- see section 5.",
+      "evidence": [
+        "tools/pipeline/shader-to-pbr.ts::",
+        "src/client/map/bundle.ts::StandardShadeMaterial"
+      ]
     },
     "trap_R_RegisterShaderNoMip": {
       "status": "mapped",
-      "meep": "meep UI image",
-      "note": "464 call sites, almost all 2D HUD/menu icons."
+      "meep": "meep UI image view",
+      "note": "464 call sites, almost all 2D HUD and menu icons.",
+      "unused": "The HUD here is text -- numbers, a speedometer, a pickup line -- built from `LabelView`. No 2D image is drawn anywhere, so the facility was never reached."
     },
     "trap_R_RegisterFont": {
       "status": "mapped",
       "meep": "engine/asset/loaders/font + UI text",
-      "note": ""
+      "note": "Q3 fonts are pre-rendered glyph atlases.",
+      "unused": "meep's `View` hierarchy renders as DOM, so HUD text is styled with CSS and the engine's font loader is never reached. A HUD that had to live inside the 3D scene would have needed it."
     },
     "trap_R_AddRefEntityToScene": {
       "status": "mapped",
-      "meep": "ShadedGeometry + ShadedGeometrySystem3",
-      "note": "Q3 immediate-mode scene list becomes retained ECS entities. Biggest structural change on the client side."
+      "meep": "ShadedGeometry / SGMesh entities",
+      "note": "Q3's immediate-mode scene list becomes retained ECS entities, which is the biggest structural change on the client side: nothing is re-submitted per frame, and an item that stops existing is an entity that stops existing.",
+      "evidence": [
+        "src/client/map/loadMap.ts::ShadedGeometry",
+        "src/client/Characters.ts::SGMesh"
+      ]
     },
     "trap_R_AddPolyToScene": {
       "status": "workaround",
-      "meep": "Geometry rebuilt per frame / Trail3D / particles",
-      "note": "Immediate-mode triangle soup. Most uses (marks, sprites, trails) map to decals/particles/trails; the rest rebuild a Geometry and set needsUpdate."
+      "meep": "GPU decals and particles instead of triangle soup",
+      "note": "Immediate-mode triangle soup: bullet marks, blood, sprites, rail ribbons. Marks and blood become `Decal`s, the rest become particles. meep has a `Trail3D` that would do a rail ribbon and it was not needed -- a rocket trail is smoke, not a ribbon. No path in this port rebuilds a `Geometry` per frame.",
+      "evidence": [
+        "src/client/Effects.ts::Decal",
+        "src/client/Effects.ts::ParticleEmitter"
+      ]
     },
     "trap_R_AddPolysToScene": {
       "status": "workaround",
       "meep": "as above",
-      "note": ""
+      "note": "As above.",
+      "evidence": [
+        "src/client/Effects.ts::Decal"
+      ]
     },
     "trap_R_AddLightToScene": {
       "status": "mapped",
       "meep": "Light + LightSystem3 (clustered)",
-      "note": "Q3 dlights were a fixed small pool; clustered lighting removes the cap."
+      "note": "Q3 dlights were a fixed pool of 32 and had to be budgeted. Clustered lighting removes the cap, which this port depends on twice over: once for effects, and once because the level's static lighting had to be reconstructed as dynamic lights (GAP-006).",
+      "evidence": [
+        "src/client/Effects.ts::LightType.POINT",
+        "src/client/map/loadMap.ts::LightType.POINT"
+      ]
     },
     "trap_R_AddAdditiveLightToScene": {
       "status": "mapped",
       "meep": "Light",
-      "note": "Additive-vs-normal dlight distinction has no PBR analogue; folded into intensity."
+      "note": "The additive-vs-normal dlight distinction is a fixed-function artefact with no PBR analogue; folded into intensity.",
+      "evidence": [
+        "src/client/Effects.ts::LightType.POINT"
+      ]
     },
     "trap_R_ClearScene": {
       "status": "not-needed",
@@ -339,37 +433,57 @@
     "trap_R_RenderScene": {
       "status": "mapped",
       "meep": "Engine graphics loop",
-      "note": ""
+      "note": "The harness owns the loop; the game is a tick handler on it.",
+      "evidence": [
+        "src/app/main.ts::EngineHarness.bootstrap"
+      ]
     },
     "trap_R_SetColor": {
       "status": "mapped",
       "meep": "UI element tint",
-      "note": "183 call sites, all 2D."
+      "note": "183 call sites, all 2D.",
+      "unused": "HUD colour here is CSS -- a class swap when health drops below 25, a fade on the pickup line. Nothing tints a UI element through the engine."
     },
     "trap_R_DrawStretchPic": {
       "status": "mapped",
       "meep": "meep UI views",
-      "note": "The entire Q3 HUD and menu draw model is this one call. Becomes retained UI views."
+      "note": "The entire Q3 HUD and menu draw model is this one call, and it becomes retained `View`s that update when their model changes. The port needed only text, so the image half of the call has no counterpart here.",
+      "evidence": [
+        "src/client/Hud.ts::LabelView",
+        "src/client/Hud.ts::EmptyView"
+      ]
     },
     "trap_R_LerpTag": {
       "status": "mapped",
-      "meep": "glTF node hierarchy + animation channels",
-      "note": "MD3 tags become animated nodes in the converted glTF: tag_torso is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player."
+      "meep": "glTF node hierarchy + AnimationSystem3 clip player",
+      "note": "MD3 tags become animated nodes in the converted glTF: `tag_torso` is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player, and the three-part model survives as a node hierarchy rather than as three models composed per frame (D-043).",
+      "evidence": [
+        "tools/convert-characters.ts::tag_torso",
+        "src/client/Characters.ts::Animation"
+      ]
     },
     "trap_CM_LerpTag": {
       "status": "mapped",
-      "meep": "glTF node hierarchy + animation channels",
-      "note": "MD3 tags become animated nodes in the converted glTF: tag_torso is a node the legs clips drive, and the torso skin hangs off it. The lerp is the clip player."
+      "meep": "glTF node hierarchy + AnimationSystem3 clip player",
+      "note": "Game-side spelling of the same call.",
+      "evidence": [
+        "tools/convert-characters.ts::tag_torso"
+      ]
     },
     "trap_R_ModelBounds": {
       "status": "mapped",
-      "meep": "AABB3 from scene bundle",
-      "note": ""
+      "meep": "AABB3 from the scene bundle",
+      "note": "Q3 uses it to size the item bob and the 2D model previews in the menus.",
+      "unused": "Item placement drops each pickup with a real trace instead, and there are no model previews because there are no menus."
     },
     "trap_R_LightForPoint": {
-      "status": "gap",
-      "meep": "nothing directly",
-      "note": "Q3 samples the BSP lightgrid to shade dynamic models. See gap register."
+      "status": "mapped",
+      "meep": "clustered lighting, directly",
+      "note": "**Corrected during the phase 6 audit**: this was filed as a gap and is not one. Q3 needs `R_LightForPoint` because its models sit *outside* the lighting solution -- the world is lightmapped, so a moving model has to sample a separate lightgrid to be lit at all. meep has one lighting solution and characters, items and level geometry are all in it, so the call has no counterpart because the problem it solves does not exist. The gap it used to point at (GAP-006, baked lightmaps cannot be imported) is real and belongs to `trap_R_LoadWorldMap`.",
+      "evidence": [
+        "src/client/map/loadMap.ts::LightType.POINT",
+        "src/app/main.ts::LightSystem3"
+      ]
     },
     "trap_R_RemapShader": {
       "status": "not-needed",
@@ -379,22 +493,34 @@
     "trap_R_GetViewPosition": {
       "status": "mapped",
       "meep": "camera Transform",
-      "note": ""
+      "note": "The camera entity's `Transform` is the view position, and the sound listener rides it.",
+      "evidence": [
+        "src/app/main.ts::cameraEntity",
+        "src/client/PlayerController.ts::transform"
+      ]
     },
     "trap_R_LoadWorldMap": {
       "status": "mapped",
-      "meep": "offline BSP to scene bundle plus runtime load",
-      "note": ""
+      "meep": "offline BSP to scene bundle, then a runtime load",
+      "note": "One `ShadedGeometry` entity per material group and one `Light` per reconstructed light source. The lossy part is not the geometry, it is the lighting: q3map2 strips every `light` entity from a compiled BSP and meep cannot import the baked lightmap (GAP-006), so the lighting is reconstructed from the surface-light shaders and the entity lump.",
+      "evidence": [
+        "src/client/map/loadMap.ts::export async function loadMap",
+        "tools/convert-map.ts::"
+      ]
     },
     "trap_R_LFX_ParticleEffect": {
       "status": "mapped",
       "meep": "ParticleEmitterSystem3 / Particular",
-      "note": "OA LFX particle extension, replaced outright."
+      "note": "OA's LFX particle extension, replaced outright per brief section 2.",
+      "evidence": [
+        "src/client/Effects.ts::ParticleEmitter"
+      ]
     },
     "trap_GetGlconfig": {
       "status": "mapped",
       "meep": "graphics device info",
-      "note": "Only used for screen dimensions and aspect."
+      "note": "Only used for screen dimensions and aspect.",
+      "unused": "The camera derives its own aspect and the HUD is laid out by CSS, so nothing asks."
     },
     "trap_UpdateScreen": {
       "status": "not-needed",
@@ -404,32 +530,52 @@
     "trap_GetEntityToken": {
       "status": "ported",
       "meep": "-",
-      "note": "Walks the BSP entity lump string. Ported as part of the BSP reader."
+      "note": "Walks the BSP entity lump string. Ported as part of the BSP reader; the same parse feeds item spawning, movers, speakers and the navigation graph.",
+      "evidence": [
+        "src/q3/bsp/Entities.ts::parseEntities"
+      ]
     },
     "trap_S_RegisterSound": {
       "status": "mapped",
-      "meep": "SoundAssetLoader",
-      "note": ""
+      "meep": "SoundAssetLoader + SampleAudioClip",
+      "note": "One `EventDescription` per Q3 sound name, built once at load. `AudioEmitterSystem` registers the sound asset loader itself, so the consumer does not have to know one exists.",
+      "evidence": [
+        "src/client/Audio.ts::SampleAudioClip",
+        "src/client/Audio.ts::EventDescription"
+      ]
     },
     "trap_S_StartSound": {
       "status": "mapped",
       "meep": "AudioEmitter, finite 3D",
-      "note": "Positional one-shot: AudioBank.play builds an emitter entity at the point and removes it on the instance's onEnded. AudioEmitterSystem routes a finite 3D event down its direct path, so this reaches the same sopra playEvent a direct call would, one link later."
+      "note": "Positional one-shot: AudioBank.play builds an emitter entity at the point and removes it on the instance's onEnded. AudioEmitterSystem routes a finite 3D event down its direct path, so this reaches the same sopra playEvent a direct call would, one link later.",
+      "evidence": [
+        "src/client/Audio.ts::    play("
+      ]
     },
     "trap_S_StartLocalSound": {
       "status": "mapped",
       "meep": "AudioEmitter, finite 2D",
-      "note": "Pickups and feedback tones, played dry -- the same emitter with is3D false, which is what makes it dry."
+      "note": "Pickups and feedback tones, played dry -- the same emitter with is3D false, which is what makes it dry.",
+      "evidence": [
+        "src/client/Audio.ts::    playLocal("
+      ]
     },
     "trap_S_AddLoopingSound": {
       "status": "mapped",
       "meep": "AudioEmitter, looping 3D",
-      "note": "Q3 rebuilds the loop set every frame and keeps the nearest; a looping 3D emitter is registered with AudioEmitterSystem's LiveEmitterSet, which promotes the nearest in range up to LOOP_BUDGET and leaves the rest dormant. Live at: CG_Missile's per-weapon fly sound on rockets, plasma and BFG shots; CG_Item's hover on a weapon lying in the map; CG_AddPlayerWeapon's firingSound/readySound on bots. Not CG_PlayerPowerups' flight loop (no powerup state) and not the gauntlet's firingSound (needs its own firing flag, not a fire-rate cooldown) -- see D-065."
+      "note": "Q3 rebuilds the loop set every frame and keeps the nearest; a looping 3D emitter is registered with AudioEmitterSystem's LiveEmitterSet, which promotes the nearest in range up to LOOP_BUDGET and leaves the rest dormant. Live at: CG_Missile's per-weapon fly sound on rockets, plasma and BFG shots; CG_Item's hover on a weapon lying in the map; CG_AddPlayerWeapon's firingSound/readySound on bots. Not CG_PlayerPowerups' flight loop (no powerup state) and not the gauntlet's firingSound (needs its own firing flag, not a fire-rate cooldown) -- see D-066.",
+      "evidence": [
+        "src/client/Audio.ts::    loop(",
+        "src/client/ItemsView.ts::loop"
+      ]
     },
     "trap_S_AddRealLoopingSound": {
       "status": "mapped",
       "meep": "AudioEmitter, looping 3D",
-      "note": "The ET_SPEAKER variant, meaning not merged with other copies of the same sound. Map ambience: MapSound starts one emitter per target_speaker carrying the looped-on spawnflag, named by the entity's own noise key. 22 on oa_dm5, 10 on oa_dm4, 3 on aggressor."
+      "note": "The ET_SPEAKER variant, meaning not merged with other copies of the same sound. Map ambience: MapSound starts one emitter per target_speaker carrying the looped-on spawnflag, named by the entity's own noise key. 22 on oa_dm5, 10 on oa_dm4, 3 on aggressor.",
+      "evidence": [
+        "src/client/MapSound.ts::loop"
+      ]
     },
     "trap_S_ClearLoopingSounds": {
       "status": "not-needed",
@@ -439,67 +585,93 @@
     "trap_S_StopLoopingSound": {
       "status": "mapped",
       "meep": "remove the emitter entity",
-      "note": "SoundLoop.stop. Unlinking is what stops the sound, so the removal is the stop. Called when a missile detonates, when a weapon is picked up, and when a bot switches or dies."
+      "note": "SoundLoop.stop. Unlinking is what stops the sound, so the removal is the stop. Called when a missile detonates, when a weapon is picked up, and when a bot switches or dies.",
+      "evidence": [
+        "src/client/Audio.ts::    stop()"
+      ]
     },
     "trap_S_UpdateEntityPosition": {
       "status": "mapped",
       "meep": "Transform on the emitter entity",
-      "note": "SoundLoop.move writes the Transform the emitter was registered with. The spatial index subscribes to that vector's onChanged, so a rocket's fly sound follows the rocket and refits its BVH leaf only when it actually moves."
+      "note": "SoundLoop.move writes the Transform the emitter was registered with. The spatial index subscribes to that vector's onChanged, so a rocket's fly sound follows the rocket and refits its BVH leaf only when it actually moves.",
+      "evidence": [
+        "src/client/Audio.ts::    move("
+      ]
     },
     "trap_S_Respatialize": {
       "status": "mapped",
       "meep": "SoundListener on the camera entity",
-      "note": "AudioEmitterSystem forwards the listener pose from the component each frame."
+      "note": "AudioEmitterSystem forwards the listener pose from the component each frame.",
+      "evidence": [
+        "src/app/main.ts::SoundListener"
+      ]
     },
     "trap_S_StartBackgroundTrack": {
       "status": "mapped",
       "meep": "AudioEmitter, looping 2D on the music bus",
-      "note": "worldspawn's music key, which SP_worldspawn copies into CS_MUSIC and CG_StartMusic hands over as an intro and a loop token. No map this port ships names a second token. oa_dm1 and oa_dm5 ask for Q3-original tracks OA does not ship, so they get none and the manifest says so."
+      "note": "worldspawn's music key, which SP_worldspawn copies into CS_MUSIC and CG_StartMusic hands over as an intro and a loop token. No map this port ships names a second token. oa_dm1 and oa_dm5 ask for Q3-original tracks OA does not ship, so they get none and the manifest says so.",
+      "evidence": [
+        "src/client/Audio.ts::    music(",
+        "src/client/MapSound.ts::music"
+      ]
     },
     "trap_S_StopBackgroundTrack": {
       "status": "mapped",
       "meep": "remove the music emitter",
-      "note": "AudioBank.stopMusic, and implicitly whenever a second track replaces the first."
+      "note": "AudioBank.stopMusic, and implicitly whenever a second track replaces the first.",
+      "evidence": [
+        "src/client/Audio.ts::    stopMusic()"
+      ]
     },
     "trap_Key_GetCatcher": {
       "status": "mapped",
-      "meep": "engine/input context stack",
-      "note": ""
+      "meep": "engine/input context stack + own binding table",
+      "note": "",
+      "unused": "No menus, so nothing competes for the keyboard."
     },
     "trap_Key_SetCatcher": {
       "status": "mapped",
-      "meep": "engine/input context stack",
-      "note": ""
+      "meep": "engine/input context stack + own binding table",
+      "note": "",
+      "unused": "No menus, so nothing competes for the keyboard."
     },
     "trap_Key_IsDown": {
       "status": "mapped",
-      "meep": "input query API",
-      "note": ""
+      "meep": "KeyboardDevice key state",
+      "note": "`keyboard.keys.<name>.is_down` is a live switch polled once a frame, which is exactly the shape Q3's input wants and is nicer than the DOM's event pair.",
+      "evidence": [
+        "src/client/PlayerController.ts::is_down"
+      ]
     },
     "trap_Key_GetKey": {
       "status": "mapped",
-      "meep": "input query API",
-      "note": ""
+      "meep": "engine/input context stack + own binding table",
+      "note": "",
+      "unused": "No binding UI."
     },
     "trap_Key_ClearStates": {
       "status": "mapped",
-      "meep": "input reset",
-      "note": ""
+      "meep": "engine/input context stack + own binding table",
+      "note": "",
+      "unused": "Nothing swallows input, so nothing has to clear it."
     },
     "trap_Key_GetBindingBuf": {
       "status": "mapped",
-      "meep": "own binding table",
-      "note": "Q3 bindings live in the engine; here they are game data."
+      "meep": "engine/input context stack + own binding table",
+      "note": "Q3 bindings live in the engine; here they are game data.",
+      "unused": "Bindings are fixed WASD; no rebinding UI shipped."
     },
     "trap_Key_SetBinding": {
       "status": "mapped",
-      "meep": "own binding table",
-      "note": ""
+      "meep": "engine/input context stack + own binding table",
+      "note": "",
+      "unused": "Bindings are fixed WASD; no rebinding UI shipped."
     },
     "trap_Key_KeynumToStringBuf": {
       "status": "mapped",
-      "meep": "own binding table",
-      "note": ""
+      "meep": "engine/input context stack + own binding table",
+      "note": "",
+      "unused": "Bindings are fixed WASD; no rebinding UI shipped."
     },
     "trap_Key_GetOverstrikeMode": {
       "status": "not-needed",
@@ -514,27 +686,36 @@
     "trap_GetClipboardData": {
       "status": "mapped",
       "meep": "core/clipboard",
-      "note": ""
+      "note": "",
+      "unused": "Only Q3's console and chat entry paste; neither is ported."
     },
     "trap_FS_FOpenFile": {
       "status": "mapped",
       "meep": "AssetManager (async)",
-      "note": "Q3 filesystem is synchronous; meep assets are promises. See gap register."
+      "note": "Q3's filesystem is synchronous and returns a length; meep's assets are promises. Nothing in the gameplay code survives that change unaltered, which is why every load in this port is hoisted to startup and awaited together rather than pulled on demand.",
+      "evidence": [
+        "src/app/main.ts::assetManager.registerLoader",
+        "src/client/map/loadModels.ts::"
+      ]
     },
     "trap_FS_Read": {
       "status": "mapped",
       "meep": "ArrayBufferLoader",
-      "note": ""
+      "note": "Q3 reads its own formats out of pk3s at runtime.",
+      "unused": "The port fetches BSP, glTF and audio by URL and hands whole `ArrayBuffer`s to its own readers. `AssetManager` is used for the formats meep itself parses -- glTF, images, sound -- and nothing else needed a loader."
     },
     "trap_FS_Write": {
-      "status": "workaround",
-      "meep": "engine/save storage",
-      "note": "Only used for demo, config and stat writing; mostly cut."
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Demo recording, config writing and stat dumps. All cut: no netcode to record, no cvars to persist, no stats beyond the HUD."
     },
     "trap_FS_Seek": {
-      "status": "mapped",
+      "status": "workaround",
       "meep": "DataView offset",
-      "note": ""
+      "note": "Q3's file handles are streams. A browser has the whole buffer, so seeking is an offset into a `DataView` -- simpler, and the reason the BSP reader is 450 lines rather than a streaming parser.",
+      "evidence": [
+        "src/q3/bsp/BspFile.ts::DataView"
+      ]
     },
     "trap_FS_FCloseFile": {
       "status": "not-needed",
@@ -544,52 +725,83 @@
     "trap_FS_GetFileList": {
       "status": "workaround",
       "meep": "build-time manifest",
-      "note": "No directory listing in a browser. The asset pipeline emits a JSON manifest."
+      "note": "There is no directory listing in a browser, and Q3 uses one to discover sounds, models and map lists. The asset pipeline emits a JSON manifest per asset kind, and the runtime treats a name the manifest does not have as a reportable miss rather than as silence -- which is how the two missing Q3-original music tracks are known about.",
+      "evidence": [
+        "tools/convert-sounds.ts::manifest",
+        "src/client/Audio.ts::manifest"
+      ]
     },
     "trap_Cvar_Register": {
-      "status": "mapped",
-      "meep": "engine/options + reactive values",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_Update": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_Set": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": "357 call sites: the most-used syscall in the codebase."
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_SetValue": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_Reset": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_Create": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_VariableValue": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_VariableIntegerValue": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_VariableStringBuffer": {
-      "status": "mapped",
-      "meep": "engine/options",
-      "note": ""
+      "status": "workaround",
+      "meep": "URL query parameters",
+      "note": "Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing.",
+      "evidence": [
+        "src/app/main.ts::URLSearchParams"
+      ]
     },
     "trap_Cvar_InfoStringBuffer": {
       "status": "not-needed",
@@ -597,74 +809,83 @@
       "note": "Serialises cvars into the network userinfo string."
     },
     "trap_Argc": {
-      "status": "mapped",
-      "meep": "own console tokenizer",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_Argv": {
-      "status": "mapped",
-      "meep": "own console tokenizer",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_Args": {
-      "status": "mapped",
-      "meep": "own console tokenizer",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_argc": {
-      "status": "mapped",
-      "meep": "own console tokenizer",
-      "note": "Lowercase alias in OA g_local.h."
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_argv": {
-      "status": "mapped",
-      "meep": "own console tokenizer",
-      "note": "Lowercase alias in OA g_local.h."
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_AddCommand": {
-      "status": "mapped",
-      "meep": "own console command table",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_RemoveCommand": {
-      "status": "mapped",
-      "meep": "own console command table",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_Cmd_ExecuteText": {
-      "status": "mapped",
-      "meep": "own console",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_SendConsoleCommand": {
-      "status": "mapped",
-      "meep": "own console",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize."
     },
     "trap_Print": {
       "status": "mapped",
-      "meep": "engine/logging",
-      "note": ""
+      "meep": "console",
+      "note": "Diagnostics.",
+      "unused": "The port logs with `console.log` directly. Worth noting the traffic in the other direction: meep's own per-second FPS report goes to `console.warn`, which is section 5's complaint."
     },
     "trap_Printf": {
       "status": "mapped",
-      "meep": "engine/logging",
-      "note": ""
+      "meep": "console",
+      "note": "As above.",
+      "unused": "As `trap_Print`."
     },
     "trap_Error": {
       "status": "mapped",
-      "meep": "throw + engine/logging",
-      "note": ""
+      "meep": "throw + a failure screen",
+      "note": "Q3's fatal error drops to the console with a message. Here it throws, and the top-level catch replaces the document with the stack -- because a WebGPU application that fails during boot otherwise shows a black canvas and nothing else.",
+      "evidence": [
+        "src/app/main.ts::failed to start"
+      ]
     },
     "trap_Milliseconds": {
       "status": "mapped",
-      "meep": "engine Clock",
-      "note": ""
+      "meep": "engine ticker + performance.now",
+      "note": "Q3's clock, used both for timing and as `usercmd_t.serverTime`. The ticker supplies the delta; `performance.now` supplies the instrumentation.",
+      "evidence": [
+        "src/app/main.ts::performance.now",
+        "src/client/PlayerController.ts::serverTime"
+      ]
     },
     "trap_RealTime": {
-      "status": "mapped",
-      "meep": "Date",
-      "note": ""
+      "status": "not-needed",
+      "meep": "-",
+      "note": "Wall-clock date, for the scoreboard timestamp and demo filenames. Neither is ported."
     },
     "trap_MemoryRemaining": {
       "status": "not-needed",
@@ -673,38 +894,55 @@
     },
     "trap_PC_LoadSource": {
       "status": "workaround",
-      "meep": "offline conversion to JSON",
-      "note": "Q3 C-preprocessor-flavoured .menu/.cfg parser. Menu files are not ported; the few data files that use it are converted offline."
+      "meep": "offline tokenizer in the asset pipeline",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "evidence": [
+        "tools/pipeline/shader-script.ts::"
+      ]
     },
     "trap_PC_FreeSource": {
       "status": "workaround",
-      "meep": "-",
-      "note": ""
+      "meep": "offline tokenizer in the asset pipeline",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "evidence": [
+        "tools/pipeline/shader-script.ts::"
+      ]
     },
     "trap_PC_ReadToken": {
       "status": "workaround",
-      "meep": "-",
-      "note": ""
+      "meep": "offline tokenizer in the asset pipeline",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "evidence": [
+        "tools/pipeline/shader-script.ts::"
+      ]
     },
     "trap_PC_SourceFileAndLine": {
       "status": "workaround",
-      "meep": "-",
-      "note": ""
+      "meep": "offline tokenizer in the asset pipeline",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "evidence": [
+        "tools/pipeline/shader-script.ts::"
+      ]
     },
     "trap_PC_AddGlobalDefine": {
       "status": "workaround",
-      "meep": "-",
-      "note": ""
+      "meep": "offline tokenizer in the asset pipeline",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "evidence": [
+        "tools/pipeline/shader-script.ts::"
+      ]
     },
     "trap_DebugPolygonCreate": {
       "status": "mapped",
       "meep": "DebugDrawSystem3",
-      "note": ""
+      "note": "Q3 uses it to visualise AAS areas.",
+      "unused": "AAS is deleted, and the navigation graph was debugged with headless tools (`tools/navmesh-probe.ts`, `tools/trace-compare.ts`) rather than on screen -- a deliberate choice recorded in section 7, not an oversight."
     },
     "trap_DebugPolygonDelete": {
       "status": "mapped",
       "meep": "DebugDrawSystem3",
-      "note": ""
+      "note": "As above.",
+      "unused": "As above."
     },
     "trap_GetClientState": {
       "status": "not-needed",
