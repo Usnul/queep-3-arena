@@ -154,7 +154,12 @@ function appendSurface(
         );
     }
 
-    for (const index of surface.indices) accum.indices.push(index);
+    // Reversed: MD3 winds clockwise from the front, glTF counter-clockwise.
+    // Measured at 0 of 204 agreeing on `rocketl.md3`. Same convention as the
+    // BSP and as `brushHull.ts`.
+    for (let i = 0; i + 2 < surface.indices.length; i += 3) {
+        accum.indices.push(surface.indices[i]!, surface.indices[i + 2]!, surface.indices[i + 1]!);
+    }
 
     accum.vertexCursor += surface.numVerts;
     accum.indexCursor += surface.indices.length;

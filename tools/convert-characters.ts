@@ -188,6 +188,26 @@ function loadPart(dir: string, part: Part): LoadedPart | null {
     return { md3, skin };
 }
 
+/**
+ * MD3 winds clockwise from the front; glTF winds counter-clockwise.
+ *
+ * Measured across the content: 0 of 204 triangles on `rocketl.md3` agree with
+ * their stored vertex normal, 4 of 506 on `sarge`'s legs. The same convention
+ * holds for BSP surfaces, patch tessellation and brush windings, so every
+ * converter reverses and `brushHull.ts` always did.
+ */
+function reverseWinding(indices: Uint32Array): Uint32Array {
+    const out = new Uint32Array(indices.length);
+
+    for (let i = 0; i + 2 < indices.length; i += 3) {
+        out[i] = indices[i]!;
+        out[i + 1] = indices[i + 2]!;
+        out[i + 2] = indices[i + 1]!;
+    }
+
+    return out;
+}
+
 /** Every drawable surface of a part, concatenated, so it gets one shared skeleton. */
 function combinedFrames(md3: Md3Model): { frames: Float32Array[]; vertexCount: number } {
     const surfaces = drawableSurfaces(md3);
@@ -497,7 +517,7 @@ async function convertCharacter(
                     JOINTS_0: gltf.joints(joints),
                     WEIGHTS_0: gltf.vec4(weights),
                 },
-                indices: gltf.indices(Uint32Array.from(surface.indices)),
+                indices: gltf.indices(reverseWinding(surface.indices)),
                 material: await materialFor(part, surface.name, surface.shaders[0] ?? surface.name),
             });
 
@@ -582,7 +602,7 @@ async function convertCharacter(
                     NORMAL: gltf.vec3(normals),
                     TEXCOORD_0: gltf.vec2(uv),
                 },
-                indices: gltf.indices(Uint32Array.from(surface.indices)),
+                indices: gltf.indices(reverseWinding(surface.indices)),
                 material: await materialFor(head, surface.name, surface.shaders[0] ?? surface.name),
             });
         }

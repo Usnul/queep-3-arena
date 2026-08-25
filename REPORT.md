@@ -93,10 +93,10 @@ Ranked by how much they would cost the next person, not by how much they cost me
 7. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
    is literally named "used for light map", and there is a whole `shade/renderer/lightmap/`
    subsystem — but it is a *baker*, and no material has a lightmap slot. Every level format
-   that predates real-time GI ships baked lighting and none of it can come in. This is also the
-   single most visible quality gap in the demo: 29 of 30 materials load their textures and the
-   walls show full detail, but the floors read as flat grey, because what is missing is not
-   brightness but spatial variation in brightness (GAP-006).
+   that predates real-time GI ships baked lighting and none of it can come in. Large flat
+   surfaces therefore read as uniformly lit, which is a real quality gap — though smaller than
+   the first version of this report claimed, because I attributed "the floors are flat grey" to
+   it when the floors were not rendering at all (GAP-018).
 
 8. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
    dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
@@ -772,13 +772,17 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   Roughly 40 minutes, most of it spent establishing that the lightmap subsystem was a baker
   rather than an importer — the directory listing strongly suggests otherwise.
 
-  **What it costs, visually, measured on the running demo:** large flat surfaces read as
-  uniform. 29 of `oa_dm1`'s 30 materials have their albedo texture loaded and the walls show
-  full brick detail, but the floors look untextured. That is not a texturing bug — it is the
-  absence of the baked ambient occlusion and light falloff that gave Q3's floors their
-  variation. Reconstructed point lights cannot substitute, because what is missing is not
-  brightness but *spatial variation* in brightness. This is the single most visible quality gap
-  in the demo and it traces directly to this entry.
+  **What it costs, visually — and a correction.** Large flat surfaces read as uniformly lit:
+  reconstructed point lights give brightness, and what baked lighting gave was *spatial
+  variation* in brightness — the ambient occlusion in a corner, the falloff along a wall. That
+  much still stands.
+
+  What does not stand is the first version of this paragraph, which said "the floors look
+  untextured" and called this the single most visible quality gap in the demo. The floors were
+  not untextured; they were **not being drawn at all**, because I had every triangle in every map
+  wound backwards (GAP-018). I had a plausible explanation for a symptom and stopped looking. The
+  visible cost of this entry is real but ordinary: a level that looks flatly lit rather than one
+  that looks wrong.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.
@@ -788,30 +792,31 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
 - **Evidence:** `src/shade/renderer/lightmap/**`, `StandardAttributes.js`,
   `StandardShadeMaterial.d.ts`. Recorded at phase 1.
 
-### GAP-007: `draw_side` exists, is documented as having no effect, and there is no double-sided path
+### GAP-007 (withdrawn): `draw_side` works; its docblock is stale
 
-- **Needed:** Q3 shaders use `cull none` for grates, railings, foliage, banners and flags —
-  surfaces authored as a single sheet of polygons meant to be visible from both sides. They
-  are common: they appear in most maps in the OA set.
-- **meep offers:** `ShadeMaterial.draw_side` with a `ShadeDrawSide` enum, whose own docblock
-  says: *"Does not affect the actual drawing. Drawing is always done with 'Front' mode, with
-  backfaces always being culled. If you want double-sided drawing - you need to clone the
-  geometry and flip normals."*
-
-  Credit where due — that is exactly the right way to document a non-functional field, and it
-  saved me from debugging it. But a settable property that is documented to do nothing is a
-  trap with a warning sign on it rather than no trap.
-- **Workaround:** duplicate the triangles with reversed winding and flipped normals at asset
-  build time, for materials the shader conversion marked `doubleSided`. Straightforward in the
-  pipeline (it is the same vertices, reversed indices) and costs a little geometry. Not yet
-  applied — currently these surfaces are simply single-sided and disappear when viewed from
-  behind, which is visible in a few places and is filed here rather than hidden.
-- **Severity:** minor, given the docblock. It would be major without it.
-- **Suggested fix:** either implement it — the renderer has the pipeline state, and a
-  per-material cull mode is a pipeline key rather than a shader change — or remove the field
-  and the enum so it cannot be set at all.
-- **Evidence:** `src/shade/renderer/material/ShadeMaterial.d.ts`,
-  `tools/pipeline/shader-to-pbr.ts` (`doubleSided`). Recorded at phase 1.
+- **Status: withdrawn.** The original entry said `ShadeMaterial.draw_side` was a settable field
+  that did nothing, quoted its docblock approvingly as the right way to document a non-functional
+  property, and filed double-sided surfaces as unsupported. The docblock is out of date and I
+  took it at face value.
+- **What is actually true:** `ShadeDrawSide.Front` and `ShadeDrawSide.Double` both work.
+  `Double` is what Q3's `cull none` needs -- grates, railings, banners, flags, beams and flame
+  sprites -- and setting it is all that is required. Five materials on `oa_dm1` need it, eight on
+  `oa_dm5`, seven on `am_thornish`.
+- **`Back` is the one to avoid**, and the engine says so by what it does rather than in prose: the
+  glTF loader runs `fix_up_material_sides`, which handles a `Back` material by *flipping the
+  geometry* with `geometry_flip_normals` and rewriting the material to `Front`. Nothing does that
+  for a hand-built material, so `Back` on one is the only value that will not behave.
+- **The remaining finding is small and is about the comment, not the code.** A stale docblock
+  that describes a limitation which has since been fixed is worse than no docblock: it is
+  believed, and it is believed precisely by the careful reader who checks before using something.
+  This one cost a feature -- double-sided surfaces went unimplemented for the whole port on the
+  strength of it -- and it also earned meep a compliment in this report's ergonomics section that
+  it did not deserve for this particular field, which has been corrected.
+- **Now applied:** `src/client/map/bundle.ts` sets `draw_side = Double` for every material the
+  shader conversion marked `doubleSided`.
+- **Evidence:** `src/shade/renderer/material/ShadeMaterial.js` line 27 (the stale comment),
+  `src/shade/renderer/loader/gltf/fix_up_material_sides.js` (what `Back` really does).
+  Withdrawn during phase 5.
 
 ### GAP-008: Meshlet construction is synchronous, single-threaded, and on the critical path
 
@@ -1180,6 +1185,50 @@ the expensive way.
   only ever checked for *load* errors. Found when the maintainer tried to play it.
 - **Evidence:** `src/client/PlayerController.ts`, `src/app/main.ts`. Recorded during phase 5.
 
+### GAP-018 (mine, not the engine's): Quake III winds its triangles clockwise, and nothing complains
+
+- **Status:** not an engine gap. Recorded here because it invalidates two claims made earlier in
+  this report, and because the failure mode is worth knowing.
+- **What happened:** the maintainer reported that the floor did not render. It did not: every
+  world surface in every converted map was wound backwards, so the renderer culled all of them.
+  Standing in a room you saw the *far* side of the next room through the near walls, and the floor
+  under your feet was simply absent.
+- **The cause:** Q3 winds its triangles **clockwise seen from the front**; glTF and meep wind
+  counter-clockwise. My converter preserved the source winding on the reasoning that the axis map
+  `(x, y, z) -> (x, z, -y)` has determinant +1 and therefore preserves orientation. That reasoning
+  is correct and irrelevant: it preserves the winding, and the winding was already the opposite of
+  what the target wants.
+- **Measured, because "which way does Q3 wind" deserves data rather than recollection.** Comparing
+  each triangle's winding-derived normal against its own stored vertex normal:
+
+  | source | agree | disagree |
+  |---|---|---|
+  | `aggressor` world surfaces | 0 | 3,272 |
+  | `oa_dm1` world surfaces | 158 | 7,348 |
+  | `oa_dm5` patch tessellation | 6 | 88,378 |
+  | `rocketl.md3` | 0 | 204 |
+
+  Uniform across BSP surfaces, patch tessellation and MD3. The handful of agreements are
+  degenerate slivers whose normals are ambiguous.
+- **The part that stings:** `brushHull.ts` already had this exact fix, with a comment explaining
+  that Q3's `BaseWindingForPlane` is clockwise from outside and that Q3 compensates internally by
+  computing `CrossProduct(v2, v1)`. I found the convention once, wrote it down, applied it to the
+  collision hulls, and never asked whether the render path had the same problem. It did.
+- **Why it survived several sessions:** a fully back-facing level does not look like a bug. Walls
+  are still walls, geometry is still geometry, and the scene reads as "dim and oddly composed"
+  rather than "inside out". I had even written an explanation for it — the withdrawn claim in
+  GAP-006 that "the floors read as flat grey" because lightmaps are missing. The floors were not
+  grey. They were absent, and I was looking at the background.
+- **What would have caught it:** an assertion in the pipeline that a mesh's winding agrees with
+  its own vertex normals, which is four lines and is now the first thing I would write in any
+  geometry converter. Every format ships normals; they are a free oracle for the winding.
+- **What an engine could do:** nothing that would be right in general — a renderer cannot know
+  which way a consumer meant to wind. But it is a reminder that "renders something" is a very weak
+  signal, and the reason this report leans on measurements rather than screenshots everywhere
+  else.
+- **Evidence:** `tools/convert-map.ts`, `tools/convert-models.ts`, `tools/convert-characters.ts`.
+  Found by the maintainer looking at the screen. Recorded during phase 5.
+
 > Further entries are added as they are hit. Numbering is stable — a withdrawn entry is
 > marked withdrawn rather than renumbered.
 
@@ -1251,10 +1300,13 @@ Observations that are not gaps — the facility exists and works — but cost ti
   misleads: I nearly skipped evaluating the controller entirely on the strength of that header.
   A stale status line is cheap to fix and expensive to leave.
 
-- **`ShadeMaterial.draw_side` is the model to copy.** A settable property documented in its own
-  docblock as having no effect, with the workaround spelled out. It cost me nothing because the
-  answer was where I looked. Whatever process produced that comment should be applied to the
-  `DESIGN.md` header above.
+- **~~`ShadeMaterial.draw_side` is the model to copy.~~ Withdrawn — it was the opposite.** I
+  praised this field for a docblock that says it has no effect and spells out the workaround. The
+  docblock is stale: `Front` and `Double` both work, and believing it cost the port double-sided
+  surfaces for its whole life (GAP-007). The two entries above and below this one are about
+  documentation that is *right*; this one belongs with the `DESIGN.md` header instead, as
+  documentation that is confidently wrong. A stale comment is worse than a missing one, because
+  it is believed by exactly the reader who checks first.
 
 ### Added during phases 3-5
 

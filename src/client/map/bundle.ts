@@ -22,6 +22,7 @@ import { Attribute } from '@woosh/meep-engine/src/shade/renderer/geometry/Attrib
 import { StandardAttributes } from '@woosh/meep-engine/src/shade/renderer/geometry/StandardAttributes.js';
 import { StandardShadeMaterial } from '@woosh/meep-engine/src/shade/renderer/material/StandardShadeMaterial.js';
 import { TransparencyMode } from '@woosh/meep-engine/src/shade/renderer/material/TransparencyMode.js';
+import { ShadeDrawSide } from '@woosh/meep-engine/src/shade/renderer/material/ShadeDrawSide.js';
 import { ShadeTexture } from '@woosh/meep-engine/src/shade/renderer/texture/ShadeTexture.js';
 import { ShadeImage } from '@woosh/meep-engine/src/shade/renderer/texture/source/ShadeImage.js';
 
@@ -106,6 +107,20 @@ export async function buildMaterials(
             material.roughness_factor = m.roughness;
             material.metallic_factor = m.metallic;
             material.transparency_mode = transparencyOf(m);
+
+            /*
+             `cull none` in a Q3 shader means both faces draw, and it is what
+             flags, banners, beams and flame sprites rely on -- a flag rendered
+             single-sided vanishes for half of every rotation. Five materials on
+             `oa_dm1`, eight on `oa_dm5`.
+
+             `ShadeDrawSide.Back` is the one to avoid: the glTF loader's own
+             `fix_up_material_sides` handles it by flipping the geometry with
+             `geometry_flip_normals` rather than by rendering it, and nothing
+             does that for a hand-built material. Front and Double are the two
+             usable values, which is all this port needs.
+            */
+            if (m.doubleSided) material.draw_side = ShadeDrawSide.Double;
 
             return material;
         })

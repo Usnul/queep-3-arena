@@ -1106,3 +1106,54 @@ Two app-level corrections are required first, and they are CSS on an element the
 rather than changes to the engine: `pointer-events: auto` on the view stack, so it is a hit-test
 target at all, and `focus()` on it, so keyboard events land there. Both are in `main.ts` with the
 reasoning next to them.
+
+---
+
+### D-060: Quake III winds clockwise, and the whole port rendered inside-out
+
+Reported: the floor does not draw. It did not, and neither did anything else facing the camera --
+every triangle in every converted map, prop and character was wound backwards, so the renderer
+culled all of them. Standing in a room you saw the *far* side of the next room through the near
+walls (GAP-018).
+
+Q3 winds its triangles **clockwise seen from the front**; glTF and meep wind counter-clockwise.
+The converters preserved the source winding, on the reasoning that the axis map
+`(x, y, z) -> (x, z, -y)` has determinant +1 and therefore preserves orientation. That reasoning
+is correct and beside the point: preserving the winding is exactly the wrong thing when the source
+convention is already the opposite of the target's.
+
+Measured rather than recalled, by comparing each triangle's winding-derived normal against the
+vertex normals the format itself ships:
+
+| source | agree | disagree |
+|---|---|---|
+| `aggressor` world surfaces | 0 | 3,272 |
+| `oa_dm1` world surfaces | 158 | 7,348 |
+| `oa_dm5` patch tessellation | 6 | 88,378 |
+| `rocketl.md3` | 0 | 204 |
+
+Uniform across BSP surfaces, patch tessellation and MD3, so all three converters reverse and the
+fix is one line in each. `brushHull.ts` already did -- with a comment explaining that Q3's
+`BaseWindingForPlane` is clockwise from outside. I found the convention once, wrote it down,
+applied it to the collision hulls, and never asked whether the render path had the same problem.
+
+**Two earlier claims in the report are wrong because of it**, and both are corrected in place
+rather than quietly edited:
+
+- GAP-006 said "the floors look untextured" and blamed missing lightmaps, calling it the single
+  most visible quality gap. The floors were not untextured; they were not being drawn. I had a
+  plausible story for a symptom and stopped looking, which is the more expensive mistake.
+- The ergonomics section praised `ShadeMaterial.draw_side` for documenting itself as
+  non-functional. The docblock is stale -- `Front` and `Double` both work -- and believing it cost
+  the port double-sided surfaces for its entire life. `cull none` materials now set
+  `ShadeDrawSide.Double`: five of `oa_dm1`'s materials, eight of `oa_dm5`'s.
+
+`test/winding.test.ts` now asserts the invariant across every map, the prop bundle and three
+characters, and it needs no oracle: every one of these formats ships vertex normals, so the cross
+product of a triangle's edges must agree with the normals at its corners. Four lines of
+arithmetic, and the first thing I would write in any geometry converter from now on.
+
+The character check tests the *converter's* invariant rather than an absolute threshold, because
+`skelebot`'s own MD3 has mixed winding -- 57% clockwise on the legs, 74% on the head. Q3 renders
+it with the same artefacts. Asserting "reversed relative to the source" holds for well-authored
+content and badly-authored content alike.

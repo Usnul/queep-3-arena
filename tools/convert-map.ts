@@ -83,6 +83,24 @@ const BUILT = join(ROOT, 'assets', 'built');
 const WORLD_SCALE = 1 / 32;
 
 /** Vertex layout written to geometry.bin, in floats. */
+/*
+ * Quake III triangles are wound *clockwise* seen from the front.
+ *
+ * Measured, not assumed: across `aggressor`'s 3,272 world triangles, the winding
+ * agrees with the stored vertex normal exactly **zero** times. `oa_dm1` is 158
+ * of 7,506, and those are degenerate slivers. Patch tessellation is the same
+ * (6 of 88,384 on `oa_dm5`), and so is MD3 (0 of 204 on the rocket launcher).
+ * The convention is uniform across every kind of Q3 geometry, which is why
+ * `brushHull.ts` already reverses its own windings for the same reason -- Q3's
+ * `BaseWindingForPlane` is clockwise from outside too.
+ *
+ * glTF and meep want counter-clockwise front faces, so every index triple is
+ * reversed on the way out. Leaving them alone renders a level entirely
+ * back-facing: you see the far side of each room through the near side, and the
+ * floor under your feet is culled. It is not obviously *wrong* at a glance --
+ * walls are still walls -- which is how it survived several sessions.
+ */
+
 const OUT_STRIDE = 12; // position(3) normal(3) uv(2) uv1(2) colour(2, packed rg/ba)
 
 interface MeshGroup {
@@ -446,10 +464,20 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             vertexData[o + 11] = g.colors[i * 3 + 1]!;
         }
 
-        // Indices are stored relative to the mesh's own vertex block, so the
-        // runtime can hand each mesh a standalone Geometry without rebasing.
-        for (let i = 0; i < g.indices.length; i++) {
+        /*
+         Indices are stored relative to the mesh's own vertex block, so the
+         runtime can hand each mesh a standalone Geometry without rebasing --
+         and every triple is reversed, because Q3 winds clockwise from the front
+         and glTF winds counter-clockwise. See the note above `OUT_STRIDE`.
+
+         Reversed here rather than at each emitter so the world surfaces, the
+         patch tessellation and the brush-entity submodels cannot drift apart:
+         they are all measured to share the convention, so they share the fix.
+        */
+        for (let i = 0; i + 2 < g.indices.length; i += 3) {
             indexData[iCursor + i] = g.indices[i]!;
+            indexData[iCursor + i + 1] = g.indices[i + 2]!;
+            indexData[iCursor + i + 2] = g.indices[i + 1]!;
         }
 
         submodelMeshes[modelIndex]!.push(meshes.length);
