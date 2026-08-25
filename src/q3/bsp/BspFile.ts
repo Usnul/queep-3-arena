@@ -79,6 +79,8 @@ const SIZEOF = {
     fog: 64 + 4 + 4,
     surface: 4 * 26,
     lightmap: LIGHTMAP_WIDTH * LIGHTMAP_HEIGHT * 3,
+    // `dgridPoint_t`: byte ambient[3], byte directed[3], byte latLong[2].
+    lightGridPoint: 8,
 } as const;
 
 export interface BspLumpRange {
@@ -345,6 +347,29 @@ export class BspFile {
         const l = this.lump(LUMP.LIGHTMAPS);
         const at = l.offset + index * SIZEOF.lightmap;
         return this.bytes.subarray(at, at + SIZEOF.lightmap);
+    }
+
+    /**
+     * `LUMP_LIGHTGRID`, raw.
+     *
+     * The other thing q3map2 bakes and the only one that survives into
+     * something readable: eight bytes per cell over a regular lattice covering
+     * the world model, holding an ambient colour, a directed colour and the
+     * direction the directed light arrives from. Where `LUMP_LIGHTMAPS` is a
+     * surface product this is a *volume* product, which is what makes it usable
+     * as a source of lights rather than of texels.
+     *
+     * Handed back as bytes with no interpretation, as `lightmap` is.
+     * `LightGrid.ts` owns the lattice arithmetic, because that needs the
+     * worldspawn `gridsize` key and this class does not parse entities.
+     */
+    get lightGridPoints(): Uint8Array {
+        const l = this.lump(LUMP.LIGHTGRID);
+        return this.bytes.subarray(l.offset, l.offset + l.length);
+    }
+
+    get numLightGridPoints(): number {
+        return this.count(LUMP.LIGHTGRID, SIZEOF.lightGridPoint);
     }
 
     get models(): BspModel[] {

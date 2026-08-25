@@ -138,7 +138,15 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
     for (const l of bundle.lights) {
         const light = new Light();
         light.type.set(LightType.POINT);
-        light.color.setRGB(1, 0.94, 0.85);
+        /*
+         Tungsten unless the light carries its own. The default is what a
+         `q3map_surfacelight` gets: the directive is a scalar and the shader has
+         no colour to give. A lightgrid light does carry one -- q3map2 baked the
+         colour arriving at each cell -- so a red room stays red.
+        */
+        const c = l.color;
+        if (c === undefined) light.color.setRGB(1, 0.94, 0.85);
+        else light.color.setRGB(c[0]!, c[1]!, c[2]!);
         /*
          `PointLight.intensity` is candela and `intensity_lumens` is lumens, with
          `cd = lm / 4pi` for an isotropic source. The ECS `Light` component

@@ -2274,3 +2274,97 @@ respawn (Q3 avoids the same snap with `ps->delta_angles`, which is a server tell
 where it now looks; there is no server here, so the client simply stops), and the movement
 command and trigger are gated on the same test, so a corpse does not walk off holding forward or
 keep firing.
+
+### D-078: The lighting comes back, from the baked product nobody had read
+
+Q-006, answered by doing it. `oa_dm5` had **zero** reconstructed point lights over 107,414
+triangles and `oa_dm7` left 70 of 79 player positions under a lux, because both were lit with
+`light` entities and q3map2 deletes those after baking. The shader route -- `q3map_surfacelight`
+plus `q3map_sun` -- only carries a map's lighting if its author used surface shaders, and two of
+six did not.
+
+`LUMP_LIGHTGRID` is the other thing q3map2 bakes and it does survive: a regular lattice over the
+world model, eight bytes a cell, an ambient colour, a directed colour and the direction the
+directed light arrived from. It is what Q3 lit *models* with, because models sit outside the
+lightmap.
+
+**The reader is verifiable and that is why it can be trusted.** None of the lattice geometry is
+stored in the file -- `R_LoadLightGrid` recomputes it from the world model's bounds and the
+worldspawn `gridsize`, and there are four independent chances to be off by one, each of which
+still decodes eight legal-looking bytes per cell into the wrong place. The point count is the one
+cross-check the format offers and it is exact. On all six maps the formula predicts the lump
+length to the byte, and `readLightGrid` throws rather than proceeding if it ever does not.
+
+**The fit is the interesting half, and it went wrong twice in ways worth recording.**
+
+Turning a sampled irradiance field back into sources is an inverse problem with no unique answer,
+so this fits rather than solves. Every lit cell becomes a *site* with a target illuminance; sites
+are visited brightest first; each is given a light only if the lights already there leave it
+short, placed toward the source and sized to close the shortfall.
+
+1. **A fixed placement offset made a volume of fireflies.** The first working version put every
+   light one metre along the sample's direction. That is the wrong distance for almost every real
+   source, and the error is not cosmetic: a light fitted to deliver the right illuminance at its
+   own cell from 1 m away under-delivers by nine times at range if the true source was 3 m away,
+   and the far field is most of the room. It emitted **256 lights on `oa_dm1`** -- hitting the
+   cap, so silently truncated -- against the 22 its shaders already give it.
+
+   The fix is that the grid can be asked. Two samples on a line through a source determine its
+   distance: with `E ~ 1/d^2`, this cell and its neighbour one step further away give
+   `d = s / (sqrt(E0/E1) - 1)`. Clamped hard, because the source is not a point, the neighbour
+   may be shadowed, and the bytes are quantised. `oa_dm1` went from 256 lights to 11.
+
+2. **Greedy placement over-delivers and no threshold fixes it.** Each light is sized against the
+   lights placed *before* it and every light after adds more on top; measured, the result was two
+   to three times the grid's target. Constraining the sites that received lights was not enough
+   either -- that left `oa_dm1` at 52 lux against a 21 lux target, because the cells *between* the
+   lights are unconstrained and that is most of the map.
+
+   So the objective is the residual over every cell, and holding all but one light fixed makes it
+   a one-variable least squares with a closed form. Sweeping that over the lights is coordinate
+   descent: monotone, local, converges in eight passes. The alternative was to divide the
+   calibration constant by the measured overshoot, which would have produced the same medians and
+   hidden a fixable error inside a number that is supposed to mean something.
+
+**The calibration is measured, and its spread is stated rather than smoothed.** q3map2's bytes
+have no physical unit and meep's lights are photometric, so one number bridges them. It is taken
+from the maps whose reconstruction the demo already accepts -- median delivered lux at player
+positions over median grid brightness at the same places -- and those give 0.084, 0.202, 0.194
+and 1.193. Fourteen times, end to end. The median, 0.2, ships. The spread is itself a finding:
+the shader route is only approximately calibrated, and a map with 147 bright shader emitters is
+not measuring the same thing as one with 22 in corridors.
+
+**Results.** Lights added, and median lux at the places a player stands:
+
+| map | lights | added | median lux | under 1 lux |
+|---|---:|---:|---|---|
+| `oa_dm5` | 0 -> 39 | **+39** | 0.0 -> **10.0** | 36/36 -> 1/37 |
+| `oa_dm7` | 13 -> 38 | +25 | 0.0 -> **27.3** | 70/79 -> 0/80 |
+| `oa_dm1` | 22 -> 33 | +11 | 8.7 -> 15.8 | 0 -> 0 |
+| `oa_dm4` | 22 -> 44 | +22 | 32.6 -> 33.2 | 0 -> 0 |
+| `aggressor` | 63 -> 90 | +27 | 20.2 -> 20.6 | 0 -> 0 |
+| `am_thornish` | 147 -> 329 | +182 | 57.6 -> 57.6 | 0 -> 0 |
+
+The three maps the demo presents move by 0.4 lux, 2%, and nothing. That is the deficit
+formulation working: it is not gated on "is this map dark", it simply has nothing to add where
+the shaders already meet the target.
+
+**A finding that fell out of it, about this port and not about meep.** Fitting against the grid
+means measuring the existing solution against it, and the existing solution overshoots: RMS error
+against the baked field is 256% on `oa_dm4`, 332% on `aggressor` and **6,855%** on `am_thornish`,
+which delivers 58 lux at player height where q3map2 baked 10. Passing `q3map_surfacelight`
+through as lumens is far too generous on a map with many bright shader emitters. Now that there
+is a reference it could be calibrated per map. Not done: it would re-light the three maps the
+demo presents, which is a larger change than this one and belongs in its own.
+
+**What was pinned is now asserted.** `test/presentation.test.ts` pinned the shortfall -- "records
+the two maps where the reconstruction is thin" -- specifically so a fix would fail there and
+force the claim to be rewritten. It did, and it has: the lighting criterion is asserted on all six
+maps rather than the three the demo presents, `oa_dm5` must have more than ten lights and every
+one of them must carry a colour (only a lightgrid light does; a `q3map_surfacelight` is a
+scalar), and a separate case asserts that the maps which were already lit did not get taken over
+by the fit.
+
+**Light colour now reaches the runtime.** `BundleLight.color` is optional: absent means the
+tungsten default a surface light has always had, present means the colour q3map2 baked into that
+cell. A room lit red in Q3 is lit red here.

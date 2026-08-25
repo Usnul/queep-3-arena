@@ -10,32 +10,33 @@ Format: **Q-nnn** — the question, the default in use, and what changes if the 
 
 ## Still open
 
-### Q-006 — Should the asset pipeline read the BSP lightgrid, to fix the two dark maps?
-
-Raised at the phase 6 boundary, by measuring something that had been assumed.
-
-The lighting reconstruction reads `q3map_surfacelight` off the shader set and `q3map_sun` off
-worldspawn, because those are the only lighting inputs that survive compilation. Phase 6 measured
-what that yields, in lux, at every spawn point and pickup on every shipped map (D-069, GAP-006):
-four of six maps come out well lit, `oa_dm7` leaves 70 of 79 player positions under 1 lux, and
-`oa_dm5` — 107,414 triangles — reconstructs to **zero** point lights, because its lighting was
-authored entirely as `light` entities that q3map2 deletes.
-
-There is a route: the BSP's lightgrid (lump 15) is the other baked product of q3map2, it *does*
-survive compilation, and it holds an ambient plus a directional sample per grid cell over the
-whole playable volume. Emitting point lights from bright cells is asset-pipeline work only — no
-rendering code, no engine change, no lightmap slot — and is roughly half a day.
-
-**Default in use:** not done. The shortfall is measured, pinned by a test that fails if it
-silently changes, and attributed in GAP-006; the brief's phase 6 is report finalisation, and
-building a feature during the reporting phase is the wrong trade against leaving the report
-incomplete.
-**If different:** half a day in `tools/convert-map.ts`, and `test/presentation.test.ts` will fail
-on the two pinned maps and have to be updated — which is the intended behaviour of that pin.
+*Nothing open. Q-006 was the last of them and it is answered below.*
 
 ---
 
 ## Answered
+
+### Q-006 — Should the asset pipeline read the BSP lightgrid? — **answered: yes, and done**
+
+Raised at the phase 6 boundary by measuring something that had been assumed, and closed in
+phase 7 by building it. The default in use was "not done", on the reasoning that building a
+feature during the reporting phase is the wrong trade against leaving the report incomplete. The
+report is finished, so the trade changed.
+
+`oa_dm5` goes from **zero** reconstructed point lights over 107,414 triangles to 39, and from all
+36 of its measured player positions dark to one of 37. `oa_dm7` goes from 70 of 79 positions under
+a lux to none of 80. The three maps the demo presents move by 0.4 lux, by 2%, and not at all —
+which is the deficit formulation doing its job rather than a special case for them.
+
+It cost about the half day estimated, and `test/presentation.test.ts` failed on the two pinned
+maps exactly as predicted, which was the point of pinning them. The lighting criterion is now
+asserted on all six maps instead of three. Two things went wrong on the way and both are worth
+reading in D-078: a fixed placement offset that emitted 256 lights on a map needing 11, and a
+greedy fit that over-delivered threefold until it was replaced with a least-squares pass.
+
+It does **not** close GAP-006. A lightgrid cell is 64×64×128 units, so what comes back is which
+room is lit, how brightly and what colour; the spatial detail is in the lightmap, and the
+lightmap is still the thing meep cannot import.
 
 ### Q-001 — Is the licence flip to GPLv2 what you intended? — **answered: yes**
 

@@ -45,6 +45,10 @@ import { ShaderIndex } from './pipeline/shader-index.ts';
 import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
 import { tessellatePatch, type PatchVertex } from './pipeline/patch.ts';
 import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
+import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
+import { fitGridLights, sitesFromGrid, type SceneLight } from './pipeline/lightgrid.ts';
+import { ClipMap, MASK_SOLID, SURF } from '../src/q3/cm/ClipMap.ts';
+import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
@@ -81,6 +85,39 @@ const BUILT = join(ROOT, 'assets', 'built');
  * coordinate systems meet on the pipeline side.
  */
 const WORLD_SCALE = 1 / 32;
+
+/**
+ * Lux per byte of sampled lightgrid irradiance.
+ *
+ * The grid's bytes are q3map2's own scale with no physical unit on them and
+ * meep's lights are photometric, so this number bridges two systems that never
+ * agreed. It is measured rather than chosen: on each map whose surface-light
+ * reconstruction the demo already accepts, take the median illuminance the
+ * reconstruction delivers at the places a player stands and divide it by the
+ * median grid brightness at those same places.
+ *
+ *   oa_dm1  8.7 lux / 103.7 = 0.084     aggressor    20.2 / 104.1 = 0.194
+ *   oa_dm4 32.6 lux / 160.9 = 0.202     am_thornish  57.6 /  48.3 = 1.193
+ *
+ * Fourteen times between the ends of that, which is worth saying plainly: the
+ * surface-light route is itself only approximately calibrated, and a map with
+ * 147 bright shader lights over open ground is not measuring the same thing as
+ * one with 22 in corridors. The median of the four, 0.198, is the robust middle
+ * and is what ships. It puts the two fitted maps at 9.0 and 31.8 lux median --
+ * inside the 8.7 to 32.6 band the accepted maps already span, which is the
+ * property that matters. See D-078.
+ */
+const LUX_PER_BYTE = 0.2;
+
+/**
+ * Grid cells dimmer than this are not sites.
+ *
+ * Most of the lattice is inside solid geometry, where q3map2 had nothing to
+ * sample and wrote zeroes: `oa_dm5` has 3,410 cells and 980 with any light in
+ * them. A small floor rather than zero also drops the near-black cells in
+ * sealed voids, which are real samples of nothing.
+ */
+const GRID_MIN_BYTES = 8;
 
 /** Vertex layout written to geometry.bin, in floats. */
 /*
@@ -501,7 +538,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
      * ~40 lights rather than 400 -- one per surface would put several lights
      * inside the same fixture and blow the intensity out.
      */
-    const lights: { x: number; y: number; z: number; lumens: number; radius: number }[] = [];
+    const lights: SceneLight[] = [];
     const CLUSTER_RADIUS = 96 * WORLD_SCALE; // 96 Q3 units, in scene metres
 
     for (const [shaderNum, g] of groups) {
@@ -556,6 +593,9 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     const suns = index.suns();
     let sun: { color: number[]; intensity: number; direction: number[] } | null = null;
 
+    /** Unit vector toward the sun, Q3 axes. Null when the map has no sun. */
+    let sunTowardQ3: [number, number, number] | null = null;
+
     for (const shader of shaders) {
         const s = suns.get(shader.name);
         if (s === undefined) continue;
@@ -568,6 +608,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         const fy = Math.sin(az) * Math.cos(el);
         const fz = Math.sin(el);
         const [dx, dy, dz] = q3ToMeepDirection(-fx, -fy, -fz);
+        sunTowardQ3 = [fx, fy, fz];
 
         sun = {
             color: [...s.color],
@@ -578,6 +619,88 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             direction: [dx, dy, dz],
         };
         break;
+    }
+
+    /* ---- lightgrid fill ---- */
+
+    /**
+     * The other thing q3map2 baked, and the half of the lighting the shader
+     * route cannot see.
+     *
+     * `q3map_surfacelight` only carries a map's lighting if its author lit it
+     * with surface shaders. Two of the six here did not: `oa_dm5` reconstructed
+     * to **zero** lights over 107,414 triangles and `oa_dm7` left 70 of 79
+     * player positions under a lux, because their light came from `light`
+     * entities and q3map2 deletes those after baking. `LUMP_LIGHTGRID` is the
+     * only surviving record of it, and it does survive -- on all six maps here
+     * the lattice arithmetic predicts the lump length exactly.
+     *
+     * This runs *after* the surface lights and fills what they left short, so a
+     * map already lit by its shaders gets nothing added. See Q-006 and D-078.
+     */
+    let gridLights: SceneLight[] = [];
+    let gridFit: { before: number; after: number; sites: number } | null = null;
+
+    {
+        const grid = readLightGrid(bsp);
+
+        if (grid !== null) {
+            const cm = new ClipMap(bsp);
+            const probe = createTrace();
+            const ZERO: [number, number, number] = [0, 0, 0];
+
+            /** Scene metres and meep axes back to Q3 units and Q3 axes. */
+            const toQ3 = (m: readonly [number, number, number]): [number, number, number] =>
+                [m[0] / WORLD_SCALE, -m[2] / WORLD_SCALE, m[1] / WORLD_SCALE];
+
+            /*
+             Can this point see sky? Trace toward the sun and ask what stopped
+             it. A sealed room always stops the trace, so `fraction === 1` alone
+             would find nothing; what matters is whether the thing it hit is a
+             sky surface. Q3 marks those `SURF_SKY` and q3map2 replaced them with
+             the sun's light, which is why a site that can see one is already lit
+             and must not be given a point light standing in for the sun.
+            */
+            const seesSky = (q3: readonly [number, number, number]): boolean => {
+                if (sunTowardQ3 === null) return false;
+
+                const end: [number, number, number] = [
+                    q3[0] + sunTowardQ3[0] * 65536,
+                    q3[1] + sunTowardQ3[1] * 65536,
+                    q3[2] + sunTowardQ3[2] * 65536,
+                ];
+
+                boxTrace(probe, cm, q3, end, ZERO, ZERO, MASK_SOLID);
+                return probe.fraction === 1 || (probe.surfaceFlags & SURF.SKY) !== 0;
+            };
+
+            const sites = sitesFromGrid(grid, {
+                luxPerByte: LUX_PER_BYTE,
+                minBytes: GRID_MIN_BYTES,
+                toScene: (q3) => q3ToMeep(q3[0], q3[1], q3[2]),
+                litBySun: seesSky,
+                // Metres. A Q3 ceiling sits ~128 units above head height, which
+                // is the 4 m default; the bounds are half a grid cell at the
+                // near end and a large room at the far.
+                defaultDistance: 128 * WORLD_SCALE,
+                minDistance: 32 * WORLD_SCALE,
+                maxDistance: 512 * WORLD_SCALE,
+            });
+
+            const fit = fitGridLights(sites, lights, {
+                blocked: (from, to) => {
+                    const a = toQ3(from);
+                    const b = toQ3(to);
+                    boxTrace(probe, cm, a, b, ZERO, ZERO, MASK_SOLID);
+                    return probe.fraction < 1 || probe.startsolid;
+                },
+            });
+
+            gridLights = fit.lights;
+            gridFit = { before: fit.residualBefore, after: fit.residualAfter, sites: fit.sites };
+
+            for (const l of gridLights) lights.push(l);
+        }
     }
 
     /* ---- textures ---- */
@@ -670,7 +793,12 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
     console.log(
         `${mapName}: ${meshes.length} meshes, ${totalVerts} verts, ${totalIndices / 3} tris, ` +
-        `${materials.length} materials, ${lights.length} lights, ${scene.stats.texturesWritten} textures` +
+        `${materials.length} materials, ${lights.length} lights` +
+        (gridFit !== null && gridLights.length > 0
+            ? ` (${gridLights.length} fitted to ${gridFit.sites} lightgrid cells, ` +
+              `RMS ${(gridFit.before * 100).toFixed(0)}% -> ${(gridFit.after * 100).toFixed(0)}%)`
+            : '') +
+        `, ${scene.stats.texturesWritten} textures` +
         (scene.stats.texturesMissing > 0 ? ` (${scene.stats.texturesMissing} missing)` : '') +
         (sun !== null ? ', sun' : '')
     );

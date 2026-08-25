@@ -59,6 +59,8 @@ interface Light {
     readonly z: number;
     readonly lumens: number;
     readonly radius: number;
+    /** Present only on lights fitted to the lightgrid; see D-078. */
+    readonly color?: readonly number[];
 }
 
 interface Scene {
@@ -202,22 +204,24 @@ describe.each(MAPS)('the converted level is presentable [%s]', (name) => {
 });
 
 /*
- * The lighting, which is where the phase 4 claim is actually at risk.
+ * The lighting, which is where the phase 4 claim was actually at risk.
  *
  * q3map2 strips every `light` entity from a compiled BSP -- measured, zero
  * across all six maps -- and meep cannot import the baked lightmap (GAP-006).
- * So the entire lighting solution is reconstructed from `q3map_surfacelight`
- * shader directives plus `q3map_sun`, and a map whose lighting came from `light`
- * entities alone reconstructs to *nothing*.
+ * The reconstruction therefore has to come from what survives, and for most of
+ * this port's life that was only `q3map_surfacelight` shader directives plus
+ * `q3map_sun`. A map whose author lit it with `light` entities reconstructed to
+ * *nothing*: `oa_dm5` yielded zero point lights from 107,414 triangles and
+ * `oa_dm7` left 70 of 79 player positions under a lux.
  *
- * That is not hypothetical and it is not uniform: `oa_dm5` yields zero point
- * lights from 107,414 triangles. The guard below therefore asserts the criterion
- * where the demo actually claims it -- the default map and the two showcase
- * maps -- and separately records, rather than asserts, what the other two do.
- * A test that demanded all six would either be a lie or a permanent failure.
+ * `LUMP_LIGHTGRID` is the other thing q3map2 bakes, it does survive, and the
+ * pipeline now fits point lights to it (Q-006, D-078). So this asserts all six
+ * maps rather than the three the demo presents -- which is the whole point of
+ * the change, and is why the block below that used to record the shortfall now
+ * checks it is gone.
  */
 describe('the reconstructed lighting solution', () => {
-    it.each(SHOWCASE)('lights the places a player stands [%s]', (name) => {
+    it.each(MAPS)('lights the places a player stands [%s]', (name) => {
         const s = scene(name);
         const points = playerPoints(s);
         const lux = points.map((p) => illuminance(s, p)).sort((a, b) => a - b);
@@ -238,27 +242,61 @@ describe('the reconstructed lighting solution', () => {
         expect(median, `median illuminance ${median.toFixed(1)} lux`).toBeGreaterThan(1);
     });
 
-    it('records the two maps where the reconstruction is thin', () => {
+    it('lights the two maps the shader route could not reach at all', () => {
         /*
-         Not a failure to fix by loosening it. `oa_dm5` and `oa_dm7` are lit in
-         Q3 by `light` entities and a lightmap, and neither survives compilation
-         into anything meep can read. Both still have a `q3map_sun`, so they are
-         not black -- they are flatly, directionally lit, which is exactly what
-         GAP-006 predicts and is why GAP-006 is in the report.
+         This block used to pin the shortfall: `oa_dm5` has zero lights,
+         `oa_dm7` is more than half dark. It was pinned so that a fix would fail
+         here and have to update the claim, and that is exactly what happened.
 
-         Pinned so that a change which *fixes* this (a lightgrid importer in the
-         asset pipeline would) fails here and has to update the claim.
+         What is asserted now is the property the fix is for -- these two maps
+         have their lighting back and it came from the lightgrid, not from the
+         shaders, because the shaders never had it. `oa_dm5` is the strong case:
+         every one of its lights is a fitted one, so if the grid route breaks
+         the count goes to zero rather than merely getting worse.
         */
         const dm5 = scene('oa_dm5');
         const dm7 = scene('oa_dm7');
 
-        expect(dm5.lights.length).toBe(0);
-        expect(dm5.sun, 'oa_dm5 has only its sun').not.toBeNull();
+        expect(dm5.lights.length, 'oa_dm5 reconstructs to nothing again')
+            .toBeGreaterThan(10);
+
+        // Every one of them is coloured, which only a lightgrid light is: a
+        // `q3map_surfacelight` is a scalar and has no colour to carry.
+        expect(
+            dm5.lights.filter((l) => l.color !== undefined).length,
+            'oa_dm5 grew a surface light from somewhere'
+        ).toBe(dm5.lights.length);
 
         const dm7Points = playerPoints(dm7);
         const dm7Dark = dm7Points.filter((p) => illuminance(dm7, p) < 1).length;
-        expect(dm7Dark / dm7Points.length).toBeGreaterThan(0.5);
-        expect(dm7.sun, 'oa_dm7 has only its sun and 13 fixtures').not.toBeNull();
+        expect(
+            dm7Dark / dm7Points.length,
+            `${dm7Dark}/${dm7Points.length} oa_dm7 player positions under 1 lux`
+        ).toBeLessThan(0.1);
+    });
+
+    it('leaves a map that was already lit close to how it was', () => {
+        /*
+         The fit adds what the shader route left short and nothing else, so a
+         map the shaders already lit should barely move. Asserted because the
+         first working version did not have this property -- it emitted 256
+         lights on `oa_dm1` and took it from 8.7 lux to 63 -- and the fix was a
+         real one (a source-distance estimate and a least-squares pass), not a
+         threshold. See D-078.
+
+         The bound is loose on purpose. Some movement is correct: the lightgrid
+         is the *baked truth* and the shader reconstruction undershoots it on
+         `oa_dm1`, so converging toward the grid is the fit working.
+        */
+        for (const name of ['oa_dm4', 'aggressor', 'am_thornish']) {
+            const s = scene(name);
+            const fitted = s.lights.filter((l) => l.color !== undefined).length;
+
+            expect(
+                fitted / s.lights.length,
+                `${name}: ${fitted} of ${s.lights.length} lights came from the grid`
+            ).toBeLessThan(0.75);
+        }
     });
 
     it('reconstructs light from surfaces, and never from a light entity', () => {

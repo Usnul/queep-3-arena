@@ -47,6 +47,15 @@ export interface BundleLight {
     readonly lumens: number;
     /** Cutoff radius, in scene metres. */
     readonly radius: number;
+    /**
+     * Linear RGB, brightest channel 1, or absent.
+     *
+     * Surface lights have no colour of their own -- a `q3map_surfacelight` is a
+     * scalar -- so those omit it and the runtime uses its tungsten default.
+     * Lightgrid lights do have one, because q3map2 baked the colour of whatever
+     * lit each cell, and a room lit red in Q3 should be lit red here.
+     */
+    readonly color?: readonly [number, number, number] | number[];
 }
 
 export interface BundleSun {

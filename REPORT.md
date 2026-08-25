@@ -164,19 +164,29 @@ the strongest argument in this report for the maintainer's instinct over mine.
    code: `LabelView` rejects a call its own implementation explicitly supports, and `Collider.shape`
    is typed such that no concrete shape is assignable to it (BUG-5, GAP-001, GAP-013).
 
-7. **Baked lightmaps cannot be imported, only baked — and the workaround succeeds on four of six
-   maps and fails on two, unpredictably.** The vertex channel exists, the attribute is literally
-   named "used for light map", and there is a whole `shade/renderer/lightmap/` subsystem — but it
-   is a *baker*, and no material has a lightmap slot (GAP-006). Every level format that predates
-   real-time GI ships baked lighting and none of it can come in. This port's answer was to
-   reconstruct the lighting as dynamic lights, which worked well enough that it read as a success
-   for five phases. Phase 6 measured it: illuminance at every spawn point and pickup on every
-   shipped map, and `oa_dm5` — 107,414 triangles — has **zero** reconstructed lights, while
-   `oa_dm7` leaves 70 of 79 player positions under 1 lux. The reconstruction reads
-   `q3map_surfacelight` and `q3map_sun`; where a map's lighting came from `light` entities, q3map2
-   has already deleted them (measured: zero across all six maps). A gap whose workaround fails
-   *unpredictably* is worse than one that fails uniformly, because nothing tells you which content
-   it will fail on.
+7. **Baked lightmaps cannot be imported, only baked — and the workaround failed on two of six
+   maps, unpredictably, until the *other* baked product turned out to be readable.** The vertex
+   channel exists, the attribute is literally named "used for light map", and there is a whole
+   `shade/renderer/lightmap/` subsystem — but it is a *baker*, and no material has a lightmap slot
+   (GAP-006). Every level format that predates real-time GI ships baked lighting and none of it
+   can come in. This port's answer was to reconstruct the lighting as dynamic lights, which worked
+   well enough that it read as a success for five phases. Phase 6 measured it: illuminance at
+   every spawn point and pickup on every shipped map, and `oa_dm5` — 107,414 triangles — had
+   **zero** reconstructed lights, while `oa_dm7` left 70 of 79 player positions under 1 lux. The
+   reconstruction read `q3map_surfacelight` and `q3map_sun`; where a map's lighting came from
+   `light` entities, q3map2 has already deleted them (measured: zero across all six maps).
+
+   Phase 7 fixed the cliff without any engine change: q3map2 bakes a *second* product, the
+   lightgrid, it does survive compilation, and the pipeline now fits point lights to it — 39 on
+   `oa_dm5` where there were none, and 0 of 37 player positions dark where all 36 measured were
+   (D-078). **The gap itself is unchanged.** A lightgrid cell is 64×64×128 units, so what comes
+   back is which room is lit, how brightly and what colour; the spatial detail that makes baked
+   lighting worth having was in the lightmap and the lightmap still cannot be imported. Two things
+   are worth taking from the episode. A workaround that fails *unpredictably* is worse than one
+   that fails uniformly, because nothing tells you which content it will fail on. And the fix
+   existed the whole time in a lump the port had already parsed the header of — the reason it took
+   until phase 7 is that the entry said "no path exists" when what was true was "no path exists
+   for the lightmap".
 
 8. **Clustered lighting is as good as advertised, and this port is alive because of it.** 147
    dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
@@ -331,14 +341,15 @@ finding, not a footnote to it.
 | 1 — asset pipeline | complete | 6 maps, 76 props, 15 characters, 97 sound names; `npm run check` |
 | 2 — collision and movement | complete | ported `cm_trace` **bit-exact** against a WASM oracle; shipping backend is meep physics measured against it, median divergence now exactly zero (`npm run divergence`) |
 | 3 — game simulation | complete | weapons, damage, items, movers, triggers, jump pads, teleporters; 27 unit tests against the OA gamecode's own numbers |
-| 4 — presentation | complete, with one measured shortfall | particles, decals, lights, HUD, characters, positional audio; `test/presentation.test.ts` (36 tests) — **the lighting reconstruction fails on 2 of 6 maps**, see item 6 above and GAP-006 |
+| 4 — presentation | complete | particles, decals, lights, HUD, characters, positional audio; `test/presentation.test.ts` (40 tests). The phase-6 shortfall — the lighting reconstruction failing outright on 2 of 6 maps — was closed in phase 7 by fitting lights to the BSP lightgrid, and all six maps are now asserted rather than three (item 7, GAP-006, D-078) |
 | 5 — bots | complete, with the cuts in D-055 | behaviour trees on a floor-sampled navigation graph; `test/match.test.ts` runs a 30-second six-bot match headlessly on the shipping backend |
-| 6 — report | this document, written continuously; matrix re-derived and exit criteria re-verified in this phase |
+| 6 — report | complete | this document, written continuously; matrix re-derived and exit criteria re-verified in that phase |
+| 7 — after the report | ongoing, maintainer-directed | the browser build verified on every map and mode since the movement rewrite (D-077); the seam between the new solver and the game covered end to end, which found D-075; the lightgrid route that closes the phase-4 shortfall (D-078) |
 
 **Phases 4 and 5 were re-verified in phase 6**, because both had originally been signed off by
 looking at the running application and this project's record with that method is poor (item 13).
 Both now have headless tests, both pass, and writing them found two things that were not known:
-the lighting shortfall above, and a defect where `am_thornish` — the largest map in the build and
+the lighting shortfall above — since fixed — and a defect where `am_thornish` — the largest map in the build and
 the one every performance number is quoted from — had been running with zero bots, because it is a
 Team Arena map with no `info_player_deathmatch` entity for the spawn filter to find.
 
@@ -346,8 +357,9 @@ What is *not* done is listed per phase in `DECISIONS.md` rather than summarised 
 collision (D-017), capsule traces (D-018), the weapon state machine (D-022), mover crush and
 shootable doors (D-041), smooth skin weights and character LOD (D-045), the bots' missing half —
 no jumping to reach anything, no aim prediction, no bot-versus-bot target selection (D-055, now
-asserted directly by a test so the claim cannot drift) — and a lightgrid importer that would
-close the lighting shortfall (D-069).
+asserted directly by a test so the claim cannot drift). The lightgrid importer that was on this
+list is done (D-078); what remains of that gap is the lightmap itself, which is the part meep
+cannot take.
 
 The brief said a half-finished demo with an excellent report is a success and the reverse is a
 failure. Effort went to the report throughout, and to phase 2, which is the one place the brief
@@ -997,7 +1009,8 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   texture plus a UV set you already have. `StandardShadeMaterial` has albedo, normal, ORM and
   emissive slots — no lightmap slot.
 - **Workaround:** none for the lightmaps themselves; they are dropped. Static lighting is
-  instead *reconstructed* as real dynamic lights (see DECISIONS.md D-012),
+  instead *reconstructed* as real dynamic lights, from the shader set (D-012) and from the
+  BSP's lightgrid (D-078),
   which is arguably the better demo but is a different picture from Q3's. `uv1` is still
   carried through the pipeline into the geometry so the data is not lost when a slot exists.
   Roughly 40 minutes, most of it spent establishing that the lightmap subsystem was a baker
@@ -1014,39 +1027,58 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   wound backwards (GAP-018). I had a plausible explanation for a symptom and stopped looking. The
   visible cost of this entry is real but ordinary: a level that looks flatly lit rather than one
   that looks wrong.
-  **What it costs, measured — added in phase 6.** The reconstruction is not uniformly good, and
-  until phase 6 nobody had checked. `test/presentation.test.ts` computes illuminance at every
+  **What it costs, measured — added in phase 6, revised in phase 7 when the second baked
+  product turned out to be readable.** The reconstruction is not uniformly good, and until
+  phase 6 nobody had checked. `test/presentation.test.ts` computes illuminance at every
   spawn point and pickup on every shipped map, in lux, using the same photometric arithmetic
   `loadMap` hands the engine — `cd = lm / 4π`, inverse-square in scene metres, cut off at the
   light's `distance`:
 
-  | map | triangles | reconstructed point lights | sun | median lux at player positions | positions under 1 lux |
-  |---|---:|---:|---|---:|---:|
-  | `am_thornish` | 198,740 | 147 | yes | 58.0 | 0 / 95 |
-  | `oa_dm4` | 4,089 | 22 | yes | 31.4 | 0 / 47 |
-  | `aggressor` | 3,263 | 63 | yes | 22.5 | 0 / 38 |
-  | `oa_dm1` | 7,532 | 22 | no | 8.8 | 0 / 38 |
-  | `oa_dm7` | 2,947 | 13 | yes | **0.0** | **70 / 79** |
-  | `oa_dm5` | 107,414 | **0** | yes | **0.0** | **36 / 36** |
+  | map | triangles | shader lights | + lightgrid | sun | median lux, shaders only | ...with the grid fit | under 1 lux |
+  |---|---:|---:|---:|---|---:|---:|---:|
+  | `am_thornish` | 198,740 | 147 | +182 | yes | 57.6 | 57.6 | 0 / 159 |
+  | `oa_dm4` | 4,089 | 22 | +22 | yes | 32.6 | 33.2 | 0 / 48 |
+  | `aggressor` | 3,263 | 63 | +27 | yes | 20.2 | 20.6 | 0 / 38 |
+  | `oa_dm1` | 7,532 | 22 | +11 | no | 8.7 | 15.8 | 0 / 39 |
+  | `oa_dm7` | 2,947 | 13 | +25 | yes | **0.0** | **27.3** | 0 / 80 |
+  | `oa_dm5` | 107,414 | **0** | **+39** | yes | **0.0** | **10.0** | 1 / 37 |
 
-  The reconstruction reads `q3map_surfacelight` off the shader set and `q3map_sun` off
+  The shader reconstruction reads `q3map_surfacelight` off the shader set and `q3map_sun` off
   worldspawn. Where a map's lighting came from `light` *entities* and the lightmap, there is
   nothing left to read: q3map2 strips every `light` entity from a compiled BSP — measured, zero
   across all six maps, and asserted in that test file so it stays measured. `oa_dm5` is 107k
   triangles of level with a single dim blue `q3map_sun` and no fixtures at all.
 
-  So the honest form of this gap's cost is: **the workaround succeeds on four of six maps and
-  fails on two, and which two is not predictable from anything except the shader set.** That is
-  worse than a uniform quality loss, because it is invisible until someone loads that map.
+  So the honest form of this gap's cost *was*: the workaround succeeds on four of six maps and
+  fails on two, and which two is not predictable from anything except the shader set — worse than
+  a uniform quality loss, because it is invisible until someone loads that map.
 
-  There is a route that was scoped out rather than tried: the BSP's lightgrid lump (15) is the
-  *other* baked product of q3map2, it survives compilation, and it holds an ambient plus
-  directional sample per grid cell. Turning bright cells into point lights offline would give
-  `oa_dm5` a lighting solution without any rendering code, any engine change, or any lightmap
-  slot. It is asset-pipeline work, roughly half a day, and it is recorded in D-069 as not done
-  rather than quietly omitted. It would not close this gap — a lightgrid is a coarse
-  approximation of the lightmap, which is the thing that cannot be imported — but it would
-  remove the cliff.
+  **The cliff is now gone, and the route that removed it is the second baked product.** The
+  BSP's lightgrid (lump 15) survives compilation where the `light` entities do not: a regular
+  lattice over the world model, eight bytes a cell, an ambient colour plus a directed colour plus
+  the direction the directed light came from. The pipeline fits point lights to it — read
+  `LUMP_LIGHTGRID`, estimate each source's distance from the grid's own inverse-square falloff,
+  place lights greedily against the shortfall the shader route leaves, then least-squares every
+  light's output against every cell. Half a day, no rendering code, no engine change (Q-006,
+  D-078). The two lux columns above are before and after; `oa_dm5` goes from zero lights to 39
+  and from every player position dark to one.
+
+  **It does not close this gap and is not offered as closing it.** A lightgrid cell is
+  64×64×128 units, so what comes back is the low-frequency part of the lighting: which rooms are
+  lit, how brightly, and what colour. The spatial detail — the occlusion in a corner, the falloff
+  along a wall — was in the lightmap, and the lightmap is still the thing that cannot be
+  imported.
+
+  **One finding the fit produced by accident, and it is about the shader route rather than about
+  the engine.** Fitting against the grid means measuring the existing solution against it, and
+  the existing solution overshoots badly: RMS error against the baked field, as a fraction of
+  mean target illuminance, is 256% on `oa_dm4`, 332% on `aggressor` and **6,855%** on
+  `am_thornish`. The fit leaves all three effectively unchanged, because it can only add light.
+  `am_thornish` delivers 58 lux at player height where q3map2 baked 10. Passing
+  `q3map_surfacelight` through as lumens is far too generous on a map with many bright shader
+  emitters, and now that there is a reference it could be calibrated per map rather than
+  assumed. Not done here: it would re-light the three maps the demo presents, which is a bigger
+  change than this belongs inside.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.
@@ -1055,7 +1087,8 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   already say "light map"; what is missing is the consumer.
 - **Evidence:** `src/shade/renderer/lightmap/**`, `StandardAttributes.js`,
   `StandardShadeMaterial.d.ts`. Recorded at phase 1; measured in phase 6 by
-  `test/presentation.test.ts`.
+  `test/presentation.test.ts`; the lightgrid route is `src/q3/bsp/LightGrid.ts` and
+  `tools/pipeline/lightgrid.ts`, tested by `test/lightgrid.test.ts`, added in phase 7.
 
 ### GAP-007 (withdrawn): `draw_side` works; its docblock is stale
 
@@ -2496,6 +2529,12 @@ Specific things that would be a loss to regress.
   meep cannot import Q3's baked lightmaps (GAP-006), so *the only* route to a lit level was to
   reconstruct the lighting as real dynamic lights and hope the engine could take it. It could,
   without tuning, without batching work on my side, and without a fallback plan.
+
+  Reinforced in phase 7, when the lightgrid route added 182 more lights to `am_thornish` for 329
+  in total and 39 to a map that had none. Nothing about that needed thinking about: no budget, no
+  culling scheme, no pooling. An engine where "how many lights" is not a question the content
+  pipeline has to answer is what made two entirely different lighting reconstructions viable
+  one after the other.
 
 - **Building geometry from raw arrays is four calls and no ceremony.** `new Geometry()`,
   `Attribute.from(array, itemSize, StandardAttributes.X)`, `geometry.index = ...`,
