@@ -12,13 +12,23 @@
  * ---
  *
  * The brief says to replace botlib with behaviour trees, and this is the half
- * that is not the tree: the body. A bot owns a `pmove_t` built by the same
- * `createPmoveHost` the player uses, fills a `usercmd_t`, and runs `Pmove`. That
- * is exactly Q3's arrangement -- `BotAIStartFrame` fills a `usercmd_t` and hands
- * it to the same `ClientThink` a human's goes through -- and it is the property
- * worth keeping, because it means a bot accelerates, strafes, steps and falls
- * identically to the player. A bot that moved by lerping toward a waypoint would
- * be a different physical object in the same room.
+ * that is not the tree: the body. A bot fills a `usercmd_t` and hands it to the
+ * same movement code the player uses. That is exactly Q3's arrangement --
+ * `BotAIStartFrame` fills a `usercmd_t` and hands it to the same `ClientThink` a
+ * human's goes through -- and it is the property worth keeping, because it means
+ * a bot accelerates, strafes, steps and falls identically to the player. A bot
+ * that moved by lerping toward a waypoint would be a different physical object
+ * in the same room.
+ *
+ * "The same movement code" now means `MeepMove` -- Q3's motor on meep's
+ * `KinematicMover` (D-071) -- with the ported `bg_pmove` still built and still
+ * selected by `?move=q3`. Both write the same `playerState_t`, so everything
+ * below this line is indifferent to which ran.
+ *
+ * That indifference is the point of the arrangement rather than a convenience.
+ * For one commit the player ran the new solver and the bots ran the old one, and
+ * the property this file's first paragraph claims -- that bots and players are
+ * the same physical object -- was quietly false. D-072.
  *
  * What is *not* here is anything botlib does: no AAS, no fuzzy weapon weights,
  * no chat, no character files. The decisions live in a behaviour tree
@@ -33,6 +43,11 @@ import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
 import { vec3, type Vec3 } from '../q3/math.ts';
 import { createPmoveHost, type PmoveHostOptions } from './PmoveHost.ts';
+import {
+    PlayerMovement,
+    type MoverHost,
+    type MoveCommand,
+} from '../client/MeepMove.ts';
 import { newInventory, type Inventory } from './Items.ts';
 import type { Damageable } from './Weapons.ts';
 import type { WeaponId } from './Weapons.ts';
@@ -54,6 +69,12 @@ export interface BotOptions extends PmoveHostOptions {
     readonly name: string;
     /** Which converted character model represents it. */
     readonly character: string;
+    /**
+     * Physics for the meep-native movement path. Null runs the ported
+     * `bg_pmove` instead, which is what `?move=q3` and the divergence harness
+     * select.
+     */
+    readonly moverHost?: MoverHost | null;
 }
 
 export class Bot implements Damageable {
@@ -62,6 +83,10 @@ export class Bot implements Damageable {
     readonly character: string;
 
     readonly pmove: Pmove;
+
+    /** Non-null when this bot moves on meep's solver, which is the default. */
+    private readonly movement: PlayerMovement | null;
+
     readonly inventory: Inventory = newInventory();
 
     /* ---- Damageable ---- */
@@ -146,6 +171,16 @@ export class Bot implements Damageable {
 
         this.pmove = createPmoveHost(options);
         this.origin = this.pmove.ps.origin;
+
+        /*
+         `origin` stays a live reference into `ps` whichever solver runs, which
+         is what lets `Damageable`, the character placement and the tree all read
+         one number that cannot go stale.
+        */
+        this.movement =
+            options.moverHost === undefined || options.moverHost === null
+                ? null
+                : new PlayerMovement(options.moverHost, this.pmove.ps.origin);
 
         this.yaw = (options.spawnQ3[3] ?? 0) * ANGLE_TO_SHORT;
         this.desiredYaw = this.yaw / ANGLE_TO_SHORT;
@@ -267,7 +302,11 @@ export class Bot implements Damageable {
         }
         this.pmove.ps.pm_type = this.dead ? C.PM_DEAD : C.PM_NORMAL;
 
-        runPmove(this.pmove);
+        if (this.movement === null) {
+            runPmove(this.pmove);
+        } else {
+            this.movement.step(this.pmove.ps, this.meepCommand(), deltaSeconds);
+        }
 
         // Stuck detection: wanting to move and not moving.
         const wanting = this.moveForward !== 0 || this.moveRight !== 0;
@@ -277,6 +316,30 @@ export class Bot implements Damageable {
         this.moveForward = 0;
         this.moveRight = 0;
         this.wantJump = false;
+    }
+
+    /**
+     * The command this frame, in the shape the meep-native path takes.
+     *
+     * Reads the `usercmd_t` that was just filled rather than the intent fields
+     * directly, so both solvers are driven from one source. `PM_DEAD` has no
+     * counterpart in `MeepMove`: a dead bot simply commands nothing and keeps
+     * falling, which is what Q3's dead move amounts to once the view-angle
+     * handling it also does is not wanted here.
+     */
+    private meepCommand(): MoveCommand {
+        const moves = this.pmove.cmd.moves;
+
+        return {
+            forward: moves[FORWARDMOVE]!,
+            right: moves[RIGHTMOVE]!,
+            up: moves[UPMOVE]!,
+            pitch: this.pitch,
+            yaw: this.yaw / ANGLE_TO_SHORT,
+            // Bots do not crouch: nothing in the tree asks for it, and a
+            // crouching bot that cannot stand back up is a stuck bot.
+            crouch: false,
+        };
     }
 
     /**

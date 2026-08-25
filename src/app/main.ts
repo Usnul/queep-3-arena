@@ -575,6 +575,9 @@ async function main(): Promise<void> {
                 spawnQ3,
                 physics: physicsWorld,
                 movers: () => ({ movers: movers.clipEntities }),
+                // The same solver the player runs, which is the whole point of
+                // a bot filling a `usercmd_t` rather than steering itself.
+                moverHost,
             });
 
             const character = new Character(ecd, name);

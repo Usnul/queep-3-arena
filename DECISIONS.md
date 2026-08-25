@@ -1912,3 +1912,77 @@ holds -- "a bot moving through a different `pmove_t` is a bot playing a differen
 this is now true and was not before. `Bot` takes the same `PhysicsTraceBackend` the player used,
 so the migration is the same `PlayerMovement` swap; it is the next change, not a design position.
 Recorded here rather than left for someone to notice from the fact that bots corner differently.
+
+### D-072: Bots move on the same solver the player does again, and the migration found an inverted constant
+
+D-071 left the player on `MeepMove` and the bots on the ported `bg_pmove`, and said so rather than
+hiding it. This closes that. `Bot` takes a `moverHost` exactly as `PlayerController` does, builds a
+`PlayerMovement` when it gets one, and `?move=q3` still selects the ported path for both.
+
+Bot.ts's opening paragraph has always claimed that a bot is the same physical object as the player
+because it fills a `usercmd_t` and hands it to the same movement code. For one commit that was
+false. It is true again, and the file now says which claim it is making.
+
+**The bug the migration surfaced, which is the useful part.**
+
+Migrating the bots made a number available that had not existed before: the fraction of frames a
+bot is grounded over a match, on each solver. It came out at **6.1%** on the meep path against
+**85.6%** on the ported path. A bot that is never grounded accelerates at `pm_airaccelerate` (1)
+rather than `pm_accelerate` (10), so the expected symptom was bots that crawl.
+
+They did not crawl. They reached 322 units/s and walked 27,000 units a match. That contradiction
+is what located it: movement was correct and only the *report* of it was wrong.
+
+`PlayerMovement.step` mirrors `MoveState.grounded` into `ps.groundEntityNum`, and it declared its
+own copy of Q3's sentinels — **inverted**. Q3 has `ENTITYNUM_NONE = 1023` and
+`ENTITYNUM_WORLD = 1022`; the local pair had them the other way round, so every consumer of
+`groundEntityNum` received the exact opposite of the truth: `Bot.onGround`, the leg animation,
+footsteps, the HUD's ground readout, and the tree's stuck detection. The player had been running
+that way since D-071 and nothing caught it.
+
+Nothing caught it because `test/meepmove.test.ts` asserts `state.grounded` — the internal field,
+which was right — and never asserts the mirrored one. **A test that reads the source of a value
+cannot catch a bug in the copy of it**, and the mirror is exactly where a bridging class earns its
+keep or fails. The constants are now imported from `constants.ts`; the fix is one import and the
+lesson is that the duplicate existed at all.
+
+Measured after the fix, six bots and a standing player over 30 s at 125 Hz:
+
+| | grounded | stuck | shots | pickups | walked |
+|---|---|---|---|---|---|
+| `oa_dm1`, meep | **93.9%** | 3.2% | **374** | **16** | 28,543 |
+| `oa_dm1`, ported | 85.6% | 7.8% | 110 | 10 | 31,073 |
+| `aggressor`, meep | **51.6%** | **23.3%** | **10** | 13 | 17,918 |
+| `aggressor`, ported | 92.5% | 2.6% | 420 | 16 | 25,003 |
+
+**`oa_dm1` is better on every axis that matters** — better grounded than the ported path, less
+than half the stuck time, three times the engagement, and it costs 215 µs a frame against the
+ported path's 47 and against the *old* meep-physics-under-pmove arrangement's 356. Fewer queries:
+`KinematicMover` issues 6.0 traces a frame where pmove through `PhysicsTrace` issued 30.4.
+
+**`aggressor` is worse on every one of them**, and the correlation available is BUG-7. Sampling
+every navigation-graph node and casting the walkability probe `KinematicMover` casts:
+
+| map | probe returns `t = 0` inside a body | probe finds a real surface |
+|---|---|---|
+| `oa_dm1` | 1.3% | 96.0% |
+| `oa_dm4` | 4.5% | 95.2% |
+| `aggressor` | **10.4%** | 84.0% |
+
+`aggressor` has the highest rate measured and the worst regression, and the mechanism is
+plausible end to end: probe fails, bot is not grounded, air acceleration, crawls, reads as stuck,
+abandons its route, re-plans, repeats. **That is a correlation and I have not proven it accounts
+for the whole 40-point grounding gap.** Stated as a correlation rather than a cause, because the
+last four exchanges have all been about claiming more than the evidence supports.
+
+**What is pinned rather than fixed.** `test/match.test.ts` asserts the shot count per map with
+both measured values written into the test, and asserts damage where it lands. A fix in either
+direction fails a test and forces this entry to be revisited, which is the intended behaviour.
+The alternative — one threshold low enough for both — would have hidden a 40× difference between
+two maps behind a green suite.
+
+**What I would do next, in order**: confirm or refute the BUG-7 attribution by stubbing the probe
+against the clipmap and re-measuring `aggressor`'s grounding; if confirmed, the fix is in the
+engine and the workaround at this level is a documented ground re-test after `move`. Not done
+here: the maintainer asked for the migration, the migration is done and measured, and building a
+second workaround before confirming its cause is the mistake GAP-019 already made once.

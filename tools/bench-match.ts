@@ -205,6 +205,7 @@ function run(mapName: string, usePhysics: boolean): Row {
             spawnQ3: snap(spawns[i]!),
             physics,
             movers: () => ({ movers: [] }),
+            moverHost: backend === null ? null : { system: backend.system, ecd: backend.ecd },
         });
         runtime.spawn(bot, null);
         weapons.targets.push(bot);

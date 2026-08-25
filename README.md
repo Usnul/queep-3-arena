@@ -121,10 +121,10 @@ what that difference is, and includes a claim I got wrong twice before getting i
   positional one-shots for weapons, impacts, items, movers, jump pads and footsteps; looping
   sources that follow what owns them, from map ambience to a rocket's fly sound; and the map's
   own background track.
-- **Bots** on meep's behaviour trees — they route, fight, take items, and one has been observed
-  strafe-jumping. They still run the ported `bg_pmove`, so since D-071 the player and the bots
-  move on different solvers; that is a known inconsistency and the next change, not a design
-  position.
+- **Bots** on meep's behaviour trees, running the *same* movement the player does — they route,
+  fight, take items, and one has been observed strafe-jumping. On `oa_dm1` the move to meep's
+  solver made them measurably better (grounded 93.9% of a match against 85.6%, three times the
+  engagement); on `aggressor` it made them worse, which is measured and attributed in D-072.
 - **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
   GPU decals and clustered lights.
 

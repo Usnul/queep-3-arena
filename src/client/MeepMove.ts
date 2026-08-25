@@ -558,12 +558,6 @@ export interface PlayerStateLike {
     pm_flags: number;
 }
 
-/** `ENTITYNUM_NONE`; Q3's "not standing on anything". */
-const ENTITYNUM_NONE = 1022;
-
-/** `ENTITYNUM_WORLD`; anything downstream only tests it against NONE. */
-const ENTITYNUM_WORLD = 1023;
-
 /**
  * Adapter: run a frame of meep-native movement over a Q3 `playerState_t`.
  *
@@ -613,7 +607,21 @@ export class PlayerMovement {
         ps.velocity[1] = this.state.velocity[1]!;
         ps.velocity[2] = this.state.velocity[2]!;
 
-        ps.groundEntityNum = this.state.grounded ? ENTITYNUM_WORLD : ENTITYNUM_NONE;
+        /*
+         Imported rather than redeclared, and that is the fix for a real bug
+         rather than a style preference. The first version of this line declared
+         its own pair of constants and had them **inverted** -- `NONE` 1022,
+         `WORLD` 1023, where Q3 is the other way round -- so `groundEntityNum`
+         reported the exact opposite of the truth to everything downstream:
+         `Bot.onGround`, the leg animation, footsteps and the HUD. The internal
+         `MoveState.grounded` was right the whole time, so movement itself
+         behaved correctly and every test that read `state.grounded` passed.
+
+         It surfaced only when the bots were migrated and their grounded
+         fraction over a match came out at 6% against the ported path's 86%.
+         See D-072.
+        */
+        ps.groundEntityNum = this.state.grounded ? C.ENTITYNUM_WORLD : C.ENTITYNUM_NONE;
         ps.viewheight = this.state.viewheight;
 
         return result;

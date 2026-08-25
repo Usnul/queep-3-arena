@@ -2288,10 +2288,25 @@ the surface and is never grounded: gravity keeps being applied and cancelled, `g
 false, and every consumer of it -- jump, animation, footsteps, the ground-stick -- is wrong.
 
 Quake III levels are built from brushes and a large fraction of them are wedges, ramps and cut
-corners, so this is not an exotic shape. Measured: it costs one of `aggressor`'s nine spawn
-platforms, where the clipmap and `overlap` both say the probe point is empty and `raycast` says it
-is inside something facing down. Pinned in `test/meepmove.test.ts` as a count, so a fix in the
-engine fails the test and forces this entry to be revisited.
+corners, so this is not an exotic shape. **Measured across whole levels**, by casting the probe
+`KinematicMover` casts at every node of the navigation graph:
+
+| map | probe returns `t = 0` inside a body | probe finds a real surface |
+|---|---:|---:|
+| `oa_dm1` | 1.3% | 96.0% |
+| `oa_dm4` | 4.5% | 95.2% |
+| `aggressor` | **10.4%** | 84.0% |
+
+`aggressor` is also where migrating the bots onto the engine's solver regressed hardest -- bots
+grounded 51.6% of a match against the ported path's 92.5%, and reading as stuck 23.3% of it
+against 2.6% -- while `oa_dm1`, at a 1.3% probe-failure rate, came out *better* than the ported
+path on every measure. The mechanism is plausible end to end: probe fails, bot is not grounded,
+accelerates at `pm_airaccelerate` instead of `pm_accelerate`, crawls, reads as stuck, abandons its
+route. That is a correlation and is written up as one in D-072; the whole 40-point grounding gap
+has not been attributed.
+
+Pinned in `test/meepmove.test.ts` and `test/match.test.ts` with the measured values written into
+the assertions, so a fix in the engine fails a test and forces this entry to be revisited.
 
 **Severity:** major. Silent, produces a plausible-looking result, and lands in the walkability
 decision of the engine's own character solver.
