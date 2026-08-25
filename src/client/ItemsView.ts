@@ -17,11 +17,26 @@
  * part of how a Q3 level reads -- a rocket launcher catches the eye at a
  * distance because of the spin, not because of the model.
  *
- * `ShadedGeometryFlags.Visible` handles the picked-up state. Destroying and
- * rebuilding the entity would also work and is what a naive port does; it also
- * throws away the meshlet build every 25 seconds per item, which on a level
- * with 40 pickups is most of a frame's budget spent re-deriving geometry that
- * has not changed.
+ * # Hiding a collected item
+ *
+ * By taking its `ShadedGeometry` off the entity, which is the only thing that
+ * works. `ShadedGeometryFlags.Visible` is documented as *"If set to false will
+ * not render"* and this file used to believe it; the flag is read by nothing in
+ * the engine, so a collected pickup stayed on screen (BUG-10). It also stopped
+ * spinning, because a pickup that is not `present` skips the animation below --
+ * which is how one dead flag produced two symptoms that looked like two bugs.
+ *
+ * Visibility in Shade is membership: `ShadedGeometrySystem3` adds a `Mesh` to
+ * the scene in `link` and removes it in `unlink`, and there is no per-node
+ * visible bit to set. Removing the component runs `unlink`; putting the *same
+ * instance* back runs `link` again, and `link` reuses the `Geometry` and the
+ * `ShadeMaterial` it is handed. So nothing is re-derived -- the meshlet build
+ * belongs to `ModelLibrary` and is shared across every copy of a model -- and
+ * the cost of a pickup is one `Mesh`, three signal bindings and a scene insert,
+ * twice per respawn.
+ *
+ * The entity itself stays, so the `Transform` and its position survive the
+ * hidden interval and the item reappears where it was rather than at the origin.
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
@@ -42,12 +57,16 @@ const SPIN_PERIOD_FAST_SECONDS = 1.024;
 interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
+    addComponentToEntity(entity: number, component: unknown): void;
+    removeComponentFromEntity(entity: number, type: unknown): void;
 }
 
 interface DrawnItem {
     readonly item: ItemInstance;
     readonly transforms: Transform[];
     readonly geometries: ShadedGeometry[];
+    /** Parallel to `geometries`; the entity each one is linked to and off. */
+    readonly entities: number[];
     /** `CG_Item`'s per-entity bob rate, so a row of pickups does not pulse in unison. */
     readonly bobScale: number;
     readonly fastSpin: boolean;
@@ -109,6 +128,7 @@ export class ItemsView {
         for (const item of items) {
             const transforms: Transform[] = [];
             const geometries: ShadedGeometry[] = [];
+            const entities: number[] = [];
 
             let missing = 0;
 
@@ -130,10 +150,12 @@ export class ItemsView {
                     const transform = new Transform();
                     transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
 
-                    new Entity().add(transform).add(geometry).build(this.ecd);
+                    const builder = new Entity().add(transform).add(geometry);
+                    builder.build(this.ecd);
 
                     transforms.push(transform);
                     geometries.push(geometry);
+                    entities.push(builder.id);
                 }
             }
 
@@ -148,6 +170,7 @@ export class ItemsView {
                 item,
                 transforms,
                 geometries,
+                entities,
                 // `scale = 0.005 + cent->currentState.number * 0.00001`, in ms.
                 bobScale: 0.005 + item.index * 0.00001,
                 fastSpin: item.def.type === 'IT_HEALTH',
@@ -166,8 +189,13 @@ export class ItemsView {
 
             if (item.present !== drawn.visible) {
                 drawn.visible = item.present;
-                for (const geometry of drawn.geometries) {
-                    geometry.writeFlag(ShadedGeometryFlags.Visible, item.present);
+
+                for (let i = 0; i < drawn.geometries.length; i++) {
+                    const geometry = drawn.geometries[i]!;
+                    const entity = drawn.entities[i]!;
+
+                    if (item.present) this.ecd.addComponentToEntity(entity, geometry);
+                    else this.ecd.removeComponentFromEntity(entity, ShadedGeometry);
                 }
 
                 if (item.present) {

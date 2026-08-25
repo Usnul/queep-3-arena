@@ -3038,3 +3038,75 @@ anyone expecting a modern renderer to shade a crate.
 does not, a fog brush does not, and an implicit texture is never unlit -- and the flame case fails
 against the version without it.
 
+### D-086: One dead flag, two symptoms, and a day spent looking for the second bug
+
+The maintainer: *"The pickups are static, they are not moving, and I assume they are supposed to.
+Also, walking through these does nothing, no sound, no visible stat change, the object doesn't
+disappear either."*
+
+Three complaints, and the natural reading is two or three faults: something wrong with the
+animation, something wrong with the touch test, something wrong with the audio. It is one fault,
+and the reason it presents as three is worth more than the fix.
+
+**`ItemsView` hid a collected pickup by clearing `ShadedGeometryFlags.Visible`**, whose entire
+docblock reads *"If set to false will not render"*. The flag is read by nothing in the engine --
+two references in 5,953 files, both of them in `ShadedGeometry.js`, one a default and one an
+equality mask, neither a renderer. Visibility in Shade is *membership*: `ShadedGeometrySystem3.link`
+adds a `Mesh` to the scene and `unlink` removes it, and `Node3D` has no visible bit at all. Filed
+as BUG-10.
+
+So a collected item stayed on screen. And **the same `present` flag that failed to hide it also
+stops it animating** -- `update` does `if (!item.present) continue` before the spin and the bob,
+correctly, because there is no point animating something nobody can see. With the hiding broken,
+that `continue` became the second symptom: the pickup froze in place instead of vanishing.
+
+The third symptom is not a symptom. Walking through *did* pick the item up: the armour went up, the
+event fired, the sound played. It just did not look like it, because the thing on the floor did not
+move and did not go away -- and a second pass over it a moment later genuinely does nothing, because
+it has already been taken and has 25 seconds of respawn to sit out.
+
+**How it was actually found, which is the part worth keeping.** Three sessions of reasoning got the
+mechanism wrong twice. The first theory was an exception mid-frame -- meep's `Signal.dispatch`
+swallows handler exceptions into a `console.error`, so a throw in the app's one tick handler
+silently deletes every line below it, and `player.update` is the first line while `items.update` is
+the sixth. That is a real hazard and it is now guarded, one named phase at a time, but it was not
+this. The second theory was the renderer not following the transform. Also wrong: 53 of 93 scene
+nodes on `oa_dm1` move every frame.
+
+What settled it was one line of data from the maintainer's own session:
+
+```
+{ map: 'oa_dm1', clockAdvanced: 1, meshesMoving: 25,
+  nearestItem: 'item_armor_shard', nearestDistance: 12, nearestPresent: false }
+```
+
+`nearestPresent: false` at a distance of 12 units, with the shard still visible on screen. The
+simulation said the item was gone; the screen disagreed. Every earlier theory had been about the
+frame not running, and the frame was running fine -- 25 meshes moving proves it. The bug was in the
+one place neither of us had instrumented, which is the sentence that connects the two.
+
+**The fix** is to take the `ShadedGeometry` component off the entity and put the same instance back
+on respawn. `link` reuses the `Geometry` and the `ShadeMaterial` it is handed, and the meshlet build
+belongs to `ModelLibrary` and is shared across every copy of a model, so nothing is re-derived: the
+cost of a pickup is one `Mesh`, three signal bindings and a scene insert, twice per respawn cycle.
+The old docblock rejected "destroying and rebuilding the entity" on exactly that ground and was
+right to; it is the *entity* that is expensive to rebuild, not the component's membership of it.
+The entity stays, so the `Transform` survives the hidden interval and the item reappears where it
+was rather than at the origin.
+
+**`test/items-view.test.ts` is new**, and it exists because neither half of this was visible to
+anything that already ran. `items.test.ts` tests the simulation and is right not to know about
+meshes -- it would have said, correctly, that the pickup worked. A screenshot cannot tell a
+stationary pickup from a pickup. What was missing was a test of the layer in between: what the view
+does to the scene graph when the simulation says an item has gone. Two of its six cases fail against
+the flag; the other four pin the spin period, the health-item double rate and the per-entity bob
+offset, which are the things the maintainer asked about and which nothing had asserted either.
+
+**Also from this, and unrelated to the cause.** meep's `Signal.dispatch` swallowing handler
+exceptions means one throw in this application's single tick listener silently deletes the rest of
+the frame for the remainder of the session, with the player still walking because `player.update` is
+the first line. The frame is now nine named phases -- player, view weapon, arena, audio, items, bots,
+mortality, player audio, movers -- each reported once by name if it throws, with the phases after it
+still running. It was written to diagnose this and did not, which is a fair description of most
+instrumentation; it stays because the failure it guards against is real, silent, and would present
+as almost exactly what was reported here.

@@ -2325,9 +2325,10 @@ device, no application — and every one was re-run against **3.2.0** after the 
 
 **Status after 3.2.0:** BUG-6 and BUG-7 are fixed. BUG-1 to BUG-5 still reproduce exactly as
 written; the `.d.ts` error count moved from 664 across 152 files to **674 across 154**, which is
-drift rather than change. **BUG-8 and BUG-9 are new and live on 3.2.0** — BUG-8 was found while
-confirming BUG-7's fix, in the defect in BUG-7's own published reproduction, and BUG-9 while
-rebuilding the transparency route (D-083).
+drift rather than change. **BUG-8, BUG-9 and BUG-10 are new and live on 3.2.0** — BUG-8 was found while
+confirming BUG-7's fix, in the defect in BUG-7's own published reproduction, BUG-9 while
+rebuilding the transparency route (D-083), and BUG-10 by a maintainer asking why collected
+pickups were still lying on the floor (D-086).
 
 These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
 bug is "the engine says it does this and does something else". The second kind is more expensive
@@ -2709,6 +2710,71 @@ The forward paths compute `diffuse` from the texture alone —
   both on 3.2.0. Port side: `src/client/map/bundle.ts`, which sets `diffuse_color` alpha to zero
   as a last-resort guard for a blended material with no albedo texture, and cannot use its rgb for
   anything.
+
+### BUG-10: `ShadedGeometryFlags.Visible` is documented as hiding a mesh and is read by nothing
+
+**Live on 3.2.0.** Found in phase 7, by a maintainer asking why collected pickups were still on
+the floor.
+
+```js
+/**
+ * If set to false will not render
+ */
+Visible: 16,
+```
+
+That is the whole docblock, and it is the only description of the flag anywhere in the package.
+The flag is referenced in exactly two places in 5,953 source files, both inside
+`ShadedGeometry.js` and neither of them a renderer:
+
+```js
+const DEFAULT_FLAGS = ShadedGeometryFlags.CastShadow
+    | ShadedGeometryFlags.ReceiveShadow
+    | ShadedGeometryFlags.Visible;
+
+const FLAG_SET_EQUALITY = ShadedGeometryFlags.CastShadow
+    | ShadedGeometryFlags.ReceiveShadow
+    | ShadedGeometryFlags.DrawMethodLocked
+    | ShadedGeometryFlags.Visible;
+```
+
+One sets it on by default; the other includes it when comparing two components for equality.
+Nothing consults it when deciding what to draw. `grep -rn "ShadedGeometryFlags.Visible" src/`
+returns those two lines and nothing else.
+
+Verified against the running engine rather than by reading, because the two could have disagreed:
+
+| action | flag afterwards | mesh in the Shade scene |
+|---|---|---|
+| `geometry.clearFlag(Visible)`, then three frames | off | **still there** |
+| `dataset.removeComponentFromEntity(entity, ShadedGeometry)` | -- | gone |
+| `dataset.addComponentToEntity(entity, geometry)` | -- | back |
+
+The reason the flag cannot work as written is structural rather than an oversight in one pass:
+visibility in Shade is *membership*. `ShadedGeometrySystem3.link` constructs a `Mesh`, hands it the
+geometry and material, and calls `scene.add(node)`; `unlink` calls `scene.remove(node)`. `Node3D`
+has no `visible` property either, so there is no bit for a renderer to read even if one wanted to.
+
+- **Severity:** moderate, entirely because of how it fails. The flag is the obvious API for the
+  job, it is the only one the enum offers, its docblock states the behaviour plainly, `setFlag`
+  and `clearFlag` accept it, and `getFlag` reads back exactly what you wrote. Every observable
+  agrees the mesh is hidden. This port shipped a pickup system on it and counted the arrangement
+  as done for four phases.
+- **What it looked like downstream:** a collected item that stayed on screen *and stopped moving*,
+  because the same code skips the spin for an item that is not present. One dead flag, two
+  symptoms, and they read as two unrelated bugs -- which is how it survived being looked at.
+- **Suggested fix:** either implement it -- `ShadedGeometrySystem3` already owns the add/remove
+  pair and could bind a flag-change handler the way it binds the three transform signals -- or
+  delete it from the enum and say in `ShadedGeometry`'s docblock that hiding a mesh means taking
+  the component off the entity. The second is cheaper and loses nothing; what is not defensible is
+  an enum member that documents a behaviour the engine does not have.
+- **Related:** `InView: 1` and `DrawMethodLocked: 8` in the same enum have no readers either. They
+  are not filed separately because neither documents a behaviour a consumer would reach for.
+- **Evidence:** `src/engine/graphics/ecs/mesh-v2/ShadedGeometryFlags.js` line 19,
+  `src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js` lines 18-27,
+  `src/engine/graphics3/ShadedGeometrySystem3.js` `link`/`unlink`,
+  `src/shade/renderer/scene/Node3D.js` (no visibility member). Port side:
+  `src/client/ItemsView.ts`, `test/items-view.test.ts`, D-086.
 
 ### Not bugs, recorded so nobody re-files them
 
