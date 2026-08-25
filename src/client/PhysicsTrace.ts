@@ -65,6 +65,9 @@ export class PhysicsTrace {
     /** Candidate brush indices handed to the ported per-brush trace. */
     private readonly brushScratch = new Int32Array(80);
 
+    /** How many of those the last `gatherBrushes` filled. */
+    private brushCount = 0;
+
     /** Reused output for that trace. */
     private readonly brushTrace: TraceResult = createTrace();
 
@@ -134,26 +137,6 @@ export class PhysicsTrace {
 
 
     /**
-     * Choose the contact plane the way Q3 would, given the body meep hit.
-     *
-     * `shape_cast` answers "which body, and how far". *Which face* of that body
-     * the contact belongs to is a different question, and the two engines answer
-     * it differently: EPA returns the minimum-penetration axis, while
-     * `CM_TraceThroughBrush` returns the **latest entering plane** -- the last
-     * one the box crosses on its way in.
-     *
-     * At a flat wall they agree. At a corner they do not, and the disagreement
-     * is not cosmetic: measured, `shape_cast` returned `[0, 1, 0]` where Q3
-     * returned `[-1, 0, 0]` for a player pressed into a corner. `PM_SlideMove`
-     * clipped velocity against the wrong plane, added a contradictory one on the
-     * retry, and after two frames hit its five-plane limit and zeroed the
-     * player's velocity -- the player simply stopped, wedged, a metre from the
-     * corner.
-     *
-     * So the plane is re-derived here using Q3's rule against the hit brush's
-     * own planes. meep's physics still does the spatial work; this restores the
-     * one semantic that movement depends on.
-     */    /**
      * The contact plane Q3 would report, for the brushes this sweep is near.
      *
      * meep's `shape_cast` answers "which body, and how far". *Which face of that
@@ -173,7 +156,9 @@ export class PhysicsTrace {
      * Running the ported trace makes the answer identical to the clipmap
      * backend's by construction, which is what D-030 claimed and did not do.
      *
-     * @returns the blocking brush's fraction, or -1 when nothing blocks.
+     * @returns the fraction Q3's rule gives -- 1 when nothing here blocks the
+     *          sweep at all -- or -1 when there was no brush to ask, which
+     *          means a body whose hull was never registered.
      */
     private contactPlane(
         primaryEntity: number,
@@ -190,17 +175,79 @@ export class PhysicsTrace {
         const cm = this.cm;
         if (cm === null) return -1;
 
+        const count = this.gatherBrushes(primaryEntity, minsQ3, maxsQ3, sx, sy, sz, gatherNeighbours);
+        if (count === 0) return -1;
+
+        traceBrushList(
+            this.brushTrace,
+            cm,
+            this.brushScratch,
+            count,
+            startQ3,
+            endQ3,
+            minsQ3,
+            maxsQ3,
+            MASK_PLAYERSOLID
+        );
+
+        out.planeNormal[0] = this.brushTrace.planeNormal[0]!;
+        out.planeNormal[1] = this.brushTrace.planeNormal[1]!;
+        out.planeNormal[2] = this.brushTrace.planeNormal[2]!;
+        out.planeDist = this.brushTrace.planeDist;
+
+        /*
+         And Q3's solidity, which is the same function's other output and used
+         to be thrown away.
+
+         `CM_TraceThroughBrush` distinguishes three states: outside, which is an
+         ordinary contact; `startsolid`, meaning the box began inside a brush
+         but the sweep leaves it; and `allsolid`, meaning it began inside and
+         never gets out. pmove treats the third as a call for help --
+         `PM_GroundTrace` hands it to `PM_CorrectAllSolid`, which jitters the
+         player a unit at a time until it finds free space.
+
+         Hardcoding `allsolid = false` disabled that recovery, and the failure
+         it produces is total rather than approximate. A trace that starts
+         embedded returns fraction 0 with **no plane**, because Q3 sets no plane
+         when the sweep never entered one. `PM_GroundTrace` then reads
+         `normal[2] = 0 < MIN_WALK_NORMAL` and concludes the player is on a
+         slope too steep to stand on; `PM_SlideMove` clips velocity against the
+         zero vector, which does nothing, and gets fraction 0 again on the
+         retry. The player stops -- permanently, in all three axes, including
+         falling. Reported twice: a player stuck in an open corridor, and a bot
+         apparently standing in mid-air against a wall. It was not standing on
+         anything. It had stopped falling. See D-063.
+        */
+        out.startsolid = out.startsolid || this.brushTrace.startsolid;
+        out.allsolid = out.allsolid || this.brushTrace.allsolid;
+
+        return this.brushTrace.fraction;
+    }
+
+    /**
+     * The brushes a sweep from this position could touch.
+     *
+     * `CM_TraceThroughLeaf` tests every brush in the leaf. `shape_cast` reports
+     * one body, so the neighbours come from `overlap_shape` and the whole set
+     * goes through the same comparison -- otherwise a tie at a corner is broken
+     * by whichever body meep reached first, which is not Q3's rule.
+     *
+     * @returns how many entries of `brushScratch` are valid.
+     */
+    private gatherBrushes(
+        primaryEntity: number,
+        minsQ3: ArrayLike<number>,
+        maxsQ3: ArrayLike<number>,
+        sx: number,
+        sy: number,
+        sz: number,
+        gatherNeighbours: boolean
+    ): number {
         let count = 0;
 
         const primary = this.hullByEntity.get(primaryEntity);
         if (primary !== undefined) this.brushScratch[count++] = primary.brush;
 
-        /*
-         At a corner two brushes are both blockers and `shape_cast` returns
-         whichever it reached first -- a tie it has no reason to break the way Q3
-         does. `CM_TraceThroughLeaf` tests every brush in the leaf, so the
-         neighbours are gathered and handed to the same comparison.
-        */
         if (gatherNeighbours) {
             const found = overlap_shape(
                 this.system,
@@ -219,28 +266,28 @@ export class PhysicsTrace {
             }
         }
 
-        if (count === 0) return -1;
+        this.brushCount = count;
+        return count;
+    }
 
-        traceBrushList(
-            this.brushTrace,
-            cm,
-            this.brushScratch,
-            count,
-            startQ3,
-            endQ3,
-            minsQ3,
-            maxsQ3,
-            MASK_PLAYERSOLID
-        );
+    /**
+     * Did the last `traceBrushList` already rule on the brush behind this body?
+     *
+     * `shape_cast` reports the nearest body; Q3 rules per brush over a whole
+     * set. When Q3 has said a set does not block and `shape_cast` then names a
+     * body from inside that same set, the two are not disagreeing about the
+     * world -- they are answering different questions, and Q3's is the one
+     * `bg_pmove` was written against.
+     */
+    private alreadyRuledOn(entity: number): boolean {
+        const hull = this.hullByEntity.get(entity);
+        if (hull === undefined) return false;
 
-        if (this.brushTrace.fraction === 1 && !this.brushTrace.startsolid) return -1;
+        for (let i = 0; i < this.brushCount; i++) {
+            if (this.brushScratch[i] === hull.brush) return true;
+        }
 
-        out.planeNormal[0] = this.brushTrace.planeNormal[0]!;
-        out.planeNormal[1] = this.brushTrace.planeNormal[1]!;
-        out.planeNormal[2] = this.brushTrace.planeNormal[2]!;
-        out.planeDist = this.brushTrace.planeDist;
-
-        return this.brushTrace.fraction;
+        return false;
     }
 
     /**
@@ -304,19 +351,38 @@ export class PhysicsTrace {
         const shape = this.boxShape(minsQ3, maxsQ3);
 
         if (length < 1e-7) {
-            // Position test. A zero-length sweep still has to answer "am I stuck
-            // here", which pmove asks on every `PM_CheckDuck`.
-            const ray = {
-                origin_x: sx, origin_y: sy, origin_z: sz,
-                direction_x: 0, direction_y: 1, direction_z: 0,
-                tMax: 1e-5,
-            };
+            /*
+             Position test: "am I stuck here", which pmove asks on every
+             `PM_CheckDuck` and once per jitter step of `PM_CorrectAllSolid`.
 
-            if (shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, undefined, false)) {
-                if (this.hit.t <= 1e-6) {
-                    out.allsolid = true;
+             This used to sweep a hair with `shape_cast` and call any contact
+             solid, which conflates *touching* a floor with being *buried* in
+             one. That is fatal inside `PM_CorrectAllSolid` specifically: every
+             position a standing player jitters to still touches the floor, so
+             every one reads as solid, the search fails, and the recovery Q3
+             provides for exactly this situation reports that there is no way
+             out.
+
+             `CM_TestBoxInBrush` is the function that draws the line, and over a
+             zero-length sweep `CM_TraceThroughBrush` reduces to it exactly:
+             `d1 === d2` for every plane, so a brush with any plane the box sits
+             in front of is skipped, and one the box is behind on every plane
+             sets `startsolid` and `allsolid` together. So it is run rather than
+             approximated, over the brushes `overlap_shape` finds.
+            */
+            const cm = this.cm;
+            const count = this.gatherBrushes(-1, minsQ3, maxsQ3, sx, sy, sz, true);
+
+            if (cm !== null && count > 0) {
+                traceBrushList(
+                    this.brushTrace, cm, this.brushScratch, count,
+                    startQ3, startQ3, minsQ3, maxsQ3, MASK_PLAYERSOLID
+                );
+
+                if (this.brushTrace.startsolid) {
                     out.startsolid = true;
-                    out.fraction = 0;
+                    out.allsolid = this.brushTrace.allsolid;
+                    out.fraction = this.brushTrace.allsolid ? 0 : 1;
                     out.contents = 1;
                     out.entityNum = 1022;
                 }
@@ -351,69 +417,116 @@ export class PhysicsTrace {
          at the moment of landing.
         */
         const backoff = SURFACE_CLIP_EPSILON * WORLD_SCALE;
-        const fraction = Math.min(1, Math.max(0, (this.hit.t - backoff) / length));
+        let fraction = Math.min(1, Math.max(0, (this.hit.t - backoff) / length));
 
         if (this.hit.t <= backoff) {
-            // Blocked where it stands.
-            /*
-             Blocked where it stands. Whether that is `startsolid` is a separate
-             question, and one `shape_cast` cannot answer: it reports `t = 0`
-             both for a box resting *on* a floor and for a box buried *in* one.
-
-             Q3 draws the line precisely -- `CM_TraceThroughBrush` sets
-             `startsolid` only when the start point is behind every plane of a
-             brush, so touching a surface is not solid. `overlap_shape` asks
-             exactly that question, so it is used rather than guessed at.
-
-             The distinction matters: `startsolid` (and worse, `allsolid`) sends
-             pmove into `PM_CorrectAllSolid`, which jitters the player a unit in
-             each direction hunting for free space. That is right for being
-             buried in geometry and wrong for standing on the ground.
-            */
-            const overlapping = overlap_shape(
-                this.system,
-                shape as unknown as never,
-                { x: sx, y: sy, z: sz },
-                NO_ROTATION,
-                this.overlaps,
-                0
-            );
-
-            /*
-             Blocked where it stands, with a valid plane for `PM_SlideMove` to
-             slide along, and `startsolid` set only if genuinely embedded.
-
-             An attempt was made to be cleverer here. `CM_TraceThroughBrush`
-             sets `startsolid` and returns *without touching `fraction`* when the
-             sweep starts inside a brush but exits it, so letting the move
-             complete looked like the faithful choice. Measured, it was eight
-             times worse: hit/miss agreement fell from 88% to 10% and the player
-             began tunnelling through walls.
-
-             The reason is that Q3's early return is **per brush** -- the leaf's
-             other brushes are still tested and can still stop the sweep. A
-             whole-trace `fraction = 1` skips all of them. Recorded because the
-             instrument caught a change that read as obviously correct.
-            */
-            out.startsolid = overlapping > 0;
-            out.allsolid = false;
-            out.fraction = 0;
             out.contents = 1;
             out.entityNum = 1022;
             out.endpos[0] = startQ3[0]!;
             out.endpos[1] = startQ3[1]!;
             out.endpos[2] = startQ3[2]!;
+            out.fraction = 0;
 
-            if (
-                this.contactPlane(
-                    this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, true
-                ) < 0
-            ) {
+            /*
+             `shape_cast` reports `t = 0` for a box resting *on* a floor, a box
+             *touching* a wall it is sliding along, and a box *buried* in one.
+             Q3 distinguishes all three and pmove behaves completely differently
+             in each, so the ported brush test decides rather than a guess.
+            */
+            const q3 = this.contactPlane(
+                this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, true
+            );
+
+            if (q3 < 0) {
+                /*
+                 No brush of ours answers for this contact -- a mover, or a body
+                 whose hull was never registered. Fall back to `shape_cast`'s own
+                 normal, which is GAP-012's wrong answer and the reason this is
+                 the last resort rather than the first.
+                */
+                out.startsolid =
+                    overlap_shape(
+                        this.system,
+                        shape as unknown as never,
+                        { x: sx, y: sy, z: sz },
+                        NO_ROTATION,
+                        this.overlaps,
+                        0
+                    ) > 0;
                 out.planeNormal[0] = this.hit.normal.x;
                 out.planeNormal[1] = -this.hit.normal.z;
                 out.planeNormal[2] = this.hit.normal.y;
+                return;
             }
-            return;
+
+            // Buried, and the sweep never leaves. `PM_CorrectAllSolid`'s cue.
+            if (out.allsolid) return;
+
+            if (q3 < 1) {
+                // An ordinary contact at zero distance: stop, with the plane.
+                return;
+            }
+
+            /*
+             Q3 says nothing here blocks, and `shape_cast` says otherwise only
+             because the box begins in contact. Two situations reach this line
+             and they need the same answer:
+
+             - **Resting against a surface.** A player standing on a floor or
+               pressed against a wall is one `SURFACE_CLIP_EPSILON` away from
+               it, which is inside the backoff, so *every* sweep from that
+               position -- including the ones running parallel to the surface or
+               straight away from it -- comes back `t = 0`. Q3 skips a brush the
+               box is entirely in front of and lets the move run.
+             - **Leaving a brush it started inside.** `CM_TraceThroughBrush`
+               sets `startsolid` and returns *without touching `fraction`*.
+               `PM_StepSlideMove` depends on this: it probes a step height
+               straight up from a position flush with the ground and reads the
+               fraction to decide how far it may climb.
+
+             Forcing `fraction = 0` for both is what froze a player mid-corridor
+             and left a bot hanging in mid-air against a wall. Every move the
+             player asked for was reported blocked by the wall they were already
+             touching, `PM_SlideMove` clipped the velocity flat against it and
+             got the same answer on the retry, and the step-up probe that would
+             have rescued them came back blocked too. Velocity kept accumulating
+             to 320 units a second against a position that never changed.
+
+             An earlier version of this file did let the move complete here, as
+             a whole-trace `fraction = 1`, and it was eight times worse --
+             hit/miss agreement fell from 88% to 10% and the player tunnelled
+             through walls -- because Q3's early return is per *brush* and the
+             leaf's other brushes still get tested. That is the part to keep.
+             The rest of the sweep is a real query, so it is asked as one:
+             `skip_initial_overlaps` re-casts past the contact and finds
+             whatever is genuinely in the way.
+            */
+            if (
+                !shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, undefined, true) ||
+                (this.hit.t <= backoff && this.alreadyRuledOn(this.hit.entity))
+            ) {
+                /*
+                 Nothing else is in the way -- or the only thing that is, is a
+                 brush Q3 has already said does not block.
+
+                 That second case is not hypothetical and it is not rare. A
+                 player running along a wall touches two brushes at once, the
+                 floor and the wall; skipping the initial overlap moves past one
+                 of them and lands straight on the other, still at zero
+                 distance. Clamping that to `fraction = 0` is what wedged a
+                 player at full speed in an open corridor: velocity climbing to
+                 320 units a second against a position that never changed,
+                 because every frame reported the surface they were standing
+                 next to as a wall in front of them.
+                */
+                out.fraction = 1;
+                out.endpos[0] = endQ3[0]!;
+                out.endpos[1] = endQ3[1]!;
+                out.endpos[2] = endQ3[2]!;
+                return;
+            }
+
+            fraction = Math.min(1, Math.max(0, (this.hit.t - backoff) / length));
         }
 
         out.fraction = fraction;
@@ -430,11 +543,13 @@ export class PhysicsTrace {
          GAP-012's wrong answer, so it is only used when no brush blocks at all,
          which means the two disagree about whether there is a contact.
         */
-        if (
-            this.contactPlane(
-                this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, false
-            ) < 0
-        ) {
+        const q3 = this.contactPlane(
+            this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, false
+        );
+
+        // -1 is "no brush of ours covers that body"; 1 is "Q3 says nothing
+        // blocks". Both mean there is no Q3 plane to report.
+        if (q3 < 0 || q3 >= 1) {
             out.planeNormal[0] = this.hit.normal.x;
             out.planeNormal[1] = -this.hit.normal.z;
             out.planeNormal[2] = this.hit.normal.y;

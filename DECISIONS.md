@@ -1277,3 +1277,98 @@ for thirteen characters and is a piece of `neko`'s head-dress for `neko`, whose 
 surfaces -- so it reported her lowest vertex at +0.6 and failed. The existing end-to-end test has
 the same narrowness and gets away with it because it only runs on `sarge`. A test that reads one
 surface of a multi-surface format is measuring whichever model the author happened to open.
+
+---
+
+### D-063: "Is the sweep blocked" is not a question `shape_cast` can answer, and pmove asks it constantly
+
+Two reports, one defect. A player stuck in an open corridor -- running at 320 units a second
+against a position that never changed. And a bot apparently standing in mid-air against a wall,
+which is not what it was doing: it had stopped falling.
+
+Both are the physics backend answering "blocked, at zero distance, with no plane" to sweeps the
+clipmap says are free. `PM_SlideMove` clips velocity against the reported plane, achieves nothing,
+retries, gets the same answer, and gives up; `PM_StepSlideMove`'s probe straight up comes back
+blocked too, so there is no step to rescue it; and `PM_GroundTrace`, reading `normal[2] = 0`,
+decides the player is on a slope too steep to stand on and stops applying ground friction to a
+player who is not moving anyway.
+
+**There were three separate causes**, found in that order.
+
+**1. `allsolid` was hardcoded to false.** `CM_TraceThroughBrush` reports three states: outside,
+`startsolid` (began inside a brush the sweep leaves), and `allsolid` (began inside and never gets
+out). pmove treats the third as a call for help -- `PM_GroundTrace` hands it to
+`PM_CorrectAllSolid`, which jitters the player a unit at a time until it finds free space. The
+backend never reported it, so the recovery Q3 provides for exactly this situation could not run.
+
+**2. The position test conflated touching with being buried.** A zero-length trace answers "am I
+stuck here", and the old implementation swept a hair with `shape_cast` and called any contact
+solid. Inside `PM_CorrectAllSolid` that is fatal: every position a standing player jitters to
+still touches the floor, so every candidate reads as solid and the search reports that there is no
+way out. `CM_TestBoxInBrush` is the function that draws the line, and over a zero-length sweep
+`CM_TraceThroughBrush` reduces to it exactly -- `d1 === d2` for every plane -- so it is now run
+rather than approximated.
+
+**3. And the one that actually mattered: Q3's brush test is not "does the swept box touch this
+brush".** This is the interesting half and it is written up as GAP-019.
+
+Measured at the reported position, `oa_dm1` (704.91, 686.92, 24.93), moving one frame at
+(2.56, 0.58, 0):
+
+| brush 414, plane | `d1` | `d2` | |
+|---|---|---|---|
+| `(-0.71, 0.71, 0)` | 0.007 | -1.393 | entering: `f = (0.007 - 0.125) / 1.400 = -0.084`, clamped to 0 |
+| `(0, 1, 0)` | -0.080 | 0.500 | leaving: `f = (-0.080 + 0.125) / -0.580 = -0.078` |
+
+`enterFrac < leaveFrac` is `0 < -0.078`, which is false, so **the brush does not block** -- even
+though the box is seven thousandths of a unit from one of its faces and moving into it. The
+`SURFACE_CLIP_EPSILON` term drags both fractions negative and the interval comes out empty. That
+is a signed-distance interval test over the brush's half-spaces. `shape_cast` answers a different
+predicate -- does the swept volume intersect this convex body -- and at sub-epsilon distances the
+two disagree systematically, because *every* surface a player rests against is sub-epsilon away.
+
+**The fix keeps meep doing the sweep.** `traceBrushList` already runs the ported, oracle-verified
+brush test over the brushes `overlap_shape` finds, so when `shape_cast` reports a contact at zero
+distance on a body whose brush that trace has already cleared, the two are not disagreeing about
+the world -- they are answering different questions, and Q3's is the one `bg_pmove` was written
+against. `PhysicsTrace.alreadyRuledOn` is that check.
+
+The alternative was to hand the whole sweep to `traceBrushList` over a swept-volume gather, which
+would make static collision exactly the clipmap's and reduce meep to a broadphase. That is a real
+option and it would measure better, but it reverses D-029 and the direction to use meep's physics
+for movement, so it is not taken unilaterally. It is noted in GAP-019 as what the gap costs.
+
+**Measured, `oa_dm1`, before and after:**
+
+| | before | after |
+|---|---|---|
+| trace hit/miss agreement | 88.7% | **99.9%** |
+| sweeps where physics passes and the clipmap blocks | -- | **0** |
+| contact normals agreeing with Q3 | 100.0% | 100.0% |
+| strafe-jump p90 | 121.3 | **34.0** |
+| walk-into-walls p90 | 1.77 | **0.22** |
+| chaos p90 | 0.18 | 0.18 |
+
+`aggressor` lands at 99.8% hit/miss and 99.8% normals.
+
+**The regression guard is the dynamic question, and the static one could not have caught this.**
+`test/physics-wedge.test.ts` already asked, at every standing position, whether a 32-unit sweep can
+leave in eight directions. It passed clean on the broken build, because one sweep is not what
+pmove does -- pmove accelerates, clips, retries, steps and pushes down, and the ways it can fail to
+make progress are invisible in a single trace. The new half runs pmove for 120 frames from each
+sampled position at each of eight headings and compares distance travelled against the clipmap.
+On the broken build: 23 of 656 walks stall on `oa_dm1`. After: none, on either map.
+
+Two details of that test worth keeping. It starts from two heights -- flush on the floor, which is
+what the sampler produces and what `PM_CorrectAllSolid` is for, and four units up, an ordinary
+standing position; the first two causes above only show up flush, and the third only shows up
+standing, so a single start height would have found half the bug and declared victory. And it
+re-checks a suspected stall by putting the *control* where the physics run stopped: the two runs
+diverge by fractions of a unit at a landing and can then take different turns at a junction, so
+"physics got less far" is not on its own a defect -- one of them may have walked into a corner the
+map really has. Without that check the test reports two false positives on `oa_dm1`, both of them
+a genuine 45-degree dead end that stops the clipmap just as dead.
+
+`tools/trace-compare.ts` is the instrument the fix was found with, kept because the next report of
+this kind will start the same way: a screenshot, a coordinate, and no idea which of a hundred
+traces per frame is the wrong one.

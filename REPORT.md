@@ -950,7 +950,7 @@ the expensive way.
   answer is the plane the sweep entered last, not the axis of least penetration. They coincide
   on a flat wall, which is why this survives casual testing and shows up only at corners — the
   exact geometry players run into constantly.
-- **Workaround:** re-derive it. `PhysicsWorld.selectContactPlaneMulti` takes the contact point,
+- **Workaround:** re-derive it. `PhysicsTrace.contactPlane` takes the contact point,
   finds every brush the inflated player box overlaps via `overlap_shape`, and applies
   `CM_TraceThroughBrush`'s rule — the plane the sweep crosses latest — across all of them,
   because a corner is usually two brushes rather than two faces of one. This requires keeping
@@ -972,8 +972,8 @@ the expensive way.
 - **What would fix it:** an optional `ShapeCastResult` field carrying the last-entered
   separating plane, or a `contact_mode` on `shape_cast`. Either is cheap relative to what every
   consumer will otherwise re-implement, badly and privately.
-- **Evidence:** `src/client/PhysicsWorld.ts` `selectContactPlane`/`selectContactPlaneMulti`,
-  `test/physics-divergence.test.ts`. Recorded during the physics swap.
+- **Evidence:** `src/client/PhysicsTrace.ts` `contactPlane`, `test/physics-divergence.test.ts`.
+  Recorded during the physics swap.
 
 ### GAP-013: `Collider.shape` is typed such that no concrete shape is assignable to it
 
@@ -1242,6 +1242,65 @@ the expensive way.
 > marked withdrawn rather than renumbered.
 
 ---
+
+### GAP-019: `shape_cast` answers "does the swept volume touch this body"; movement code asks "does this brush block this move"
+
+- **Severity:** high — the two predicates disagree systematically at exactly the distances a
+  character controller lives at, and the disagreement is not a tolerance to tune. It is
+  load-bearing: taken at face value it stops the player dead, permanently.
+- **What happened:** two reports in one session. A player stuck in an open corridor with velocity
+  climbing to 320 units a second against a position that never changed, and a bot apparently
+  standing in mid-air against a wall — which is not what it was doing, it had stopped falling.
+  Both were the backend reporting `t = 0` for sweeps the clipmap says are free.
+- **The mechanism, measured rather than reasoned.** `CM_TraceThroughBrush` is a signed-distance
+  interval test over a brush's half-spaces, with a ±`SURFACE_CLIP_EPSILON` (1/8 unit) term on both
+  ends. At `oa_dm1` (704.91, 686.92, 24.93), moving one frame at (2.56, 0.58, 0), brush 414 gives:
+
+  | plane | `d1` | `d2` | |
+  |---|---|---|---|
+  | `(-0.71, 0.71, 0)` | 0.007 | -1.393 | entering: `(0.007 - 0.125) / 1.400 = -0.084` → clamped to 0 |
+  | `(0, 1, 0)` | -0.080 | 0.500 | leaving: `(-0.080 + 0.125) / -0.580 = -0.078` |
+
+  `enterFrac < leaveFrac` is `0 < -0.078`, which is false, so the brush **does not block** — with
+  the box seven thousandths of a unit from one of its faces and moving into it. `shape_cast` sees
+  the swept volume graze that face and reports a hit, correctly, to a different question.
+- **Why it is a gap rather than a Q3 quirk:** the epsilon is a Q3 quirk and is recorded as one
+  (D-030). The structural fact underneath is not. *Every* surface a character rests on or slides
+  along is sub-epsilon away — that is what resting means — so a query that reports intersection
+  without reporting whether the intersection opposes the sweep will fire on every contact, in
+  every direction, forever. `skip_initial_overlaps` is the right idea and is not enough: it skips
+  candidates already overlapping at `t = 0` (all of them — it `continue`s rather than `break`s,
+  which is the correct choice), but a surface you are resting 1/8 unit from is not overlapping. It
+  is reached at a very small positive `t`, and clamping that to zero is what wedges the player.
+- **The result also cannot express `allsolid`.** Q3 separates "began inside a brush the sweep
+  leaves" from "began inside and never gets out", and pmove's recovery path
+  (`PM_CorrectAllSolid`) is gated on the second. `PhysicsSurfacePoint` has no field for it, so a
+  backend built on `shape_cast` silently removes the escape hatch the movement code was written
+  to rely on.
+- **Workaround:** run the ported brush test over the brushes `overlap_shape` finds, and when
+  `shape_cast` names a body whose brush that trace has already cleared, treat the contact as
+  answered rather than as a blocker (`PhysicsTrace.alreadyRuledOn`). meep still does the sweep.
+  Like GAP-012 this needs the source half-spaces kept alongside the `ConvexHullShape3D` — an
+  application whose hulls came from a mesh has nothing to re-derive from and would have to give
+  up or reimplement the broadphase.
+- **What it costs to not fix:** the honest alternative is to hand the whole sweep to the ported
+  trace over a swept-volume gather, which would make static collision exactly Q3's and reduce
+  meep's physics to a broadphase for this use. It would measure better than the workaround. That
+  is the real price of the gap: for character control specifically, the engine's own sweep stops
+  being the thing you use it for.
+- **What would fix it:** a directional predicate on the result — the separating-axis distance at
+  `t = 0` signed against the sweep direction would be enough, since it is already computed — plus
+  an `initially_overlapping` flag so a consumer can implement `allsolid` semantics. Both are
+  information the query already has and discards.
+- **Cost:** ~4 hours, and it took two rounds: the first fix (`allsolid`, and the position test)
+  was necessary, correct, and moved the failure rather than removing it. Recorded because that is
+  the shape of this class of bug — several independent places where a Q3 semantic was approximated
+  rather than reproduced, each individually plausible, failing together.
+- **Evidence:** `src/client/PhysicsTrace.ts` (`trace`, `contactPlane`, `alreadyRuledOn`),
+  `test/physics-wedge.test.ts` (the `walking` half), `tools/trace-compare.ts`. Measured
+  improvement: trace hit/miss agreement 88.7% → 99.9%, strafe-jump p90 121.3 → 34.0,
+  walk-into-walls p90 1.77 → 0.22, and zero sweeps where the physics passes through something the
+  clipmap blocks. See D-063.
 
 ## 4. Ergonomics
 
