@@ -240,7 +240,31 @@ the strongest argument in this report for the maintainer's instinct over mine.
     matrix now requires every disposition claiming shipped code to cite `path::token` in this
     repository, and `--check` fails if the file or the token is gone. Section 2 lists what moved.
 
-14. **The measurement was good and the summary statistic was wrong, which is a lesson about
+14. **Replacing something that maintained state as a side effect drops the bookkeeping, not the
+    behaviour -- twice, and the second one was player-reported.** Swapping `PmoveSingle` for a
+    meep-native mover took the movement across and left two `playerState_t` fields behind:
+    `ps.groundEntityNum`, written with Q3's two sentinels inverted so that everything asking "am I
+    on the ground" received the opposite of the truth; and `ps.viewangles`, never written at all,
+    because `PM_UpdateViewAngles` is the first thing `PmoveSingle` does and the replacement did
+    not do it. The second froze the camera, the aim and the direction of travel at once -- the
+    player could not aim with the mouse, and holding forward always walked the same way through
+    the world however you turned.
+
+    Neither was caught, for the same reason both times: the tests drove the *solver* and read the
+    solver's own state, and the bots read their own yaw rather than the player's, so bots aimed
+    correctly while the player could not. The seam between solver and game had no test, and a seam
+    is exactly where a replacement drops things.
+
+    The fix in both cases was structural rather than a restored line -- move the responsibility
+    into the bridge instead of leaving it split across callers, which is why the two callers had
+    diverged and why one of them was wrong -- plus a parity suite comparing the two paths on the
+    `playerState_t` **fields** rather than on behaviour, which is deliberately different now. That
+    suite is only possible because the ported `bg_pmove` is still in the tree and still bit-exact
+    against the C; retiring it entirely would have removed the only oracle for this class of bug.
+    Verified to catch it: removing the fix fails three of the five new tests. D-072, D-074.
+
+
+15. **The measurement was good and the summary statistic was wrong, which is a lesson about
     verification rather than about meep.** The physics backend was signed off at 88% sweep
     agreement with a bit-exact control, and a player was frozen in an open corridor. The
     disagreements were rare and every single one of them was catastrophic rather than small —
@@ -260,7 +284,7 @@ the strongest argument in this report for the maintainer's instinct over mine.
     and none of them was flagged by any test, because they are failures to look rather than
     failures to check.
 
-15. **Smaller things that each cost under an hour and would each cost the next person the same.**
+16. **Smaller things that each cost under an hour and would each cost the next person the same.**
     The camera uses the object convention (+Z forward), documented inside the docblock of a
     function consumers never call — a hand-built view quaternion assuming −Z points the camera
     exactly backwards, which in a closed level presents as *a dark scene* rather than a reversed

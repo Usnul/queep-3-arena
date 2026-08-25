@@ -43,7 +43,7 @@ import {
 import * as C from '../q3/pmove/constants.ts';
 import { weaponStats, type WeaponId } from '../game/Weapons.ts';
 import { newInventory, type Inventory } from '../game/Items.ts';
-import { PlayerMovement, type MoverHost, type MoveCommand } from './MeepMove.ts';
+import { PlayerMovement, type MoverHost } from './MeepMove.ts';
 import {
     createPmoveHost,
     type MoverSource,
@@ -424,34 +424,12 @@ export class PlayerController {
         if (this.movement === null) {
             runPmove(this.pmove);
         } else {
-            this.movement.step(this.ps, this.meepCommand(), deltaSeconds);
+            this.movement.step(this.pmove, this.crouching, deltaSeconds);
         }
 
         this.fireIfReady(msec);
 
         this.writeCamera(cameraTransform);
-    }
-
-    /**
-     * The same command, in the shape the meep-native path takes.
-     *
-     * `usercmd_t` packs crouch into `UPMOVE` as a negative, because Q3 has one
-     * axis for both and `PM_CheckDuck` reads the sign. `MoveCommand` splits
-     * them, since nothing downstream of it needs them fused -- and fusing them
-     * would mean jump and crouch could cancel, which they do in Q3 and is a
-     * quirk rather than a feature.
-     */
-    private meepCommand(): MoveCommand {
-        const moves = this.pmove.cmd.moves;
-
-        return {
-            forward: moves[FORWARDMOVE]!,
-            right: moves[RIGHTMOVE]!,
-            up: this.active && this.has(KEY_JUMP) ? 127 : 0,
-            pitch: this.ps.viewangles[0]!,
-            yaw: this.ps.viewangles[1]!,
-            crouch: this.crouching,
-        };
     }
 
     /** Horizontal speed, Q3 units/s -- whichever solver produced it. */

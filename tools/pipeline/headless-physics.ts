@@ -53,7 +53,12 @@ export class HeadlessPhysics {
     readonly system: PhysicsSystem;
     readonly stats: Stats;
 
-    private readonly cm: ClipMap;
+    /**
+     * Public because callers that drive movement need the same clipmap this was
+     * built from -- `pointContents` is still Q3's, and `createPmoveHost` takes
+     * one. Exposing it beats handing every caller two objects that must match.
+     */
+    readonly cm: ClipMap;
 
     /**
      * The query half, shared with `PhysicsWorld`.

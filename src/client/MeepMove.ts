@@ -54,6 +54,9 @@ import { TransformedShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/Tr
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 
 import * as C from '../q3/pmove/constants.ts';
+import { PM_UpdateViewAngles } from '../q3/pmove/pmove.ts';
+import type { PlayerState, UserCmd } from '../q3/pmove/types.ts';
+import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../q3/pmove/types.ts';
 import { vec3, type Vec3 } from '../q3/math.ts';
 
 /** Scene metres per Q3 unit. */
@@ -550,12 +553,9 @@ export function boxForState(state: MoveState): { mins: Vec3; maxs: Vec3 } {
  * Everything else in `playerState_t` is netcode, animation or weapon
  * bookkeeping.
  */
-export interface PlayerStateLike {
-    readonly origin: Float32Array | number[];
-    readonly velocity: Float32Array | number[];
-    groundEntityNum: number;
-    viewheight: number;
-    pm_flags: number;
+export interface PmoveLike {
+    readonly ps: PlayerState;
+    readonly cmd: UserCmd;
 }
 
 /**
@@ -588,7 +588,47 @@ export class PlayerMovement {
         return Math.hypot(this.state.velocity[0]!, this.state.velocity[1]!);
     }
 
-    step(ps: PlayerStateLike, cmd: MoveCommand, dt: number): MoveResult {
+    /**
+     * One movement frame, from the `pmove_t` the ported path would have run.
+     *
+     * Takes the whole `pmove_t` rather than a pre-built `MoveCommand`, because
+     * this has to be a faithful stand-in for `PmoveSingle` in every respect
+     * downstream reads -- and the first version was not. It took a
+     * `MoveCommand` the caller assembled, which meant the caller was also
+     * responsible for the parts of `PmoveSingle` that are not movement, and
+     * `PlayerController` silently dropped one: `PM_UpdateViewAngles`.
+     *
+     * That call is the first thing `PmoveSingle` does. It turns the command's
+     * 16-bit angles into `ps.viewangles`, and `ps.viewangles` is what the camera
+     * is oriented from, what the weapon fires along, and what the movement
+     * command's own yaw is read back out of. Skipping it left all three frozen
+     * at their initial values: the player could not aim, could not turn, and
+     * only ever walked along world yaw zero. See D-074.
+     *
+     * @param crouch held-key crouch; `usercmd_t` packs it into UPMOVE's sign and
+     *               `MoveCommand` keeps the two apart.
+     */
+    step(pmove: PmoveLike, crouch: boolean, dt: number): MoveResult {
+        const ps = pmove.ps;
+
+        /*
+         First, exactly as `PmoveSingle` does it. Everything below reads
+         `ps.viewangles`, so it has to be current before anything else runs.
+        */
+        PM_UpdateViewAngles(ps, pmove.cmd);
+
+        const moves = pmove.cmd.moves;
+        const command: MoveCommand = {
+            forward: moves[FORWARDMOVE]!,
+            right: moves[RIGHTMOVE]!,
+            // Q3 reads jump off UPMOVE's positive half and crouch off its
+            // negative one; a negative UPMOVE must not read as a jump.
+            up: moves[UPMOVE]! > 0 ? moves[UPMOVE]! : 0,
+            pitch: ps.viewangles[0]!,
+            yaw: ps.viewangles[1]!,
+            crouch,
+        };
+
         // Anything outside may have moved the player: a teleporter, a jump pad,
         // a respawn, a plat carrying them. `ps` is the authority on entry.
         this.state.origin[0] = ps.origin[0]!;
@@ -598,7 +638,7 @@ export class PlayerMovement {
         this.state.velocity[1] = ps.velocity[1]!;
         this.state.velocity[2] = ps.velocity[2]!;
 
-        const result = this.move.step(this.state, cmd, dt);
+        const result = this.move.step(this.state, command, dt);
 
         ps.origin[0] = this.state.origin[0]!;
         ps.origin[1] = this.state.origin[1]!;

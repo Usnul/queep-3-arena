@@ -34,8 +34,12 @@ import { join } from 'node:path';
 import { BspFile } from '../src/q3/bsp/BspFile.ts';
 import { ClipMap } from '../src/q3/cm/ClipMap.ts';
 import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
-import { MeepMove, createMoveState, type MoveCommand, type MoveState } from '../src/client/MeepMove.ts';
+import { MeepMove, PlayerMovement, createMoveState, type MoveCommand, type MoveState } from '../src/client/MeepMove.ts';
 import { spawnPoints } from '../src/game/Spawns.ts';
+import { createPmoveHost } from '../src/game/PmoveHost.ts';
+import { Pmove as runPmove } from '../src/q3/pmove/pmove.ts';
+import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
+import * as C from '../src/q3/pmove/constants.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
 
@@ -337,5 +341,164 @@ describe.each(['oa_dm1', 'aggressor'])('Q3 movement on meep [%s]', (mapName) => 
         run(move, state, 30, () => command());
         expect(state.ducked).toBe(false);
         expect(state.viewheight).toBe(26);
+    });
+});
+
+/*
+ * The bridge, against the thing it replaced.
+ *
+ * `PlayerMovement` stands in for `PmoveSingle`, and everything downstream of
+ * movement -- the camera, the weapon, the HUD, the animation, the bots' own
+ * command -- reads `playerState_t` fields that `PmoveSingle` maintained as a
+ * side effect of running. Replacing it means taking on *all* of them, and twice
+ * now a field was quietly dropped:
+ *
+ *   - `ps.groundEntityNum` was written with Q3's two sentinels inverted, so
+ *     everything asking "am I on the ground" got the opposite of the truth
+ *     (D-072). Movement itself was correct, so no movement test failed.
+ *   - `ps.viewangles` was never written at all, because `PM_UpdateViewAngles`
+ *     is the first thing `PmoveSingle` does and the bridge did not do it. The
+ *     player could not aim, could not turn, and only ever walked along world
+ *     yaw zero (D-074). Reported by a player.
+ *
+ * Both were invisible to the tests above, which drive `MeepMove` directly with
+ * a `MoveCommand` and read `MoveState`. These drive the *bridge* and read the
+ * `playerState_t`, and they compare against the ported path frame for frame --
+ * not for equal movement, which is deliberately not equal any more, but for
+ * equal bookkeeping.
+ */
+describe('the bridge maintains what PmoveSingle maintained [oa_dm1]', () => {
+    const { physics, spawns } = world('oa_dm1');
+
+    /** Both paths, same spawn, same commands. */
+    function pair() {
+        const spawnQ3 = spawns[0]!;
+        const ported = createPmoveHost({ cm: physics.cm, spawnQ3, physics: null });
+        const hosted = createPmoveHost({ cm: physics.cm, spawnQ3, physics });
+        const movement = new PlayerMovement(physics, hosted.ps.origin);
+        return { ported, hosted, movement };
+    }
+
+    /** Drive one frame of each with identical 16-bit view angles and moves. */
+    function frame(
+        ctx: ReturnType<typeof pair>,
+        pitch: number,
+        yaw: number,
+        moves: [number, number, number],
+        ms: number
+    ): void {
+        for (const pm of [ctx.ported, ctx.hosted]) {
+            pm.cmd.serverTime += ms;
+            pm.cmd.angles[0] = pitch;
+            pm.cmd.angles[1] = yaw;
+            pm.cmd.angles[2] = 0;
+            pm.cmd.moves[FORWARDMOVE] = moves[0];
+            pm.cmd.moves[RIGHTMOVE] = moves[1];
+            pm.cmd.moves[UPMOVE] = moves[2];
+        }
+
+        runPmove(ctx.ported);
+        ctx.movement.step(ctx.hosted, false, ms / 1000);
+    }
+
+    it('turns the view with the mouse, exactly as the ported path does', () => {
+        /*
+         The regression. A mouse delta becomes a 16-bit yaw on the command; both
+         paths must turn `ps.viewangles` with it. The bridge did not, so the
+         camera, the aim and the movement direction were all frozen.
+        */
+        const ctx = pair();
+        const seen = new Set<number>();
+
+        // A quarter turn, in eighths, plus some pitch.
+        for (let i = 1; i <= 8; i++) {
+            const yaw = ((i * 8192) << 16) >> 16;
+            frame(ctx, i * 900, yaw, [0, 0, 0], 8);
+
+            expect(
+                ctx.hosted.ps.viewangles[1],
+                `frame ${i}: yaw short ${yaw}`
+            ).toBeCloseTo(ctx.ported.ps.viewangles[1]!, 6);
+            expect(ctx.hosted.ps.viewangles[0]).toBeCloseTo(ctx.ported.ps.viewangles[0]!, 6);
+
+            seen.add(Math.round(ctx.hosted.ps.viewangles[1]!));
+        }
+
+        // And it actually moved, rather than agreeing on a constant.
+        expect(seen.size, 'distinct yaw values over the sweep').toBeGreaterThan(4);
+    });
+
+    it('clamps pitch where Q3 clamps it, and lets yaw wrap', () => {
+        const ctx = pair();
+
+        // Far past the +/-16000 limit: Q3 cannot look straight up.
+        frame(ctx, 30000, 0, [0, 0, 0], 8);
+        expect(ctx.hosted.ps.viewangles[0]).toBeCloseTo(ctx.ported.ps.viewangles[0]!, 6);
+        expect(Math.abs(ctx.hosted.ps.viewangles[0]!)).toBeLessThan(90);
+
+        // Yaw is circular because the 16-bit addition wraps.
+        frame(ctx, 0, ((40000) << 16) >> 16, [0, 0, 0], 8);
+        expect(ctx.hosted.ps.viewangles[1]).toBeCloseTo(ctx.ported.ps.viewangles[1]!, 6);
+    });
+
+    it('reports groundEntityNum with Q3\'s own sentinels', () => {
+        const ctx = pair();
+
+        for (let i = 0; i < 250; i++) frame(ctx, 0, 0, [0, 0, 0], 8);
+
+        // Standing on a floor, both paths agree it is the world.
+        expect(ctx.hosted.ps.groundEntityNum).toBe(C.ENTITYNUM_WORLD);
+        expect(ctx.ported.ps.groundEntityNum).toBe(C.ENTITYNUM_WORLD);
+
+        // Jumping, both agree it is nothing.
+        frame(ctx, 0, 0, [0, 0, 127], 8);
+        expect(ctx.hosted.ps.groundEntityNum).toBe(C.ENTITYNUM_NONE);
+    });
+
+    it('walks where it is looking, not where it started', () => {
+        /*
+         The player-visible half of the same bug: with `ps.viewangles` frozen,
+         `wishdir` is built from yaw zero forever, so holding forward always
+         walks the same way through the world however you turn.
+        */
+        const headings: number[][] = [];
+
+        for (const yawShort of [0, 16384, -16384]) {
+            const ctx = pair();
+            for (let i = 0; i < 250; i++) frame(ctx, 0, yawShort, [0, 0, 0], 8);
+
+            const from: [number, number] = [
+                ctx.hosted.ps.origin[0]!, ctx.hosted.ps.origin[1]!,
+            ];
+            for (let i = 0; i < 60; i++) frame(ctx, 0, yawShort, [127, 0, 0], 8);
+
+            headings.push([
+                ctx.hosted.ps.origin[0]! - from[0],
+                ctx.hosted.ps.origin[1]! - from[1],
+            ]);
+        }
+
+        // Three different yaws must produce three different directions of travel.
+        for (let a = 0; a < headings.length; a++) {
+            const [ax, ay] = headings[a] as [number, number];
+            expect(Math.hypot(ax, ay), `heading ${a} did not move`).toBeGreaterThan(20);
+
+            for (let b = a + 1; b < headings.length; b++) {
+                const [bx, by] = headings[b] as [number, number];
+                const cos =
+                    (ax * bx + ay * by) / (Math.hypot(ax, ay) * Math.hypot(bx, by));
+                expect(cos, `headings ${a} and ${b} point the same way`).toBeLessThan(0.9);
+            }
+        }
+    });
+
+    it('keeps viewheight in step with posture', () => {
+        const ctx = pair();
+        for (let i = 0; i < 250; i++) frame(ctx, 0, 0, [0, 0, 0], 8);
+
+        expect(ctx.hosted.ps.viewheight).toBe(C.DEFAULT_VIEWHEIGHT);
+
+        for (let i = 0; i < 30; i++) ctx.movement.step(ctx.hosted, true, 0.008);
+        expect(ctx.hosted.ps.viewheight).toBe(C.CROUCH_VIEWHEIGHT);
     });
 });

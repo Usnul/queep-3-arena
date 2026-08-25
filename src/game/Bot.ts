@@ -43,11 +43,7 @@ import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
 import { vec3, type Vec3 } from '../q3/math.ts';
 import { createPmoveHost, type PmoveHostOptions } from './PmoveHost.ts';
-import {
-    PlayerMovement,
-    type MoverHost,
-    type MoveCommand,
-} from '../client/MeepMove.ts';
+import { PlayerMovement, type MoverHost } from '../client/MeepMove.ts';
 import { newInventory, type Inventory } from './Items.ts';
 import type { Damageable } from './Weapons.ts';
 import type { WeaponId } from './Weapons.ts';
@@ -305,7 +301,7 @@ export class Bot implements Damageable {
         if (this.movement === null) {
             runPmove(this.pmove);
         } else {
-            this.movement.step(this.pmove.ps, this.meepCommand(), deltaSeconds);
+            this.movement.step(this.pmove, false, deltaSeconds);
         }
 
         // Stuck detection: wanting to move and not moving.
@@ -316,30 +312,6 @@ export class Bot implements Damageable {
         this.moveForward = 0;
         this.moveRight = 0;
         this.wantJump = false;
-    }
-
-    /**
-     * The command this frame, in the shape the meep-native path takes.
-     *
-     * Reads the `usercmd_t` that was just filled rather than the intent fields
-     * directly, so both solvers are driven from one source. `PM_DEAD` has no
-     * counterpart in `MeepMove`: a dead bot simply commands nothing and keeps
-     * falling, which is what Q3's dead move amounts to once the view-angle
-     * handling it also does is not wanted here.
-     */
-    private meepCommand(): MoveCommand {
-        const moves = this.pmove.cmd.moves;
-
-        return {
-            forward: moves[FORWARDMOVE]!,
-            right: moves[RIGHTMOVE]!,
-            up: moves[UPMOVE]!,
-            pitch: this.pitch,
-            yaw: this.yaw / ANGLE_TO_SHORT,
-            // Bots do not crouch: nothing in the tree asks for it, and a
-            // crouching bot that cannot stand back up is a stuck bot.
-            crouch: false,
-        };
     }
 
     /**

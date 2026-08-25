@@ -2060,3 +2060,60 @@ whole-level number above was always sound.
 **BUG-6 is also fixed in 3.2.0**, incidentally -- `ShadeMaterial.draw_side`'s docblock now
 describes what the code does. BUG-1 through BUG-5 still reproduce; the `.d.ts` error count drifted
 from 664 across 152 files to 674 across 154.
+
+### D-074: The bridge dropped `PM_UpdateViewAngles`, and the player could not aim
+
+Reported by the maintainer: *"after the mover changes, camera controls no longer seem to work.
+That is - I can't aim with the mouse at all."*
+
+`PmoveSingle`'s first act is `PM_UpdateViewAngles(pm->ps, pm->cmd)`, which turns the command's
+16-bit angles into `ps.viewangles`. D-071 replaced `runPmove` with `PlayerMovement.step` on the
+shipping path and did not replace that call, so `ps.viewangles` was never written again. It held
+whatever it was initialised to, forever.
+
+Three things read it, and all three froze:
+
+- `PlayerController.writeCamera` orients the camera from it -- the reported symptom.
+- `onFire` passes it as the shot direction, so every weapon fired along world yaw zero.
+- The movement command's own yaw was read back out of it, so `wishdir` was built from yaw zero
+  and holding forward always walked the same way through the world however you turned.
+
+The mouse handler was fine throughout: it accumulated `this.pitch` and `this.yaw` and wrote them
+into `cmd.angles` every frame. The command was correct and nothing consumed it.
+
+**Why the tests did not catch it, which is the part worth keeping.** `meepmove.test.ts` drives
+`MeepMove` directly with a `MoveCommand` carrying an explicit `yaw`, and reads `MoveState`. It
+never goes through the bridge and never looks at a `playerState_t`. `match.test.ts` drives bots,
+and a bot's yaw comes from its own field rather than from `ps.viewangles`, so bots aimed correctly
+while the player could not. Between them the two suites covered the solver and the AI and left the
+seam between them untested -- and the seam is exactly where a replacement drops things.
+
+This is the second time. D-072 was the same shape: `ps.groundEntityNum` written with Q3's
+sentinels inverted, invisible because every test read `MoveState.grounded`, the source, rather
+than the copy.
+
+**The fix is structural rather than a restored line.** `PlayerMovement.step` now takes the whole
+`pmove_t` instead of a `MoveCommand` the caller assembled, and does `PM_UpdateViewAngles` itself
+before building the command from `ps.viewangles`. The caller no longer has any part of
+`PmoveSingle`'s job: previously `PlayerController` and `Bot` each built their own `MoveCommand`,
+which is why they diverged, and why one of them was wrong. Both now hand over the `pmove_t` and
+a crouch flag.
+
+**And a test for the seam, which is what was missing.** `test/meepmove.test.ts` gains "the bridge
+maintains what `PmoveSingle` maintained": it runs the ported path and the meep path from the same
+spawn with identical commands and compares the `playerState_t` bookkeeping frame by frame -- not
+positions, which are deliberately not equal any more, but view angles, pitch clamping, yaw wrap,
+`groundEntityNum` against Q3's own sentinels, and `viewheight` against posture. Plus one
+behavioural check that the player walks where it is looking, since that is the half a user
+notices.
+
+Verified to actually catch it: commenting the `PM_UpdateViewAngles` call out fails three of the
+five, and restoring it passes all twenty-five. A regression test that does not fail on the
+regression is decoration.
+
+**The general lesson, since it now has two instances.** When a replacement stands in for something
+that maintained state as a side effect, the risk is not the behaviour you replaced -- it is the
+bookkeeping you did not know you had inherited. The test for that is parity against the thing
+replaced, on the *fields*, not on the behaviour. `bg_pmove` is still in the tree and still
+bit-exact, which is what makes that test possible; retiring it entirely would have removed the
+only oracle for this class of bug.
