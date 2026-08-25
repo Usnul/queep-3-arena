@@ -339,7 +339,7 @@ async function decompose(mapName: string): Promise<void> {
 
     console.log(`\nwhere one trace's time goes [${mapName}]`);
 
-    time('PhysicsTrace.trace -- the shipping path', (i) =>
+    time('PhysicsTrace.trace -- the ?move=q3 path', (i) =>
         physics.trace(out, from(i), to(i), MINS, MAXS, MASK_PLAYERSOLID)
     );
     time('boxTrace -- ported clipmap, whole answer', (i) =>

@@ -17,7 +17,7 @@ The point of the exercise is the engineering report in [REPORT.md](REPORT.md).
 
 ## Setup
 
-Requires Node >= 24 and a WebGPU-capable browser.
+Requires Node >= 24, `@woosh/meep-engine` >= 3.2.0, and a WebGPU-capable browser.
 
 ```bash
 npm install
@@ -80,9 +80,11 @@ reports how far the third drifts from the first, with the second as a bit-exact 
 npm run bench-match
 ```
 
-which plays a six-bot deathmatch headlessly on both collision backends and then decomposes the
-cost of a single trace. It is where section 5's claim comes from that the ported Q3 rule which
-decides the answer costs 0.29 µs and the `shape_cast` in front of it costs 3.49.
+which plays a six-bot deathmatch headlessly on both movement paths and then decomposes the cost of
+a single trace. It is where section 5's numbers come from: the shipping path needs 6.0 traces a
+frame where driving `bg_pmove` through meep's physics needed 30.4, and in that older arrangement
+the ported Q3 rule that decides the answer cost 0.22 µs against the 3.06 of the `shape_cast` in
+front of it.
 
 ```bash
 npm run navmesh-probe
@@ -122,9 +124,10 @@ what that difference is, and includes a claim I got wrong twice before getting i
   sources that follow what owns them, from map ambience to a rocket's fly sound; and the map's
   own background track.
 - **Bots** on meep's behaviour trees, running the *same* movement the player does — they route,
-  fight, take items, and one has been observed strafe-jumping. On `oa_dm1` the move to meep's
-  solver made them measurably better (grounded 93.9% of a match against 85.6%, three times the
-  engagement); on `aggressor` it made them worse, which is measured and attributed in D-072.
+  fight, take items, and one has been observed strafe-jumping. On meep 3.2.0 they are grounded
+  89–94% of a match against the ported path's 86–93%, and on `oa_dm1` they engage roughly three
+  times as often. The regression that showed on `aggressor` under 3.0.2 was BUG-7 and is gone
+  (D-073).
 - **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
   GPU decals and clustered lights.
 

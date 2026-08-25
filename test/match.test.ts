@@ -405,39 +405,25 @@ describe.each(['oa_dm1', 'aggressor'])('a match runs unattended [%s]', (mapName)
         expect(result.engagedBots, 'bots that ever saw the player').toBeGreaterThan(0);
 
         /*
-         Volume of fire is pinned per map rather than to one threshold, because
-         migrating the bots onto meep's solver (D-072) moved it in both
-         directions and the split is a finding rather than noise.
+         One threshold for every map, and the history is worth keeping.
 
-         `oa_dm1` improved sharply -- 374 shots against the ported path's 110,
-         16 pickups against 10, and a grounded fraction of 93.9% against 85.6%.
-         `aggressor` regressed just as sharply, to 10 shots against 420, with
-         bots grounded 51.6% of the time and reading as stuck 23.3% of it.
+         Migrating the bots onto meep's solver (D-072) briefly split this: 374
+         shots on `oa_dm1` against the ported path's 110, and 10 on `aggressor`
+         against 420, with bots there grounded 51.6% of the time and reading as
+         stuck 23.3% of it. I wrote a per-map floor of 5 so the suite stayed
+         green, which was wrong -- it turned "bots have stopped fighting on this
+         map" into a passing test.
 
-         `aggressor` is also the map with by far the highest rate of the
-         walkability probe hitting BUG-7 -- 10.4% of navigation-graph nodes,
-         against 1.3% on `oa_dm1` -- and an ungrounded bot accelerates at
-         `pm_airaccelerate` (1) instead of `pm_accelerate` (10), so it crawls,
-         reads as stuck, abandons its route and re-plans. That correlation is
-         strong and is *not* proof: I have not shown the whole 40-point grounding
-         gap is BUG-7, and it is recorded as a correlation in D-072.
-
-         Pinned low so a fix in either direction is visible rather than absorbed.
+         The cause was BUG-7, and meep 3.2.0 fixes it: `aggressor` is back to
+         220 shots with bots grounded 89.4% and stuck 4.4%. One floor, both maps,
+         and if either regresses the suite says so.
         */
-        const floor = mapName === 'aggressor' ? 5 : 100;
         expect(
             result.board.shots,
             `${result.board.shots} shots fired on ${mapName}`
-        ).toBeGreaterThan(floor);
+        ).toBeGreaterThan(100);
 
-        /*
-         Damage lands on `oa_dm1` and does not on `aggressor`: ten shots from
-         bots that are stuck or airborne half the time do not connect. Asserted
-         where it holds rather than dropped, so the working map keeps its guard.
-        */
-        if (mapName !== 'aggressor') {
-            expect(result.playerDamage, 'damage taken by the player').toBeGreaterThan(0);
-        }
+        expect(result.playerDamage, 'damage taken by the player').toBeGreaterThan(0);
     });
 
     it('brings the dead back', () => {

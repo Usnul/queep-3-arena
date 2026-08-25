@@ -1986,3 +1986,77 @@ against the clipmap and re-measuring `aggressor`'s grounding; if confirmed, the 
 engine and the workaround at this level is a documented ground re-test after `move`. Not done
 here: the maintainer asked for the migration, the migration is done and measured, and building a
 second workaround before confirming its cause is the mistake GAP-019 already made once.
+
+### D-073: meep 3.2.0, BUG-7 fixed, and the pinned tests deleted
+
+The maintainer: *"BUG-7 fixed in meep `3.2.0`."* And, separately: *"tests must never 'pass' with
+incorrect behavior, so the practice of 'pinning' broken behavior is wrong. Failing tests are
+better."*
+
+Both land. The peer dependency is now `^3.2.0`.
+
+**The fix is real and the numbers moved with it.** The synthetic probe, and then every navigation
+node of three levels:
+
+| map | `t = 0` inside a body, 3.0.2 → 3.2.0 | real surface found, 3.0.2 → 3.2.0 |
+|---|---|---|
+| `oa_dm1` | 1.3% → **0.0%** | 96.0% → 97.1% |
+| `oa_dm4` | 4.5% → **0.0%** | 95.2% → 99.2% |
+| `aggressor` | 10.4% → **0.0%** | 84.0% → 92.5% |
+
+False hits gone, real hits up. Downstream, on `aggressor` -- the map that had the worst rate and
+the worst regression when the bots moved onto meep's solver:
+
+| | grounded | stuck | shots | pickups | walked |
+|---|---|---|---|---|---|
+| 3.0.2 | 51.6% | 23.3% | 10 | 13 | 17,918 |
+| **3.2.0** | **89.4%** | **4.4%** | **220** | **16** | **24,391** |
+| ported `bg_pmove` | 92.5% | 2.6% | 420 | 16 | 25,003 |
+
+**This settles a question D-072 deliberately left open.** That entry recorded the link between the
+probe failure and the bots' behaviour as a *correlation* and refused to call it a cause, because I
+had not shown the whole gap was BUG-7. One changed line upstream moved every number in the table.
+The correlation was the cause, and the method is worth keeping: when a correlation cannot be
+untangled locally, an upstream fix is a controlled trial, and waiting for one beats guessing or
+building a workaround on a hunch.
+
+**The pinning was wrong and the tests are rewritten.** Two of them asserted the broken value so
+the suite would stay green:
+
+- `meepmove.test.ts`, "grounds at every spawn except where BUG-7 hides the floor", expecting
+  exactly one failure on `aggressor`.
+- `match.test.ts`, a per-map shot floor of 5 on `aggressor` against 100 elsewhere, and a damage
+  assertion skipped on `aggressor` entirely.
+
+Both now assert what ought to be true -- every spawn grounds, every map's bots fire and connect --
+with one threshold and no per-map special cases. Both pass on 3.2.0, and the first of them failed
+the moment the engine was upgraded, which is exactly the signal a pin destroys.
+
+The reasoning I used at the time was that a pin plus a comment records the defect and makes a fix
+visible. It does neither for the person who matters: someone reading a green run sees a working
+system, and the comment is only read by whoever is already editing that file. A failing test is a
+standing statement of what is broken, in the one place nobody can skip. The measured number
+belongs in the failure *message*; it does not belong in the assertion.
+
+**A defect in this report's own BUG-7 reproduction, found while confirming the fix.** The snippet
+published in section 6 wound its hull faces inconsistently. On 3.2.0 that hull raycasts to a clean
+**miss**, which looks like a regression and is not one; the maintainer spotted the likely cause
+immediately ("I think your hull was inside out"). Re-running with outward-consistent winding gives
+`t = 1.8000` and the correct slope normal, against 3.0.2's `t = 0` -- so the bug and the fix are
+both confirmed, and the published repro has been corrected.
+
+Worth recording as a finding in its own right, because the failure is silent and asymmetric:
+`ConvexHullShape3D.from` accepts inconsistent winding without complaint, and every query built on
+the support function then behaves correctly -- `overlap` classifies interior and exterior points
+right, `support` returns correct extreme points, and `.volume` returns the correct 4. Only
+`raycast`, which uses the face list, is winding-sensitive, and it silently returns nothing. The
+suggested check I would have wanted is a signed volume or a winding pass in the constructor: it
+would turn a silent wrong answer into a constructor error. `.volume` as it stands cannot be used
+for this, which is worth knowing since it is the obvious thing to reach for.
+
+None of this touched the real measurements: `brushHull` emits correctly-wound hulls, so every
+whole-level number above was always sound.
+
+**BUG-6 is also fixed in 3.2.0**, incidentally -- `ShadeMaterial.draw_side`'s docblock now
+describes what the code does. BUG-1 through BUG-5 still reproduce; the `.d.ts` error count drifted
+from 664 across 152 files to 674 across 154.

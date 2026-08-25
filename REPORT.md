@@ -17,8 +17,9 @@ them, and the `trap_` coverage matrix, because auditing it against the shipping 
 maintaining it by editing notes had let it describe a plan rather than a build. Section 2 lists
 what moved and D-067 explains why the check that was supposed to prevent that did not.
 
-**Engine under test:** `@woosh/meep-engine@3.0.2`, consumed from npm as a peer dependency,
-unmodified. No patching, no forking, no monkey-patching — where the engine did not do what
+**Engine under test:** `@woosh/meep-engine`, consumed from npm as a peer dependency, unmodified.
+Phases 0-6 ran against **3.0.2**; the port moved to **3.2.0** when BUG-7 was fixed there, and
+every measurement that changed as a result has been re-taken and labelled with its version. No patching, no forking, no monkey-patching — where the engine did not do what
 the port needed, the port worked around it and the workaround is written down here.
 
 ---
@@ -108,18 +109,19 @@ the strongest argument in this report for the maintainer's instinct over mine.
    *the engine is very good at loud, specific failures* (section 7) *and has no story at all for
    silent ones.*
 
-4. **`raycast` reports an immediate hit for a ray starting inside a convex hull's bounding box
-   but outside the hull, and it lands in the walkability decision of the engine's own character
-   solver.** `overlap` at the same point correctly returns nothing; `raycast` returns `t = 0` with
-   a face normal. Twenty lines to reproduce, no map data, in BUG-7.
+4. **A real engine bug, found by adopting the engine's own solver rather than reimplementing
+   around it -- reported, fixed in 3.2.0, and confirmed.** `raycast` reported an immediate hit for
+   a ray starting inside a convex hull's bounding box but outside the hull, where `overlap` at the
+   same point correctly returned nothing. Twenty lines to reproduce, no map data, in BUG-7.
 
    `KinematicMover._categorizeGround` decides "am I standing on something walkable" with a centre
    raycast from `stepHeight` above the feet, and treats a steep normal there as a slope to slide
    down. Above any brush that does not fill its bounding box -- in a Quake III level, every wedge,
-   ramp and cut corner -- that probe answers "inside, facing down", so the player rests on the
-   surface and is never grounded. Gravity is applied and cancelled forever, `grounded` stays false,
-   and jump, animation, footsteps and ground-stick are all wrong downstream. Measured: it costs one
-   of `aggressor`'s nine spawn platforms.
+   ramp and cut corner -- that probe answered "inside, facing down", so the player rested on the
+   surface and was never grounded, and jump, animation, footsteps and ground-stick were all wrong
+   downstream. On `aggressor` it left bots grounded 51.6% of a match and stuck 23.3% of it, firing
+   10 shots against the ported path's 420. On 3.2.0 the same match is 89.4% grounded, 4.4% stuck
+   and 220 shots, and the false-hit rate across three levels is 0.0% where it was up to 10.4%.
 
    It is ranked here because of *how* it was found, which is the most useful methodological point
    in this report. Three sessions of building character movement directly on `shape_cast` and
@@ -128,6 +130,12 @@ the strongest argument in this report for the maintainer's instinct over mine.
    consumer who reimplements rather than adopts stops being able to find your bugs**, and the
    value of a port as a bug-finding exercise collapses at exactly the moment it decides to do
    things its own way.
+
+   The upgrade also settled a question this report had left open. D-072 recorded the link between
+   the probe failure and the bots' behaviour as a *correlation* and explicitly declined to call it
+   a cause. One changed line in the engine moved every number in that table, which is the
+   experiment that decides it. Worth noting as a method: when a correlation cannot be untangled
+   locally, an upstream fix is a controlled trial, and waiting for one beats guessing.
 
    The finding it displaced -- `shape_cast` returning the minimum-penetration normal where a
    slide-move wants the plane it entered last (GAP-012) -- is still factual and is still in the
@@ -1952,37 +1960,60 @@ one of them was catastrophic rather than small.
 Reproduce with `npm run bench-match`. Six bots and one standing player, 30 simulated seconds at
 125 Hz (Q3's `sv_fps`), no renderer, no engine boot. Node v24.15.0.
 
+**Re-taken on meep 3.2.0, with movement on `KinematicMover` (D-071, D-072).** The earlier version
+of this table measured `bg_pmove` driving `PhysicsTrace`, which is now the `?move=q3` path; both
+are here because the difference is the point.
+
 | | `oa_dm1` | | `aggressor` | |
 |---|---:|---:|---:|---:|
-| collision backend | meep physics | ported clipmap | meep physics | ported clipmap |
-| static body construction | 24 ms | — | 15 ms | — |
-| navigation graph build | 165 ms | 31 ms | 120 ms | 18 ms |
-| **simulation, per frame** | **356 µs** | **31 µs** | **248 µs** | **25 µs** |
-| traces per frame (6 bots) | 30.4 | same by construction | 25.2 | same by construction |
-| distance walked, all bots | 30,269 | 31,073 | 25,029 | 25,003 |
+| movement + collision | Q3 motor on `KinematicMover` | ported `bg_pmove` on the clipmap | Q3 motor on `KinematicMover` | ported `bg_pmove` on the clipmap |
+| static body construction | 18 ms | — | 12 ms | — |
+| navigation graph build | 154 ms | 31 ms | 109 ms | 23 ms |
+| **simulation, per frame** | **178 µs** | 35 µs | **266 µs** | 25 µs |
+| traces per frame (6 bots) | **6.0** | same by construction | **6.0** | same by construction |
+| distance walked, all bots | 27,727 | 31,073 | 24,391 | 25,003 |
+| shots fired | **374** | 110 | **220** | 420 |
+| pickups taken | **16** | 10 | **16** | 16 |
+
+The trace count is the number to read: **6.0 a frame against the 30.4 the old arrangement needed**,
+because `KinematicMover` resolves a move in one recover-slide-ground sequence where
+`PM_SlideMove` through `PhysicsTrace` issued a sweep per bump plus a ground trace plus the
+per-brush re-derivation. Frame cost halved on `oa_dm1` (356 µs → 178) even though each remaining
+query does more work.
+
+For the record, the arrangement this replaced — `bg_pmove` driving meep's physics through
+`PhysicsTrace`, measured on 3.0.2: 356 µs and 30.4 traces a frame on `oa_dm1`, 248 µs and 25.2 on
+`aggressor`.
 
 The two backends produce the same match — the bots walk the same distance to within 3%, take the
 same pickups, fire the same number of shots — and one costs **eleven times** what the other does.
 A whole deathmatch at 356 µs a frame is still nothing next to a 16.7 ms budget, so this is not a
 performance problem for this port. It is a *finding*, and it wanted decomposing:
 
-| one trace on `oa_dm1` | |
+| one trace on `oa_dm1`, meep 3.2.0 | |
 |---|---:|
-| `PhysicsTrace.trace` — the shipping path | 4.53 µs |
-| `boxTrace` — ported clipmap, answering the entire question | 0.42 µs |
-| of the shipping path: `shape_cast` alone | 3.49 µs |
-| of the shipping path: `overlap_shape` alone | 1.18 µs |
-| of the shipping path: `traceBrushList` over 8 brushes | 0.29 µs |
+| `PhysicsTrace.trace` — the `?move=q3` path | 3.69 µs |
+| `boxTrace` — ported clipmap, answering the entire question | 0.29 µs |
+| of that path: `shape_cast` alone | 3.06 µs |
+| of that path: `overlap_shape` alone | 1.15 µs |
+| of that path: `traceBrushList` over 8 brushes | 0.22 µs |
 
 Mean of 20,000 calls after a 2,000-call warm-up, shapes cached exactly as `PhysicsTrace` caches
 them, so this is not measuring allocation.
 
 **The part that decides the answer is the cheapest line in the table.** `traceBrushList` is the
 ported `CM_TraceThroughBrush`: it produces the fraction, the contact plane, `startsolid` and
-`allsolid`, and it costs 0.29 µs. `shape_cast` costs twelve times that to find which body is
+`allsolid`, and it costs 0.22 µs. `shape_cast` costs fourteen times that to find which body is
 nearest, and its own fraction and normal are then discarded on every blocking contact (GAP-019,
 GAP-012). The complete ported clipmap — BSP tree descent, leaf gather, every brush test — answers
-the whole question for less than an eighth of what `shape_cast` costs on its own.
+the whole question for less than a tenth of what `shape_cast` costs on its own.
+
+**This table is now about the road not taken.** It measures `?move=q3`, the configuration that
+kept Q3's contact semantics on meep's broadphase. The shipping path does not do this any more: it
+asks `KinematicMover` for a move and gets one, at 6.0 queries a frame instead of 30.4. The
+decomposition is kept because it is the clearest statement of what reproducing another engine's
+narrowphase costs, and because the ratio is the evidence behind GAP-021's argument that a consumer
+should adopt the solver rather than rebuild around the queries.
 
 Two things follow, and the maintainer should weigh them separately:
 
@@ -2067,9 +2098,12 @@ here.
 ## 6. Engine bugs
 
 Behaviour that contradicts the engine's own documentation, its own package manifest, or its own
-emitted types. Each one below was re-run in phase 6 against `@woosh/meep-engine@3.0.2` as
-installed, and every reproduction here is the whole reproduction — no engine boot, no graphics
-device, no application.
+emitted types. Every reproduction here is the whole reproduction — no engine boot, no graphics
+device, no application — and every one was re-run against **3.2.0** after the upgrade.
+
+**Status after 3.2.0:** BUG-6 and BUG-7 are fixed. BUG-1 to BUG-5 still reproduce exactly as
+written; the `.d.ts` error count moved from 664 across 152 files to **674 across 154**, which is
+drift rather than change.
 
 These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
 bug is "the engine says it does this and does something else". The second kind is more expensive
@@ -2168,13 +2202,14 @@ With this project's own import surface and `skipLibCheck: false`:
 npx tsc --noEmit --skipLibCheck false
 ```
 
-**664 errors across 152 `.d.ts` files.** The distribution says what is wrong:
+**674 errors across 154 `.d.ts` files** on 3.2.0 (664 across 152 on 3.0.2). The distribution
+says what is wrong:
 
 | errors | code | cause |
 |---:|---|---|
-| 533 | TS2304 / TS2552 | a name used in the type is never imported into the `.d.ts` |
+| 544 | TS2304 / TS2552 | a name used in the type is never imported into the `.d.ts` |
 | 79 | TS2339 | property does not exist on the declared type |
-| 32 | TS2416 | an override is incompatible with the base class it declares |
+| 33 | TS2416 | an override is incompatible with the base class it declares |
 | 8 | TS2425 | a class declares a property the base declares as a method |
 
 The top undefined names are `BinaryBuffer` (58), `Class` (30), `Vector3` (26), `int` (21),
@@ -2208,7 +2243,9 @@ where the emitted type contradicts working code rather than merely failing to re
 Both are corrected in this port with narrow local types rather than `any`, per the brief:
 `src/client/Hud.ts` and `src/client/PhysicsWorld.ts`.
 
-### BUG-6: `ShadeMaterial.draw_side`'s docblock describes a limitation that no longer exists
+### BUG-6 (fixed in 3.2.0): `ShadeMaterial.draw_side`'s docblock described a limitation that no longer existed
+
+On 3.0.2:
 
 ```js
 // src/shade/renderer/material/ShadeMaterial.js:26
@@ -2220,6 +2257,10 @@ Both are corrected in this port with narrow local types rather than `any`, per t
 draw_side = ShadeDrawSide.Front;
 ```
 
+On 3.2.0 the same docblock reads *"Which faces of the geometry are drawn. Faces that are not drawn
+are culled, back faces that are drawn are shaded with a flipped normal."* — which is what the code
+does. Fixed.
+
 `ShadeDrawSide.Double` works. Setting it is all that is required, and it is what Q3's `cull none`
 surfaces need — grates, railings, banners, flags, flame sprites; five materials on `oa_dm1`,
 eight on `oa_dm5`, seven on `am_thornish`.
@@ -2230,7 +2271,11 @@ by a reader who checked before using the field. It was found only when a later p
 the note. `Back` is the value that genuinely misbehaves on a hand-built material, and the docblock
 does not say so. Filed, and withdrawn as a gap, as GAP-007.
 
-### BUG-7: `raycast` reports an immediate hit for a ray that starts inside a hull's AABB but outside the hull
+### BUG-7 (fixed in 3.2.0): `raycast` reported an immediate hit for a ray starting inside a hull's AABB but outside the hull
+
+**Reported against 3.0.2, fixed in 3.2.0, confirmed here.** Kept in full because the fix is the
+end of the story rather than the whole of it, and because the reproduction I first published was
+itself defective in a way worth reading.
 
 Found in phase 6 by moving the port onto meep's own `KinematicMover` (D-071), which is the point:
 three sessions of building character movement on `shape_cast` and `overlap_shape` found no engine
@@ -2248,9 +2293,10 @@ import { Ray3 } from '@woosh/meep-engine/src/core/geom/3d/ray/Ray3.js';
 import { PhysicsSurfacePoint } from '@woosh/meep-engine/src/engine/physics/queries/PhysicsSurfacePoint.js';
 
 // A right-triangular prism -- a ramp. It fills half of its own AABB.
+// Faces wound consistently outward; see the note below on why that matters.
 const shape = ConvexHullShape3D.from(
     new Float32Array([-1,-1,-1,  1,-1,-1,  1,1,-1,  -1,-1,1,  1,-1,1,  1,1,1]),
-    [0,1,2, 3,5,4, 0,3,4, 0,4,1, 1,4,5, 1,5,2, 0,2,5, 0,5,3]
+    [0,2,1,  3,4,5,  0,1,4,  0,4,3,  1,2,5,  1,5,4,  0,5,2,  0,3,5]
 );
 
 const sys = new PhysicsSystem();
@@ -2271,9 +2317,13 @@ ray.setOrigin(p.x, p.y, p.z);
 ray.setDirection(0, -1, 0);
 ray.tMax = 5;
 sys.raycast(ray, new PhysicsSurfacePoint());
-// -> true, t = 0.0000, normal = (-1, 0, 0)
-// Expected: a hit further down, on the sloped face.
 ```
+
+| meep | result | |
+|---|---|---|
+| 3.0.2 | `t = 0.0000`, normal `(-1.00, 0.00, 0.00)` | wrong: the ray origin is not inside the hull |
+| **3.2.0** | `t = 1.8000`, normal `(-0.71, 0.71, 0.00)` | exactly right: the slope, where it should be |
+
 
 `overlap` and `raycast` disagree about whether the same point is inside the same body, and
 `overlap` is the one that agrees with the geometry. The `t = 0` plus a face normal is the
@@ -2291,28 +2341,52 @@ Quake III levels are built from brushes and a large fraction of them are wedges,
 corners, so this is not an exotic shape. **Measured across whole levels**, by casting the probe
 `KinematicMover` casts at every node of the navigation graph:
 
-| map | probe returns `t = 0` inside a body | probe finds a real surface |
-|---|---:|---:|
-| `oa_dm1` | 1.3% | 96.0% |
-| `oa_dm4` | 4.5% | 95.2% |
-| `aggressor` | **10.4%** | 84.0% |
+| map | `t = 0` inside a body, 3.0.2 | 3.2.0 | real surface, 3.0.2 | 3.2.0 |
+|---|---:|---:|---:|---:|
+| `oa_dm1` | 1.3% | **0.0%** | 96.0% | 97.1% |
+| `oa_dm4` | 4.5% | **0.0%** | 95.2% | 99.2% |
+| `aggressor` | **10.4%** | **0.0%** | 84.0% | 92.5% |
 
-`aggressor` is also where migrating the bots onto the engine's solver regressed hardest -- bots
-grounded 51.6% of a match against the ported path's 92.5%, and reading as stuck 23.3% of it
-against 2.6% -- while `oa_dm1`, at a 1.3% probe-failure rate, came out *better* than the ported
-path on every measure. The mechanism is plausible end to end: probe fails, bot is not grounded,
-accelerates at `pm_airaccelerate` instead of `pm_accelerate`, crawls, reads as stuck, abandons its
-route. That is a correlation and is written up as one in D-072; the whole 40-point grounding gap
-has not been attributed.
+The false hits are gone and the real ones went *up*, which is the shape a correct fix has.
 
-Pinned in `test/meepmove.test.ts` and `test/match.test.ts` with the measured values written into
-the assertions, so a fix in the engine fails a test and forces this entry to be revisited.
+**The downstream effect is the part worth quoting**, because it is what a consumer feels. Bots on
+`aggressor` -- the map with the worst probe-failure rate -- over a 30-second match:
 
-**Severity:** major. Silent, produces a plausible-looking result, and lands in the walkability
-decision of the engine's own character solver.
+| | grounded | stuck | shots fired | pickups |
+|---|---:|---:|---:|---:|
+| 3.0.2 | 51.6% | 23.3% | 10 | 13 |
+| **3.2.0** | **89.4%** | **4.4%** | **220** | **16** |
+| ported `bg_pmove`, for reference | 92.5% | 2.6% | 420 | 16 |
 
-**Evidence:** the snippet above, run against `@woosh/meep-engine@3.0.2` as installed;
-`test/meepmove.test.ts` ("grounds at every spawn except where BUG-7 hides the floor"); D-071.
+D-072 recorded the mechanism as a *correlation* -- probe fails, bot is not grounded, accelerates
+at `pm_airaccelerate` instead of `pm_accelerate`, crawls, reads as stuck, abandons its route --
+and declined to call it a cause. Upgrading is the experiment that settles it: one changed line in
+the engine moved every number in that table. The correlation was the cause.
+
+**A defect in this report's own reproduction, which changes nothing and is worth knowing.** The
+snippet above originally wound its faces inconsistently. `ConvexHullShape3D.from` accepted it
+silently, and so did every query built on the support function -- `overlap` classified interior
+and exterior points correctly, `support` returned correct extreme points, and `.volume` returned
+the correct 4. Only `raycast`, which uses the face list, is winding-sensitive, and against the
+malformed hull on 3.2.0 it returns a clean **miss** -- which reads exactly like a regression and
+is not one. Re-running with correct winding is what produced the table above.
+
+Two things follow. The bug was real and is fixed, on evidence that never depended on the bad
+hull: the whole-level measurements were taken against `brushHull`'s output, which is correctly
+wound. And there is a small live finding underneath: **a convex hull with inconsistent winding is
+accepted without complaint and then behaves correctly under every query except `raycast`**, where
+it silently reports nothing. `.volume` cannot be used to detect it. A winding check in
+`ConvexHullShape3D.from`, or a signed volume, would turn a silent wrong answer into a constructor
+error.
+
+**Severity:** was major -- silent, plausible-looking, and in the walkability decision of the
+engine's own character solver. **Fixed in 3.2.0**; this port now depends on `^3.2.0` for that
+reason.
+
+**Evidence:** the snippet above, run against 3.0.2 and 3.2.0; the whole-level probe over every
+navigation-graph node; `test/meepmove.test.ts` ("grounds at every spawn point") and
+`test/match.test.ts`, both of which now assert the correct behaviour unconditionally. D-071,
+D-072, D-073.
 
 ### Not bugs, recorded so nobody re-files them
 
@@ -2551,7 +2625,7 @@ is the counter-example, and it cost a feature.
 
 | | |
 |---|---|
-| meep | `@woosh/meep-engine@3.0.2` (peer dependency, never vendored) |
+| meep | `@woosh/meep-engine@3.2.0` (peer dependency, never vendored). Findings recorded against 3.0.2 are dated as such; BUG-7 was fixed in 3.2.0. |
 | Node | v24.15.0 |
 | TypeScript | 5.9, `strict: true` |
 | Bundler | Vite 6 |

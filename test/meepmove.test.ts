@@ -111,36 +111,31 @@ describe.each(['oa_dm1', 'aggressor'])('Q3 movement on meep [%s]', (mapName) => 
         }
     });
 
-    it('grounds at every spawn except where BUG-7 hides the floor', () => {
+    it('grounds at every spawn point', () => {
         /*
-         `KinematicMover` decides walkability with a centre raycast from
-         `stepHeight` above the feet. meep's `raycast` reports `t = 0` with a
-         face normal for a ray whose origin lies inside a convex hull's *AABB*
-         but outside the hull itself -- reproduced in twenty lines in BUG-7 --
-         so above any brush that does not fill its own bounding box, that probe
-         answers "you are inside me, facing down" and the player never grounds.
+         A player standing still on a floor is grounded. There is no version of
+         this that is allowed to be partially true.
 
-         Q3 levels are full of wedges and ramps, so this is not exotic: one of
-         `aggressor`'s nine spawn platforms sits over such a brush. The clipmap
-         says the probe point is empty, and `overlap` at the same point agrees
-         with the clipmap and finds nothing.
+         This assertion was briefly written to expect one failure on
+         `aggressor`, because BUG-7 -- meep's `raycast` reporting `t = 0` for a
+         ray starting inside a convex hull's AABB but outside the hull -- broke
+         `KinematicMover`'s walkability probe above any brush that did not fill
+         its bounding box, which in a Q3 level means every wedge and ramp. That
+         was the wrong shape for a test: a suite that goes green while a player
+         cannot stand on the floor is reporting the opposite of the truth, and
+         the comment explaining why does not reach anyone reading a passing run.
 
-         Pinned as a count rather than fixed, because the fix is in the engine.
-         If `raycast` is corrected this fails, and that is the intended
-         behaviour.
+         Fixed in meep 3.2.0. The assertion is what it should always have been.
         */
-        let grounded = 0;
+        const failed: number[] = [];
+
         for (let i = 0; i < spawns.length; i++) {
             const state = at(i);
             run(move, state, 250, () => command());
-            if (state.grounded) grounded += 1;
+            if (!state.grounded) failed.push(i);
         }
 
-        const known = mapName === 'aggressor' ? 1 : 0;
-        expect(
-            spawns.length - grounded,
-            `${spawns.length - grounded} of ${spawns.length} spawns failed to ground`
-        ).toBe(known);
+        expect(failed, `spawns that never grounded: ${failed.join(', ') || 'none'}`).toEqual([]);
     });
 
     it('stops falling and stays stopped', () => {
