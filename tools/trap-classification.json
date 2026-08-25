@@ -364,7 +364,7 @@
     "trap_R_RegisterShader": {
       "status": "workaround",
       "meep": "offline .shader to PBR conversion, then StandardShadeMaterial",
-      "note": "Per brief section 2, and lossy by design: 1,679 `tcMod`, 982 non-benign `rgbGen`, 911 `tcGen`, 413 `alphaGen`, 93 `animMap` and 2 `deformVertexes` stages are dropped across the OA shader set. Counted rather than estimated -- see section 5.",
+      "note": "Per brief section 2, and lossy by design: 1,588 `tcMod`, 925 non-benign `rgbGen`, 786 `tcGen`, 410 `alphaGen`, 376 `deformVertexes` and 90 `animMap` directives are dropped across the OA shader set. Counted rather than estimated -- see section 5. What is *not* dropped is the blend equation: it decides the transparency mode and what each image's alpha channel means (D-083).",
       "evidence": [
         "tools/pipeline/shader-to-pbr.ts::",
         "src/client/map/bundle.ts::StandardShadeMaterial"
@@ -896,7 +896,7 @@
     "trap_PC_LoadSource": {
       "status": "workaround",
       "meep": "offline tokenizer in the asset pipeline",
-      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it.",
       "evidence": [
         "tools/pipeline/shader-script.ts::"
       ]
@@ -904,7 +904,7 @@
     "trap_PC_FreeSource": {
       "status": "workaround",
       "meep": "offline tokenizer in the asset pipeline",
-      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it.",
       "evidence": [
         "tools/pipeline/shader-script.ts::"
       ]
@@ -912,7 +912,7 @@
     "trap_PC_ReadToken": {
       "status": "workaround",
       "meep": "offline tokenizer in the asset pipeline",
-      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it.",
       "evidence": [
         "tools/pipeline/shader-script.ts::"
       ]
@@ -920,7 +920,7 @@
     "trap_PC_SourceFileAndLine": {
       "status": "workaround",
       "meep": "offline tokenizer in the asset pipeline",
-      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it.",
       "evidence": [
         "tools/pipeline/shader-script.ts::"
       ]
@@ -928,7 +928,7 @@
     "trap_PC_AddGlobalDefine": {
       "status": "workaround",
       "meep": "offline tokenizer in the asset pipeline",
-      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings.",
+      "note": "Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it.",
       "evidence": [
         "tools/pipeline/shader-script.ts::"
       ]

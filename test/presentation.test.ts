@@ -18,7 +18,10 @@
  *     stripped the `light` entities (GAP-006). This is the one that actually
  *     bites, and it bites unevenly -- see the illumination block below.
  *   - a material pointing at a texture that was never written, which renders as
- *     the fallback and reads as "the conversion is broken".
+ *     the fallback and reads as "the conversion is broken". This one asserts the
+ *     textures a material *names*; the case where it names none at all, and the
+ *     rest of what a material and its image have to agree about, is
+ *     `materials.test.ts` (D-083).
  *   - a pickup with no model, which is an item you cannot see and therefore
  *     cannot find.
  *   - an effect or a sound named in the code and absent from disk, which fails

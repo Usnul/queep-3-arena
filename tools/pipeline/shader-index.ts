@@ -103,7 +103,17 @@ export class ShaderIndex {
      * vanishing.
      */
     material(name: string): PbrMaterial {
-        const key = name.replace(/\\/g, '/').toLowerCase();
+        /*
+         `R_FindShader` runs `COM_StripExtension` before it looks anything up, so
+         a surface naming `models/powerups/orb/b_orb.png` finds the *shader*
+         called `models/powerups/orb/b_orb`. MD3 surfaces name their skins with
+         the extension left on often enough for this to matter: without it,
+         eleven of the pickup models missed their scripts and fell through to the
+         implicit-texture branch below, which has no stages and therefore no
+         transparency, no glow and -- for the ones whose script was the only
+         thing naming a real file -- no texture either.
+        */
+        const key = name.replace(/\\/g, '/').toLowerCase().replace(/\.[a-z0-9]+$/, '');
 
         const cached = this.pbrCache.get(key);
         if (cached !== undefined) return cached;
@@ -126,6 +136,7 @@ export class ShaderIndex {
             material = {
                 name: key,
                 albedo: this.resolveTexture(key) === null ? null : key,
+                albedoBlend: 'opaque',
                 emissive: null,
                 emissiveIntensity: 0,
                 roughness: 0.85,
@@ -148,13 +159,29 @@ export class ShaderIndex {
     /**
      * Find the file backing a virtual texture path, trying Q3's extension order.
      * Returns the path relative to the asset root, or `null`.
+     *
+     * `R_LoadImage` tries the name it was handed *first* and only then strips a
+     * trailing extension and tries the loaders' own. Doing it the other way round
+     * -- strip first, always -- is not a subtle difference: every Q3 glow map is
+     * named `<texture>.blend.tga`, and `.blend` looks exactly like an extension.
+     * Stripping it unconditionally resolved every one of them to the base texture
+     * beside it, so a light's emissive was a second copy of its diffuse and the
+     * whole fixture glowed instead of the bright part of it.
      */
     resolveTexture(virtualPath: string): string | null {
-        const base = virtualPath.replace(/\\/g, '/').toLowerCase().replace(/\.[a-z0-9]+$/, '');
+        const path = virtualPath.replace(/\\/g, '/').toLowerCase();
 
         for (const ext of TEXTURE_EXTENSIONS) {
-            const candidate = `${base}${ext}`;
+            const candidate = `${path}${ext}`;
             if (existsSync(join(this.assetRoot, candidate))) return candidate;
+        }
+
+        const base = path.replace(/\.[a-z0-9]+$/, '');
+        if (base !== path) {
+            for (const ext of TEXTURE_EXTENSIONS) {
+                const candidate = `${base}${ext}`;
+                if (existsSync(join(this.assetRoot, candidate))) return candidate;
+            }
         }
 
         return null;

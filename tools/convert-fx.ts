@@ -31,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import sharp from 'sharp';
 
 import { decodeTga } from './pipeline/tga.ts';
+import { luminance8 } from './pipeline/texture-out.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
@@ -140,7 +141,7 @@ async function convertOne(fx: FxTexture): Promise<boolean> {
             const g = rgba[i + 1]!;
             const b = rgba[i + 2]!;
 
-            rgba[i + 3] = Math.min(255, Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b));
+            rgba[i + 3] = luminance8(r, g, b);
 
             if (!keepColour) {
                 rgba[i] = 0;

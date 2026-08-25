@@ -691,11 +691,11 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_LocateGameData` | 4 | game | not needed | ECS dataset | -- | Shared-memory handshake between QVM and engine. Gone with the QVM. |
 | `trap_MemoryRemaining` | 11 | cgame, q3_ui, ui | not needed | - | -- | QVM heap accounting. |
 | `trap_Milliseconds` | 18 | cgame, game, q3_ui, ui | mapped | engine ticker + performance.now | `src/app/main.ts`<br>`src/client/PlayerController.ts` | Q3's clock, used both for timing and as `usercmd_t.serverTime`. The ticker supplies the delta; `performance.now` supplies the instrumentation. |
-| `trap_PC_AddGlobalDefine` | 3 | cgame, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings. |
-| `trap_PC_FreeSource` | 7 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings. |
-| `trap_PC_LoadSource` | 9 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings. |
-| `trap_PC_ReadToken` | 32 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings. |
-| `trap_PC_SourceFileAndLine` | 5 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,154 entries, 1,924 unique names, 214 cross-file name collisions and 4 parse warnings. |
+| `trap_PC_AddGlobalDefine` | 3 | cgame, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
+| `trap_PC_FreeSource` | 7 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
+| `trap_PC_LoadSource` | 9 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
+| `trap_PC_ReadToken` | 32 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
+| `trap_PC_SourceFileAndLine` | 5 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
 | `trap_PointContents` | 12 | game | ported | - | `src/q3/cm/trace.ts`<br>`src/game/PmoveHost.ts` | Brush contents lookup, and the one collision call the physics swap did not touch. Contents are Q3 semantics -- lava, slime, water, playerclip, trigger, and the exact bitmask pmove tests -- and a rigid body has no concept of them, so the clipmap is still loaded and still queried on the physics backend. That is why `PhysicsTrace` takes a `ClipMap`. |
 | `trap_Print` | 46 | cgame, q3_ui, ui | mapped | console | *not exercised.* The port logs with `console.log` directly. Worth noting the traffic in the other direction: meep's own per-second FPS report goes to `console.warn`, which is section 5's complaint. | Diagnostics. |
 | `trap_Printf` | 16 | game | mapped | console | *not exercised.* As `trap_Print`. | As above. |
@@ -714,7 +714,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_R_ModelBounds` | 11 | cgame, ui | mapped | AABB3 from the scene bundle | *not exercised.* Item placement drops each pickup with a real trace instead, and there are no model previews because there are no menus. | Q3 uses it to size the item bob and the 2D model previews in the menus. |
 | `trap_R_RegisterFont` | 10 | cgame, ui | mapped | engine/asset/loaders/font + UI text | *not exercised.* meep's `View` hierarchy renders as DOM, so HUD text is styled with CSS and the engine's font loader is never reached. A HUD that had to live inside the 3D scene would have needed it. | Q3 fonts are pre-rendered glyph atlases. |
 | `trap_R_RegisterModel` | 124 | cgame, q3_ui, ui | mapped | AssetManager + GLTFSceneBundleAssetLoader | `src/app/main.ts`<br>`src/client/map/loadModels.ts` | Two paths, because two kinds of model. Characters go through `GLTFSceneBundleAssetLoader` and `load_model_scene_bundle`, after MD3 vertex-morph frames are decomposed into a skeleton offline (D-042) -- meep has no morph-target path. Item and weapon models skip the loader entirely: they are static, so the pipeline emits one packed vertex buffer for all 82 of them and the runtime builds `ShadedGeometry` from slices of it, which is one fetch instead of 82. Six of the 82 are the weapons' hands models, which carry no geometry and are converted for the `tag_weapon` that places a first-person weapon (D-080). |
-| `trap_R_RegisterShader` | 117 | cgame | workaround | offline .shader to PBR conversion, then StandardShadeMaterial | `tools/pipeline/shader-to-pbr.ts`<br>`src/client/map/bundle.ts` | Per brief section 2, and lossy by design: 1,679 `tcMod`, 982 non-benign `rgbGen`, 911 `tcGen`, 413 `alphaGen`, 93 `animMap` and 2 `deformVertexes` stages are dropped across the OA shader set. Counted rather than estimated -- see section 5. |
+| `trap_R_RegisterShader` | 117 | cgame | workaround | offline .shader to PBR conversion, then StandardShadeMaterial | `tools/pipeline/shader-to-pbr.ts`<br>`src/client/map/bundle.ts` | Per brief section 2, and lossy by design: 1,588 `tcMod`, 925 non-benign `rgbGen`, 786 `tcGen`, 410 `alphaGen`, 376 `deformVertexes` and 90 `animMap` directives are dropped across the OA shader set. Counted rather than estimated -- see section 5. What is *not* dropped is the blend equation: it decides the transparency mode and what each image's alpha channel means (D-083). |
 | `trap_R_RegisterShaderNoMip` | 464 | cgame, q3_ui, ui | mapped | meep UI image view | *not exercised.* The HUD here is text -- numbers, a speedometer, a pickup line -- built from `LabelView`. No 2D image is drawn anywhere, so the facility was never reached. | 464 call sites, almost all 2D HUD and menu icons. |
 | `trap_R_RegisterSkin` | 22 | cgame, q3_ui, ui | workaround | offline .skin resolution into glTF materials | `tools/convert-characters.ts` | Q3's `.skin` maps a surface name to a shader and is chosen at runtime. There is no runtime material table here: `convert-characters.ts` reads the `.skin` file, resolves each surface to a converted PBR material and bakes it into the glTF. Switching skins at runtime is therefore not possible in this port -- a real capability lost, rather than a translation. |
 | `trap_R_RemapShader` | 7 | cgame, ui | not needed | swap material reference | -- | Used for team colours and teleport effects; a material swap. |
@@ -2294,12 +2294,26 @@ vertex trajectories, then Kabsch per cluster per frame, then reassign, six passe
 ### Asset pipeline, for scale
 
 Not meep's numbers, but they establish what the engine was fed. 4,370 files flattened from 8
-pk3s in Q3 load order; 104 `.shader` scripts yielding 2,154 entries and 1,924 unique shader
-names, with 214 name collisions across files and 4 parse warnings. The Q3 → PBR projection
-drops, in total across the OA shader set: 1,679 `tcMod`, 982 non-benign `rgbGen`, 911 `tcGen`,
-413 `alphaGen`, 93 `animMap`, 2 `deformVertexes`, 1 `videoMap`. That is the measured lossiness
-of the material conversion — every one of those is a surface that animated in Q3 and does not
-here.
+pk3s in Q3 load order; 104 `.shader` scripts yielding 2,226 entries and 1,960 unique shader
+names, with 250 name collisions across files and 36 parse warnings. The Q3 → PBR projection
+drops, in total across the OA shader set: 1,588 `tcMod`, 925 non-benign `rgbGen`, 786 `tcGen`,
+410 `alphaGen`, 376 `deformVertexes`, 90 `animMap`, 1 `videoMap`, 1 `alphaFunc LT128`. That is
+the measured lossiness of the material conversion — every one of those is a surface that animated
+in Q3 and does not here.
+
+**Every number in that paragraph moved in D-083, and two of them moved for reasons worth
+separating.** The entry and collision counts went *up* because the reader was mis-tracking brace
+depth: a line ending in `}` never closed its stage, so the rest of that shader was swallowed into
+it and the entry ran on past its own end. Thirty-six lines across five scripts are written that
+way, and recovering them is where the 72 extra entries came from. The parse warnings are the same
+36 lines, which the reader still cannot split back into separate directives and now says so.
+
+The drop counts went *down* for the same reason — directives swallowed into an over-long stage
+were being counted twice over — except `deformVertexes`, which went from 2 to **376**. That one
+was never a measurement: `deformVertexes` is only ever written at shader level and the counter
+only ever read stages, so the two it found were two that the brace bug had misfiled. It is the
+largest single category of dropped *geometry* animation in the set — every flame that flickered,
+every banner that waved, every sprite that faced the camera — and the report had it at two.
 
 ---
 
@@ -2311,8 +2325,9 @@ device, no application — and every one was re-run against **3.2.0** after the 
 
 **Status after 3.2.0:** BUG-6 and BUG-7 are fixed. BUG-1 to BUG-5 still reproduce exactly as
 written; the `.d.ts` error count moved from 664 across 152 files to **674 across 154**, which is
-drift rather than change. **BUG-8 is new and live on 3.2.0** — it was found while confirming
-BUG-7's fix, in the defect in BUG-7's own published reproduction.
+drift rather than change. **BUG-8 and BUG-9 are new and live on 3.2.0** — BUG-8 was found while
+confirming BUG-7's fix, in the defect in BUG-7's own published reproduction, and BUG-9 while
+rebuilding the transparency route (D-083).
 
 These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
 bug is "the engine says it does this and does something else". The second kind is more expensive
@@ -2659,6 +2674,42 @@ the same symptom BUG-7 produced and it cost a session to trace.
   `test/winding.test.ts` now asserts it over every brush of two maps — 6,256 and 9,310 faces —
   rather than claiming it in prose as D-073 did. Found in phase 7.
 
+### BUG-9: `diffuse_color` tints an opaque material and is ignored on a transparent one
+
+**Live on 3.2.0.** Found in phase 7 while trying to give a Q3 additive surface a black base
+colour, so that its texture could carry coverage in alpha while the colour was emitted rather
+than shaded (D-083).
+
+`StandardShadeMaterial.diffuse_color` is documented, in full, as *"Gets multiplied with the
+albedo"*, and it reaches the GPU as `albedo_color`, a `vec4f` in `MATERIAL_METADATA_STRUCT`.
+Which parts of it are read depends on which pass draws the surface, and the two passes disagree:
+
+| pass | `albedo_color.rgb` | `albedo_color.a` |
+|---|---|---|
+| deferred G-buffer (`fragment_gbuffer`) | multiplied into the albedo, as documented | not read |
+| OIT forward (`chunk_forward_shade_standard_fragment_ibl`, `…_brick4`) | **not read** | `surface_alpha = t_diffuse.a * albedo_color.a` |
+| visibility alpha test (`viz_rasterization_alpha_tested_pass_descriptor`) | not read | multiplied into the tested alpha |
+
+So the same field means "tint" on an opaque material and "opacity" on a transparent one, and
+setting a colour on a material whose `transparency_mode` is `Transparent` does nothing at all.
+The forward paths compute `diffuse` from the texture alone —
+`t_diffuse.rgb * vert.color`, un-premultiplied — and never bring the factor in.
+
+- **Severity:** minor, and entirely about silence. Nothing crashes, nothing looks obviously wrong,
+  and the workaround is to bake the colour into the texture, which is what this port does. The
+  cost is the time spent assuming the documented behaviour and looking elsewhere for the reason it
+  was not happening.
+- **Suggested fix:** one line in each forward fragment —
+  `diffuse * material_info.albedo_color.rgb` — which makes the field mean the same thing in both
+  passes. If the omission is deliberate (a transparent surface's tint arguably belongs in the
+  texture), then the docblock is the thing to fix: say that `diffuse_color`'s rgb applies to
+  opaque materials only, and that its alpha is the opacity multiplier.
+- **Evidence:** `src/shade/renderer/material/standard/fragment_gbuffer.js` line 280 against
+  `src/shade/renderer/rasterize/native/oit/chunk_forward_shade_standard_fragment_ibl.js` line 82,
+  both on 3.2.0. Port side: `src/client/map/bundle.ts`, which sets `diffuse_color` alpha to zero
+  as a last-resort guard for a blended material with no albedo texture, and cannot use its rgb for
+  anything.
+
 ### Not bugs, recorded so nobody re-files them
 
 - **`shape_cast` reporting the minimum-penetration normal** (GAP-012) is a documented, defensible
@@ -2860,6 +2911,19 @@ without `MeshSystem3` by reference cannot drive a clip; a system constructed wit
 succeeds at every diagnostic you reach for. A table of "system → what it needs registered
 alongside it → what breaks if you forget" would have saved this port perhaps three hours across
 four separate incidents, and it can be generated from the existing constructors.
+
+**Nothing says an albedo texture's alpha channel is load-bearing on an *opaque* material.**
+`StandardShadeMaterial.texture_albedo` is documented as *"If there is transparency, it is encoded
+into Alpha channel (RGBA)"*, which reads as "alpha is where transparency goes if you have any".
+What it does not say is the other direction: uploads are premultiplied
+(`texture_write_to_gpu`, whenever `color_space !== ColorSpace.None`) and both shading paths
+divide the colour back out by that alpha, so a texel at alpha 0 shades **black** whatever
+`transparency_mode` says. Feed the engine an image with a leftover alpha channel — which a great
+many Quake III textures have, since Q3's blend equations mostly ignored it — and an opaque surface
+comes out with black patches in the shape of a mask nobody meant to apply. Nineteen of this port's
+albedo images were in that state (D-083). The contract is stated, precisely, in a comment inside
+`fragment_gbuffer`'s WGSL; it is not on the field a consumer assigns. Same shape as GAP-023, and
+the same one-sentence fix.
 
 **No reference values for photometric lighting.** `PointLight.intensity` is candela, falloff is
 inverse-square in scene units, and the design is right (see section 7). What is missing is a

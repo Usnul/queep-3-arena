@@ -46,7 +46,7 @@ import {
     drawableSurfaces,
     type Md3Model,
 } from './pipeline/md3.ts';
-import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
+import { textureCache, writeTexture, type TextureCache } from './pipeline/texture-out.ts';
 import { decomposeSkin, type RigResult } from './pipeline/rig.ts';
 import {
     GltfBuilder,
@@ -265,7 +265,7 @@ async function convertCharacter(
     mkdirSync(outDir, { recursive: true });
 
     const gltf = new GltfBuilder('queep-3-arena tools/convert-characters.ts');
-    const textures: TextureCache = new Map();
+    const textures: TextureCache = textureCache();
 
     /* ---- materials ---- */
 
@@ -282,7 +282,14 @@ async function convertCharacter(
 
         let texture: number | null = null;
         if (pbr.albedo !== null) {
-            const file = await writeTexture(index, EXTRACTED, pbr.albedo, outDir, textures);
+            const file = await writeTexture(
+                index,
+                EXTRACTED,
+                pbr.albedo,
+                outDir,
+                textures,
+                pbr.albedoBlend
+            );
             if (file !== null) texture = gltf.image(file);
         }
         if (texture === null) untextured += 1;

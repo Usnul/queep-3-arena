@@ -193,18 +193,49 @@ export function parseShaderScript(
             const t = lineTokens(raw);
             if (t.length === 0) continue;
 
-            if (t[0] === '{') {
-                depth += 1;
-                if (depth === 2) stageBuffer = [];
-                continue;
-            }
+            /*
+             A brace is applied wherever it appears on the line, not only when it
+             is the first token.
 
-            if (t[0] === '}') {
-                depth -= 1;
-                if (depth === 1 && stageBuffer !== null) {
-                    stages.push({ directives: directiveLines(stageBuffer.join('\n')) });
-                    stageBuffer = null;
+             Q3's tokenizer reads token by token and carries on with whatever
+             follows a brace; this reader is line-oriented and drops it, because
+             separating `{ map $lightmap blendfunc filter }` back into three
+             directives needs the per-directive arities the note above
+             `directiveLines` explains this reader does not have. Thirty-six lines
+             across five OA scripts are written that way, none of them on a
+             converted map.
+
+             What is *not* optional is the depth. Reading the braces only in
+             leading position left a line ending in `}` never closing its stage,
+             so the rest of the shader was swallowed into that stage and the entry
+             ended short a brace -- a whole shader misread, rather than one line
+             of it. The tokens are still dropped; they are now warned about, and
+             the structure around them survives.
+            */
+            const braces = t.filter((x) => x === '{' || x === '}');
+
+            if (braces.length > 0) {
+                if (braces.length !== t.length) {
+                    onWarning(
+                        `${filename}: '${name}': ${t.length - braces.length} token(s) share a brace line and are dropped`
+                    );
                 }
+
+                for (const brace of braces) {
+                    if (brace === '{') {
+                        depth += 1;
+                        if (depth === 2) stageBuffer = [];
+                    } else {
+                        depth -= 1;
+                        if (depth === 1 && stageBuffer !== null) {
+                            stages.push({ directives: directiveLines(stageBuffer.join('\n')) });
+                            stageBuffer = null;
+                        }
+                        // The entry ended; anything after this brace is the next one's.
+                        if (depth <= 0) break;
+                    }
+                }
+
                 continue;
             }
 

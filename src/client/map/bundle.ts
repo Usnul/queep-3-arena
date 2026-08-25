@@ -70,10 +70,16 @@ export async function buildMaterials(
 ): Promise<StandardShadeMaterial[]> {
     const textureCache = new Map<string, Promise<ShadeTexture | null>>();
 
-    const get = (virtualPath: string | null): Promise<ShadeTexture | null> => {
-        if (virtualPath === null) return Promise.resolve(null);
+    /*
+     A material names a texture by *key*, not by path: a path most of the time,
+     but a path plus `#<blend>` when the pipeline had to write the same image
+     more than one way (D-083). The runtime only ever looks it up, so the
+     distinction costs nothing here beyond calling it what it is.
+    */
+    const get = (key: string | null): Promise<ShadeTexture | null> => {
+        if (key === null) return Promise.resolve(null);
 
-        const file = bundle.textures[virtualPath];
+        const file = bundle.textures[key];
         if (file === undefined || file === null || file === '') return Promise.resolve(null);
 
         let p = textureCache.get(file);
@@ -95,6 +101,27 @@ export async function buildMaterials(
             const [albedo, emissive] = await Promise.all([get(m.albedo), get(m.emissive)]);
 
             if (albedo !== null) material.texture_albedo = albedo;
+
+            /*
+             meep reads coverage out of the albedo texture's alpha --
+             `surface_alpha = t_diffuse.a * albedo_color.a` -- so a blended
+             material with no albedo texture samples the white default at alpha
+             1 and draws as a solid white box that also poisons the OIT
+             accumulation around it. That is what `textures/sfx/beam` looked
+             like on `oa_dm1` before the pipeline learned to write additive
+             images as coverage.
+
+             The pipeline should not produce one any more and
+             `materials.test.ts` asserts over every bundle that it does not, but
+             the failure is bad enough, and the right answer obvious enough, to
+             state here as well: an effect surface whose image could not be
+             resolved adds nothing, so draw nothing.
+            */
+            if (albedo === null && m.transparency === 'blend') {
+                material.diffuse_color = new Color(1, 1, 1, 0);
+                console.warn(`[queep] ${m.name}: blended with no albedo texture; drawn as nothing`);
+            }
+
             if (emissive !== null && m.emissiveIntensity > 0) {
                 material.texture_emissive = emissive;
                 material.emissive_factor = new Color(

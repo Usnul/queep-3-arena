@@ -12,8 +12,39 @@
  *
  * Lifted out of `convert-map.ts` when the model converter needed the same
  * behaviour. TGA is decoded and re-encoded because browsers do not read it;
- * JPEG and PNG are copied byte-for-byte, because re-encoding them would only
- * lose quality to no purpose.
+ * JPEG and PNG are copied byte-for-byte where nothing has to change in them,
+ * because re-encoding them would only lose quality to no purpose.
+ *
+ * # An image is written for the blend it was authored for
+ *
+ * A Q3 image is not a texture on its own -- it is a texture *plus* the blend
+ * equation the stage that named it used, and the two are only meaningful
+ * together. meep wants straight RGBA with coverage in alpha, and it premultiplies
+ * on upload, which makes an alpha channel load-bearing whether or not Q3's blend
+ * ever read one. So each reference carries its {@link ImageBlend} and this file
+ * holds what each of them costs:
+ *
+ * | blend           | what it does to the image                                |
+ * |-----------------|----------------------------------------------------------|
+ * | `opaque`        | alpha forced to 255 -- Q3 ignored it, and a leftover one  |
+ * |                 | would shade the surface black wherever it was zero        |
+ * | `alpha`         | nothing; the file already says what meep wants            |
+ * | `add`           | colour dropped, `luminance` into alpha (D-079's rule)     |
+ * | `addAlpha`      | same, scaled by the image's own alpha                     |
+ * | `filter`        | colour dropped, `255 - luminance` into alpha -- a multiply |
+ * |                 | by a grey image *is* black at that coverage               |
+ * | `premultiplied` | colour divided back out of alpha                          |
+ *
+ * `add` and `addAlpha` discard the colour rather than keeping it, which is where
+ * this differs from `convert-fx.ts`'s otherwise identical `add`. A particle
+ * sprite *is* its colour; a shader's additive pass is bound as the material's
+ * emissive as well, so keeping the colour here would shade it a second time.
+ *
+ * Two references that restate to the same bytes share one file: the caller keys
+ * the bundle by {@link textureKey}, which is a pure function of path and blend,
+ * while the file on disk is named for what the restatement actually did. A JPEG
+ * has no alpha channel, so `opaque`, `alpha` and `premultiplied` all leave it
+ * alone and all three land on the same copy.
  */
 
 import { copyFileSync, readFileSync } from 'node:fs';
@@ -21,55 +52,221 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 
 import type { ShaderIndex } from './shader-index.ts';
-import { decodeTga } from './tga.ts';
+import type { ImageBlend } from './shader-to-pbr.ts';
+import { decodeTga, type DecodedImage } from './tga.ts';
 
 /**
- * Memo of virtual path -> written filename. An empty string records "resolved
- * to nothing", so a missing texture is looked up once rather than once per
- * material that references it.
+ * Rec. 709 luminance of one 8-bit RGB triple.
+ *
+ * Shared with `convert-fx.ts` rather than written twice, because the two places
+ * that turn a Q3 additive image into coverage have to agree on what "bright"
+ * means or the same artwork reads differently depending on which pipeline
+ * carried it.
  */
-export type TextureCache = Map<string, string>;
+export function luminance8(r: number, g: number, b: number): number {
+    return Math.min(255, Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b));
+}
+
+/**
+ * Memo of what has been resolved and what has been written.
+ *
+ * `byKey` maps a {@link textureKey} to the filename it ended up in, with an
+ * empty string recording "resolved to nothing" so a missing texture is looked up
+ * once rather than once per material that references it. `byFile` maps the
+ * *effective* blend -- what the restatement actually did to this particular
+ * source -- to the same filename, so two references that restate identically are
+ * one file on disk.
+ */
+export interface TextureCache {
+    readonly byKey: Map<string, string>;
+    readonly byFile: Map<string, string>;
+}
+
+export function textureCache(): TextureCache {
+    return { byKey: new Map(), byFile: new Map() };
+}
+
+/** Files actually written, and references that resolved to nothing. */
+export function textureCounts(cache: TextureCache): { written: number; missing: number } {
+    let missing = 0;
+    for (const v of cache.byKey.values()) if (v === '') missing += 1;
+    return { written: cache.byFile.size, missing };
+}
+
+/**
+ * How a bundle names one texture reference.
+ *
+ * A path alone is not enough any more: the same image can be referenced by two
+ * materials through two different blends and has to be written twice. `opaque`
+ * is unsuffixed because it is what the overwhelming majority of references are,
+ * and because it keeps the bundles' texture names readable.
+ */
+export function textureKey(virtualPath: string, blend: ImageBlend): string {
+    return blend === 'opaque' ? virtualPath : `${virtualPath}#${blend}`;
+}
+
+/** The virtual path a {@link textureKey} was made from. */
+export function texturePathOf(key: string): string {
+    const hash = key.lastIndexOf('#');
+    return hash < 0 ? key : key.slice(0, hash);
+}
+
+/**
+ * The blend, reduced to what it actually changes about *this* source.
+ *
+ * The two that read the *colour* -- `add` and `filter` -- always do something.
+ * The rest only touch alpha, so on an image with no alpha channel `alpha` and
+ * `premultiplied` are no-ops, `addAlpha` degenerates to `add`, and `opaque` has
+ * nothing to force. Folding those together is what lets one file serve several
+ * keys.
+ */
+function effectiveBlend(blend: ImageBlend, hasAlpha: boolean): ImageBlend {
+    if (blend === 'add' || blend === 'filter') return blend;
+    if (hasAlpha) return blend;
+    return blend === 'addAlpha' ? 'add' : 'opaque';
+}
+
+/** Apply a restatement in place. See the table at the top of this file. */
+function restate(rgba: Uint8Array, blend: ImageBlend): void {
+    for (let i = 0; i < rgba.length; i += 4) {
+        const r = rgba[i]!;
+        const g = rgba[i + 1]!;
+        const b = rgba[i + 2]!;
+        const a = rgba[i + 3]!;
+
+        switch (blend) {
+            case 'opaque':
+                rgba[i + 3] = 255;
+                break;
+
+            case 'add':
+                rgba[i] = 0;
+                rgba[i + 1] = 0;
+                rgba[i + 2] = 0;
+                rgba[i + 3] = luminance8(r, g, b);
+                break;
+
+            case 'addAlpha':
+                rgba[i] = 0;
+                rgba[i + 1] = 0;
+                rgba[i + 2] = 0;
+                rgba[i + 3] = Math.round((luminance8(r, g, b) * a) / 255);
+                break;
+
+            case 'filter':
+                rgba[i] = 0;
+                rgba[i + 1] = 0;
+                rgba[i + 2] = 0;
+                rgba[i + 3] = 255 - luminance8(r, g, b);
+                break;
+
+            case 'premultiplied':
+                if (a === 0) {
+                    rgba[i] = 0;
+                    rgba[i + 1] = 0;
+                    rgba[i + 2] = 0;
+                } else {
+                    rgba[i] = Math.min(255, Math.round((r * 255) / a));
+                    rgba[i + 1] = Math.min(255, Math.round((g * 255) / a));
+                    rgba[i + 2] = Math.min(255, Math.round((b * 255) / a));
+                }
+                break;
+
+            case 'alpha':
+                break;
+        }
+    }
+}
+
+async function decode(src: string, isTga: boolean): Promise<DecodedImage> {
+    if (isTga) return decodeTga(readFileSync(src));
+
+    /*
+     `hadAlpha` comes from the metadata rather than from the raw buffer, because
+     `ensureAlpha` has already put a fourth channel there by the time the pixels
+     come back and every image would claim to have one.
+    */
+    const image = sharp(src);
+    const hadAlpha = (await image.metadata()).hasAlpha === true;
+    const raw = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+
+    return {
+        width: raw.info.width,
+        height: raw.info.height,
+        rgba: new Uint8Array(raw.data),
+        hadAlpha,
+    };
+}
 
 export async function writeTexture(
     index: ShaderIndex,
     assetRoot: string,
     virtualPath: string,
     outDir: string,
-    written: TextureCache
+    cache: TextureCache,
+    blend: ImageBlend = 'opaque'
 ): Promise<string | null> {
-    const existing = written.get(virtualPath);
+    const key = textureKey(virtualPath, blend);
+
+    const existing = cache.byKey.get(key);
     if (existing !== undefined) return existing === '' ? null : existing;
 
     const resolved = index.resolveTexture(virtualPath);
     if (resolved === null) {
-        written.set(virtualPath, '');
+        cache.byKey.set(key, '');
         return null;
     }
 
     const src = join(assetRoot, resolved);
     const flat = virtualPath.replace(/[\\/]/g, '_');
+    const isTga = resolved.toLowerCase().endsWith('.tga');
+
+    /*
+     A JPEG has no alpha channel, so nothing but `add` can change it and the
+     common case stays a byte copy. Everything else has to be decoded to know
+     whether its alpha is real, which the TGA path was doing anyway.
+    */
+    const isJpeg = /\.jpe?g$/i.test(resolved);
 
     try {
-        if (resolved.endsWith('.tga')) {
-            const decoded = decodeTga(readFileSync(src));
-            const out = `${flat}.png`;
-            await sharp(Buffer.from(decoded.rgba), {
-                raw: { width: decoded.width, height: decoded.height, channels: 4 },
-            })
-                .png({ compressionLevel: 9 })
-                .toFile(join(outDir, out));
-            written.set(virtualPath, out);
+        if (isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
+            // A JPEG has no alpha, so none of these three change a pixel of it.
+            const out = `${flat}${resolved.slice(resolved.lastIndexOf('.'))}`;
+            const shared = cache.byFile.get(`${virtualPath}#opaque`);
+            if (shared === undefined) {
+                copyFileSync(src, join(outDir, out));
+                cache.byFile.set(`${virtualPath}#opaque`, out);
+            }
+            cache.byKey.set(key, out);
             return out;
         }
 
-        const ext = resolved.slice(resolved.lastIndexOf('.'));
-        const out = `${flat}${ext}`;
-        copyFileSync(src, join(outDir, out));
-        written.set(virtualPath, out);
+        const decoded = await decode(src, isTga);
+        const effective = effectiveBlend(blend, decoded.hadAlpha);
+        const fileKey = `${virtualPath}#${effective}`;
+
+        const shared = cache.byFile.get(fileKey);
+        if (shared !== undefined) {
+            cache.byKey.set(key, shared);
+            return shared;
+        }
+
+        const out = `${flat}${effective === 'opaque' ? '' : `.${effective}`}.png`;
+
+        restate(decoded.rgba, effective);
+
+        await sharp(Buffer.from(decoded.rgba), {
+            raw: { width: decoded.width, height: decoded.height, channels: 4 },
+        })
+            .png({ compressionLevel: 9 })
+            .toFile(join(outDir, out));
+
+        cache.byFile.set(fileKey, out);
+        cache.byKey.set(key, out);
         return out;
     } catch (e) {
-        console.warn(`  texture ${virtualPath}: ${(e as Error).message}`);
-        written.set(virtualPath, '');
+        console.warn(`  texture ${key}: ${(e as Error).message}`);
+        cache.byKey.set(key, '');
         return null;
     }
 }

@@ -42,9 +42,16 @@ import {
 } from '../src/q3/bsp/BspFile.ts';
 import { parseEntities, entityVector, entityNumber } from '../src/q3/bsp/Entities.ts';
 import { ShaderIndex } from './pipeline/shader-index.ts';
-import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
+import {
+    textureCache,
+    textureCounts,
+    textureKey,
+    texturePathOf,
+    writeTexture,
+    type TextureCache,
+} from './pipeline/texture-out.ts';
 import { tessellatePatch, type PatchVertex } from './pipeline/patch.ts';
-import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
+import type { ImageBlend, PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
 import { fitGridLights, sitesFromGrid, type SceneLight } from './pipeline/lightgrid.ts';
 import { ClipMap, MASK_SOLID, SURF } from '../src/q3/cm/ClipMap.ts';
@@ -154,7 +161,10 @@ interface MeshGroup {
 
 interface SceneMaterial {
     readonly name: string;
+    /** Key into the bundle's texture table -- see `textureKey`, not a bare path. */
     readonly albedo: string | null;
+    /** The Q3 blend the albedo image was written for. */
+    readonly albedoBlend: ImageBlend;
     readonly emissive: string | null;
     readonly emissiveIntensity: number;
     readonly roughness: number;
@@ -224,9 +234,10 @@ async function convertTexture(
     index: ShaderIndex,
     virtualPath: string,
     outDir: string,
-    written: TextureCache
+    written: TextureCache,
+    blend: ImageBlend
 ): Promise<string | null> {
-    return writeTexture(index, EXTRACTED, virtualPath, outDir, written);
+    return writeTexture(index, EXTRACTED, virtualPath, outDir, written, blend);
 }
 
 async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
@@ -294,7 +305,8 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 mi = materials.length;
                 materials.push({
                     name: pbr.name,
-                    albedo: pbr.albedo,
+                    albedo: pbr.albedo === null ? null : textureKey(pbr.albedo, pbr.albedoBlend),
+                    albedoBlend: pbr.albedoBlend,
                     emissive: pbr.emissive,
                     emissiveIntensity: pbr.emissiveIntensity,
                     roughness: pbr.roughness,
@@ -705,15 +717,33 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
     /* ---- textures ---- */
 
-    const written = new Map<string, string>();
+    const written = textureCache();
     const textureFor: Record<string, string | null> = {};
 
+    /*
+     A material names its textures by `textureKey` rather than by virtual path,
+     because the same image can be referenced through two different Q3 blends and
+     then has to be written twice. An emissive is always `opaque`: it is the
+     colour an additive pass added, and that pass's alpha would only dim it.
+    */
     for (const m of materials) {
         if (m.albedo !== null) {
-            textureFor[m.albedo] = await convertTexture(index, m.albedo, textureDir, written);
+            textureFor[m.albedo] = await convertTexture(
+                index,
+                texturePathOf(m.albedo),
+                textureDir,
+                written,
+                m.albedoBlend
+            );
         }
         if (m.emissive !== null) {
-            textureFor[m.emissive] = await convertTexture(index, m.emissive, textureDir, written);
+            textureFor[m.emissive] = await convertTexture(
+                index,
+                m.emissive,
+                textureDir,
+                written,
+                'opaque'
+            );
         }
     }
 
@@ -774,8 +804,8 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             triangles: totalIndices / 3,
             lights: lights.length,
             entities: entities.length,
-            texturesWritten: [...written.values()].filter((v) => v !== '').length,
-            texturesMissing: [...written.values()].filter((v) => v === '').length,
+            texturesWritten: textureCounts(written).written,
+            texturesMissing: textureCounts(written).missing,
             submodels: models.length - 1,
         },
     };

@@ -2668,3 +2668,172 @@ holding forward asked for `player/footstep` **three** times, against six or seve
 at Q3's 320 unit/s run speed works out at 102 units of ground per step, against the 48 the old
 constant asserted, and the reason it is not a constant is that it is not a property of the gait --
 it is what the gait and the speed happen to multiply out to.
+
+### D-083: The transparency route, which was wrong in six independent ways
+
+The maintainer, with a screenshot: *"I think transparent materials are not properly used, or
+textures are messed up. The white thing, I believe, is supposed to have transparency on it, it
+doesn't -- it looks 100% opaque. This messed with OIT because alpha is 100% too. The torches on the
+walls clearly were intended to have alpha in the flame texture too."*
+
+Both are right, they have different causes, and looking for the shared cause turned up four more.
+The white thing is `textures/sfx/beam` on `oa_dm1` -- eight triangles of light shaft over the
+corridor, drawn as a solid white box. The torches are `textures/sfx/flame2`, twenty triangles of
+opaque black-and-orange quad.
+
+**1. `blendFunc GL_SRC_ALPHA GL_ONE` was not recognised as additive.** `isAdditive` tested
+`src === 'gl_one'` and then `dst === 'gl_one'`, which catches `blendfunc add` and misses the form
+OA's flames, sprites and half its effects actually use. A stage it missed matched no other branch
+either -- not `filter`, not alpha-blend, not "no blendfunc" -- so it contributed *nothing*: no
+albedo, no emissive, no transparency. The material fell through to `qer_editorimage`, the preview
+picture the level editor shows in its texture browser, and rendered that, opaque.
+
+The rule is now stated by the blend's **destination** factor rather than by a list of source
+factors: a stage whose destination factor is `GL_ONE` keeps the whole framebuffer, so it cannot
+occlude anything, so whatever coverage it has is its own brightness. One sentence covering
+`GL_ONE GL_ONE`, `GL_SRC_ALPHA GL_ONE` and `GL_DST_COLOR GL_ONE` -- flames, beams and water.
+
+**2. Transparency was decided by `surfaceparm trans`, which Q3's renderer never reads.**
+`tr_shader.c`'s `infoParms` maps it to `CONTENTS_TRANSLUCENT` with surface flags of **zero**, and
+the comment beside it says what it is for: *"don't eat contained surfaces"*, a hint to the BSP
+compiler about vis and light. It has nothing to do with drawing.
+
+What decides drawing is `FinishShader`, and it asks one question: does **stage 0** set blend bits?
+If it does the shader sorts into `SS_BLEND0`; if it does not, `shader.sort = SS_OPAQUE`, however
+many later stages blend. That is now the whole rule here too, including `ParseStage`'s two
+normalisations -- the `add`/`filter`/`blend` shorthands, and *"implicitly assume that a GL_ONE
+GL_ZERO blend mask disables blending"*.
+
+Reading `surfaceparm trans` instead was wrong in both directions at once. It made
+`textures/liquids/lavahell` -- opaque geometry with an additive second pass -- see-through, and it
+rescued `textures/sfx/beam` into the transparent bucket by accident, which is how the beam ended up
+transparent-in-name and solid-in-fact. Fixing only the flames would have left the beam exactly as
+reported.
+
+**3. Nothing gave a transparent surface any coverage, so `beam` was a white box.**
+`textures/sfx/beam` names one image, `beam.jpg`, through `GL_ONE GL_ONE`. The additive branch
+routed it to the emissive slot and `continue`d before it could be an albedo, so the material had
+`albedo: null`; the runtime then bound no albedo texture, meep sampled its white default at alpha 1,
+and `surface_alpha = t_diffuse.a * albedo_color.a` came out at exactly 1. A fragment at full opacity
+in the OIT accumulation is not merely opaque, it dominates the moment-based transmittance around it,
+which is the second half of what the maintainer saw.
+
+A Q3 additive image has no alpha channel to give: it is authored over black and its *brightness* is
+how much of the destination it replaces. That is D-079's identity, and this is the same restatement
+applied to shader materials rather than to sprites. Such a shader is now an alpha-blended material
+with
+
+- albedo: the same image restated as **black with `luminance` in alpha**, so it contributes
+  coverage and no diffuse;
+- emissive: the image itself, at intensity 1 or at `q3map_surfacelight`.
+
+which composites to `src * L + dst * (1 - L)` against Q3's `dst + src`. The two agree where the
+image is black and where it is bright, and the port under-brightens in between rather than
+over-brightening. `beam.add.png` averages 9% coverage; the water on `oa_dm7` 17%; the quad aura 4%.
+None of them is a box any more.
+
+**4. Every glow map in the game resolved to the wrong file.** Q3 names a glow `<texture>.blend.tga`
+and `.blend` looks exactly like an extension. `resolveTexture` stripped a trailing `.<ext>`
+unconditionally and *then* tried the loaders' extensions, so `textures/base_light/ceil1_38.blend`
+resolved to `ceil1_38.tga` -- the base texture sitting beside it. Every emissive was a second copy
+of its own diffuse, so the whole fixture glowed instead of the bright part of it.
+
+`R_LoadImage` tries the name it was handed first and only strips afterwards. Doing it in that order
+resolves `ceil1_38.blend.tga` correctly and leaves the stripping fallback for the names that need
+it. `R_FindShader` has the mirror-image behaviour on the *shader* side -- it runs
+`COM_StripExtension` before looking anything up -- which `ShaderIndex.material` did not, so eleven
+pickup models whose MD3 surfaces name their skins with the extension left on missed their scripts
+entirely and fell through to the implicit-texture branch, which has no stages and therefore no
+transparency and no glow.
+
+**5. An alpha channel Q3 ignored is load-bearing in meep, and nineteen images had one.** Uploads are
+premultiplied and both shading paths divide the colour back out by alpha, so a texel at alpha 0
+shades **black** whatever `transparency_mode` says. Q3 had no such coupling: a stage with no
+`blendFunc`, or `filter`, or `add` never looked at the alpha channel, and a great many OA textures
+carry a leftover one. The red armour, the yellow armour, the railgun skin, the plasma gun, the three
+CTF flags and the gib membranes are all in that state, and all of them were rendering with black
+patches in the shape of a mask nobody meant to apply.
+
+So a texture reference is not a path any more, it is a path **plus the Q3 blend the stage that named
+it used**, and `texture-out.ts` holds one restatement per blend: alpha forced opaque, alpha kept,
+luminance into alpha, `255 - luminance` into alpha, or the colour divided back out of alpha. Bundles
+key their texture table by path-plus-blend, because one image referenced two ways is two files.
+Filed against the engine as BUG-9 and as a docs gap: the contract is stated precisely, in a comment
+inside `fragment_gbuffer`'s WGSL, and not on the field a consumer assigns.
+
+**6. The reader lost brace balance, and the report's lossiness numbers were the casualty.**
+`shader-script.ts` acted on a brace only when it was a line's *first* token. Thirty-six lines across
+five OA scripts put a directive on a brace line, and a line ending in `}` therefore never closed its
+stage: the rest of that shader was swallowed into it and the entry ran on past its own end.
+Recovering that is 72 more entries and 36 more unique shader names, none of them on a converted map
+-- and it moves every drop count in section 5, because directives swallowed into an over-long stage
+were being counted where they did not belong.
+
+The one that moved most is `deformVertexes`, from 2 to **376**. That was never a measurement: it is
+only ever written at shader level and the counter only ever read stages, so the two it found were
+two the brace bug had misfiled. It is the largest single category of dropped geometry animation in
+the set -- every flame that flickered, every banner that waved, every sprite that turned to face the
+camera -- and the report had it at two. The tokens on a shared brace line are still dropped, because
+splitting them needs the per-directive arities this reader deliberately does not have; they are now
+warned about instead of being silent.
+
+---
+
+**Two rules came out of the fix rather than going into it, and both are Q3's own.**
+
+*Which stage is the albedo* used to be "the first one that is opaque or `filter`". On
+`textures/base_light/xlight5` that is a `tcGen environment` reflection pass, so the light rendered
+as a picture of an environment map; on the three CTF flags it is a chrome envmap or an electric-zap
+overlay, so none of the flags was its own texture. The port now ranks candidates with
+`VertexLightingCollapse`'s weights -- `-5` for a `tcGen` that is not the texture's own, `-5` for any
+`tcMod`, `-3` for a non-identity `rgbGen`, earliest wins ties -- which is Q3 answering exactly this
+question when it drops to vertex lighting: if only one of these passes can be drawn, which one
+carries the surface? Eight shipping materials change, and every one of them changes to the image a
+person would have picked.
+
+*Which additive pass is a glow* needed a discriminator, because Q3 draws a weapon skin twice --
+diffuse, then additively at a specular coefficient -- and that second pass has exactly the shape of
+a glow map. `RB_CalcSpecularAlpha` computes the coefficient from the scene's lights, so it is
+shading, and a PBR material shades. An additive pass whose `rgbGen`/`alphaGen` is a `lighting*`
+form, or whose `tcGen` is `environment`, is therefore *not* promoted -- unless it is the whole
+shader, at which point the surface is an effect, its colour has to come from somewhere, and emitted
+is the only place left. Without that rule the fix lit up the railgun, the BFG, the gauntlet, the
+plasma gun and both armours like lamps.
+
+**What it comes to.** Across the six converted maps and the model bundle: no material is left
+without an albedo image (was 2 on the maps, 27 on the models); 20 map materials and 18 model
+materials are blended where 21 and 1 were before, and the ones that changed are beams, flames,
+water, fog, glass and every powerup shell; 3 map materials and 7 model materials are alpha-tested,
+which is the grates, the flags, the gib membranes and the machinegun's iron sight and nothing else.
+`textures/liquids/lavahell` is opaque again, and `textures/common/portal` -- which had been drawing
+as a solid black wall, because `invisible.tga` is 128x128 of alpha zero -- is invisible.
+
+**What is still wrong, named rather than left to be found.** `models/weapons2/bfg/bfgtube` is a
+`blendFunc blend` stage whose translucency came entirely from an `alphaGen wave inversesawtooth`;
+the image is opaque, the wave is dropped, and the tube draws solid. `alphaFunc LT128` -- draw where
+the image is *more* transparent -- is an inverted test a cutoff cannot express, and is recorded as a
+drop rather than mapped onto its own opposite. `alphaCutoff` survives in the bundles for the glTF
+character path and is inert for maps and models, because meep alpha-tests stochastically against
+blue noise rather than against a threshold. `GL_DST_COLOR GL_ONE` is treated as plain additive,
+which over-brightens where the destination is dark; the only shipping surfaces are two pools of
+water. And `E:/projects/oa/newtele/Circle` is a shader name that OpenArena shipped -- an absolute
+path off an artist's machine that no file answers to. It is the one material in the whole set with
+no texture at all, and it is named in `materials.test.ts` so that a *second* one would fail.
+
+**How this was checked, and the one link that was not.** `test/materials.test.ts` is new and it is
+the point of the exercise: the existing suite was green before this change and green after it, so
+the first job was a suite that would have been red. Thirteen of its rule cases fail against the old
+projection, verified by reverting the four pipeline files and re-running. The rules are asserted on
+shader text written out in the test -- every case a real OA shader cut down to the smallest thing
+that still has the property -- and the invariants on the bundles the pipeline actually wrote: every
+material resolves an albedo image, no blended material's albedo is fully opaque, no opaque
+material's albedo carries alpha for meep to divide by. The runtime half was checked by building the
+materials in the browser and reading back what reached `StandardShadeMaterial`: nine materials on
+`oa_dm1` are transparent or emissive, all nine have an albedo texture bound, and none of them
+reaches the OIT pass at `surface_alpha` 1 for want of one.
+
+Not checked: the pixels. The preview pane was not displayed for this session, so the page never
+composited -- `requestAnimationFrame` fired **zero** times in 1.5 seconds of waiting -- and D-015
+exists because this project has already shipped two wrong fixes on the strength of screenshots taken
+through that channel. Everything above is bundle-level and runtime-object-level evidence, and the
+frame that would confirm it is one screenshot away for anyone with the window open.

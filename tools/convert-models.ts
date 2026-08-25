@@ -41,7 +41,13 @@ import {
     type Md3Model,
     type Md3Surface,
 } from './pipeline/md3.ts';
-import { writeTexture, type TextureCache } from './pipeline/texture-out.ts';
+import {
+    textureCache as newTextureCache,
+    textureCounts,
+    textureKey,
+    writeTexture,
+    type TextureCache,
+} from './pipeline/texture-out.ts';
 import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import type {
     BundleMaterial,
@@ -160,11 +166,17 @@ const EXTRA_MODELS: readonly string[] = [
     'models/misc/telep.md3',
 ];
 
-function toBundleMaterial(name: string, pbr: PbrMaterial, albedo: string | null): BundleMaterial {
+function toBundleMaterial(
+    name: string,
+    pbr: PbrMaterial,
+    albedo: string | null,
+    emissive: string | null
+): BundleMaterial {
     return {
         name,
         albedo,
-        emissive: null,
+        albedoBlend: pbr.albedoBlend,
+        emissive,
         emissiveIntensity: pbr.emissiveIntensity ?? 0,
         roughness: pbr.roughness,
         metallic: pbr.metallic,
@@ -234,7 +246,7 @@ async function convertModels(): Promise<void> {
     const materials: BundleMaterial[] = [];
     const materialByShader = new Map<string, number>();
     const textures: Record<string, string | null> = {};
-    const textureCache: TextureCache = new Map();
+    const textureCache: TextureCache = newTextureCache();
 
     const models: BundleModel[] = [];
     const missingModels: string[] = [];
@@ -271,15 +283,45 @@ async function convertModels(): Promise<void> {
             if (materialIndex === undefined) {
                 const pbr = index.material(shaderName);
 
-                let albedo: string | null = null;
+                /*
+                 Same arrangement as the map bundle: a material names its
+                 textures by `textureKey`, because one image restated for two
+                 different Q3 blends is two files. An item's additive shell --
+                 the quad aura, the invisibility shimmer, the BFG's tube -- is
+                 exactly the case where the albedo and the emissive are the same
+                 image written two ways.
+                */
+                let albedoKey: string | null = null;
                 if (pbr.albedo !== null) {
-                    albedo = await writeTexture(index, EXTRACTED, pbr.albedo, textureDir, textureCache);
-                    textures[pbr.albedo] = albedo;
+                    albedoKey = textureKey(pbr.albedo, pbr.albedoBlend);
+                    textures[albedoKey] = await writeTexture(
+                        index,
+                        EXTRACTED,
+                        pbr.albedo,
+                        textureDir,
+                        textureCache,
+                        pbr.albedoBlend
+                    );
+                    if (textures[albedoKey] === null) albedoKey = null;
                 }
-                if (albedo === null) untexturedSurfaces += 1;
+                if (albedoKey === null) untexturedSurfaces += 1;
+
+                let emissiveKey: string | null = null;
+                if (pbr.emissive !== null && pbr.emissiveIntensity > 0) {
+                    emissiveKey = pbr.emissive;
+                    textures[emissiveKey] = await writeTexture(
+                        index,
+                        EXTRACTED,
+                        pbr.emissive,
+                        textureDir,
+                        textureCache,
+                        'opaque'
+                    );
+                    if (textures[emissiveKey] === null) emissiveKey = null;
+                }
 
                 materialIndex = materials.length;
-                materials.push(toBundleMaterial(shaderName, pbr, pbr.albedo));
+                materials.push(toBundleMaterial(shaderName, pbr, albedoKey, emissiveKey));
                 materialByShader.set(shaderName, materialIndex);
             }
 
@@ -333,7 +375,7 @@ async function convertModels(): Promise<void> {
             vertices: accum.vertexCursor,
             triangles: accum.indexCursor / 3,
             materials: materials.length,
-            texturesWritten: [...textureCache.values()].filter((v) => v !== '').length,
+            texturesWritten: textureCounts(textureCache).written,
             untexturedSurfaces,
         },
     };

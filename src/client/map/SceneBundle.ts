@@ -17,10 +17,34 @@
 
 export type TransparencyName = 'opaque' | 'mask' | 'blend';
 
+/**
+ * The Q3 blend an albedo image was written for; `tools/pipeline/texture-out.ts`
+ * has the restatements and `shader-to-pbr.ts` has the reasoning.
+ *
+ * Spelled out again here rather than imported, for the same reason
+ * `TransparencyName` is: the runtime does not read `tools/`, and a bundle field
+ * whose type lives in the pipeline would make it look as if it did. The runtime
+ * never acts on this one -- the written texture already carries the result -- but
+ * a bundle that does not say which blend produced its textures cannot be checked
+ * against the shaders it came from.
+ */
+export type TextureBlendName =
+    | 'opaque'
+    | 'alpha'
+    | 'add'
+    | 'addAlpha'
+    | 'filter'
+    | 'premultiplied';
+
 export interface BundleMaterial {
     readonly name: string;
-    /** Virtual texture path, or `null` when nothing on disk backed it. */
+    /**
+     * Key into {@link SceneBundle.textures}, or `null` when nothing on disk
+     * backed it. A path most of the time, but a path plus `#<blend>` when the
+     * same image had to be written more than one way.
+     */
     readonly albedo: string | null;
+    readonly albedoBlend: TextureBlendName;
     readonly emissive: string | null;
     readonly emissiveIntensity: number;
     readonly roughness: number;
@@ -102,7 +126,11 @@ export interface SceneBundle {
     readonly vertexBytes: number;
     readonly indexBytes: number;
     readonly materials: readonly BundleMaterial[];
-    /** Virtual texture path -> filename under `textures/`, or `null` if missing. */
+    /**
+     * Texture key -> filename under `textures/`, or `null` if missing. The key is
+     * a virtual path, plus `#<blend>` when the same image was written more than
+     * one way; see {@link BundleMaterial.albedo}.
+     */
     readonly textures: Readonly<Record<string, string | null>>;
     readonly meshes: readonly BundleMesh[];
     /** Absent in bundles written before movers existed. */
