@@ -40,7 +40,8 @@ own `engine.devices` rather than DOM listeners — see GAP-017 for why that is n
 |---|---|
 | `?map=<name>` | which level to load |
 | `?fly=1` | swaps the player for a noclip camera, for inspecting conversions |
-| `?trace=clipmap` | runs movement on the ported `cm_trace` instead of meep's physics, for an A/B |
+| `?move=q3` | runs the ported `bg_pmove.c` whole -- slide-move, ground trace and all -- instead of Q3's motor on meep's `KinematicMover` |
+| `?trace=clipmap` | runs collision on the ported `cm_trace` instead of meep's physics, for an A/B; implies `?move=q3` |
 | `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
 
 ## Verification
@@ -94,10 +95,15 @@ what that difference is, and includes a claim I got wrong twice before getting i
   dynamic lights from the map's own `.shader` data. Four of the six come out well lit; `oa_dm5`
   and `oa_dm7` do not, because their lighting was authored as `light` entities that q3map2
   deletes at compile time. That is measured rather than estimated — see GAP-006.
-- **Movement** is Q3's, on meep's physics. The ported `cm_trace` is bit-exact against the C and
-  is what the physics backend is measured against: the two agree on hit-or-miss for 100.0% of
-  20,000 sampled sweeps, fraction error is 5.3e-8 at the p90, and position divergence over 240
-  frames of identical input is **zero at the median** on every input pattern.
+- **Movement** is Q3's motor on meep's kinematic solver: `PM_Accelerate`, `PM_Friction` and
+  `PM_CmdScale` produce a desired velocity, and meep's `KinematicMover` resolves it. Strafe
+  jumping survives because it lives entirely in the acceleration function and never touches a
+  trace -- flat headings top out at exactly 320 u/s and a scripted strafe chain reaches 354.
+  Ported in spirit, not in body (D-071).
+- **The ported `bg_pmove.c` also ships**, bit-exact against the C, reachable with `?move=q3`. It
+  is the reference the new path is judged against rather than the shipping path: the ported
+  `cm_trace` agrees with meep's physics on hit-or-miss for 100.0% of 20,000 sampled sweeps, with
+  a p90 fraction error of 5.3e-8.
 - **Weapons** fire with Q3's own damage numbers and fire rates, extracted from the sources
   rather than transcribed.
 - **Items** spawn, drop to the floor, bob, spin, get picked up under `BG_CanItemBeGrabbed`'s

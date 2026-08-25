@@ -105,7 +105,12 @@ export class PhysicsWorld {
 
     /** Kept so `addMover` can build submodel bodies after the initial load. */
     private cm: ClipMap | null = null;
-    private ecd: EcsDataset | null = null;
+    /**
+     * Public because `KinematicMover` resolves an overlapping body back to its
+     * `Transform` and `Collider` through the dataset, so anything driving the
+     * mover needs both halves of the world. See `MoverHost`.
+     */
+    ecd: EcsDataset | null = null;
 
     private constructor() {
         this.system = new PhysicsSystem();

@@ -67,10 +67,38 @@ export class HeadlessPhysics {
      */
     private readonly queries: PhysicsTrace;
 
+    /**
+     * The two `EntityComponentDataset` methods `KinematicMover` reaches for.
+     *
+     * Its recover pass resolves an overlapping body back to its `Transform` and
+     * `Collider` so `compute_penetration` has both poses. In the browser that is
+     * the real ECS; here the bodies were linked directly, so this is the same
+     * lookup over the map this harness already keeps. Two methods, and the
+     * mover touches nothing else on the dataset -- which is worth recording as
+     * an ergonomics note rather than a complaint: a solver that takes the whole
+     * dataset to read two components is harder to drive headlessly than one
+     * that takes a resolver function.
+     */
+    readonly ecd: {
+        getComponent(entity: number, type: unknown): unknown;
+    };
+
+    private readonly components = new Map<number, { transform: Transform; collider: Collider }>();
+
     constructor(cm: ClipMap) {
         this.cm = cm;
         this.system = new PhysicsSystem();
         this.queries = new PhysicsTrace(this.system, cm);
+
+        this.ecd = {
+            getComponent: (entity: number, type: unknown): unknown => {
+                const record = this.components.get(entity);
+                if (record === undefined) return undefined;
+                if (type === Transform) return record.transform;
+                if (type === Collider) return record.collider;
+                return undefined;
+            },
+        };
 
         /*
          Model 0 only, matching `PhysicsWorld`. Models 1..n are brush entities --
@@ -131,6 +159,10 @@ export class HeadlessPhysics {
             this.system.attach_collider(id, collider as unknown as Collider, transform, id);
             // `link` stamps the packed body id onto the component.
             this.queries.register(id, (body as unknown as { _bodyId: number })._bodyId, hull);
+            this.components.set(id, {
+                transform,
+                collider: collider as unknown as Collider,
+            });
 
             bodies += 1;
         }

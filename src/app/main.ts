@@ -75,6 +75,25 @@ function useClipmapTrace(): boolean {
     return new URLSearchParams(window.location.search).get('trace') === 'clipmap';
 }
 
+/**
+ * `?move=q3` runs the ported `bg_pmove.c` whole -- slide-move, ground trace and
+ * all -- instead of Q3's motor on meep's `KinematicMover`.
+ *
+ * The meep-native path is the default (D-071): the brief's "movement fidelity is
+ * non-negotiable" was reversed in favour of porting Q3 in spirit rather than in
+ * body, and reproducing Q3's contact semantics through a general-purpose sweep
+ * was what made that expensive. The ported path stays because it is bit-exact
+ * against the C and is therefore the reference any claim about the new one is
+ * measured against.
+ *
+ * Forced on when `?trace=clipmap` is set, since that selects the ported
+ * collision backend and there is nothing for the kinematic mover to run on.
+ */
+function usePortedPmove(): boolean {
+    const move = new URLSearchParams(window.location.search).get('move');
+    return move === 'q3' || useClipmapTrace();
+}
+
 async function main(): Promise<void> {
     const engine = await EngineHarness.bootstrap();
 
@@ -291,12 +310,22 @@ async function main(): Promise<void> {
             );
         }
 
+        const moverHost =
+            usePortedPmove() || physicsWorld === null || physicsWorld.ecd === null
+                ? null
+                : { system: physicsWorld.system, ecd: physicsWorld.ecd };
+
         const player = new PlayerController(
             clipMap,
             input,
             engine.devices,
             spawn?._originQ3 ?? [0, 0, 0],
-            physicsWorld
+            physicsWorld,
+            moverHost
+        );
+
+        console.log(
+            `[queep] movement: ${moverHost === null ? 'ported bg_pmove' : "Q3's motor on meep KinematicMover"}`
         );
         player.attach();
 
@@ -735,7 +764,7 @@ async function main(): Promise<void> {
                 damage: arena.totalDamage,
                 kills: arena.kills,
                 deaths: arena.deaths,
-                backend: clipmapOnly ? 'clipmap' : 'physics',
+                backend: usePortedPmove() ? (clipmapOnly ? 'q3/clipmap' : 'q3/physics') : 'meep',
                 health: player.inventory.health,
                 armor: player.inventory.armor,
                 ammo: player.inventory.ammo[player.weapon] ?? 0,

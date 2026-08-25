@@ -1831,3 +1831,84 @@ something, read the directory, not the file.
 and zero median divergence, the change would be unmeasured churn during a reporting phase, and the
 honest record of what the port would have looked like is more valuable here than the port looking
 different. Recorded as the alternative, in GAP-019 and GAP-021, rather than silently taken.
+
+### D-071: Movement runs on meep's kinematic solver, and `bg_pmove`'s slide-move is retired
+
+The maintainer, reversing the brief: *"We're looking to port Q3 in spirit, not in body. If you
+lack exact precise semantic of movement in Q3 within the physics engine, the right move is to
+change the movement semantic to be meep's."*
+
+That overrides brief section 2, which said `bg_pmove.c` fidelity was "the one place fidelity is
+non-negotiable" and that collision traces had to be faithful "because pmove depends on them". It
+also settles what the previous three exchanges were circling: the port had been spending its
+effort making a general-purpose sweep reproduce a 1999 brush-interval test, and the answer is to
+stop.
+
+**The split.** "Spirit" is not "vaguely Q3-ish", and the line is sharper than it looks:
+
+| Q3 keeps -- the spirit | meep takes -- the body |
+|---|---|
+| `PM_CmdScale` | recover (depenetration via `compute_penetration`) |
+| `PM_Friction` | sweep-and-slide, crease-aware |
+| **`PM_Accelerate`** | stairs (`stepHeight`) |
+| wishdir / wishspeed, ground-plane projection | ground categorise + stick |
+| `JUMP_VELOCITY`, gravity, `pm_duckScale` | contact normals, the standoff |
+
+`PM_Accelerate` is the whole reason this split works. Strafe jumping exists because `addspeed` is
+capped against the *projection* of current velocity onto `wishdir`, so a player moving nearly
+perpendicular to where they are pushing gets the full acceleration on top of the speed they
+already have. That is arithmetic on a velocity vector. **No trace is involved in it at all.** So
+the trick that makes Q3 movement worth porting is entirely on the side that stays, and every
+contact semantic -- the thing that was expensive -- is entirely on the side that goes.
+
+`src/client/MeepMove.ts` is that, and it is 400 lines against the 1,766 of `pmove.ts`.
+
+**What this deletes as a *requirement*.** GAP-019's per-brush blocking rule and GAP-012's
+latest-entering-plane normal were both needed *only* to make meep's sweep answer Q3's question.
+Nothing asks Q3's question any more. `PhysicsTrace` and its per-brush re-derivation stay in the
+tree because `?trace=clipmap` and the divergence harness still use them, and because the ported
+`bg_pmove` is the reference any claim about the new path is measured against -- but the shipping
+player no longer goes near them.
+
+**What it costs, stated plainly.** Contact fractions differ, so a ramp launches at a slightly
+different angle and a corner is rounded rather than clipped. There is no oracle for the new path
+and there cannot be one: it is deliberately not the C. `test/meepmove.test.ts` replaces
+bit-exactness with twenty behavioural assertions, each naming the property of Q3 movement it
+protects -- tops out at exactly `ps.speed`, diagonal is not faster, one jump per press, the
+strafe-jump chain exceeds the 320 base, a dropped player rests, a player pushed into walls keeps
+moving, nothing goes non-finite. Measured on the new path: flat headings peak at **320.0** u/s,
+and a scripted strafe chain reaches **354**.
+
+**Integration.** `PlayerMovement` writes the existing `playerState_t` rather than replacing it, so
+weapons, items, the HUD, character placement and the bots all read `ps.origin` / `ps.velocity` /
+`ps.groundEntityNum` unchanged and cannot tell which solver ran. That kept the change to one
+branch in `PlayerController` instead of a rewrite of `main.ts`. `?move=q3` selects the ported
+path, and `?trace=clipmap` implies it.
+
+**Three things this turned up that reasoning would not have.**
+
+1. **`KinematicMover` wants feet-at-origin shapes, and meep's shapes are centre-origin.** The
+   contract is real -- "Reference point is the capsule bottom (`position.y`)" -- and the way to
+   satisfy it is to wrap the shape in a `TransformedShape3D` offset by half its height, which is
+   what the engine's own `makePostureCapsule` does. It is documented in
+   `FirstPersonPlayerControllerSystem`, not in `KinematicMover`, so a consumer driving the mover
+   directly does not meet it. Passing a centre-origin box with a centred position is silent: the
+   sweep is correct, and `_groundedAt` rays down `2 * stepHeight` from `position.y + stepHeight`,
+   which for a 56-unit Q3 box stops ten units *above* the feet and can never reach the floor. The
+   player hangs, ungrounded, at spawn height. An hour.
+2. **A real engine bug, BUG-7.** `raycast` reports `t = 0` with a face normal for a ray whose
+   origin is inside a convex hull's *AABB* but outside the hull. Reproduced in twenty lines with
+   no map data. It breaks `_categorizeGround`'s walkability probe above any brush that does not
+   fill its bounding box -- which in a Q3 level means every wedge and every ramp -- and it costs
+   one of `aggressor`'s nine spawn platforms.
+3. **The maintainer's direction was right in a way I could not have argued from the outside.**
+   Thirty minutes of using the engine's own solver found a genuine engine bug. Three sessions of
+   bending the query layer to Q3's semantics found none, because the workaround was carefully
+   avoiding the code path the bug is in.
+
+**What is not done, and is not hidden.** The bots still run the ported `bg_pmove` through
+`PmoveHost`, so the player and the bots now move on different solvers. D-050's reasoning still
+holds -- "a bot moving through a different `pmove_t` is a bot playing a different game" -- and
+this is now true and was not before. `Bot` takes the same `PhysicsTraceBackend` the player used,
+so the migration is the same `PlayerMovement` swap; it is the next change, not a design position.
+Recorded here rather than left for someone to notice from the fact that bots corner differently.

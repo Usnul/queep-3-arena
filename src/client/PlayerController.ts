@@ -43,6 +43,7 @@ import {
 import * as C from '../q3/pmove/constants.ts';
 import { weaponStats, type WeaponId } from '../game/Weapons.ts';
 import { newInventory, type Inventory } from '../game/Items.ts';
+import { PlayerMovement, type MoverHost, type MoveCommand } from './MeepMove.ts';
 import {
     createPmoveHost,
     type MoverSource,
@@ -232,7 +233,8 @@ export class PlayerController {
         element: HTMLElement,
         devices: InputDevices,
         spawnQ3: readonly number[],
-        physics: PhysicsTraceBackend | null = null
+        physics: PhysicsTraceBackend | null = null,
+        moverHost: MoverHost | null = null
     ) {
         this.element = element;
         this.devices = devices;
@@ -252,7 +254,26 @@ export class PlayerController {
         });
 
         this.ps = this.pmove.ps;
+
+        /*
+         The shipping movement path (D-071).
+
+         `PlayerMovement` runs Q3's motor and hands the resulting velocity to
+         meep's `KinematicMover`; the ported `bg_pmove` above stays built and is
+         used when this is null, which is what `?move=q3` selects. Both write
+         the same `playerState_t`, so nothing downstream -- weapons, items, the
+         HUD, character placement -- can tell which one ran.
+        */
+        this.movement = moverHost === null
+            ? null
+            : new PlayerMovement(moverHost, this.ps.origin);
     }
+
+    /** Non-null when movement runs on meep's solver, which is the default. */
+    private readonly movement: PlayerMovement | null;
+
+    /** Held-key crouch, for the meep-native path; Q3 reads it off `UPMOVE`. */
+    private crouching = false;
 
     attach(): void {
         if (this.attached) return;
@@ -385,6 +406,7 @@ export class PlayerController {
         cmd.weapon = 1;
 
         this.attacking = this.active && this.devices.pointer.mouseButtonLeft.is_down;
+        this.crouching = this.active && this.has(KEY_CROUCH);
 
         if (this.active) {
             cmd.moves[FORWARDMOVE] =
@@ -399,11 +421,42 @@ export class PlayerController {
             cmd.moves[UPMOVE] = 0;
         }
 
-        runPmove(this.pmove);
+        if (this.movement === null) {
+            runPmove(this.pmove);
+        } else {
+            this.movement.step(this.ps, this.meepCommand(), deltaSeconds);
+        }
 
         this.fireIfReady(msec);
 
         this.writeCamera(cameraTransform);
+    }
+
+    /**
+     * The same command, in the shape the meep-native path takes.
+     *
+     * `usercmd_t` packs crouch into `UPMOVE` as a negative, because Q3 has one
+     * axis for both and `PM_CheckDuck` reads the sign. `MoveCommand` splits
+     * them, since nothing downstream of it needs them fused -- and fusing them
+     * would mean jump and crouch could cancel, which they do in Q3 and is a
+     * quirk rather than a feature.
+     */
+    private meepCommand(): MoveCommand {
+        const moves = this.pmove.cmd.moves;
+
+        return {
+            forward: moves[FORWARDMOVE]!,
+            right: moves[RIGHTMOVE]!,
+            up: this.active && this.has(KEY_JUMP) ? 127 : 0,
+            pitch: this.ps.viewangles[0]!,
+            yaw: this.ps.viewangles[1]!,
+            crouch: this.crouching,
+        };
+    }
+
+    /** Horizontal speed, Q3 units/s -- whichever solver produced it. */
+    get movementSpeed(): number {
+        return Math.hypot(this.ps.velocity[0]!, this.ps.velocity[1]!);
     }
 
     /**

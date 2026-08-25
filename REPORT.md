@@ -27,16 +27,25 @@ the port needed, the port worked around it and the workaround is written down he
 
 Ranked by how much they would cost the next person, not by how much they cost me.
 
-**Re-ranked from scratch in phase 6, then corrected again after review.** The phase 6 ranking
-put "building a character controller on `shape_cast`" first, on the strength of GAP-019 and
-GAP-020. That was wrong and the correction is worth stating before the list rather than after it:
-meep ships `KinematicMover`, a kinematic character solver with a `skin` standoff, a public
-`compute_penetration` depenetration step, Quake-lineage crease handling and a 365-line design
-document — and I never opened it, because in phase 2 I had evaluated the *controller* it sits
-beside, correctly rejected that, and let the rejection cover the directory. GAP-020 is withdrawn.
-GAP-019 shrinks to a Q3-fidelity constraint. What replaces them at the top of this list is not
-those findings; it is the first-run experience, which was always the item with the widest reach.
-The full correction is GAP-021.
+**Re-ranked from scratch in phase 6, corrected after review, and then overtaken by a change of
+direction.** Both corrections are worth stating before the list rather than after it.
+
+The phase 6 ranking put "building a character controller on `shape_cast`" first, on the strength
+of GAP-019 and GAP-020. That was wrong: meep ships `KinematicMover`, a kinematic character solver
+with a `skin` standoff, a public `compute_penetration` depenetration step, Quake-lineage crease
+handling and a 365-line design document — and I never opened it, because in phase 2 I had
+evaluated the *controller* it sits beside, correctly rejected that, and let the rejection cover
+the directory. GAP-020 is withdrawn; GAP-019 shrank to a Q3-fidelity constraint. GAP-021 is the
+correction.
+
+The maintainer then reversed the brief's central constraint: **port Q3 in spirit, not in body**,
+and where Q3's exact movement semantics cannot be had inside the physics engine, change the
+semantics to meep's. So the port's movement now runs Q3's *motor* -- `PM_Accelerate` and the
+friction and command-scale functions around it, which is where strafe jumping actually lives -- on
+`KinematicMover`, and `PM_SlideMove`, `PM_StepSlideMove` and `PM_GroundTrace` are retired
+(D-071). GAP-012 and GAP-019 are no longer things this port needs; they are recorded as what it
+cost to have believed otherwise. Item 4 below is what that change found in half an hour, and it is
+the strongest argument in this report for the maintainer's instinct over mine.
 
 1. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
    spent on graphics.** The cheapest item on this list to fix and the only one that hits 100% of
@@ -99,19 +108,31 @@ The full correction is GAP-021.
    *the engine is very good at loud, specific failures* (section 7) *and has no story at all for
    silent ones.*
 
-4. **`shape_cast` returns the minimum-penetration normal, and a slide-move controller needs the
-   plane it entered last.** They agree on a flat wall and disagree at a corner, where meep
-   returned `[0, 1, 0]` — the floor — for a box wedged against a wall. Clip velocity against that
-   and the horizontal motion into the wall survives untouched; re-trace, accumulate a second
-   contradictory plane, hit the five-plane limit, and the player stops dead about a metre short of
-   the corner. Two hours, most of it spent believing the port had a `PM_SlideMove` bug, because a
-   slide-move symptom is what it looks like. Re-deriving the plane from source geometry took
-   bunny-hop divergence from 56.0 units to 0.12 — a 450× reduction (GAP-012).
+4. **`raycast` reports an immediate hit for a ray starting inside a convex hull's bounding box
+   but outside the hull, and it lands in the walkability decision of the engine's own character
+   solver.** `overlap` at the same point correctly returns nothing; `raycast` returns `t = 0` with
+   a face normal. Twenty lines to reproduce, no map data, in BUG-7.
 
-   Kept in this list, at this height and no higher, after the correction described above: the API
-   observation is factual and the workaround needs source half-spaces the engine does not keep,
-   but "every consumer will re-implement this privately" was not true, and a consumer using
-   `KinematicMover` rather than the raw query may not meet it at all.
+   `KinematicMover._categorizeGround` decides "am I standing on something walkable" with a centre
+   raycast from `stepHeight` above the feet, and treats a steep normal there as a slope to slide
+   down. Above any brush that does not fill its bounding box -- in a Quake III level, every wedge,
+   ramp and cut corner -- that probe answers "inside, facing down", so the player rests on the
+   surface and is never grounded. Gravity is applied and cancelled forever, `grounded` stays false,
+   and jump, animation, footsteps and ground-stick are all wrong downstream. Measured: it costs one
+   of `aggressor`'s nine spawn platforms.
+
+   It is ranked here because of *how* it was found, which is the most useful methodological point
+   in this report. Three sessions of building character movement directly on `shape_cast` and
+   `overlap_shape` found no engine bug at all -- the workaround was carefully routing around the
+   code path the bug lives in. Half an hour of running the engine's own solver found it. **A
+   consumer who reimplements rather than adopts stops being able to find your bugs**, and the
+   value of a port as a bug-finding exercise collapses at exactly the moment it decides to do
+   things its own way.
+
+   The finding it displaced -- `shape_cast` returning the minimum-penetration normal where a
+   slide-move wants the plane it entered last (GAP-012) -- is still factual and is still in the
+   register, but this port no longer depends on it (D-071) and `KinematicMover` approaches the
+   corner case from the other end.
 
 
 5. **Photometric lighting is the right design and has no guidance, and world scale is silently
@@ -1151,8 +1172,10 @@ the expensive way.
 
 ### GAP-012: `shape_cast` returns the minimum-penetration normal; character control needs the latest entering plane
 
-- **Severity:** major — a correct answer to a different question, but the one a character
-  controller asks is not available and cannot be derived from the result.
+- **Severity:** minor, reduced twice. It was `major` while this port re-derived the plane to keep
+  Q3's contact semantics; movement now runs on `KinematicMover` (D-071) and nothing in the
+  shipping path asks this question any more. The API observation below is unchanged and still
+  factual — it is the *consequence* that shrank.
 - **What happened:** With movement on meep's physics, the player wedged permanently on outside
   corners — velocity went to zero about a metre short of the corner and stayed there. Traced to
   the contact normal. A player box overlapping the join between a floor brush and a wall brush
@@ -1487,9 +1510,12 @@ the expensive way.
 > GAP-009, and then never opened. The correction is GAP-021. What is left below is real, and it is
 > much smaller than what was here before.
 
-- **Severity:** minor. A Q3-fidelity constraint with a working workaround, not an absence in the
-  engine. The engine's answer to character collision is `KinematicMover`, and it is a good one;
-  it is simply not an answer `bg_pmove` can use.
+- **Severity:** minor, and as of D-071 **no longer load-bearing for this port at all**. It was a
+  Q3-fidelity constraint with a working workaround, never an absence in the engine; the maintainer
+  has since reversed the fidelity requirement, so the shipping player runs Q3's motor on
+  `KinematicMover` and never asks Q3's contact question. `PhysicsTrace` and the machinery below
+  survive only for `?trace=clipmap` and the divergence harness, which measure the ported
+  reference rather than the game.
 - **What is actually true.** `CM_TraceThroughBrush` is a signed-distance interval test over a
   brush's half-spaces with a ±`SURFACE_CLIP_EPSILON` (1/8 unit) term on both ends, and it returns
   "this brush does not block" for cases where the swept volume demonstrably touches the brush. At
@@ -2203,6 +2229,75 @@ defect: double-sided surfaces went unimplemented for the whole port on the stren
 by a reader who checked before using the field. It was found only when a later pass questioned
 the note. `Back` is the value that genuinely misbehaves on a hand-built material, and the docblock
 does not say so. Filed, and withdrawn as a gap, as GAP-007.
+
+### BUG-7: `raycast` reports an immediate hit for a ray that starts inside a hull's AABB but outside the hull
+
+Found in phase 6 by moving the port onto meep's own `KinematicMover` (D-071), which is the point:
+three sessions of building character movement on `shape_cast` and `overlap_shape` found no engine
+bug at all, and thirty minutes of using the engine's own solver found this one.
+
+```js
+import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
+import { RigidBody }    from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
+import { Collider }     from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
+import { BodyKind }     from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
+import { ConvexHullShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/ConvexHullShape3D.js';
+import { SphereShape3D }     from '@woosh/meep-engine/src/core/geom/3d/shape/SphereShape3D.js';
+import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Ray3 } from '@woosh/meep-engine/src/core/geom/3d/ray/Ray3.js';
+import { PhysicsSurfacePoint } from '@woosh/meep-engine/src/engine/physics/queries/PhysicsSurfacePoint.js';
+
+// A right-triangular prism -- a ramp. It fills half of its own AABB.
+const shape = ConvexHullShape3D.from(
+    new Float32Array([-1,-1,-1,  1,-1,-1,  1,1,-1,  -1,-1,1,  1,-1,1,  1,1,1]),
+    [0,1,2, 3,5,4, 0,3,4, 0,4,1, 1,4,5, 1,5,2, 0,2,5, 0,5,3]
+);
+
+const sys = new PhysicsSystem();
+const body = new RigidBody(); body.kind = BodyKind.Static;
+const collider = new Collider(); collider.shape = shape;
+const transform = new Transform(); transform.position.set(0, 0, 0);
+sys.link(body, transform, 1);
+sys.attach_collider(1, collider, transform, 1);
+
+// Inside the AABB, plainly outside the wedge (which only fills y <= x).
+const p = { x: -0.9, y: 0.9, z: 0 };
+
+sys.overlap(SphereShape3D.from(1e-4), p, {x:0,y:0,z:0,w:1}, new Uint32Array(8), 0);
+// -> 0 bodies.  Correct.
+
+const ray = new Ray3();
+ray.setOrigin(p.x, p.y, p.z);
+ray.setDirection(0, -1, 0);
+ray.tMax = 5;
+sys.raycast(ray, new PhysicsSurfacePoint());
+// -> true, t = 0.0000, normal = (-1, 0, 0)
+// Expected: a hit further down, on the sloped face.
+```
+
+`overlap` and `raycast` disagree about whether the same point is inside the same body, and
+`overlap` is the one that agrees with the geometry. The `t = 0` plus a face normal is the
+signature of inside-body handling: the ray is being treated as originating within the shape, which
+is true of its bounding box and false of the shape.
+
+**Why it matters beyond a wrong number.** `KinematicMover._categorizeGround` decides walkability
+with a centre raycast from `stepHeight` above the feet, and its docblock is explicit that a steep
+normal there means a genuine slope and therefore *not grounded*. Above any brush that does not
+fill its bounding box, that probe returns `t = 0` with a downward normal, so the player rests on
+the surface and is never grounded: gravity keeps being applied and cancelled, `grounded` stays
+false, and every consumer of it -- jump, animation, footsteps, the ground-stick -- is wrong.
+
+Quake III levels are built from brushes and a large fraction of them are wedges, ramps and cut
+corners, so this is not an exotic shape. Measured: it costs one of `aggressor`'s nine spawn
+platforms, where the clipmap and `overlap` both say the probe point is empty and `raycast` says it
+is inside something facing down. Pinned in `test/meepmove.test.ts` as a count, so a fix in the
+engine fails the test and forces this entry to be revisited.
+
+**Severity:** major. Silent, produces a plausible-looking result, and lands in the walkability
+decision of the engine's own character solver.
+
+**Evidence:** the snippet above, run against `@woosh/meep-engine@3.0.2` as installed;
+`test/meepmove.test.ts` ("grounds at every spawn except where BUG-7 hides the floor"); D-071.
 
 ### Not bugs, recorded so nobody re-files them
 
