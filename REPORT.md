@@ -507,17 +507,17 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_RankUserStatus` | 3 | game | not needed | - | Q3 online rankings service, dead since 2002. _(classified by prefix `trap_Rank`)_ |
 | `trap_RealTime` | 16 | cgame, game, ui | mapped | Date |  |
 | `trap_RemoveCommand` | 1 | cgame | mapped | own console command table |  |
-| `trap_S_AddLoopingSound` | 9 | cgame | mapped | looping sound emitter | Q3 rebuilds the looping-sound set every frame; meep keeps them as entities. |
-| `trap_S_AddRealLoopingSound` | 3 | cgame | mapped | looping sound emitter |  |
-| `trap_S_ClearLoopingSounds` | 5 | cgame | not needed | retained emitters | Immediate-mode artifact. |
+| `trap_S_AddLoopingSound` | 9 | cgame | mapped | AudioEmitter, looping 3D | Q3 rebuilds the loop set every frame and keeps the nearest; a looping 3D emitter is registered with AudioEmitterSystem's LiveEmitterSet, which promotes the nearest in range up to LOOP_BUDGET and leaves the rest dormant. Live at: CG_Missile's per-weapon fly sound on rockets, plasma and BFG shots; CG_Item's hover on a weapon lying in the map; CG_AddPlayerWeapon's firingSound/readySound on bots. Not CG_PlayerPowerups' flight loop (no powerup state) and not the gauntlet's firingSound (needs its own firing flag, not a fire-rate cooldown) -- see D-065. |
+| `trap_S_AddRealLoopingSound` | 3 | cgame | mapped | AudioEmitter, looping 3D | The ET_SPEAKER variant, meaning not merged with other copies of the same sound. Map ambience: MapSound starts one emitter per target_speaker carrying the looped-on spawnflag, named by the entity's own noise key. 22 on oa_dm5, 10 on oa_dm4, 3 on aggressor. |
+| `trap_S_ClearLoopingSounds` | 5 | cgame | not needed | retained emitters | Immediate-mode artifact: Q3 clears the set each frame because the set is rebuilt each frame. An emitter persists until something stops it. |
 | `trap_S_RegisterSound` | 218 | cgame, q3_ui, ui | mapped | SoundAssetLoader |  |
 | `trap_S_Respatialize` | 3 | cgame | mapped | SoundListener on the camera entity | AudioEmitterSystem forwards the listener pose from the component each frame. |
-| `trap_S_StartBackgroundTrack` | 8 | cgame, ui | mapped | music bus / streaming source |  |
-| `trap_S_StartLocalSound` | 71 | cgame, q3_ui, ui | mapped | sopra playOneShot, is3D false | Pickups and feedback tones, played dry. |
-| `trap_S_StartSound` | 77 | cgame | mapped | sopra playOneShot | Positional one-shot. Played straight through the sopra engine rather than as an AudioEmitter component: only looping events take the spatially-managed path, and a machinegun would mean an entity built and destroyed ten times a second. |
-| `trap_S_StopBackgroundTrack` | 6 | cgame, ui | mapped | music bus |  |
-| `trap_S_StopLoopingSound` | 3 | cgame | mapped | stop/remove emitter |  |
-| `trap_S_UpdateEntityPosition` | 4 | cgame | mapped | Transform on emitter entity |  |
+| `trap_S_StartBackgroundTrack` | 8 | cgame, ui | mapped | AudioEmitter, looping 2D on the music bus | worldspawn's music key, which SP_worldspawn copies into CS_MUSIC and CG_StartMusic hands over as an intro and a loop token. No map this port ships names a second token. oa_dm1 and oa_dm5 ask for Q3-original tracks OA does not ship, so they get none and the manifest says so. |
+| `trap_S_StartLocalSound` | 71 | cgame, q3_ui, ui | mapped | AudioEmitter, finite 2D | Pickups and feedback tones, played dry -- the same emitter with is3D false, which is what makes it dry. |
+| `trap_S_StartSound` | 77 | cgame | mapped | AudioEmitter, finite 3D | Positional one-shot: AudioBank.play builds an emitter entity at the point and removes it on the instance's onEnded. AudioEmitterSystem routes a finite 3D event down its direct path, so this reaches the same sopra playEvent a direct call would, one link later. |
+| `trap_S_StopBackgroundTrack` | 6 | cgame, ui | mapped | remove the music emitter | AudioBank.stopMusic, and implicitly whenever a second track replaces the first. |
+| `trap_S_StopLoopingSound` | 3 | cgame | mapped | remove the emitter entity | SoundLoop.stop. Unlinking is what stops the sound, so the removal is the stop. Called when a missile detonates, when a weapon is picked up, and when a bot switches or dies. |
+| `trap_S_UpdateEntityPosition` | 4 | cgame | mapped | Transform on the emitter entity | SoundLoop.move writes the Transform the emitter was registered with. The spatial index subscribes to that vector's onChanged, so a rocket's fly sound follows the rocket and refits its BVH leaf only when it actually moves. |
 | `trap_Send` | 1 | game | not needed | - | OA-specific raw send. |
 | `trap_SendClientCommand` | 19 | cgame | not needed | direct call |  |
 | `trap_SendConsoleCommand` | 57 | cgame, game | mapped | own console |  |

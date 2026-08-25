@@ -25,7 +25,8 @@ npm run dev
 
 `npm run assets` converts the static props, the 15 player characters and the sound bank. It is
 separate from the map conversion because it runs once for the whole game rather than once per
-map.
+map — with one ordering caveat: a map names its own ambience and music, so `npm run
+convert-sounds` wants running again after a new map is converted, and says so.
 
 `npm run setup` clones the reference C sources at pinned commits and downloads the OpenArena
 0.8.8 game data (425 MB). Nothing it fetches is committed — see [ASSETS.md](ASSETS.md) for
@@ -87,7 +88,10 @@ what that difference is, and includes a claim I got wrong twice before getting i
   solved by `AimAtTarget` and teleporters that take you somewhere.
 - **15 characters**, converted from MD3 vertex-morph animation to skinned glTF by inferring a
   skeleton the source data does not contain.
-- **Positional audio** for weapons, impacts, items, movers, jump pads and footsteps.
+- **Audio** on meep's `AudioEmitter` components, one path for all four of Q3's sound calls:
+  positional one-shots for weapons, impacts, items, movers, jump pads and footsteps; looping
+  sources that follow what owns them, from map ambience to a rocket's fly sound; and the map's
+  own background track.
 - **Bots** on meep's behaviour trees, running the *same* `Pmove` the player does — they route,
   fight, take items, and one has been observed strafe-jumping.
 - **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,

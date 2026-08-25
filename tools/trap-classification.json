@@ -413,38 +413,38 @@
     },
     "trap_S_StartSound": {
       "status": "mapped",
-      "meep": "sopra playOneShot",
-      "note": "Positional one-shot. Played straight through the sopra engine rather than as an AudioEmitter component: only looping events take the spatially-managed path, and a machinegun would mean an entity built and destroyed ten times a second."
+      "meep": "AudioEmitter, finite 3D",
+      "note": "Positional one-shot: AudioBank.play builds an emitter entity at the point and removes it on the instance's onEnded. AudioEmitterSystem routes a finite 3D event down its direct path, so this reaches the same sopra playEvent a direct call would, one link later."
     },
     "trap_S_StartLocalSound": {
       "status": "mapped",
-      "meep": "sopra playOneShot, is3D false",
-      "note": "Pickups and feedback tones, played dry."
+      "meep": "AudioEmitter, finite 2D",
+      "note": "Pickups and feedback tones, played dry -- the same emitter with is3D false, which is what makes it dry."
     },
     "trap_S_AddLoopingSound": {
       "status": "mapped",
-      "meep": "looping sound emitter",
-      "note": "Q3 rebuilds the looping-sound set every frame; meep keeps them as entities."
+      "meep": "AudioEmitter, looping 3D",
+      "note": "Q3 rebuilds the loop set every frame and keeps the nearest; a looping 3D emitter is registered with AudioEmitterSystem's LiveEmitterSet, which promotes the nearest in range up to LOOP_BUDGET and leaves the rest dormant. Live at: CG_Missile's per-weapon fly sound on rockets, plasma and BFG shots; CG_Item's hover on a weapon lying in the map; CG_AddPlayerWeapon's firingSound/readySound on bots. Not CG_PlayerPowerups' flight loop (no powerup state) and not the gauntlet's firingSound (needs its own firing flag, not a fire-rate cooldown) -- see D-065."
     },
     "trap_S_AddRealLoopingSound": {
       "status": "mapped",
-      "meep": "looping sound emitter",
-      "note": ""
+      "meep": "AudioEmitter, looping 3D",
+      "note": "The ET_SPEAKER variant, meaning not merged with other copies of the same sound. Map ambience: MapSound starts one emitter per target_speaker carrying the looped-on spawnflag, named by the entity's own noise key. 22 on oa_dm5, 10 on oa_dm4, 3 on aggressor."
     },
     "trap_S_ClearLoopingSounds": {
       "status": "not-needed",
       "meep": "retained emitters",
-      "note": "Immediate-mode artifact."
+      "note": "Immediate-mode artifact: Q3 clears the set each frame because the set is rebuilt each frame. An emitter persists until something stops it."
     },
     "trap_S_StopLoopingSound": {
       "status": "mapped",
-      "meep": "stop/remove emitter",
-      "note": ""
+      "meep": "remove the emitter entity",
+      "note": "SoundLoop.stop. Unlinking is what stops the sound, so the removal is the stop. Called when a missile detonates, when a weapon is picked up, and when a bot switches or dies."
     },
     "trap_S_UpdateEntityPosition": {
       "status": "mapped",
-      "meep": "Transform on emitter entity",
-      "note": ""
+      "meep": "Transform on the emitter entity",
+      "note": "SoundLoop.move writes the Transform the emitter was registered with. The spatial index subscribes to that vector's onChanged, so a rocket's fly sound follows the rocket and refits its BVH leaf only when it actually moves."
     },
     "trap_S_Respatialize": {
       "status": "mapped",
@@ -453,13 +453,13 @@
     },
     "trap_S_StartBackgroundTrack": {
       "status": "mapped",
-      "meep": "music bus / streaming source",
-      "note": ""
+      "meep": "AudioEmitter, looping 2D on the music bus",
+      "note": "worldspawn's music key, which SP_worldspawn copies into CS_MUSIC and CG_StartMusic hands over as an intro and a loop token. No map this port ships names a second token. oa_dm1 and oa_dm5 ask for Q3-original tracks OA does not ship, so they get none and the manifest says so."
     },
     "trap_S_StopBackgroundTrack": {
       "status": "mapped",
-      "meep": "music bus",
-      "note": ""
+      "meep": "remove the music emitter",
+      "note": "AudioBank.stopMusic, and implicitly whenever a second track replaces the first."
     },
     "trap_Key_GetCatcher": {
       "status": "mapped",

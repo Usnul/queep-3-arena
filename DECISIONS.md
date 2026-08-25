@@ -806,6 +806,9 @@ exactly the kind of thing that first appears on the fourteenth.
 
 ### D-046: One-shots through sopra directly, not `AudioEmitter` components
 
+**Reversed by D-064.** Kept as written, because the argument below is the one that had to be
+answered and the answer turned out to be about consistency rather than about cost.
+
 Q3's sound model for everything a weapon, a pickup or a door does is
 `S_StartSound(origin, entity, channel, handle)`: fire-and-forget, at a point, no handle kept.
 sopra's `playOneShot(description, { position })` is the same shape, so the port is a bank of
@@ -857,9 +860,17 @@ footstep at all, which is kept.
 ### D-049: The sound set is curated, and misses are reported
 
 OA ships about 40 MB of audio, most of it announcer lines, taunts and per-character voice for
-modes this port does not have. `convert-sounds.ts` copies the 58 files something in the port
-actually triggers -- 3.3 MB -- and the manifest records anything named by the code and absent from
-disk, because that is a bug, while a file on disk that nothing names is not.
+modes this port does not have. `convert-sounds.ts` copies the 77 files something in the port
+actually triggers -- 8.1 MB, of which 1 MB is one music track and 2.7 MB is long ambient loops --
+and the manifest records anything named by the code and absent from disk, because that is a bug,
+while a file on disk that nothing names is not.
+
+Half the list is curated and the other half is read out of the built maps, because half of it is
+per-map data rather than gamecode: `target_speaker` names its own ambience and `worldspawn` names
+its own music (D-065). Both halves are named by the same `soundName` the runtime derives names
+with, so a map's string and the copied file cannot drift apart. Two names come back missing on
+every run -- `oa_dm1` and `oa_dm5` ask for `music/sonic6.ogg` and `music/sonic3.ogg`, Q3-original
+tracks OA does not ship -- and that is the manifest doing its job rather than a fault to fix.
 
 Copied rather than transcoded: OA's WAVs are PCM, every browser decodes them through
 `decodeAudioData`, and re-encoding would trade a real quality loss against a saving on assets that
@@ -1469,3 +1480,125 @@ to be greater than -2", which is the half-burying, in a test, in a second.
 Neither half of that claim is checkable alone. The asset test says the feet hang 24 units below the
 model's origin. The placement code says the origin goes at `ps.origin`. Both were separately true
 and correct while the characters were visibly wrong, because nothing multiplied them together.
+
+---
+
+### D-064: Every sound is an `AudioEmitter`, and the one-shot exception was not worth its second code path
+
+D-046 argued that a one-shot should skip the component layer and call `sopra.playOneShot` directly,
+because an `AudioEmitter` per machinegun round means an entity built and destroyed ten times a
+second. The premise was right and the conclusion was wrong.
+
+What the premise misses is where a one-shot emitter actually goes. `AudioEmitterSystem` picks its
+routing once, at link: a looping 3D emitter is registered with the `LiveEmitterSet` and left
+dormant until it is among the nearest in range, and *everything else* -- 2D sounds, and finite 3D
+one-shots -- takes the direct path, which is `sopra.playEvent` with the same description, the same
+position vector and `oneShot: true`. So the component route does not add a spatial-management tier
+to a gunshot. It adds an entity, a `Transform` and one observer dispatch, and then arrives at the
+call the direct route was making anyway. Measured in the running app, 20 machinegun one-shots fired
+in one frame produce 20 emitter entities and leave the dataset at exactly the count it started at
+once they finish.
+
+What the exception cost was the interesting part. Two routes meant two answers to every question
+that came up afterwards. Where does the bus id go. What stops this. Which of these is affected by
+`distanceMax`. And -- the one that mattered -- when a loop is finally needed, does it go through the
+component route, in which case the file now has both, or does it get a third thing. The port had
+already answered that badly once, by claiming four looping-sound syscalls were mapped to a
+component nothing built (D-065).
+
+The one thing the component route genuinely needs and the direct route did not is a way to know
+when a sound has ended, because `AudioEmitterSystem.unlink` stops a direct instance -- an entity
+retired on a timer that ran short would cut off its own sound. `instanceFor(entity).onEnded` is
+exact, and it also covers a case a duration could not: a sample whose asset fails to load ends
+immediately rather than after its nominal length. The removal is deferred one frame into
+`AudioBank.update` rather than done in the handler, because `onEnded` fires from inside
+`AudioEmitterSystem.update` and removing an entity there mutates the dataset while the system that
+owns it is mid-frame. `Effects` retires its particle entities the same way and for the same reason.
+
+**What is now one path rather than two:**
+
+| Q3 call | emitter |
+|---|---|
+| `S_StartSound` | finite, `is3D` |
+| `S_StartLocalSound` | finite, not `is3D` |
+| `S_AddLoopingSound` / `S_AddRealLoopingSound` | looping, `is3D` |
+| `S_StartBackgroundTrack` | looping, not `is3D`, music bus |
+
+The two axes Q3 varies -- positioned or not, finite or looping -- are exactly the two the system
+routes on. That is not a coincidence to be clever about; it is the reason one component expresses
+all four.
+
+### D-065: The trap matrix said four sound calls were mapped, and three of them were not
+
+`trap_S_AddLoopingSound`, `trap_S_AddRealLoopingSound`, `trap_S_StopLoopingSound` and
+`trap_S_UpdateEntityPosition` were all marked `mapped`, against "looping sound emitter" and
+"Transform on emitter entity". `trap_S_StartBackgroundTrack` was marked `mapped` against "music bus
+/ streaming source". None of those existed. `AudioBank` had `play` and `playLocal` and no way to
+start a loop, stop a sound, or play music at all, and nothing in the port ever constructed an
+`AudioEmitter`.
+
+This is a worse failure than a gap, because a gap is visible and this was not: the matrix is
+generated from a classification file, so an entry that describes an intended design reads exactly
+like an entry that describes a built one. The rule the file now follows is that a `mapped` note
+names the call site, and a call site can be checked.
+
+**What was built to make them true**, each against the Q3 code that makes the call:
+
+- **`CG_EntityEffects`, the `ET_SPEAKER` branch.** `SP_target_speaker` sets `s.loopSound` when the
+  `looped-on` spawnflag is present, and the client plays it through `AddRealLoopingSound` -- the
+  "real" variant meaning it is not merged with other copies of itself. `MapSound` starts one
+  emitter per such speaker, named by the entity's own `noise` key. 22 on `oa_dm5`, 10 on `oa_dm4`,
+  3 on `aggressor`. A speaker with neither looped flag is a triggered one-shot waiting on a
+  `target` this port does not fire, and is skipped and counted rather than started, because
+  starting it would invent a sound the map does not make.
+- **`CG_Missile`'s `weapon->missileSound`.** A rocket, a plasma bolt and a BFG shot carry a fly
+  loop; a grenade deliberately does not. This is the one that needs all three of the remaining
+  calls -- the loop starts with the projectile, `SoundLoop.move` writes the `Transform` the emitter
+  was registered with (which the spatial index tracks reactively, so the BVH leaf refits only when
+  the rocket actually moves), and it stops when the projectile is gone.
+- **`CG_Item`, `IT_WEAPON`.** A weapon lying in the map hovers audibly. Stopped on pickup and
+  started again on respawn rather than muted, because a stopped loop is one fewer emitter in the
+  live set and a muted one is not.
+- **`CG_AddPlayerWeapon`, under `if ( !ps )`.** `firingSound` while `EF_FIRING`, `readySound`
+  otherwise -- and only in the third person, so these are deliberately sounds the player never
+  hears from their own gun. Bots get them; `fireCooldown > 0` stands in for `EF_FIRING`, which is
+  the same question the torso animation already answers with it. Most weapons have neither sound,
+  which is why the lookup is guarded by `AudioBank.has` rather than by a pair of branches: asking
+  for a `readySound` a machinegun does not have must not be reported as a missing file.
+- **`SP_worldspawn`'s `music` key**, via `CS_MUSIC` and `CG_StartMusic`, which parses an intro
+  token and a loop token. No map this port ships names a second.
+
+**What `S_AddLoopSounds` did that the `LiveEmitterSet` does instead.** Q3 rebuilds the loop set
+every frame and merges identical loops within a radius, keeping the loudest, which is exactly the
+`oa_dm5` case: nineteen of its 22 speakers are the same `firesoft` sample. Retained emitters cannot
+merge, so the equivalent here is the budget -- registered emitters stay dormant and only the
+nearest `LOOP_BUDGET` in range are promoted to voices. That composes with, and can be gated by, the
+event's own polyphony cap, which is the trap the `LiveEmitterSet` docblock warns about:
+content-equal events share one sopra bucket, so a loop capped below the budget would make promotion
+churn instead of settle. Loops are therefore capped above it.
+
+**Measured in the running app**, by driving `entityManager.simulate` on a timer and tapping the
+master bus with an `AnalyserNode` -- D-047's instrument, for the same reason: Web Audio needs a
+browser and a running context, so this is not a check a headless test can make.
+
+| `oa_dm5` unless noted | |
+|---|---|
+| speakers registered | 22 |
+| looping emitters registered in total | 27 |
+| live at the spawn point | 23 |
+| live standing next to one firesoft speaker | 12 |
+| attenuation, 1 m from a speaker | 1.000 |
+| attenuation, across the map | 0.006 |
+| master bus RMS, ambience only | 0.107 |
+| master bus RMS, `aggressor` music only | 0.542 |
+| entities after 20 machinegun one-shots finish | unchanged |
+
+The live count falling from 23 to 12 when the listener moves is the budget doing `S_AddLoopSounds`'
+job, and the 1.000 is `SOUND_FULLVOLUME`: inside `distanceMin` a Q3 sound does not attenuate at all.
+The rocket fly loop was traced separately -- it appears with the projectile, its `Transform` tracks
+the flight, and it is gone on the frame the rocket detonates.
+
+**What still is not built**, and is now recorded as such rather than as mapped: the flight
+powerup's loop (`CG_PlayerPowerups`), which needs powerup state the port does not carry, and the
+gauntlet's `firingSound`, which needs the gauntlet's own firing flag rather than a fire-rate
+cooldown.

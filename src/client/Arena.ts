@@ -35,7 +35,7 @@ import {
     type WeaponId,
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
-import type { AudioBank } from './Audio.ts';
+import type { AudioBank, SoundLoop } from './Audio.ts';
 
 const WORLD_SCALE = 1 / 32;
 
@@ -76,7 +76,7 @@ export class Arena implements WeaponEvents {
      */
     private readonly projectileEntities = new Map<
         number,
-        { entity: number; transform: Transform }
+        { entity: number; transform: Transform; fly: SoundLoop | null }
     >();
 
     private readonly targetMaterial = new StandardShadeMaterial();
@@ -300,7 +300,15 @@ export class Arena implements WeaponEvents {
             .add(ShadedGeometry.from(this.rocketGeometry, this.rocketMaterial))
             .build(this.ecd);
 
-        this.projectileEntities.set(projectile.id, { entity: builder.id, transform });
+        /*
+         `CG_Missile`: a missile whose weapon has a `missileSound` carries it as
+         a looping sound for as long as it is in the air. Not every weapon has
+         one -- a grenade arcs silently -- so a null handle here is a weapon Q3
+         gives no fly sound to, and not a failure.
+        */
+        const fly = this.audio?.loop(`missile/${projectile.weapon}`, projectile.origin) ?? null;
+
+        this.projectileEntities.set(projectile.id, { entity: builder.id, transform, fly });
     }
 
     projectileMoved(projectile: Projectile): void {
@@ -309,6 +317,8 @@ export class Arena implements WeaponEvents {
         if (record !== undefined) {
             const [x, y, z] = toMeep(projectile.origin);
             record.transform.position.set(x, y, z);
+            // `S_UpdateEntityPosition`: the fly sound rides the rocket.
+            record.fly?.move(projectile.origin);
         }
 
         // Smoke trail, thinned to a fixed rate rather than one puff per frame:
@@ -325,7 +335,13 @@ export class Arena implements WeaponEvents {
         const record = this.projectileEntities.get(projectile.id);
         this.projectileEntities.delete(projectile.id);
 
-        if (record !== undefined && this.ecd.entityExists(record.entity)) {
+        if (record === undefined) return;
+
+        // `S_StopLoopingSound`. Before the entity goes, because the explosion
+        // that follows should not be competing with a rocket still in flight.
+        record.fly?.stop();
+
+        if (this.ecd.entityExists(record.entity)) {
             this.ecd.removeEntity(record.entity);
         }
     }

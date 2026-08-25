@@ -93,7 +93,7 @@ the GPLv2/CC inputs above and carries their terms.
 | `assets/built/<map>/` | `convert-map.ts` | `scene.json` (materials, mesh table, submodel table, lights, entities), `geometry.bin`, `textures/`, and the untouched `collision.bsp` |
 | `assets/built/models/` | `convert-models.ts` | one bundle of every static prop -- pickups, weapon world models, ammo, gibs -- as `models.json` plus `models.bin` |
 | `assets/built/characters/<name>/` | `convert-characters.ts` | player models as skinned glTF: `<name>.gltf`, `<name>.bin`, textures. The skeleton is *inferred* from MD3's vertex-morph frames (DECISIONS.md D-042) and is not present in the source data |
-| `assets/built/sound/` | `convert-sounds.ts` | the WAV files the port triggers, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded |
+| `assets/built/sound/` | `convert-sounds.ts` | the WAVs the port triggers and the OGG music the maps name, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded. Half the list comes from the gamecode and half is read out of the built maps' `target_speaker` and `worldspawn` keys, so this runs *after* `convert-map.ts` |
 | `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals |
 
 ---

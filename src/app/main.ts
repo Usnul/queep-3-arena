@@ -37,7 +37,8 @@ import type { Damageable } from '../game/Weapons.ts';
 import { vec3 as q3vec3 } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS } from '../client/Characters.ts';
-import { AudioBank, Footsteps } from '../client/Audio.ts';
+import { AudioBank, Footsteps, LOOP_BUDGET } from '../client/Audio.ts';
+import { MapSound } from '../client/MapSound.ts';
 import { Bot } from '../game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../client/Bots.ts';
 import { buildWaypoints, linkMapPortals } from '../game/Waypoints.ts';
@@ -128,15 +129,21 @@ async function main(): Promise<void> {
     await em.addSystem(new AnimationSystem3(graphics, meshes));
 
     /*
-     Sound. `AudioEmitterSystem` is registered even though this port plays
-     everything as a one-shot rather than through `AudioEmitter` components: it
-     is what creates the shared sopra engine, registers the sound asset loader,
-     forwards the listener pose from the `SoundListener` component, and ticks
-     the mixer. Without it there is no engine to play a one-shot into.
+     Sound. Every sound in the port is an `AudioEmitter` component, so this
+     system is the whole audio runtime: it creates the shared sopra engine,
+     registers the sound asset loader, forwards the listener pose from the
+     `SoundListener` component, promotes the nearest looping emitters up to its
+     budget, and ticks the mixer.
+
+     The budget is passed rather than left at its default because it is the
+     port's stand-in for `S_AddLoopSounds` -- see `LOOP_BUDGET`.
     */
     const sound = engine.sound;
+    let emitters: AudioEmitterSystem | null = null;
+
     if (sound !== null) {
-        await em.addSystem(new AudioEmitterSystem(engine.assetManager, sound));
+        emitters = new AudioEmitterSystem(engine.assetManager, sound, { budget: LOOP_BUDGET });
+        await em.addSystem(emitters);
     }
 
     /*
@@ -182,13 +189,16 @@ async function main(): Promise<void> {
         loadMap(ecd, baseUrl),
         loadClipMap(baseUrl, mapName),
         loadModels('/assets/built/models'),
-        AudioBank.load(
-            '/assets/built/sound',
-            // `obtainSopra` is idempotent and `AudioEmitterSystem` has already
-            // called it, so this is the same engine the system ticks.
-            sound === null ? null : sound.sopra
-        ),
+        AudioBank.load('/assets/built/sound', ecd, emitters),
     ]);
+
+    /*
+     The map's own sound: `target_speaker` ambience and the `worldspawn` music
+     track. Asked for now rather than after the gesture, because a loop is a
+     state rather than an event -- the bank holds them until the context is
+     running and starts them all at once.
+    */
+    const mapSound = new MapSound(audio, loaded.bundle.entities);
 
     /*
      Browsers create an `AudioContext` suspended and will not start it without a
@@ -199,12 +209,17 @@ async function main(): Promise<void> {
     firstGesture(input, async () => {
         if (sound === null) return;
         await sound.resumeContext();
-        audio.enabled = true;
+        audio.enable();
     });
 
     console.log(
         `[queep] sound: ${audio.stats['names']} names, ${audio.stats['files']} files, ` +
-        `${audio.stats['kilobytes']} KB`
+        `${audio.stats['kilobytes']} KB` +
+        `\n  map: ${mapSound.stats.speakers} looping speakers, ` +
+        `music ${mapSound.stats.music ?? 'none'}` +
+        (mapSound.stats.skipped.length > 0
+            ? `\n  skipped: ${mapSound.stats.skipped.join(', ')}`
+            : '')
     );
 
     const spawn =
@@ -245,6 +260,7 @@ async function main(): Promise<void> {
         fly.attach();
         engine.ticker.onTick.add((dt: number) => {
             fly.update(dt);
+            audio.update();
             hud.update({
                 mode: 'fly', speed: 0, onGround: false, map: mapName,
                 weapon: '', damage: 0, kills: 0, deaths: 0, backend: 'noclip',
@@ -252,7 +268,7 @@ async function main(): Promise<void> {
             });
         });
 
-        expose(engine, { loaded, clipMap, fly });
+        expose(engine, { loaded, clipMap, fly, audio, mapSound });
     } else {
         const clipmapOnly = useClipmapTrace();
 
@@ -301,7 +317,7 @@ async function main(): Promise<void> {
         const items = new ItemSystem();
         items.spawn(loaded.bundle.entities, dropTrace);
 
-        const itemsView = new ItemsView(ecd, models);
+        const itemsView = new ItemsView(ecd, models, audio);
         itemsView.build(items.items);
 
         console.log(
@@ -489,7 +505,7 @@ async function main(): Promise<void> {
         };
         arena.weapons.targets.push(playerTarget);
 
-        const botRuntime = new BotRuntime(botWorld);
+        const botRuntime = new BotRuntime(botWorld, audio);
         const characters: Character[] = [];
 
         /*
@@ -575,6 +591,9 @@ async function main(): Promise<void> {
         engine.ticker.onTick.add((deltaSeconds: number) => {
             player.update(deltaSeconds, transform);
             arena.update(deltaSeconds);
+
+            // Retire the emitter entities whose one-shot finished last frame.
+            audio.update();
 
             for (const event of items.update(
                 deltaSeconds,
@@ -727,7 +746,7 @@ async function main(): Promise<void> {
 
         expose(engine, {
             loaded, clipMap, player, arena, physicsWorld, items, models,
-            movers, moversView, characters, audio, graph, botRuntime,
+            movers, moversView, characters, audio, mapSound, graph, botRuntime,
         });
     }
 

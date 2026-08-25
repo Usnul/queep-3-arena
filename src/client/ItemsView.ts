@@ -31,6 +31,7 @@ import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/
 
 import type { ModelLibrary } from './map/loadModels.ts';
 import type { ItemInstance, ItemSystem } from '../game/Items.ts';
+import type { AudioBank, SoundLoop } from './Audio.ts';
 
 const WORLD_SCALE = 1 / 32;
 
@@ -51,6 +52,15 @@ interface DrawnItem {
     readonly bobScale: number;
     readonly fastSpin: boolean;
     visible: boolean;
+    /**
+     * The hover loop, for a weapon that is currently lying there.
+     *
+     * `CG_Item` adds it from inside the draw, so it exists exactly while the
+     * item does -- which here means it is stopped on pickup and started again on
+     * respawn rather than muted, because a stopped loop is one fewer emitter in
+     * the live set and a muted one is not.
+     */
+    hover: SoundLoop | null;
 }
 
 export class ItemsView {
@@ -72,9 +82,19 @@ export class ItemsView {
     /** Classnames that drew some of their models but not all. */
     readonly partial: string[] = [];
 
-    constructor(ecd: EcsDataset, library: ModelLibrary) {
+    private readonly audio: AudioBank | null;
+
+    constructor(ecd: EcsDataset, library: ModelLibrary, audio: AudioBank | null = null) {
         this.ecd = ecd;
         this.library = library;
+        this.audio = audio;
+    }
+
+    /** `CG_Item`'s hover loop, which only a weapon on the ground gets. */
+    private hoverFor(item: ItemInstance): SoundLoop | null {
+        if (this.audio === null || item.def.type !== 'IT_WEAPON') return null;
+
+        return this.audio.loop('item/hover', item.origin);
     }
 
     /**
@@ -132,6 +152,7 @@ export class ItemsView {
                 bobScale: 0.005 + item.index * 0.00001,
                 fastSpin: item.def.type === 'IT_HEALTH',
                 visible: true,
+                hover: this.hoverFor(item),
             });
         }
     }
@@ -147,6 +168,13 @@ export class ItemsView {
                 drawn.visible = item.present;
                 for (const geometry of drawn.geometries) {
                     geometry.writeFlag(ShadedGeometryFlags.Visible, item.present);
+                }
+
+                if (item.present) {
+                    drawn.hover = this.hoverFor(item);
+                } else {
+                    drawn.hover?.stop();
+                    drawn.hover = null;
                 }
             }
 

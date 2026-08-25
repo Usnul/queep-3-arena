@@ -46,6 +46,7 @@ import { weaponStats, type WeaponId, MASK_SHOT } from '../game/Weapons.ts';
 import { vec3, type Vec3 } from '../q3/math.ts';
 import type { ItemInstance } from '../game/Items.ts';
 import { canBeGrabbed, touchesItem, type Inventory } from '../game/Items.ts';
+import type { AudioBank, SoundLoop } from './Audio.ts';
 
 /** How far a bot will engage, in Q3 units. Beyond this it goes back to routing. */
 const ENGAGE_RANGE = 2200;
@@ -219,8 +220,20 @@ export class BotRuntime {
     private readonly scratch: Vec3 = vec3();
     private readonly playerEye: Vec3 = vec3();
 
-    constructor(world: BotWorld) {
+    private readonly audio: AudioBank | null;
+
+    /**
+     * The loop each bot's held weapon is making, and which sound it is.
+     *
+     * `CG_AddPlayerWeapon` re-adds this every frame from scratch, so switching
+     * between `firingSound` and `readySound` costs it nothing. A retained
+     * emitter has to be told, which is what the name is kept for.
+     */
+    private readonly weaponLoops = new Map<number, { loop: SoundLoop; name: string }>();
+
+    constructor(world: BotWorld, audio: AudioBank | null = null) {
         this.world = world;
+        this.audio = audio;
     }
 
     /**
@@ -522,8 +535,58 @@ export class BotRuntime {
             ? 'LEGS_IDLE'
             : Character.legsFor(bot.speed, bot.onGround, 1);
 
+        const firing = bot.fireCooldown > 0;
+
         character.setLegs(legs);
-        character.setTorso(bot.fireCooldown > 0 ? 'TORSO_ATTACK' : 'TORSO_STAND');
+        character.setTorso(firing ? 'TORSO_ATTACK' : 'TORSO_STAND');
+
+        this.weaponSound(bot, firing);
+    }
+
+    /**
+     * The sound a bot's weapon makes just by being held.
+     *
+     * `CG_AddPlayerWeapon` plays `firingSound` while `EF_FIRING` is set and
+     * `readySound` otherwise -- and does it only under `if ( !ps )`, the branch
+     * for a weapon seen in the third person. So this is deliberately a sound the
+     * player never hears from their own gun: the lightning hum belongs to the
+     * bot pointing one at you.
+     *
+     * `fireCooldown > 0` stands in for `EF_FIRING`. It is the same question the
+     * torso animation above already answers with it.
+     *
+     * Most weapons have neither sound and fall out with a null name, which is
+     * why this is a lookup rather than a pair of branches: `weapon/change` is
+     * the only noise a machinegun makes when it is not being fired.
+     */
+    private weaponSound(bot: Bot, firing: boolean): void {
+        if (this.audio === null) return;
+
+        const wanted = bot.dead
+            ? null
+            : this.audio.has(`firing/${bot.weapon}`) && firing
+                ? `firing/${bot.weapon}`
+                : this.audio.has(`ready/${bot.weapon}`)
+                    ? `ready/${bot.weapon}`
+                    : null;
+
+        const current = this.weaponLoops.get(bot.id);
+
+        if (current !== undefined && current.name === wanted) {
+            // `S_UpdateEntityPosition`: the hum walks around with the bot.
+            current.loop.move(bot.origin);
+            return;
+        }
+
+        if (current !== undefined) {
+            current.loop.stop();
+            this.weaponLoops.delete(bot.id);
+        }
+
+        if (wanted === null) return;
+
+        const loop = this.audio.loop(wanted, bot.origin);
+        if (loop !== null) this.weaponLoops.set(bot.id, { loop, name: wanted });
     }
 
     stats(): BotStats {

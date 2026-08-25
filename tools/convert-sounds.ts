@@ -27,12 +27,20 @@
  * which is also why the manifest reports misses -- a sound named by the code and
  * absent from disk is a bug, and a sound on disk that nothing names is not.
  *
+ * Half the list is curated and the other half is read out of the maps, because
+ * half of it is: `target_speaker` names its own ambience and `worldspawn` names
+ * its own music, and which files those are is a property of the map rather than
+ * of the port. Those are collected from the *built* maps under `assets/built/`,
+ * so converting a new map means running this again -- which the output says.
+ *
  * Usage:  node tools/convert-sounds.ts
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { soundName, speakerNoisePath } from '../src/q3/soundName.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
@@ -101,6 +109,39 @@ const SOUNDS: Readonly<Record<string, string | string[]>> = {
     'world/jumppad': 'sound/world/jumppad.wav',
     'world/telein': 'sound/world/telein.wav',
     'world/teleout': 'sound/world/teleout.wav',
+
+    /*
+     ---- loops ----
+
+     Everything below is played through `trap_S_AddLoopingSound` in Q3 rather
+     than `trap_S_StartSound`, which is a property of the call site and not of
+     the file: the same `rockfly.wav` is a loop under a rocket and would be a
+     one-shot anywhere else. The names carry the field they come from in
+     `weaponInfo_t`, because that is what says which is which.
+
+     `CG_Missile`, one per weapon that has a `missileSound`. The grenade
+     launcher deliberately has none -- a grenade arcs silently and lands with a
+     bounce -- and the nailgun's is commented out in the OA source.
+    */
+    'missile/WP_ROCKET_LAUNCHER': 'sound/weapons/rocket/rockfly.wav',
+    'missile/WP_PLASMAGUN': 'sound/weapons/plasma/lasfly.wav',
+    'missile/WP_BFG': 'sound/weapons/rocket/rockfly.wav',
+
+    /*
+     `CG_AddPlayerWeapon`, which plays `firingSound` while `EF_FIRING` is set
+     and `readySound` otherwise -- and only for a weapon seen in the third
+     person (`if ( !ps )`), so these are the sounds other players make and never
+     the sounds you make.
+    */
+    'firing/WP_GAUNTLET': 'sound/weapons/melee/fstrun.wav',
+    'firing/WP_LIGHTNING': 'sound/weapons/lightning/lg_hum.wav',
+    'firing/WP_CHAINGUN': 'sound/weapons/vulcan/wvulfire.wav',
+    'ready/WP_GAUNTLET': 'sound/weapons/melee/fsthum.wav',
+    'ready/WP_RAILGUN': 'sound/weapons/railgun/rg_hum.wav',
+    'ready/WP_BFG': 'sound/weapons/bfg/bfg_hum.wav',
+
+    /** `CG_Item`: a weapon lying in the map hovers, and hovering is audible. */
+    'item/hover': 'sound/weapons/weapon_hover.wav',
 };
 
 interface Manifest {
@@ -126,11 +167,100 @@ function itemSounds(): Record<string, string> {
     return out;
 }
 
+interface BuiltEntity extends Record<string, unknown> {
+    classname?: string;
+}
+
+/**
+ * Every sound the *built* maps name for themselves.
+ *
+ * `target_speaker` carries a `noise` key and `worldspawn` carries a `music` key,
+ * and neither is knowable from the gamecode -- they are per-map data. The names
+ * are derived by `soundName`, the same function the runtime derives them with,
+ * so a map's string and the copied file cannot drift apart.
+ *
+ * Only looping speakers are collected. A speaker with neither looped flag waits
+ * for a trigger this port does not fire, and copying its sample would put a file
+ * in the manifest that nothing can ever play.
+ */
+function mapSounds(): { sounds: Record<string, string>; maps: number } {
+    const out: Record<string, string> = {};
+    let maps = 0;
+
+    let names: string[];
+    try {
+        names = readdirSync(BUILT);
+    } catch {
+        return { sounds: out, maps: 0 };
+    }
+
+    for (const name of names) {
+        const scenePath = join(BUILT, name, 'scene.json');
+        if (!existsSync(scenePath)) continue;
+
+        let entities: BuiltEntity[];
+        try {
+            entities = (JSON.parse(readFileSync(scenePath, 'utf8')) as { entities?: BuiltEntity[] })
+                .entities ?? [];
+        } catch {
+            continue;
+        }
+
+        maps += 1;
+
+        for (const entity of entities) {
+            if (entity.classname === 'target_speaker') {
+                if (((Number(entity['spawnflags'] ?? 0) | 0) & 1) === 0) continue;
+
+                const noise = entity['noise'];
+                if (typeof noise !== 'string') continue;
+
+                const path = speakerNoisePath(noise);
+                if (path !== null) out[soundName(path)] = path;
+                continue;
+            }
+
+            if (entity.classname === 'worldspawn') {
+                const music = entity['music'];
+                if (typeof music !== 'string' || music.trim().length === 0) continue;
+
+                // `CG_StartMusic` parses an intro token and a loop token.
+                for (const token of music.trim().split(/\s+/)) {
+                    out[soundName(token)] = token;
+                }
+            }
+        }
+    }
+
+    return { sounds: out, maps };
+}
+
+/**
+ * The file on disk for a Q3 path, tolerating case.
+ *
+ * Q3's own filesystem is case-insensitive on the platforms it shipped for, and
+ * OA's maps take advantage: `aggressor` asks for `music/OA14.ogg` and the pk3
+ * holds `music/oa14.ogg`. The manifest name stays the one the map wrote, so the
+ * runtime -- which derives it from the same string -- still finds it.
+ */
+function resolveSource(path: string): string | null {
+    const direct = join(EXTRACTED, path);
+    if (existsSync(direct)) return direct;
+
+    const lowered = join(EXTRACTED, path.toLowerCase());
+    return existsSync(lowered) ? lowered : null;
+}
+
 function convertSounds(): void {
     const outDir = join(BUILT, 'sound');
     mkdirSync(outDir, { recursive: true });
 
-    const all: Record<string, string | string[]> = { ...SOUNDS, ...itemSounds() };
+    const fromMaps = mapSounds();
+    const all: Record<string, string | string[]> = {
+        ...SOUNDS,
+        ...itemSounds(),
+        ...fromMaps.sounds,
+    };
 
     const sounds: Record<string, string[]> = {};
     const missing: string[] = [];
@@ -148,8 +278,8 @@ function convertSounds(): void {
                 continue;
             }
 
-            const source = join(EXTRACTED, path);
-            if (!existsSync(source)) {
+            const source = resolveSource(path);
+            if (source === null) {
                 missing.push(`${name}: ${path}`);
                 continue;
             }
@@ -174,6 +304,8 @@ function convertSounds(): void {
             files: written.size,
             kilobytes: Math.round(bytes / 1024),
             missing: missing.length,
+            maps: fromMaps.maps,
+            fromMaps: Object.keys(fromMaps.sounds).length,
         },
     };
 
@@ -182,6 +314,8 @@ function convertSounds(): void {
     console.log(
         `sounds: ${manifest.stats['names']} names, ${manifest.stats['files']} files, ` +
         `${manifest.stats['kilobytes']} KB` +
+        `\n  ${manifest.stats['fromMaps']} named by ${manifest.stats['maps']} built maps ` +
+        `(run this again after converting a map)` +
         (missing.length > 0 ? `\n  missing: ${missing.join(', ')}` : '')
     );
 }
