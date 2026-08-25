@@ -11,12 +11,13 @@
  *
  * ---
  *
- * Written after the whole transparency route turned out to be wrong in five
- * independent ways at once, none of which any existing test could see. The suite
- * was green before the fix and green after it, so the first job here is to be a
+ * Written after the whole transparency route turned out to be wrong in six
+ * independent ways at once, none of which any existing test could see, and then
+ * extended when the fix made a seventh visible (D-083, D-084). The suite was
+ * green before all of that and green after it, so the first job here is to be a
  * suite that would have been red.
  *
- * Two halves, and they check different things:
+ * Three parts, and they check different things:
  *
  * - the **rules**, on shader text written out in the test. Every case is a real
  *   OA shader reduced to the smallest thing that still has the property, so what
@@ -26,6 +27,9 @@
  *   transparency and the alpha channel of the image it points at are one claim
  *   made in two files, and the failure the maintainer reported -- a solid white
  *   box where a light shaft should be -- is exactly those two disagreeing.
+ * - the **orientation**, on the same bundles' geometry. A texture coordinate is
+ *   only wrong relative to something, and for a mirrored one that something has
+ *   to be a surface with a top and a bottom.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -617,4 +621,144 @@ describe('a materials transparency and its albedo image agree', () => {
         expect(existsSync(join(BUILT, 'oa_dm1', 'textures', coverage!))).toBe(true);
         expect(existsSync(join(BUILT, 'oa_dm1', 'textures', colour!))).toBe(true);
     });
+});
+
+/*
+ * The texture coordinates, which turned out to be mirrored on every surface in
+ * the game and to have been that way since phase 1.
+ *
+ * Q3 and glTF agree: coordinate zero is the image's *top* row. Q3's loaders
+ * normalise to top-row-first before upload and `glTexImage2D` puts buffer row 0
+ * at `t = 0`; glTF says (0, 0) is the upper-left corner and meep's loader passes
+ * `TEXCOORD_0` through untouched. `1 - t` is therefore not a translation between
+ * two conventions, it is a mirror -- and a mirrored brick wall is still a brick
+ * wall, which is why it survived six phases and a screenshot review.
+ *
+ * What caught it is the one surface where up and down are not interchangeable.
+ */
+describe('texture coordinates keep Q3s orientation', () => {
+    interface Bundle {
+        readonly materials: readonly { name: string; albedo: string }[];
+        readonly textures: Readonly<Record<string, string | null>>;
+        readonly meshes: readonly {
+            material: number;
+            vertexOffset: number;
+            vertexCount: number;
+        }[];
+        readonly vertexStride: number;
+        readonly vertexBytes: number;
+    }
+
+    function geometry(map: string): { bundle: Bundle; verts: Float32Array } {
+        const bundle = JSON.parse(
+            readFileSync(join(BUILT, map, 'scene.json'), 'utf8')
+        ) as Bundle;
+        const bin = readFileSync(join(BUILT, map, 'geometry.bin'));
+        const verts = new Float32Array(
+            bin.buffer.slice(bin.byteOffset, bin.byteOffset + bundle.vertexBytes)
+        );
+        return { bundle, verts };
+    }
+
+    /*
+     `textures/sfx/beam` on `oa_dm1` is a light shaft: four faces of a volume
+     hanging off a ceiling fixture, textured with a gradient that is bright for
+     the top third of the image and black for the rest. Which end of it is bright
+     is not a matter of taste, and Q3 gives its ceiling end `t = 0`.
+    */
+    it('puts the bright end of a light shaft at the lamp', async () => {
+        const { bundle, verts } = geometry('oa_dm1');
+        const stride = bundle.vertexStride;
+
+        const index = bundle.materials.findIndex((m) => m.name === 'textures/sfx/beam');
+        expect(index, 'oa_dm1 still has the light shaft').toBeGreaterThanOrEqual(0);
+
+        let top: { y: number; v: number } | null = null;
+        let bottom: { y: number; v: number } | null = null;
+
+        for (const mesh of bundle.meshes) {
+            if (mesh.material !== index) continue;
+            for (let i = 0; i < mesh.vertexCount; i++) {
+                const o = (mesh.vertexOffset + i) * stride;
+                const p = { y: verts[o + 1]!, v: verts[o + 7]! };
+                if (top === null || p.y > top.y) top = p;
+                if (bottom === null || p.y < bottom.y) bottom = p;
+            }
+        }
+
+        expect(top, 'the shaft has vertices').not.toBeNull();
+        expect(bottom!.y).toBeLessThan(top!.y - 1);
+
+        // Q3's own coordinate, unmirrored: the ceiling end is V = 0.
+        expect(top!.v).toBeCloseTo(0, 2);
+        expect(bottom!.v).toBeCloseTo(1, 2);
+
+        /*
+         And end to end, through the restated image: the coverage the OIT pass
+         reads has to be higher at the lamp than at the floor. Asserting the UV
+         alone would still pass if the gradient were ever rewritten.
+        */
+        const file = bundle.textures[bundle.materials[index]!.albedo]!;
+        const image = await sharp(join(BUILT, 'oa_dm1', 'textures', file))
+            .ensureAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+
+        const { width, height } = image.info;
+        const alphaAtV = (v: number): number => {
+            const y = Math.min(height - 1, Math.max(0, Math.round(v * (height - 1))));
+            let sum = 0;
+            for (let x = 0; x < width; x++) sum += image.data[(y * width + x) * 4 + 3]!;
+            return sum / width;
+        };
+
+        expect(alphaAtV(top!.v), 'coverage at the lamp').toBeGreaterThan(alphaAtV(bottom!.v) + 32);
+    });
+
+    /*
+     The general form of the same claim, which is what would have caught it
+     without anybody noticing a beam: on a vertical wall Q3's `t` grows
+     *downward*, so the image's top row lands at the top of the wall. Not every
+     face -- a mapper is free to mirror one deliberately, and a few hundred do --
+     but the great majority, and a whole-set mirror flips the ratio rather than
+     shifting it.
+    */
+    it.each(['oa_dm1', 'aggressor', 'am_thornish'])(
+        'grows V downward on a vertical wall, as Q3 does [%s]',
+        (map) => {
+            const { bundle, verts } = geometry(map);
+            const stride = bundle.vertexStride;
+
+            let upright = 0;
+            let mirrored = 0;
+
+            for (const mesh of bundle.meshes) {
+                for (let i = 0; i + 2 < mesh.vertexCount; i += 3) {
+                    const tri = [0, 1, 2].map((k) => {
+                        const o = (mesh.vertexOffset + i + k) * stride;
+                        return { y: verts[o + 1]!, ny: verts[o + 4]!, v: verts[o + 7]! };
+                    });
+
+                    // Vertical faces only: a floor's V runs along a horizontal axis.
+                    if (Math.abs(tri[0]!.ny) > 0.3) continue;
+
+                    const ys = tri.map((p) => p.y);
+                    if (Math.max(...ys) - Math.min(...ys) < 0.25) continue;
+
+                    const high = tri[ys.indexOf(Math.max(...ys))]!;
+                    const low = tri[ys.indexOf(Math.min(...ys))]!;
+                    if (high.v === low.v) continue;
+
+                    if (high.v < low.v) upright += 1;
+                    else mirrored += 1;
+                }
+            }
+
+            expect(upright + mirrored, 'vertical faces to judge').toBeGreaterThan(100);
+            expect(
+                upright / (upright + mirrored),
+                `${map}: ${upright} upright against ${mirrored} mirrored`
+            ).toBeGreaterThan(0.6);
+        }
+    );
 });

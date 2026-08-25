@@ -214,9 +214,29 @@ function pushVertex(group: MeshGroup, v: PatchVertex): number {
 
     group.positions.push(x, y, z);
     group.normals.push(nx, ny, nz);
-    // Q3 texture coordinates have V running the opposite way from glTF's.
-    group.uvs.push(v.s, 1 - v.t);
-    group.uvs1.push(v.lms, 1 - v.lmt);
+    /*
+     No vertical flip. Both conventions put coordinate zero on the image's *top*
+     row, so flipping is not a translation between them, it is a mirror.
+
+     Q3's loaders normalise to top-row-first before upload -- `R_LoadTGA` writes
+     the file's bottom-origin rows backwards into the buffer, `R_LoadJPG` takes
+     libjpeg's scanlines in order -- and `glTexImage2D` puts buffer row 0 at
+     `t = 0`. glTF says the same thing outright: (0, 0) is the upper-left corner
+     of the image, and meep's loader passes `TEXCOORD_0` through untouched.
+
+     Measured rather than argued, because a mirrored brick wall is still a brick
+     wall and this survived six phases: of the vertical wall faces in `oa_dm1`,
+     `aggressor` and `am_thornish`, 2,216 have `t` *falling* as world z rises and
+     100 have it rising. Q3 puts an image's top row at the top of the wall, and
+     `1 - t` was putting it at the bottom.
+
+     What made it visible is the one surface where up and down are not
+     interchangeable: `textures/sfx/beam`, a light shaft whose gradient is bright
+     for the top third of the image and black for the rest. Q3 gives its ceiling
+     end `t = 0`; the flip sent the bright end to the floor (D-083).
+    */
+    group.uvs.push(v.s, v.t);
+    group.uvs1.push(v.lms, v.lmt);
     group.colors.push(v.r, v.g, v.b);
 
     return index;

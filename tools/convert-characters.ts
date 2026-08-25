@@ -509,8 +509,9 @@ async function convertCharacter(
                 normals[i * 3] = nx; normals[i * 3 + 1] = ny; normals[i * 3 + 2] = nz;
 
                 uv[i * 2] = surface.st[i * 2]!;
-                // MD3's V increases downward, glTF's does not.
-                uv[i * 2 + 1] = 1 - surface.st[i * 2 + 1]!;
+                // MD3's V increases downward and so does glTF's; see
+                // `pushVertex` in `convert-map.ts` for why that is not a flip.
+                uv[i * 2 + 1] = surface.st[i * 2 + 1]!;
 
                 joints[i * 4] = rig.vertexJoint[cursor + i]!;
                 weights[i * 4] = 1;
@@ -600,7 +601,7 @@ async function convertCharacter(
                 normals[i * 3] = nx; normals[i * 3 + 1] = ny; normals[i * 3 + 2] = nz;
 
                 uv[i * 2] = surface.st[i * 2]!;
-                uv[i * 2 + 1] = 1 - surface.st[i * 2 + 1]!;
+                uv[i * 2 + 1] = surface.st[i * 2 + 1]!;
             }
 
             primitives.push({

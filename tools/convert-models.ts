@@ -205,9 +205,15 @@ function appendSurface(
         accum.vertices.push(
             x, y, z,
             nx, ny, nz,
-            // MD3 stores V the same way Q3's BSP does: increasing downward.
-            surface.st[i * 2]!, 1 - surface.st[i * 2 + 1]!,
-            surface.st[i * 2]!, 1 - surface.st[i * 2 + 1]!,
+            /*
+             MD3 stores V the same way Q3's BSP does -- increasing downward, and
+             so does glTF, so it passes through. `torch.md3` is the check that
+             does not need a judgement call: a straight vertical prop, and its
+             `corr(model z, t)` is exactly -1. See `pushVertex` in
+             `convert-map.ts` for the whole argument.
+            */
+            surface.st[i * 2]!, surface.st[i * 2 + 1]!,
+            surface.st[i * 2]!, surface.st[i * 2 + 1]!,
             1, 1
         );
     }

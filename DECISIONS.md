@@ -2837,3 +2837,63 @@ composited -- `requestAnimationFrame` fired **zero** times in 1.5 seconds of wai
 exists because this project has already shipped two wrong fixes on the strength of screenshots taken
 through that channel. Everything above is bundle-level and runtime-object-level evidence, and the
 frame that would confirm it is one screenshot away for anyone with the window open.
+
+*It was, and the frame found a seventh -- the one all six of these had been hiding. See D-084.*
+
+### D-084: Every texture in the game was upside down, and only one surface could say so
+
+The maintainer, looking at what D-083 produced: *"that fixture at the top... it gained
+transparency, but it looks almost inverted, getting more opaque towards the bottom. I think it's
+supposed to model a light beam."*
+
+It is a light beam -- `textures/sfx/beam` on `oa_dm1`, four faces of a 12 x 3 x 3.5 m volume hanging
+off the ceiling fixture -- and it was inverted. Not by the restatement, which was right: `beam.jpg`
+is bright for the top third of the image and black for the other two thirds, and
+`beam.add.png` carries exactly that as coverage, 134 falling to 0. The gradient was landing on the
+wrong end of the shaft.
+
+**`pushVertex` had been storing `1 - t` since phase 1, and that is a mirror rather than a
+translation.** Both conventions put coordinate zero on the image's *top* row:
+
+- Q3's loaders normalise to top-row-first before upload. `R_LoadTGA` reads a bottom-origin file and
+  writes its rows backwards into the buffer -- `for(row=rows-1; row>=0; row--)` -- and refuses to
+  flip a top-down one, warning instead. `R_LoadJPG` takes libjpeg's scanlines in order, and libjpeg
+  emits the top one first. Then `glTexImage2D` puts buffer row 0 at `t = 0`.
+- glTF says it outright: (0, 0) is the upper-left corner of the image. meep's loader passes
+  `TEXCOORD_0` through untouched, there is no flip anywhere in its material path, and
+  `resample_cube_to_octahedral` states the same premise in a docblock: *a decoded image's first row
+  is its top*.
+
+So the two agree, and `1 - t` mirrors every surface in the game vertically.
+
+**Measured rather than argued, because the argument had already been lost once.** Of the vertical
+wall faces in `oa_dm1`, `aggressor` and `am_thornish`, **2,216 have Q3's `t` falling as world z
+rises and 100 have it rising** -- Q3 puts an image's top row at the top of a wall, and the hundred
+are mappers mirroring a face on purpose. The flip was putting the top row at the bottom on all of
+them.
+
+**Why six phases of looking at the thing did not catch it.** A mirrored brick wall is a brick wall.
+A mirrored floor tile is a floor tile. The OA texture set is overwhelmingly tiling masonry, metal
+plate and trim, and vertical mirror symmetry is close to free in that material. The surfaces where
+it is *not* free are the ones whose gradient means something -- and the only such surface in
+`oa_dm1` is the light shaft, which until D-083 was drawing as a solid white box and therefore had
+no gradient to be wrong about. Fixing the transparency is what made the mirror visible: the second
+bug was hiding behind the first, the same way the decal fade hid the decal textures in D-079.
+
+**What it changes.** Every texture on every map, every static prop and every character skin, plus
+the lightmap UV set, which nothing reads yet (GAP-006) and which was mirrored the same way. Nothing
+in the geometry, the winding or the normals: a UV flip is independent of all three, which is why
+this was never going to show up as a physics or lighting discrepancy.
+
+`materials.test.ts` asserts it two ways, and both fail against the old flip. The specific one is the
+shaft: the ceiling end of `textures/sfx/beam` is `V = 0`, and -- read through the restated image
+rather than off the UV alone, so that rewriting the gradient cannot quietly satisfy it -- the
+coverage at the lamp is at least 32/255 higher than at the floor. The general one is the wall
+convention: on each of the three maps, the vertical faces whose V is smallest at the top have to
+outnumber the mirrored ones, which a whole-set flip inverts rather than nudges. `oa_dm1` runs 1,221
+against 42.
+
+`torch.md3` is the MD3 half of the same check and is the reason the model and character converters
+were changed too: a straight vertical prop with a plain wrap, `corr(model z, t) = -1.00`. The other
+props are irregular unwraps and correlate weakly in the same direction, which is what an irregular
+unwrap should do and is not evidence on its own.
