@@ -544,18 +544,25 @@ export function boxForState(state: MoveState): { mins: Vec3; maxs: Vec3 } {
 }
 
 /**
- * The parts of Q3's `playerState_t` this can drive.
+ * The parts of Q3's `pmove_t` this has to stand in for.
  *
- * Declared structurally rather than importing `PlayerState`, so the bridge
- * cannot quietly start depending on the rest of pmove's state -- and so the
- * shape of what meep-native movement actually needs is visible: an origin, a
- * velocity, whether you are standing on something, and how tall you are.
+ * Declared structurally rather than importing `Pmove`, so the bridge cannot
+ * quietly start depending on the rest of pmove's state -- and so the shape of
+ * what meep-native movement actually needs is visible: an origin, a velocity,
+ * whether you are standing on something, how tall you are, and how big.
  * Everything else in `playerState_t` is netcode, animation or weapon
  * bookkeeping.
+ *
+ * `mins` and `maxs` are on this list because leaving them off was D-075. They
+ * are not inputs to the solver -- it has its own shapes -- but `PmoveSingle`
+ * writes them and the game reads them, and that makes them the bridge's job.
  */
 export interface PmoveLike {
     readonly ps: PlayerState;
     readonly cmd: UserCmd;
+    /** `PM_CheckDuck`'s output: the player's box, in Q3 units about `ps.origin`. */
+    readonly mins: Vec3;
+    readonly maxs: Vec3;
 }
 
 /**
@@ -663,6 +670,33 @@ export class PlayerMovement {
         */
         ps.groundEntityNum = this.state.grounded ? C.ENTITYNUM_WORLD : C.ENTITYNUM_NONE;
         ps.viewheight = this.state.viewheight;
+
+        /*
+         `PM_CheckDuck` writes the player's box as well as the view height, and
+         the box is not solver state -- it is what the *game* tests the player
+         with. `main.ts` builds `playerMins`/`playerMaxs` from it every frame for
+         trigger touches, button presses and `carryDisplacement`.
+
+         Leaving it out was D-075, and it is the third instance of one mistake:
+         `createPmoveHost` initialises both to `vec3()`, so on this path the
+         player was a zero-size point at `ps.origin` -- 24 units above its own
+         feet -- for the whole game. Teleporters and jump pads only fired when
+         that point entered the trigger brush rather than when the body did,
+         buttons could not be pressed by walking into them, and no plat ever
+         carried anyone, because `carryDisplacement` asks whether the player's
+         *feet* are within a unit of the plat's top and the feet were wherever
+         the chest is.
+
+         Written here rather than derived by the caller for the reason D-074
+         gave: the caller doing `PmoveSingle`'s job is how these get dropped.
+        */
+        const box = boxForState(this.state);
+        pmove.mins[0] = box.mins[0]!;
+        pmove.mins[1] = box.mins[1]!;
+        pmove.mins[2] = box.mins[2]!;
+        pmove.maxs[0] = box.maxs[0]!;
+        pmove.maxs[1] = box.maxs[1]!;
+        pmove.maxs[2] = box.maxs[2]!;
 
         return result;
     }

@@ -760,7 +760,7 @@ again after review. Both reductions are visible below rather than edited away.
 |---|---|---|
 | **blocker** | GAP-014, GAP-017 | the port could not ship with this unaddressed. Both are silent: the application builds, runs, reports success at every diagnostic, and does not work. |
 | **major** | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-008, GAP-012, GAP-015, GAP-016 | cost real time, or would cost any consumer real time on adoption. |
-| **minor** | GAP-009, GAP-013, GAP-019, GAP-021 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 and GAP-021 are positioning and discoverability findings rather than defects, and GAP-019 is a Q3-fidelity constraint. |
+| **minor** | GAP-009, GAP-013, GAP-019, GAP-021, GAP-022 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 and GAP-021 are positioning and discoverability findings rather than defects, and GAP-019 is a Q3-fidelity constraint. GAP-022 is minor *here* and major for the solver's own positioning: this port had a parallel mover simulation to read the platform delta from, and a consumer with ordinary animated kinematic platforms would have nothing. |
 | **papercut** | GAP-010, GAP-011 | noticed, worked around in minutes, recorded so the pattern is visible. |
 | **withdrawn** | GAP-007, GAP-020 | was a gap, is not. Both entries keep the mistake, because how a wrong conclusion was reached is usually the part a maintainer can act on. |
 | *(not the engine's)* | GAP-018 | mine: Quake III winds its triangles clockwise and nothing complained. Kept because the silence is the finding. |
@@ -1711,6 +1711,43 @@ is what `KinematicMover` does and what GAP-021 is about.
   `src/engine/control/first-person/DESIGN_COLLISION.md`,
   `src/engine/physics/narrowphase/compute_penetration.js`, and REPORT GAP-009 (where I named the
   class and moved on). Recorded in phase 6, after review. See D-070.
+
+### GAP-022: `KinematicMover` has no moving-platform support, and does not return enough for a consumer to add it
+
+- **Needed:** a character standing on a rising lift, a moving walkway or a swinging door goes with
+  it. Q3 does this in `G_MoverPush`, which is one of the two halves of `func_plat`, `func_door`
+  and `func_train` being usable at all; the other half is that they block you.
+- **meep offers:** nothing, in either direction. `DESIGN_COLLISION.md`'s five-step sequence —
+  recover → slide → stairs → ground → settle — has no platform step, and neither the shipped
+  phases nor the roadmap mentions one. The gap is not just the feature: `move()` returns
+  `{hit, grounded, groundNormal}`, so the consumer is told *that* they are on a walkable surface
+  and never *what* they are on. Every ingredient for writing the carry yourself — the ground
+  body id, its velocity, its delta since last frame — is inside `_categorizeGround` and none of
+  it comes back out.
+- **Workaround:** `carryDisplacement` in `src/game/Movers.ts`, ~50 lines, about an hour. It runs
+  outside the solver, after the movers have moved and before the next solve, and re-derives the
+  rider test from Q3's own rule: horizontally inside the mover's box, and feet within a band
+  above its top. It works because the port already keeps a full mover simulation of its own for
+  Q3's door and plat state machines, so the displacement is known; a consumer whose platforms are
+  ordinary kinematic bodies driven by an animation would not have that and would have nothing to
+  work from.
+- **Severity:** minor for this port, major for the solver's stated positioning. It is minor here
+  only because the port had a parallel mover simulation to read from. `DESIGN_COLLISION.md`
+  benchmarks the design against Jolt's `CharacterVirtual` and Source's
+  `TryPlayerMove`+`CategorizePosition`, and both of those carry the character: Jolt exposes
+  `GetGroundBodyID`/`GetGroundVelocity` and Source's `CategorizePosition` records
+  `m_hGroundEntity`. A kinematic character solver that cannot stand on a lift is not finished,
+  and every 3D game with a lift in it needs this.
+- **Suggested fix:** the cheap half first — put the ground body on `MoveResult` (`groundBody`, or
+  the id, next to `groundNormal`). `_categorizeGround` already has it and dropping it is the only
+  reason a consumer cannot solve this themselves. The full half is a platform step between ground
+  and settle: if the ground body moved since last frame, apply its delta to the character before
+  the next recover.
+- **Evidence:** `src/engine/control/first-person/collision/KinematicMover.js` (`MoveResult`,
+  `_categorizeGround`), `src/engine/control/first-person/DESIGN_COLLISION.md` §4 and the phase
+  list; workaround at `src/game/Movers.ts::carryDisplacement`, exercised end to end by
+  `test/player-controller.test.ts` ("lets a plat carry the player standing on it"). Found in
+  phase 7 while writing that test; see D-075.
 
 ## 4. Ergonomics
 

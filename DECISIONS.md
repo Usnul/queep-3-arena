@@ -2117,3 +2117,83 @@ bookkeeping you did not know you had inherited. The test for that is parity agai
 replaced, on the *fields*, not on the behaviour. `bg_pmove` is still in the tree and still
 bit-exact, which is what makes that test possible; retiring it entirely would have removed the
 only oracle for this class of bug.
+
+### D-075: The bridge dropped the player's *box*, and no plat in the game carried anyone
+
+Third instance of one mistake, found by finally writing the test the second instance said was
+missing.
+
+`PM_CheckDuck` writes two things: `ps.viewheight`, and `pm->mins` / `pm->maxs` -- the player's
+bounding box. D-071 replaced `PmoveSingle` with `PlayerMovement.step`, which carried the view
+height across and not the box. `createPmoveHost` initialises both to `vec3()`, so on the shipping
+path `pm.mins` and `pm.maxs` were **`[0, 0, 0]` for the entire game**.
+
+`main.ts` builds the box every mover asks about out of exactly those two:
+
+```js
+playerMins[i] = ps.origin[i] + player.mins[i];
+playerMaxs[i] = ps.origin[i] + player.maxs[i];
+```
+
+So the player was a zero-size point at `ps.origin` -- which sits 24 units above the soles, i.e.
+at chest height -- and that point was what `movers.update`, `movers.touchButtons` and
+`carryDisplacement` were handed.
+
+**What that broke, in order of how obvious it is:**
+
+- **No plat carried anyone.** `carryDisplacement`'s rider test is "are the player's feet within a
+  unit of the top of this thing", and the feet were reported 24 units above where they are. Both
+  branches -- the standing-on-top band and the overlap fallback -- miss for the same reason.
+- **Buttons could not be pressed by walking into them**, only by standing so that a point at
+  chest height was inside the button's brush.
+- **Every trigger volume shrank to a point.** Teleporters, jump pads and hurt triggers fired on
+  the chest rather than the body, so a trigger whose brush ends below chest height -- a floor
+  pad -- was harder to fire or impossible.
+- Crouching changed nothing about what the world thought you were, so the one case `main.ts`
+  explicitly reads the box for -- "a trigger test against the standing box would open a door you
+  cannot fit through" -- did the opposite of its comment.
+
+The `?move=q3` path was correct throughout, which is the signature of every bug in this family
+and the reason the test is written as a two-path comparison.
+
+**The fix** is six lines in `PlayerMovement.step`, next to the view height, sourced from
+`boxForState` so posture and box cannot disagree. `PmoveLike` grows `mins` and `maxs`, which is
+the honest signature: the bridge stands in for `PmoveSingle`, and `PmoveSingle` writes them.
+
+**The test, which is the actual deliverable here.** `test/player-controller.test.ts`, 34 cases.
+D-074 ended by saying the two suites covered the solver and the AI and left the seam between them
+untested; that was still true, because the fix it shipped was a test of `PlayerMovement`, not of
+the thing the browser builds. Nothing in the suite constructed a `PlayerController`.
+
+This one does, through meep's own input-device shapes -- a keyboard whose keys are live switches,
+a pointer that hands `(position, event, delta)`, a `document` stub for pointer lock -- and asserts
+against the *real* consumers: the camera transform, `Footsteps`, `Character.legsFor`,
+`WeaponSystem`'s angle handling, `carryDisplacement`, and the exact fields `Hud.update` is passed.
+Twenty-two of the 34 run on both solvers, because "does the ported path do this too" separates a
+port bug from a bridge bug and is the first thing worth knowing.
+
+Verified to catch it: zeroing the six lines again fails four cases and passes thirty.
+
+**Two things about writing it that are worth more than the bug.**
+
+1. **A test that positions its fixture using the value under test cannot fail.** The plat case
+   first placed the platform's top at `rig.boxMins[2]` -- the reported box -- so with a zeroed box
+   the plat moved to chest height too and the player rode it happily. It passed the regression
+   check. It now anchors to `ps.origin + MINS_Z`, Q3's own geometry, and fails. The same shape as
+   D-072's "a test that reads the source of a value cannot catch a bug in the copy of it".
+2. **The rig reproduces `main.ts`'s frame order rather than a tidier one** -- solve, then audio
+   off the result, then movers, then the world's writes back into `ps`. Two cases exist only
+   because that order is load-bearing: a teleporter and a jump pad both write `ps` *between*
+   frames, and a solver that trusted its own last-frame output over `ps` on entry would ignore
+   both.
+
+**What the rig could not test, stated rather than skipped.** The synthetic plat is carried
+sideways, not upwards. The headless collision world has no body for it, so a rising plat is one
+the solver cannot see and it drops the player back onto the real floor -- the net lift would
+measure ground stick, not carry. Sideways the floor is under the player either way, so the
+distance travelled is the carry and nothing else. The obvious worry -- that a rising plat in the browser is a real
+kinematic body, so `KinematicMover` might lift the player too and `carryDisplacement`'s vertical
+term would be double-counting -- is settled by reading the solver rather than guessing: it has no
+moving-platform support at all, and its `MoveResult` is `{hit, grounded, groundNormal}` with no
+identity for what you are standing on. There is nothing to double-count with, and a consumer
+could not write the carry themselves from what `move()` returns. Filed as GAP-022.
