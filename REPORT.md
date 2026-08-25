@@ -2699,8 +2699,9 @@ Specific things that would be a loss to regress.
 
 - **Clustered lighting, again, at a different scale.** 147 dynamic lights was the phase-1
   headline; adding items, movers, characters and their effects on top changed nothing about the
-  frame budget. The thing about a facility that scales is that it stops being interesting, which
-  is the compliment.
+  frame budget, and phase 7's lightgrid fit took the same map to 329 without that changing either.
+  The thing about a facility that scales is that it stops being interesting, which is the
+  compliment.
 
 - **`shape_cast` and `overlap_shape` are the right two primitives.** Between them they answered
   every collision question this port asks -- swept contact, resting contact, "am I inside

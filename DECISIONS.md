@@ -189,9 +189,14 @@ declarations, 527 `q3map_lightimage`, 66 `q3map_sun`. The pipeline therefore:
 - converts `q3map_sun` into a directional light with the map's own intended azimuth and
   elevation.
 
-This produces between 13 and 147 dynamic lights per map from real map data. It is a deviation
+This produces between 0 and 147 dynamic lights per map from real map data. It is a deviation
 from Q3's appearance and it is the deviation the brief asks for: it is the version that shows
 what the engine does. The performance answer is in the report — light count did not register.
+
+**The zero is not a typo and it is the reason for D-078.** This route only carries a map's
+lighting if its author lit it with surface shaders; `oa_dm5` reconstructs to nothing at all from
+it. The lightgrid fit runs after this one and fills what it leaves short, which takes the shipped
+range to 33 to 329.
 
 ### D-013: `.shader` scripts are read structurally, never interpreted
 
