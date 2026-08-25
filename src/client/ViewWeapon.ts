@@ -16,6 +16,24 @@
  * models the pickups use, the same lighting, the same frustum -- placed each
  * frame relative to the camera rather than parented to it.
  *
+ * # Putting a weapon away
+ *
+ * By taking the drawn pieces' `ShadedGeometry` off their entities, which is the
+ * only thing that works. `ShadedGeometryFlags.Visible` is documented as *"If set
+ * to false will not render"* and this file used to believe it; the flag is read
+ * by nothing in the engine (BUG-10), so the weapon you switched *away* from
+ * stayed in the scene. And because only the held weapon's transform is written
+ * each frame, it stayed at the pose it was last drawn at -- a gun hanging in the
+ * air where you were standing, which snapped back into your hands the moment you
+ * selected it again. One dead flag, and both halves of the complaint.
+ *
+ * Visibility in Shade is membership: `ShadedGeometrySystem3` adds a `Mesh` to
+ * the scene in `link` and removes it in `unlink`, and `Node3D` has no per-node
+ * visible bit to set. So `show` adds and removes the component, exactly as
+ * `ItemsView` does for a collected pickup (D-086, D-088). The entity and its
+ * `Transform` outlive the hidden interval, so a weapon is still built once and
+ * kept for the rest of the map.
+ *
  * **Where it sits is measured, not chosen.** Q3 draws a hands model at the view
  * origin and hangs the weapon off its `tag_weapon`, so that tag is the offset
  * from the eye, per weapon, authored by the people who made the game. The
@@ -62,6 +80,8 @@ const DEG_TO_RAD = Math.PI / 180;
 interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
+    addComponentToEntity(entity: number, component: unknown): void;
+    removeComponentFromEntity(entity: number, type: unknown): void;
 }
 
 /**
@@ -268,7 +288,19 @@ export function placeViewWeapon(
 interface DrawnWeapon {
     readonly transforms: Transform[];
     readonly geometries: ShadedGeometry[];
+    /** Parallel to `geometries`; the entity each one is linked to and off. */
+    readonly entities: number[];
     readonly offset: readonly [number, number, number];
+    /**
+     * Whether the geometries are attached, which is what "on screen" means.
+     *
+     * Redundant with `current` by construction -- exactly the held weapon is
+     * attached -- and kept anyway so `show` is total. A method that adds or
+     * removes an ECS component is one the dataset will assert or warn about if
+     * it is asked twice, and pushing that condition onto its one caller is how
+     * the second caller gets it wrong.
+     */
+    visible: boolean;
 }
 
 const scratchPosition = new Vector3();
@@ -311,23 +343,34 @@ export class ViewWeapon {
 
         const wanted = state.visible ? this.acquire(state.weapon) : null;
 
+        /*
+         Placed before it is shown, rather than after. A weapon that has been put
+         away still carries the pose it was last drawn at, and one that has never
+         been drawn carries none at all, so showing first hands
+         `ShadedGeometrySystem3.link` -- which copies the transform onto its
+         `Mesh` as its final act -- either a stale pose or the world origin, and
+         then corrects it on the next transform signal. Nothing renders in
+         between, so this is one redundant placement saved rather than a frame
+         with the gun in the wrong place; the reason to write it this way is that
+         the other order is only correct by accident of when the tick runs.
+        */
+        if (wanted !== null) {
+            const sway = weaponSway(state.speed, state.bobCycle, this.timeSeconds);
+
+            placeViewWeapon(camera, wanted.offset, sway, scratchPosition, scratchRotation);
+
+            for (const transform of wanted.transforms) {
+                transform.position.set(scratchPosition.x, scratchPosition.y, scratchPosition.z);
+                transform.rotation.copy(scratchRotation);
+            }
+        }
+
         if (wanted !== this.current) {
             this.show(this.current, false);
             this.show(wanted, true);
 
             this.current = wanted;
             this.currentName = wanted === null ? '' : state.weapon;
-        }
-
-        if (wanted === null) return;
-
-        const sway = weaponSway(state.speed, state.bobCycle, this.timeSeconds);
-
-        placeViewWeapon(camera, wanted.offset, sway, scratchPosition, scratchRotation);
-
-        for (const transform of wanted.transforms) {
-            transform.position.set(scratchPosition.x, scratchPosition.y, scratchPosition.z);
-            transform.rotation.copy(scratchRotation);
         }
     }
 
@@ -336,18 +379,38 @@ export class ViewWeapon {
         return this.currentName;
     }
 
-    /** Total drawn pieces across every weapon built so far. */
+    /**
+     * Pieces built across every weapon held so far, in the scene or not.
+     *
+     * A count of what has been paid for rather than of what is on screen: one
+     * weapon is drawn at a time, and the rest are entities waiting to be handed
+     * their geometry back.
+     */
     get pieceCount(): number {
         let n = 0;
         for (const drawn of this.drawn.values()) n += drawn.geometries.length;
         return n;
     }
 
+    /**
+     * Put a weapon in the scene, or take it out of it.
+     *
+     * By the component's membership of its entity, because that is the only
+     * thing Shade reads -- see the note at the top of the file. Guarded on
+     * `drawn.visible` because the dataset is not indifferent to being told
+     * twice: `addComponentToEntity` asserts when the entity already has one, and
+     * `removeComponentFromEntity` warns when it does not.
+     */
     private show(drawn: DrawnWeapon | null, visible: boolean): void {
-        if (drawn === null) return;
+        if (drawn === null || drawn.visible === visible) return;
 
-        for (const geometry of drawn.geometries) {
-            geometry.writeFlag(ShadedGeometryFlags.Visible, visible);
+        drawn.visible = visible;
+
+        for (let i = 0; i < drawn.geometries.length; i++) {
+            const entity = drawn.entities[i]!;
+
+            if (visible) this.ecd.addComponentToEntity(entity, drawn.geometries[i]!);
+            else this.ecd.removeComponentFromEntity(entity, ShadedGeometry);
         }
     }
 
@@ -367,6 +430,7 @@ export class ViewWeapon {
 
         const transforms: Transform[] = [];
         const geometries: ShadedGeometry[] = [];
+        const entities: number[] = [];
 
         for (const geometry of components) {
             // Position and rotation are both written every frame; this is the
@@ -379,18 +443,25 @@ export class ViewWeapon {
              the player.
             */
             geometry.clearFlag(ShadedGeometryFlags.CastShadow);
-            geometry.clearFlag(ShadedGeometryFlags.Visible);
 
             const transform = new Transform();
             transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
 
-            new Entity().add(transform).add(geometry).build(this.ecd);
+            /*
+             Built without its geometry, and handed it by `show` a few lines
+             later, once `update` has placed the transform. A weapon is acquired
+             on the frame it is first selected, so building it drawn would put the
+             model at the world origin for the rest of that call.
+            */
+            const builder = new Entity().add(transform);
+            builder.build(this.ecd);
 
             transforms.push(transform);
             geometries.push(geometry);
+            entities.push(builder.id);
         }
 
-        const drawn: DrawnWeapon = { transforms, geometries, offset };
+        const drawn: DrawnWeapon = { transforms, geometries, entities, offset, visible: false };
         this.drawn.set(weapon, drawn);
 
         return drawn;

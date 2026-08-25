@@ -2328,7 +2328,8 @@ written; the `.d.ts` error count moved from 664 across 152 files to **674 across
 drift rather than change. **BUG-8, BUG-9 and BUG-10 are new and live on 3.2.0** — BUG-8 was found while
 confirming BUG-7's fix, in the defect in BUG-7's own published reproduction, BUG-9 while
 rebuilding the transparency route (D-083), and BUG-10 by a maintainer asking why collected
-pickups were still lying on the floor (D-086).
+pickups were still lying on the floor (D-086) and then, the same day, why the weapon just switched
+away from was still hanging in mid-air (D-088).
 
 These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
 bug is "the engine says it does this and does something else". The second kind is more expensive
@@ -2763,6 +2764,13 @@ has no `visible` property either, so there is no bit for a renderer to read even
 - **What it looked like downstream:** a collected item that stayed on screen *and stopped moving*,
   because the same code skips the spin for an item that is not present. One dead flag, two
   symptoms, and they read as two unrelated bugs -- which is how it survived being looked at.
+- **And again, in the other consumer.** This port reached for the flag twice, and finding it dead
+  the first time did not find the second: `ViewWeapon` put a weapon away the same way, so the
+  weapon you switched *away* from stayed in the scene, froze at the pose it was last drawn at, and
+  crossed the map back into your hands when you selected it again. Same flag, same shape of
+  symptom, reported the same day as the first and by the maintainer rather than found by the fix
+  for the first (D-088). Recorded here because it is the honest measure of the severity above:
+  a flag that reads back what you wrote does not get re-examined once it has been explained.
 - **Suggested fix:** either implement it -- `ShadedGeometrySystem3` already owns the add/remove
   pair and could bind a flag-change handler the way it binds the three transform signals -- or
   delete it from the enum and say in `ShadedGeometry`'s docblock that hiding a mesh means taking
@@ -2774,7 +2782,8 @@ has no `visible` property either, so there is no bit for a renderer to read even
   `src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js` lines 18-27,
   `src/engine/graphics3/ShadedGeometrySystem3.js` `link`/`unlink`,
   `src/shade/renderer/scene/Node3D.js` (no visibility member). Port side:
-  `src/client/ItemsView.ts`, `test/items-view.test.ts`, D-086.
+  `src/client/ItemsView.ts` and `test/items-view.test.ts` (D-086), `src/client/ViewWeapon.ts` and
+  `test/view-weapon.test.ts` (D-088).
 
 ### Not bugs, recorded so nobody re-files them
 

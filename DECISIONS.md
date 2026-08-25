@@ -3110,3 +3110,76 @@ mortality, player audio, movers -- each reported once by name if it throws, with
 still running. It was written to diagnose this and did not, which is a fair description of most
 instrumentation; it stays because the failure it guards against is real, silent, and would present
 as almost exactly what was reported here.
+
+### D-088: The same dead flag, in the file nobody re-checked
+
+The maintainer: *"When I switch weapons, the previously held weapon's model gets left behind in
+the world. When I switch back to that weapon it gets teleported into my hand."*
+
+This is D-086 again, in `ViewWeapon` instead of `ItemsView`, and it is worth its own entry only
+because of what it says about how the first fix was done.
+
+`ViewWeapon` put a weapon away with `geometry.writeFlag(ShadedGeometryFlags.Visible, false)`. That
+flag is documented as *"If set to false will not render"* and is read by nothing in the engine
+(BUG-10). So the weapon you switched away from stayed in the scene. And because `update` writes the
+transform of the *held* weapon only, the abandoned one stopped moving at the pose it was last drawn
+at -- half a metre in front of where the player's eye happened to be -- and hung there. Selecting it
+again resumed the writes, and it crossed the map in one frame. Two complaints, one cause, and the
+second is the first seen from the other side: it was never teleported *in*, it was left *out*.
+
+**The fix is D-086's.** Visibility in Shade is membership, so `show` adds the `ShadedGeometry` back
+to its entity and removes it again, and the entity and its `Transform` outlive the hidden interval
+so a weapon is still built once and kept. The one addition is ordering: `update` now places the
+weapon *before* it hands it to the scene. `ShadedGeometrySystem3.link` copies the transform onto its
+`Mesh` as its last act, so showing first would link at a stale pose -- or, for a weapon being drawn
+for the very first time, at the world origin -- and then correct it on the next transform signal.
+Nothing renders in between, so this buys one redundant placement rather than a visible frame; the
+reason to write it that way round is that the other order is only correct by accident of when the
+tick runs, which is the mistake D-081 already made once in this file.
+
+**What this actually costs, and why the entry exists.** When BUG-10 was found, `ItemsView` was
+fixed, the flag was filed, the report was written, a test was added, and the search that proved the
+flag dead -- *"two references in 5,953 files"* -- was run against the **engine's** tree. BUG-10 even
+quotes the command, `grep -rn "ShadedGeometryFlags.Visible" src/`, and that `src/` is
+`node_modules/@woosh/meep-engine/src`. The same line against *this* `src/` was never typed. It would
+have returned two more hits, both in `ViewWeapon.ts`, and closed both bugs in one commit. It was not run, because
+the bug had been explained and explaining a bug feels like finishing it.
+
+So the rule this leaves behind is narrow and mechanical: **when a dependency's API turns out not to
+work, grep your own tree for the other callers before writing the fix up.** The write-up is what
+makes it feel closed, and it is the last moment anyone will look.
+
+There were exactly two callers, and the second was reported the same day the first was fixed -- in
+the next session, by the maintainer, before anything else had been touched. It had been drawing a
+rocket launcher hanging in mid-air on `oa_dm1` since it shipped in phase 4, and nothing said so,
+including the test file whose subject it was: `first-person.test.ts` owns the gun's arithmetic and
+passed throughout, correctly, because every number the gun is placed with is right.
+Which entities carry a mesh is a different question, and `test/view-weapon.test.ts` is where it is
+now asked -- six of its seven cases fail against the flag.
+
+**What the rule turned up when it was actually applied.** `ShadedGeometryFlags.DeferredBoundsUpdate`
+is set by three files here -- `ItemsView`, `ViewWeapon`, `loadMap` -- each with a comment saying it
+is the case the flag exists for. On this render path it does nothing. The flag is read in exactly
+one place, `ShadedGeometry.updateTransform`, which parks the component in a `DeferredBoundsQueue`
+that something has to have handed it via `bindBoundsQueue`; `bindBoundsQueue` is defined and called
+by nothing in 5,947 files. Its own docblock says `@see ShadedGeometrySystem.flushBoundsUpdates`, and
+there is no `ShadedGeometrySystem` in the package -- only `ShadedGeometrySystem3`, which owns no BVH,
+binds no queue, and never subscribes `updateTransform` at all. So the flag is inert rather than
+wrong, the measured numbers in its docblock presumably belong to the mesh-v2 BVH path this port does
+not use, and setting it costs one `|=`.
+
+**The flag is left alone** and no code changed for it. It is free, it is right if this port ever
+moves onto that path, and unpicking three files to remove a no-op is the sort of churn that makes a
+bug fix hard to read. It is written down because the entry above is an argument for grepping your
+own tree, and the first thing that grep found was a second flag in the same enum making a promise
+the shipping path does not keep. Worth filing against 3.2.0 alongside BUG-10 -- a docblock citing a
+class the package does not contain is the same defect as a flag no renderer reads -- but that is the
+maintainer's call and not this commit's.
+
+**Not fixed here, and named so it is not mistaken for an oversight.** A weapon whose model converts
+but whose hands tag does not resolve re-runs `library.components()` every frame and drops the
+`ShadedGeometry` instances it allocates. It is unreachable unless the asset pipeline has not been
+run at all (`CG_RegisterWeapon`'s fallback to `shotgun_hand.md3` catches every real case), it
+allocates garbage rather than leaking, and `acquire`'s own de-duplication of the `unmodelled` list
+shows the path was always known to repeat. It is a separate, smaller thing than the bug that was
+reported.
