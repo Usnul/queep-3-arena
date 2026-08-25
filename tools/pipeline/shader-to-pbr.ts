@@ -102,6 +102,7 @@ import {
     type ShaderScriptEntry,
     type ShaderStage,
 } from './shader-script.ts';
+import { LUX_PER_BYTE } from './lightgrid.ts';
 
 export type TransparencyMode = 'opaque' | 'mask' | 'blend';
 
@@ -150,6 +151,8 @@ export interface PbrMaterial {
     readonly isSky: boolean;
     /** From `surfaceparm nodraw`/`nodrawnonsolid` etc. -- collision only. */
     readonly isNoDraw: boolean;
+    /** Q3 drew this without any baked or dynamic lighting. See {@link UNLIT_LUMINANCE}. */
+    readonly unlit: boolean;
     /** `q3map_surfacelight` intensity, 0 when absent. Drives point-light placement. */
     readonly surfaceLight: number;
     /** Directives that were understood but deliberately not represented. */
@@ -187,6 +190,28 @@ const RGBGEN_BENIGN = new Set(['identity', 'identitylighting', 'vertex', 'exactv
 
 const DEFAULT_ROUGHNESS = 0.85;
 const DEFAULT_METALLIC = 0.0;
+
+/**
+ * What an *unlit* Q3 surface is worth, in cd/m2.
+ *
+ * Q3 draws a shader with no `$lightmap` stage at its texture's own brightness,
+ * unmodulated by anything in the room -- `identityLighting`, which is 1.0 once
+ * the overbright shift is undone. Every flame, beam, waterfall and portal in
+ * the game is drawn that way, and in a renderer that shades everything from
+ * photometric lights there is exactly one way to say "not shaded": emit it.
+ *
+ * The number is the port's own ceiling on how brightly anything is lit. A
+ * lightgrid byte is `LUX_PER_BYTE` lux (D-078) and a byte holds 255, so 51 lux
+ * is the most illumination this calibration admits; a Lambertian surface under
+ * it reflects `51 / pi` times its albedo. An unlit surface emits what a fully
+ * lit one of the same texture would reflect, which is Q3's own equivalence --
+ * an unlit stage and a lightmapped stage at full white draw the same pixel.
+ *
+ * Against this port's measured 1 to 6 cd/m2 for an ordinary lit wall, that puts
+ * a torch flame three to sixteen times brighter than the room it is in, which
+ * is what a torch in a Quake III dungeon looks like.
+ */
+export const UNLIT_LUMINANCE = (LUX_PER_BYTE * 255) / Math.PI;
 
 /** Strip a texture reference down to a virtual path without extension. */
 function texturePath(token: string | undefined): string | null {
@@ -371,6 +396,32 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         surfaceParms.has('clusterportal') ||
         surfaceParms.has('donotenter');
 
+    /*
+     Q3 lights a surface in one of three ways, and the third is "not at all".
+     `FinishShader` tracks `hasLightmapStage` for exactly this reason: a shader
+     with one is modulated by the baked light, one that {@link isShadedPass}
+     recognises is shaded by the scene, and one with neither is drawn at its own
+     brightness whatever the room is doing. Every flame, beam, waterfall, portal
+     and fullbright pickup in the game is the third kind.
+
+     `isShadedPass` rather than a lightmap test alone, because a `tcGen
+     environment` pass is *also* shaded by the scene -- it samples the
+     surroundings. Without that the chrome shells on the health pickups and the
+     domination point skins came out as emitters, which is a reflection read as a
+     light.
+
+     An implicit texture -- a name with no script at all -- is never unlit: Q3
+     builds it a default shader that carries a lightmap stage when the surface
+     has a lightmap, and vertex lighting when it does not.
+    */
+    const unlit =
+        entry.stages.length > 0 &&
+        !entry.stages.some((s) => {
+            const map = directive(s.directives, 'map') ?? directive(s.directives, 'clampmap');
+            if ((map?.[1] ?? '').toLowerCase() === '$lightmap') return true;
+            return isShadedPass(s);
+        });
+
     const cull = directive(entry.directives, 'cull');
     const cullMode = cull?.[1]?.toLowerCase() ?? 'front';
     const doubleSided = cullMode === 'none' || cullMode === 'twosided' || cullMode === 'disable';
@@ -513,6 +564,22 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
     }
 
     /*
+     An unlit surface emits its own texture, because that is the only way to say
+     "not shaded" to a renderer that shades everything (see {@link
+     UNLIT_LUMINANCE}). This is what a Q3 flame is: no `$lightmap` stage, no
+     `rgbGen lightingDiffuse`, no additive pass either -- two plain
+     `blendFunc blend` stages of a fire texture, drawn at full brightness. Shading
+     it instead left `oa_dm5` with torches lit by the room they are lighting.
+
+     A `filter` albedo is the exception and has to be: a multiply subtracts light
+     rather than adding it, so a fog brush emitting its own grey would be a lamp
+     in the shape of a cloud.
+    */
+    if (emissive === null && unlit && albedo !== null && albedoBlend !== 'filter') {
+        emissive = albedo;
+    }
+
+    /*
      Q3 had no notion of roughness or metalness, so both are conventions rather
      than data. Uniform dielectric with high roughness is the least-wrong default
      for painted metal, concrete and rock, which is most of the OA texture set. A
@@ -545,7 +612,7 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
      wall it lit sat at several cd/m2, which is how the port ended up with light
      fixtures darker than what they illuminated.
     */
-    const emissiveLuminance = emissive === null ? 0 : 1;
+    const emissiveLuminance = emissive === null ? 0 : UNLIT_LUMINANCE;
 
     return {
         name: entry.name,
@@ -560,6 +627,7 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         doubleSided,
         isSky,
         isNoDraw,
+        unlit,
         surfaceLight,
         dropped,
         source: entry.source,

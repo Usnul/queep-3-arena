@@ -38,7 +38,11 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 
 import { parseShaderScript } from '../tools/pipeline/shader-script.ts';
-import { shaderToPbr, type PbrMaterial } from '../tools/pipeline/shader-to-pbr.ts';
+import {
+    shaderToPbr,
+    UNLIT_LUMINANCE,
+    type PbrMaterial,
+} from '../tools/pipeline/shader-to-pbr.ts';
 import { ShaderIndex } from '../tools/pipeline/shader-index.ts';
 
 const ROOT = process.cwd();
@@ -154,7 +158,8 @@ textures/liquids/lavahell
          and the bundle invariant below checks that it did.
         */
         expect(m.surfaceLight).toBe(666);
-        expect(m.emissiveLuminance, 'the placeholder, in cd/m2').toBe(1);
+        expect(m.unlit, 'lava has no lightmap stage, so Q3 draws it unshaded').toBe(true);
+        expect(m.emissiveLuminance).toBe(UNLIT_LUMINANCE);
     });
 
     /*
@@ -286,7 +291,7 @@ textures/sfx/beam
         expect(
             m.emissiveLuminance,
             'gating the glow on a light-compiler directive is what unbound every beam'
-        ).toBe(1);
+        ).toBe(UNLIT_LUMINANCE);
     });
 
     /*
@@ -303,6 +308,98 @@ textures/sfx/beam
                 );
             }
         }
+    });
+});
+
+/*
+ * Q3 lights a surface in one of three ways and the third is "not at all".
+ * `FinishShader` tracks `hasLightmapStage` for exactly that reason. A renderer
+ * that shades everything from photometric lights has one way to say "not
+ * shaded", which is to emit it.
+ */
+describe('an unlit Q3 surface emits its own texture', () => {
+    /*
+     `textures/acc_dm5/flame`, the torch on `oa_dm5`: no `$lightmap` stage, no
+     `rgbGen lightingDiffuse`, and no additive pass either -- two plain
+     `blendFunc blend` stages of a fire texture, which Q3 draws at full
+     brightness. Shading it instead lit the torches with the room they light.
+    */
+    it('gives a flame drawn with two plain blend stages an emissive', () => {
+        const m = project(`
+textures/acc_dm5/flame
+{
+    surfaceparm nolightmap
+    cull none
+    {
+        map textures/acc_dm5/flame.tga
+        tcMod Scroll 1 0
+        blendFunc blend
+    }
+    {
+        map textures/acc_dm5/flame.tga
+        blendFunc blend
+        rgbGen wave sin 2 0 .1 1.5
+    }
+}`);
+
+        expect(m.unlit).toBe(true);
+        expect(m.emissive, 'an unlit surface emits what it would have reflected').toBe(
+            'textures/acc_dm5/flame'
+        );
+        expect(m.emissiveLuminance).toBe(UNLIT_LUMINANCE);
+    });
+
+    it('leaves a lightmapped surface alone', () => {
+        const m = project(`
+textures/acc_dm5/mud_trans
+{
+    cull none
+    {
+        map textures/acc_dm5/mud02.jpg
+    }
+    {
+        map $lightmap
+        rgbGen identity
+        blendFunc GL_DST_COLOR GL_ZERO
+    }
+}`);
+
+        expect(m.unlit).toBe(false);
+        expect(m.emissive, 'a wall is lit, not emitting').toBeNull();
+    });
+
+    /*
+     A multiply subtracts light rather than adding it, so a fog brush emitting
+     its own grey would be a lamp in the shape of a cloud.
+    */
+    it('refuses to make a fog brush emit', () => {
+        const m = project(`
+textures/sfx/xnotsodensegreyfog
+{
+    surfaceparm fog
+    cull disable
+    {
+        map textures/liquids/kc_fogcloud3.tga
+        blendfunc filter
+    }
+}`);
+
+        expect(m.unlit).toBe(true);
+        expect(m.albedoBlend).toBe('filter');
+        expect(m.emissive).toBeNull();
+    });
+
+    /*
+     A name with no script at all is never unlit: Q3 builds it a default shader
+     carrying a lightmap stage when the surface has a lightmap, and vertex
+     lighting when it does not. Every ordinary wall in the game arrives that way.
+    */
+    it('never calls an implicit texture unlit', () => {
+        const wall = new ShaderIndex(EXTRACTED).load().material('textures/gothic_block/blocks18c');
+
+        expect(wall.source).toBe('(implicit texture)');
+        expect(wall.unlit).toBe(false);
+        expect(wall.emissive).toBeNull();
     });
 });
 
@@ -368,7 +465,10 @@ models/weapons/nailgun/nailgun
 }`);
 
         expect(m.emissive).toBe('models/weapons/nailgun/glow');
-        expect(m.emissiveLuminance).toBe(1);
+        expect(m.unlit, 'the diffuse pass is `rgbGen lightingDiffuse`, so the gun is lit').toBe(
+            false
+        );
+        expect(m.emissiveLuminance).toBe(UNLIT_LUMINANCE);
     });
 });
 
@@ -788,6 +888,7 @@ describe('a light fixture is as bright as the light it emits', () => {
             emissive: string | null;
             emissiveLuminance: number;
             surfaceLight: number;
+            unlit: boolean;
         }[];
         readonly meshes: readonly {
             material: number;
@@ -866,6 +967,14 @@ describe('a light fixture is as bright as the light it emits', () => {
             if (a === undefined || a === 0) return;
 
             declared += 1;
+
+            /*
+             A surface that is both declared and unlit takes whichever of the two
+             is larger, so lava is not made dimmer than an ordinary unlit texture
+             by 666 lumens spread over 38 square metres. That case is the floor
+             exactly, and every other one has to be a whole number of fixtures.
+            */
+            if (m.unlit && m.emissiveLuminance === UNLIT_LUMINANCE) return;
 
             const perCluster = Math.min(m.surfaceLight, 20000) / (Math.PI * a);
             const clusters = m.emissiveLuminance / perCluster;

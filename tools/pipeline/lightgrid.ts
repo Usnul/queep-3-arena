@@ -48,6 +48,33 @@
 import type { LightGrid } from '../../src/q3/bsp/LightGrid.ts';
 
 /** Rec.709 luma, which is what "how bright is this sample" means here. */
+/**
+ * Lux per byte of sampled lightgrid irradiance.
+ *
+ * The grid's bytes are q3map2's own scale with no physical unit on them and
+ * meep's lights are photometric, so this number bridges two systems that never
+ * agreed. It is measured rather than chosen: on each map whose surface-light
+ * reconstruction the demo already accepts, take the median illuminance the
+ * reconstruction delivers at the places a player stands and divide it by the
+ * median grid brightness at those same places.
+ *
+ *   oa_dm1  8.7 lux / 103.7 = 0.084     aggressor    20.2 / 104.1 = 0.194
+ *   oa_dm4 32.6 lux / 160.9 = 0.202     am_thornish  57.6 /  48.3 = 1.193
+ *
+ * Fourteen times between the ends of that, which is worth saying plainly: the
+ * surface-light route is itself only approximately calibrated, and a map with
+ * 147 bright shader lights over open ground is not measuring the same thing as
+ * one with 22 in corridors. The median of the four, 0.198, is the robust middle
+ * and is what ships. It puts the two fitted maps at 9.0 and 31.8 lux median --
+ * inside the 8.7 to 32.6 band the accepted maps already span, which is the
+ * property that matters. See D-078.
+ *
+ * It lives here rather than in `convert-map.ts` because it is the lightgrid's
+ * own unit, and because `shader-to-pbr.ts` needs it too: a byte of 255 is the
+ * brightest this port admits any surface can be lit, which is what an *unlit*
+ * Q3 surface has to be worth. See `UNLIT_LUMINANCE`.
+ */
+export const LUX_PER_BYTE = 0.2;
 export function luma(rgb: readonly [number, number, number]): number {
     return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
 }

@@ -51,9 +51,14 @@ import {
     type TextureCache,
 } from './pipeline/texture-out.ts';
 import { tessellatePatch, type PatchVertex } from './pipeline/patch.ts';
-import type { ImageBlend, PbrMaterial } from './pipeline/shader-to-pbr.ts';
+import { UNLIT_LUMINANCE, type ImageBlend, type PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
-import { fitGridLights, sitesFromGrid, type SceneLight } from './pipeline/lightgrid.ts';
+import {
+    fitGridLights,
+    sitesFromGrid,
+    LUX_PER_BYTE,
+    type SceneLight,
+} from './pipeline/lightgrid.ts';
 import { ClipMap, MASK_SOLID, SURF } from '../src/q3/cm/ClipMap.ts';
 import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
 
@@ -92,29 +97,6 @@ const BUILT = join(ROOT, 'assets', 'built');
  * coordinate systems meet on the pipeline side.
  */
 const WORLD_SCALE = 1 / 32;
-
-/**
- * Lux per byte of sampled lightgrid irradiance.
- *
- * The grid's bytes are q3map2's own scale with no physical unit on them and
- * meep's lights are photometric, so this number bridges two systems that never
- * agreed. It is measured rather than chosen: on each map whose surface-light
- * reconstruction the demo already accepts, take the median illuminance the
- * reconstruction delivers at the places a player stands and divide it by the
- * median grid brightness at those same places.
- *
- *   oa_dm1  8.7 lux / 103.7 = 0.084     aggressor    20.2 / 104.1 = 0.194
- *   oa_dm4 32.6 lux / 160.9 = 0.202     am_thornish  57.6 /  48.3 = 1.193
- *
- * Fourteen times between the ends of that, which is worth saying plainly: the
- * surface-light route is itself only approximately calibrated, and a map with
- * 147 bright shader lights over open ground is not measuring the same thing as
- * one with 22 in corridors. The median of the four, 0.198, is the robust middle
- * and is what ships. It puts the two fitted maps at 9.0 and 31.8 lux median --
- * inside the 8.7 to 32.6 band the accepted maps already span, which is the
- * property that matters. See D-078.
- */
-const LUX_PER_BYTE = 0.2;
 
 /**
  * Grid cells dimmer than this are not sites.
@@ -165,6 +147,8 @@ interface SceneMaterial {
     readonly albedo: string | null;
     /** The Q3 blend the albedo image was written for. */
     readonly albedoBlend: ImageBlend;
+    /** Q3 drew this surface without any lighting; see `UNLIT_LUMINANCE`. */
+    readonly unlit: boolean;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
     readonly roughness: number;
@@ -359,6 +343,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                     name: pbr.name,
                     albedo: pbr.albedo === null ? null : textureKey(pbr.albedo, pbr.albedoBlend),
                     albedoBlend: pbr.albedoBlend,
+                    unlit: pbr.unlit,
                     emissive: pbr.emissive,
                     emissiveLuminance: pbr.emissiveLuminance,
                     roughness: pbr.roughness,
@@ -826,9 +811,22 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     */
     for (let i = 0; i < materials.length; i++) {
         const luminance = emissiveLuminance.get(i);
-        if (luminance !== undefined && materials[i]!.emissive !== null) {
-            materials[i] = { ...materials[i]!, emissiveLuminance: luminance };
-        }
+        if (luminance === undefined || materials[i]!.emissive === null) continue;
+
+        /*
+         A surface can be both declared and unlit -- lava is -- and the two say
+         different things. "Q3 drew this without shading it" is a floor on how it
+         looks; "the port credits it with F lumens over A" is a floor on how it
+         looks given what it emits. Neither is an upper bound, so the larger is
+         the better-informed of the two: it keeps a torch at the thousands its own
+         flux implies, and stops 666 lumens spread over 38 square metres of lava
+         from making lava dimmer than an ordinary unlit texture.
+        */
+        const floor = materials[i]!.unlit ? UNLIT_LUMINANCE : 0;
+        materials[i] = {
+            ...materials[i]!,
+            emissiveLuminance: Math.max(luminance, floor),
+        };
     }
 
     for (const m of materials) {

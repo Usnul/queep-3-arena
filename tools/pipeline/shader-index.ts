@@ -146,6 +146,8 @@ export class ShaderIndex {
                 doubleSided: false,
                 isSky: false,
                 isNoDraw: false,
+                // Q3 gives a name with no script a default shader that is lit.
+                unlit: false,
                 surfaceLight: 0,
                 dropped: [],
                 source: '(implicit texture)',

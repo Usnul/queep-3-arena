@@ -2970,3 +2970,71 @@ saturates at 65,408 cd/m2, comfortably above the highest of them -- and the mete
 five per cent rather than dragging the whole frame down. That is an argument from the shader
 source, not from a frame: a wall of lights filling the view would still stop the aperture down,
 which is what a camera does and may not be what a Quake III level wants.
+
+### D-087: A Q3 flame is not lit, and the port was lighting it
+
+The maintainer, on `oa_dm5`: *"the torches are a bit meh, not bright enough for sure."*
+
+D-085 had just put every *declared* emitter on a photometric footing, and this torch is not one.
+`textures/acc_dm5/flame` declares nothing -- no `q3map_surfacelight`, because `oa_dm5`'s author lit
+the map with `light` entities that q3map2 then stripped (Q-006). It is two plain `blendFunc blend`
+stages of a fire texture, and the port was giving it an albedo, no emissive, and the room's own
+lighting. A torch shaded by the light it is supposed to be casting.
+
+**Q3 lights a surface in one of three ways and the third is "not at all".** `FinishShader` tracks
+`hasLightmapStage` for exactly that reason:
+
+- a stage of `$lightmap` modulates the surface by the baked light;
+- `rgbGen lightingDiffuse` / `alphaGen lightingSpecular` shade it dynamically, which is how models
+  are drawn;
+- **neither** means `identityLighting` -- the texture at its own brightness, whatever the room is
+  doing.
+
+Nineteen of the 162 shipping map materials are the third kind and every one is an effect: flames,
+beams, waterfalls, fog, portals, lava. Thirty-one of the model materials are, and they are the
+powerup shells, the auras, and eleven ammo boxes that OpenArena deliberately draws fullbright so a
+pickup is findable in a dark corner. Nothing else -- no wall, no weapon body, no character.
+
+A renderer that shades everything from photometric lights has exactly one way to say "not shaded",
+which is to emit it. So an unlit surface now emits its own texture.
+
+**`tcGen environment` had to join the test, and finding out why is the useful part.** The first
+version asked only about `$lightmap` and `rgbGen lighting*`, and it made 54 model materials emit
+instead of 31 -- the extra 23 being the chrome shells on the health pickups, the domination point
+skins and the rune icons, all of which are `tcGen environment`. An environment pass *is* shaded by
+the scene; it samples the surroundings. It is the same distinction `isShadedPass` already drew for
+deciding which additive passes are glow maps and which are 1999's fake specular (D-083), so the two
+now share one predicate rather than disagreeing about the same shaders.
+
+A `filter` albedo is the other exception. A multiply subtracts light rather than adding it, so
+`textures/sfx/xnotsodensegreyfog` emitting its own grey would be a lamp in the shape of a cloud.
+
+**How bright is "unlit"?** This is the number D-085 left as an admitted placeholder of 1 cd/m2, and
+there is a better one available. A lightgrid byte is `LUX_PER_BYTE` lux and a byte holds 255, so 51
+lux is the most illumination this port's calibration admits anywhere; a Lambertian surface under it
+reflects `51 / pi` times its albedo. An unlit surface emits what a fully lit one of the same texture
+would reflect -- which is Q3's own equivalence, since an unlit stage and a lightmapped stage at full
+white draw the same pixel. That is **16.2 cd/m2**, against the 1 to 6 an ordinary lit wall runs on
+these maps, so a torch is three to sixteen times brighter than the room it is in.
+
+`LUX_PER_BYTE` moved from `convert-map.ts` to `lightgrid.ts` to make that one definition rather than
+two. It is the lightgrid's own unit and it now lives with the lightgrid.
+
+**A surface can be both declared and unlit, and lava is.** The two say different things: "Q3 drew
+this without shading it" is a floor on how it looks, and "the port credits it with F lumens over
+area A" is a floor on how it looks given what it emits. Neither is an upper bound, so the larger
+wins. That keeps `sfx/flame2` at the 5,963 cd/m2 its own 3,787 lumens imply, and stops `lavahell` --
+666 lumens spread over 38 square metres, which works out at 5.6 -- from being dimmer than an
+ordinary unlit texture.
+
+**What is approximated and not hidden.** An unlit blended surface still has its albedo bound and
+therefore still picks up a little diffuse on top of what it emits. Writing a black-albedo variant
+the way the additive path does would remove it exactly, at one more file per material; against an
+emissive of 16.2 in a room of 1 to 6, the double count is under a third and it did not seem worth
+six more textures. The eleven fullbright ammo boxes are faithful to Q3 and will still look odd to
+anyone expecting a modern renderer to shade a crate.
+
+`materials.test.ts` covers the rule on shader text -- the flame gets an emissive, a lightmapped wall
+does not, a fog brush does not, and an implicit texture is never unlit -- and the flame case fails
+against the version without it.
+
