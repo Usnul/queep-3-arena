@@ -1602,3 +1602,147 @@ the flight, and it is gone on the frame the rocket detonates.
 powerup's loop (`CG_PlayerPowerups`), which needs powerup state the port does not carry, and the
 gauntlet's `firingSound`, which needs the gauntlet's own firing flag rather than a fire-rate
 cooldown.
+
+---
+
+## Phase 6 — report finalisation
+
+### D-067: The trap matrix was re-derived from scratch, and every number in it moved
+
+D-066 found that four sound syscalls were marked `mapped` against a component the port had never
+constructed, and adopted a rule: a `mapped` note names a call site, because a call site can be
+checked. Phase 6 applied that rule to all 142 explicit entries rather than to the five that had
+already been caught, and the rule is now enforced by `tools/trap-matrix.mjs --check` rather than
+by remembering it.
+
+**The mechanism.** Every entry whose disposition asserts something was built carries
+`evidence: ["path::token", ...]`. The generator resolves each path and checks that the token
+appears in the file; a `ported`, `hybrid` or `workaround` entry with no evidence fails the check,
+and a `mapped` entry must carry either evidence or an explicit `unused` reason. `npm run check`
+runs it, so the matrix cannot describe an intention again without someone deleting the rule.
+
+**What moved, and why each one was wrong.**
+
+| was | now | why |
+|---|---|---|
+| `mapped 77` | `mapped, exercised 31` + `mapped, not exercised 18` | The single number conflated "meep does this and we use it" with "meep does this and we never needed it". 18 facilities are real, would do the job, and were idle: no menus so no fonts, no 2D HUD art so no image drawing, four settings so no cvar system, no console so no clipboard, no on-screen debugging so no `DebugDrawSystem3`. |
+| `trap_Trace`, `trap_CM_BoxTrace` — `ported` | `hybrid` | Written before the physics swap and never revisited. The shipping backend is meep's broadphase and sweep with Q3's per-brush rule behind it, and *both halves are load-bearing*: `shape_cast` cannot express the blocking predicate (GAP-019) or the standoff (GAP-020). Calling it `ported` credited meep with nothing; calling it `mapped` would have credited it with the whole thing. |
+| `trap_CM_TransformedBoxTrace`, `trap_SetBrushModel` — `ported` | `hybrid` | Same reason, plus the genuine win: on the physics backend a mover is a kinematic body the world trace already finds, so `SV_ClipMoveToEntities` collapses into the same query. |
+| `trap_R_LightForPoint` — `GAP` | `mapped` | The matrix's only `GAP`, and it pointed at a gap-register entry that does not exist. It is not a gap: Q3 needs a lightgrid because its models sit outside the lighting solution, and meep's do not. The real gap it was standing in for is GAP-006, which belongs to `trap_R_LoadWorldMap`. |
+| `trap_R_RegisterSkin`, `trap_R_RegisterShader` — `mapped` | `workaround` | Both are resolved offline into baked glTF materials. Runtime skin switching is a capability this port does not have, and `mapped` hid that. |
+| `trap_TraceCapsule` and four siblings — `ported` | `not needed` | Nothing was ported. OA traces the player as a box, so the capsule branches are dead code (D-018), and claiming them as ported work was simply false. |
+| nine `trap_Cvar_*` — `mapped` against `engine/options` | `workaround` against URL query parameters | The port never imported `engine/options`. Its four knobs are `?map=`, `?trace=`, `?fly=` and `?targets=`. |
+| `trap_EntitiesInBox`, `trap_EntityContact` — `mapped` against the BVH | `workaround` | The port keeps its own arrays and tests AABBs directly. At 31 items and 6 brush entities a broadphase costs more than it saves. Worth recording as a facility correctly *not* used. |
+| nine console syscalls, three configstring, three userinfo — `mapped` | `not needed` | No console shipped, and configstrings and userinfo exist only to cross a client/server boundary this port does not have. |
+
+**What this does to the headline.** `227 not needed / 31 exercised / 18 available / 4 hybrid /
+7 ported / 22 workaround / 0 gap`. The engine comes out of this looking *narrower and more
+honest* rather than worse: 31 facilities carried a Quake III port, which is the interesting
+number, and the 18 idle ones are evidence of breadth rather than of failure.
+
+**The uncomfortable part**, recorded because the brief asks for it: the previous matrix was
+written early, described a plan, and was then maintained by editing notes rather than by
+re-deriving. It survived five phases and a `--check` that only verified *completeness* — every
+syscall classified — while never verifying *truth*. A check that cannot fail on the thing that
+actually goes wrong is worse than no check, because it is quoted as evidence.
+
+### D-068: `am_thornish` has no `info_player_deathmatch`, and the largest map in the build had no bots
+
+Found by `test/presentation.test.ts` asserting that every shipped map has at least four spawn
+points, not by playing it.
+
+`main.ts` selected spawn points by filtering entities for `classname === 'info_player_deathmatch'`,
+in three separate places. `am_thornish` is a Team Arena map: its entry points are 24 CTF team
+spawns and 16 `info_player_start`, and it has zero `info_player_deathmatch`. The filter therefore
+produced an empty list, which meant no bots at all on that map, and a death respawning the player
+at `[0, 0, 0]` because the respawn line reads `botSpawns[random] ?? [0, 0, 0]` and did exactly
+what it says.
+
+Q3 itself would refuse the map — `SelectRandomDeathmatchSpawnPoint` calls `G_Error` when it finds
+none — because a Q3 server knows its gametype and will not host a map that cannot support it.
+That is the right behaviour for a server and the wrong behaviour for a demo with six maps and one
+gametype, so `spawnPoints` (`src/game/Spawns.ts`) walks a preference chain instead:
+`info_player_deathmatch`, then the CTF team spawns, then the CTF player markers, then
+`info_player_start`.
+
+It returns the **first non-empty tier rather than the union**, deliberately. Mixing combat spawns
+with `info_player_start` on a map that has both would put bots in a lobby position the map never
+expects to be fought over. The tiers are ordered so the combat spawns win.
+
+Three tests pin it, including one asserting that `am_thornish` still has no deathmatch spawn and
+resolves to exactly 24 CTF ones — so if the asset pipeline ever starts synthesising them, the
+change is visible rather than silent.
+
+### D-069: The phase 4 and 5 exit criteria are now tests, and one of them does not fully pass
+
+The brief's exit criteria for phases 4 and 5 are "it looks like a showcase, not a test harness"
+and "a real match is playable". Both had been signed off by looking at the running application.
+This project's record with that method is: two wrong fixes shipped from screenshots in one
+session, a measurement harness that reported healthy numbers for code the browser was not running
+(D-036), and the same failure again a session later (D-061). The preview browser in the previous
+session did not composite frames at all, so `MeshSystem3` never loaded a model and no live
+measurement was possible from it.
+
+So both criteria were rewritten as headless Node checks. Neither can judge whether something looks
+good; both can refuse every failure mode that judgement would catch, and each of those is a
+number.
+
+**`test/presentation.test.ts` (36 tests)** — every texture a material names is on disk, every
+material carries real PBR inputs rather than one default, every mesh has geometry and a material,
+every spawned pickup resolves to a model, every fx texture named in `Effects.ts` exists, every
+sound the shipping code plays is in the bank, and every place a player stands receives light.
+
+The last one is computed rather than asserted from a screenshot: illuminance in lux at every
+spawn point and pickup, using the same photometric arithmetic `loadMap` hands the engine —
+`cd = lm / 4π`, inverse-square in scene metres, cut off at each light's `distance`. Reproducing
+that arithmetic in the test rather than calling the engine's copy is deliberate; the engine's
+needs a graphics device.
+
+**The result is that the criterion does not hold uniformly**, which is the finding:
+
+| map | point lights | median lux | player positions under 1 lux |
+|---|---:|---:|---:|
+| `am_thornish` | 147 | 58.0 | 0 / 95 |
+| `oa_dm4` | 22 | 31.4 | 0 / 47 |
+| `aggressor` | 63 | 22.5 | 0 / 38 |
+| `oa_dm1` | 22 | 8.8 | 0 / 38 |
+| `oa_dm7` | 13 | 0.0 | 70 / 79 |
+| `oa_dm5` | **0** | 0.0 | 36 / 36 |
+
+The test asserts the criterion on the default map and the two showcase maps, and *pins* the two
+failures rather than loosening the threshold to cover them. Loosening would have made the suite
+pass and the report wrong.
+
+**Why it fails there.** The lighting reconstruction reads `q3map_surfacelight` off the shader set
+and `q3map_sun` off worldspawn, because those are the only lighting inputs that survive
+compilation: q3map2 deletes every `light` entity from a compiled BSP, which the test also asserts,
+across all six maps. `oa_dm5` is 107,414 triangles of level lit entirely by `light` entities and a
+lightmap, so there is nothing left to read.
+
+**The route not taken, and why.** The BSP's lightgrid (lump 15) is the other baked product of
+q3map2 and it *does* survive: an ambient plus a directional sample per grid cell, covering the
+whole playable volume. Emitting point lights from bright cells would give `oa_dm5` a lighting
+solution with no rendering code, no engine change and no lightmap slot — pure asset-pipeline work,
+roughly half a day. It is not done. The brief's phase 6 is report finalisation, the shortfall is
+now measured, pinned and attributed in GAP-006, and inventing a feature during the reporting phase
+would be the wrong trade against leaving the report incomplete. Recorded here so the next person
+finds the idea rather than the absence.
+
+**`test/match.test.ts` (16 tests)** — six bots and one standing player for 30 simulated seconds at
+125 Hz on the shipping physics backend, with no renderer and no engine boot. Bots leave their
+spawns, cross the level, take pickups, find the player and open fire; the dead come back; no state
+goes non-finite. The same match runs on the clipmap backend as a guard against a collision change
+that traps every bot where it stands — the failure that actually happened twice — comparing total
+distance walked and share of the navigation graph reached.
+
+Nothing in the shipping code had to change to make this possible, which is itself a finding and is
+in section 7: `WeaponSystem`, `ItemSystem` and `MoverSystem` never knew about the ECS,
+`BotRuntime.spawn` already took a null `Character`, and `PhysicsSystem` drives headless.
+
+**The player in that match is a dummy, and it has to be.** The first version ran bots only and
+measured zero shots fired, which looked like a bug and is not: bots in this port fight the player
+and not each other, because Q3's target selection scores every client and this one does not
+(D-055). A stationary player is the smallest arrangement in which the tree's fight branch ever
+runs. The cut is now asserted directly in its own test — with no player, nobody fires — so the
+report's claim and the code cannot drift apart, and implementing bot-versus-bot selection will
+fail that test and force the report to be updated.

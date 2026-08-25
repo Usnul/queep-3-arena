@@ -3,9 +3,19 @@
 **Audience:** meep's maintainer. Everything here is meant to become a backlog item or be
 consciously rejected.
 
-**Method:** this document is appended to as the work happens, not reconstructed afterwards.
-Entries carry the commit they were written at, so a claim that has since been fixed can be
-dated. Where something cost real time, the time is stated.
+**Method:** this document was appended to as the work happened rather than reconstructed
+afterwards, and where something cost real time the time is stated. Entries say which phase they
+were written in, so a claim that has since been overtaken can be dated — and several have been.
+Where a later phase contradicted an earlier entry, the earlier one is kept with the correction
+attached rather than quietly edited, because how a wrong conclusion was reached is usually the
+part a maintainer can act on. GAP-006, GAP-007 and GAP-016 are the three worth reading for that
+reason alone.
+
+Two parts of this report were *not* written continuously and were re-derived from scratch in
+phase 6: the executive summary, because two findings arrived late that outranked everything above
+them, and the `trap_` coverage matrix, because auditing it against the shipping code showed that
+maintaining it by editing notes had let it describe a plan rather than a build. Section 2 lists
+what moved and D-067 explains why the check that was supposed to prevent that did not.
 
 **Engine under test:** `@woosh/meep-engine@3.0.2`, consumed from npm as a peer dependency,
 unmodified. No patching, no forking, no monkey-patching — where the engine did not do what
@@ -17,39 +27,159 @@ the port needed, the port worked around it and the workaround is written down he
 
 Ranked by how much they would cost the next person, not by how much they cost me.
 
-1. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
-   spent on graphics.** The engine itself came up cleanly and rendered at 230 FPS on the first
-   frame it drew. The time went to integration defects a consumer hits in a fixed order and
-   cannot skip: an optional peer dependency that is a mandatory top-level import (GAP-003),
-   worker bundles addressed at a web-root path no application has (GAP-004), and a missing
-   `./package.json` export that breaks the standard way of locating a package root. Each is
-   individually trivial. Together they are the entire first-run experience, and they are the
-   cheapest thing on this list to fix.
+**Re-ranked from scratch in phase 6.** The previous ranking was written before GAP-019 and
+GAP-020 existed, and those two changed the shape of the document rather than adding to it: they
+are the most expensive findings here, they compound with GAP-012, and together they are the
+reason the shipping build runs meep's physics *in front of* Q3's collision code rather than
+instead of it. Appending them at the bottom would have been the wrong answer to the question this
+section is supposed to answer.
 
-2. **Photometric lighting has no guidance, and world scale is silently load-bearing.**
-   `PointLight.intensity` is candela and falloff is inverse-square in scene units, which is the
-   right design. The consequence is undocumented: content authored in any unit other than
-   metres renders black, with no diagnostic. Diagnosing it cost about 90 minutes and was
-   actively misleading — raising every light's intensity by 10,000x moved mean frame luminance
-   from 14.7 to 25.7, which reads as "lights are disconnected", not "your distances are 32x too
-   large" (GAP-005). It then cost a further ten minutes at the other end of the scale when a
-   physically-plausible 60,000-lumen explosion whited out a corridor (GAP-011). A short table
-   of reference values in the lighting docs would have prevented both.
+1. **Building a character controller on `shape_cast` costs three findings, in a fixed order, and
+   each one presents as your own bug.** This is the single most expensive thing in this report —
+   about six hours across a session, arriving as four separate player-visible failures rather than
+   as anything a measurement flagged — and it is the one a maintainer can act on with the widest
+   effect, because *every* consumer who builds a character controller will hit all three.
 
-3. **Swapping Q3's collision for meep's physics cost three specific behaviours, and one of them
-   is a general finding about character control.** The maintainer directed that movement run on
-   meep's physics rather than the ported `cm_trace`, so it does, measured against the ported
-   code as a bit-exact control (D-029). Two of the three restorations are Q3 quirks nobody else
-   needs. The third is not: **`shape_cast` reports the minimum-penetration axis as its contact
-   normal, and for character control the *latest entering plane* is the useful answer.** They
-   agree on a flat wall and disagree in a corner, where meep returned `[0, 1, 0]` — the floor —
-   for a box wedged against a wall. Any slide-move controller clips velocity against that
-   normal, and clipping against the wrong plane in a corner is how characters get stuck in
-   corners. Re-deriving the plane from the source geometry took the error from 56 units to 0.12
-   (GAP-012). This is worth an engine-side option because every character controller built on
-   `shape_cast` will need it and most will diagnose it as their own bug.
+   - **There is no way to ask a swept query to stop short of contact** (GAP-020). Every character
+     controller needs a standoff; Q3 offsets its planes by 1/8 unit, and every engine solves it
+     somehow. `shape_cast` has no parameter for it. Subtracting the epsilon from the returned
+     fraction is the obvious workaround, it is what this port did first, and it is *silently
+     different* whenever the sweep stops just short of a surface rather than reaching it. The
+     result: falling players who never land. 63 of 64 dropped players never reached the ground,
+     `groundEntityNum` never left `ENTITYNUM_NONE`, so the animation code played the jump clip, so
+     every bot in the level rendered with its legs tucked up. Three unrelated-looking bug reports,
+     one cause. The correct workaround is to inflate the swept shape instead — which is correct,
+     is not obviously correct, and makes the next problem worse.
+   - **`shape_cast` answers "does the swept volume touch this body"; movement code asks "does this
+     brush block this move"** (GAP-019). These disagree systematically at exactly the distance a
+     character controller lives at, because *resting on a surface means being sub-epsilon away
+     from it*. A query that reports intersection without reporting whether the intersection
+     opposes the sweep fires on every contact, in every direction, forever. `skip_initial_overlaps`
+     is the right idea and is not enough: a surface you are 1/8 unit from is not overlapping, it is
+     reached at a very small positive `t`, and clamping that to zero is what wedges the player. A
+     player stood in an open corridor with velocity climbing to 320 units a second against a
+     position that never changed. The result also cannot express `allsolid` — "began inside and
+     never gets out" versus "began inside but the sweep leaves" — and pmove's recovery path is
+     gated on precisely that distinction.
+   - **`shape_cast` reports the minimum-penetration axis as its contact normal; character control
+     needs the latest entering plane** (GAP-012). They agree on a flat wall and disagree in a
+     corner, where meep returned `[0, 1, 0]` — the floor — for a box wedged against a wall. Any
+     slide-move controller clips velocity against that normal, and clipping against the wrong
+     plane in a corner is how characters get stuck in corners.
 
-4. **A navmesh needs a surface and a Quake III map is a pile of interpenetrating solids — and the
+   **What the workaround costs, now that it has a number.** Q3's own per-brush test is re-imposed
+   over the brushes `overlap_shape` finds, so the shipping configuration is meep's broadphase and
+   sweep in front of Q3's narrowphase rule. Measured (`npm run bench-match`): one trace costs
+   4.53 µs on the shipping path against 0.42 µs for the ported clipmap answering the entire
+   question; `shape_cast` alone is 3.49 µs of it and `traceBrushList` — the ported code that
+   actually produces the fraction, the plane, `startsolid` and `allsolid` — is 0.29 µs. A whole
+   six-bot deathmatch costs 356 µs a frame on meep's physics and 31 µs on the ported clipmap, for
+   an identical match. **The part that decides the answer is the cheapest line in the table.**
+   That is not a criticism of `shape_cast`'s implementation, which is doing strictly more work;
+   it is the price of the two gaps, and closing them would collapse three queries into one.
+
+   The workaround also needs the source half-spaces kept alongside the `ConvexHullShape3D`. An
+   application whose hulls came from a mesh has nothing to re-derive from and would have to give
+   up or reimplement the broadphase.
+
+   **What would fix it:** a `standoff` / `skin_width` parameter on `shape_cast` (a subtraction on
+   an existing comparison), a directional blocking predicate (the separating-axis distance at
+   `t = 0` signed against the sweep direction — already computed, currently discarded), an
+   `initially_overlapping` flag, and an option for the latest-entering-plane normal. All four are
+   information the query already has.
+
+2. **Getting from `npm install` to a rendered frame took about 2.5 hours, and none of it was
+   spent on graphics.** Second only because it is a smaller number than the first, but it is the
+   *cheapest* item on this list to fix and the only one that hits 100% of consumers on day one.
+   The engine itself came up cleanly and rendered at 230 FPS on the first frame it drew. The time
+   went to integration defects a consumer hits in a fixed order and cannot skip: an optional peer
+   dependency that is a mandatory top-level import in the de-facto entry point (BUG-2), worker
+   bundles addressed at a web-root path no application has and with no parameter to correct it
+   (BUG-4), and a missing `./package.json` export that breaks the standard way of locating a
+   package root (BUG-3). Each is individually a one-line fix. Together they are the entire
+   first-run experience.
+
+3. **Four APIs accept a wrong-but-plausible call, do nothing, and report success at every
+   diagnostic you reach for.** Roughly four hours in total, spread so thinly that none of them
+   ever looked like the same problem twice — which is exactly why they belong together.
+
+   - `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
+     `ColliderObserverSystem` the consumer must also register. Register only the first and every
+     body is real, present in the broadphase, and completely intangible — 537 static bodies and
+     `fraction === 1` for a sweep from a metre above a floor to 128 m below it, with nothing in
+     the console (GAP-014).
+   - `new Animation({ clips })` documents `List<AnimationClip>`, forwards to `fromJSON`, and
+     rebuilds each entry by reading `json.name` only `if (typeof json.name === "string")` — which
+     an `ObservedString` is not. The model loads, both skins are there, the list is the right
+     length, every clip is an `AnimationClip`, every name is `""`, and nothing ever plays (BUG-1).
+   - meep builds its pointer and keyboard devices on `viewStack.el` and starts them — but that
+     element and everything under it are `pointer-events: none`, so no pointer event reaches the
+     device, and although it carries `tabindex="0"` nothing focuses it, so key events go to
+     `<body>`. The application renders at 160 FPS and cannot be played, which looks exactly like
+     an application with no input code at all (GAP-017).
+   - A scene with no environment map renders black. `make_default_environment` documents this
+     well, but you only read that docblock if you already suspect the environment, and
+     `EngineHarness.buildBasics` sets one up for you — so it bites at the moment you stop using
+     the all-or-nothing helper, which is the moment you stop being a beginner.
+
+   Every one of these is a first-use warning or a `@see`. The pattern is worth naming as a class:
+   *the engine is very good at loud, specific failures* (section 7) *and has no story at all for
+   silent ones.*
+
+4. **Photometric lighting is the right design and has no guidance, and world scale is silently
+   load-bearing.** `PointLight.intensity` is candela and falloff is inverse-square in scene units.
+   The consequence is undocumented: content authored in any unit other than metres renders black,
+   with no diagnostic. Diagnosing it cost about 90 minutes and was actively misleading — raising
+   every light's intensity by 10,000× moved mean frame luminance from 14.7 to 25.7, which reads as
+   "lights are disconnected", not "your distances are 32× too large" (GAP-005). It then cost a
+   further ten minutes at the other end when a physically-plausible 60,000-lumen explosion whited
+   out a corridor (GAP-011). A five-row table of reference values — candle, bulb, office ceiling,
+   overcast, direct sun — in the lighting docs would have prevented both, and would also be the
+   only place that tells a consumer world scale matters.
+
+5. **Generated `.d.ts` files do not typecheck, and it is systematic rather than incidental.**
+   664 errors across 152 declaration files on this project's own import surface with
+   `skipLibCheck: false`. 533 of them are one mechanical fault — a JSDoc type referenced without
+   a matching import in the emitted `.d.ts`, plus JSDoc pseudo-types (`int`, `Class`, bare `T`)
+   emitted verbatim as TypeScript identifiers. The consequence is not cosmetic: consumers are
+   forced into `skipLibCheck: true`, which is not scoped to one package and disables declaration
+   checking for **every** other dependency they have. Two cases go further and reject working
+   code: `LabelView` rejects a call its own implementation explicitly supports, and `Collider.shape`
+   is typed such that no concrete shape is assignable to it (BUG-5, GAP-001, GAP-013).
+
+6. **Baked lightmaps cannot be imported, only baked — and the workaround succeeds on four of six
+   maps and fails on two, unpredictably.** The vertex channel exists, the attribute is literally
+   named "used for light map", and there is a whole `shade/renderer/lightmap/` subsystem — but it
+   is a *baker*, and no material has a lightmap slot (GAP-006). Every level format that predates
+   real-time GI ships baked lighting and none of it can come in. This port's answer was to
+   reconstruct the lighting as dynamic lights, which worked well enough that it read as a success
+   for five phases. Phase 6 measured it: illuminance at every spawn point and pickup on every
+   shipped map, and `oa_dm5` — 107,414 triangles — has **zero** reconstructed lights, while
+   `oa_dm7` leaves 70 of 79 player positions under 1 lux. The reconstruction reads
+   `q3map_surfacelight` and `q3map_sun`; where a map's lighting came from `light` entities, q3map2
+   has already deleted them (measured: zero across all six maps). A gap whose workaround fails
+   *unpredictably* is worse than one that fails uniformly, because nothing tells you which content
+   it will fail on.
+
+7. **Clustered lighting is as good as advertised, and this port is alive because of it.** 147
+   dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
+   not register against geometry count. That matters more than a benchmark: with lightmaps
+   unavailable and every `light` entity stripped at compile time, reconstructing the lighting as
+   real dynamic lights was not a showcase choice — it was the only remaining route to a lit level,
+   and there was no fallback plan. It worked with no tuning, no batching and no budget management.
+   Ranked this high because a maintainer needs to know which properties are load-bearing before
+   optimising near them.
+
+8. **The physics engine runs headless, and that property is worth more than any single feature in
+   the package.** `PhysicsSystem`, `shape_cast` and `overlap_shape` need no graphics device, no
+   `Engine`, no entity manager and no DOM. That is what made a three-way differential harness
+   against a WASM oracle possible, and it is why "a real match is playable" is a test — six bots
+   for thirty simulated seconds against the shipping collision backend, in Node, in under a second
+   — rather than an opinion. Most physics engines cannot be driven this way. Every one of the four
+   player-reported bugs in this project's record was, in principle, catchable in CI because of it;
+   that they were not is this port's failure and is item 12.
+
+9. **A navmesh needs a surface and a Quake III map is a pile of interpenetrating solids — and the
    engine has more tooling for this than I first credited.** `NavigationMesh` is real and good:
    agent radius, height, step and climb angle in, exact any-angle geodesics out. My first
    conclusion — that nothing in the package could repair arbitrary geometry into something it
@@ -65,78 +195,55 @@ Ranked by how much they would cost the next person, not by how much they cost me
    routes 100% of the same pairs, because a trace does not care how many surfaces the world is
    made of (GAP-016).
 
-5. **The application rendered at 160 FPS and could not be played, and finding out why took a walk
-   up the computed styles.** meep builds its pointer and keyboard devices on `viewStack.el` and
-   starts them — but that element and everything under it, including the render canvas, are
-   `pointer-events: none`, so no pointer event ever reaches the device; and although it carries
-   `tabindex="0"`, nothing focuses it, so key events go to `<body>` instead. Both halves fail
-   silently and look exactly like an application with no input code at all, which is the wrong
-   place to start looking. The fix is four lines of app-level CSS and a `focus()` call, and after
-   it the device layer is genuinely nicer than the DOM — `keyboard.keys.w.is_down` needs no
-   held-key bookkeeping, and `pointer.on.move` hands over the pointer-lock delta as its third
-   argument already extracted. Worth a warning from `PointerDevice.start()` when its element
-   computes to `pointer-events: none`: two lines, for a failure that is otherwise invisible
-   (GAP-017).
+10. **Nothing runnable ships, and no document says which systems you have to register.** The
+    published package contains `samples/generation/**` and nothing else — no sample boots the
+    engine, loads a model or draws a frame, and `exports` has no `./samples/*` entry so the folder
+    cannot be imported even though it is shipped (GAP-002). `EngineHarness` turns out to be the
+    real worked example; finding that took reading a directory listing. The higher-value missing
+    page is narrower and would fit on one screen: **system → what it needs registered alongside it
+    → what breaks silently if you forget.** That table is derivable from the existing constructors
+    and would have prevented items 3a and part of 3b outright.
 
-6. **Two APIs silently accept a wrong-but-plausible call and do nothing, and both cost an hour
-   each.** `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
-   `ColliderObserverSystem` the consumer must also register. Register only the first and every
-   body is real, present in the broadphase, and completely intangible -- 537 static bodies and
-   `fraction === 1` for a sweep from a metre above a floor to 128 m below it, with nothing in the
-   console (GAP-014). Separately, `new Animation({ clips })` documents its parameter as
-   `List<AnimationClip>` and in fact forwards to `fromJSON`, so passing the documented type builds
-   clips whose names are the empty string: the model loads, both skins are there, the list is the
-   right length, and nothing ever plays (GAP-015). Neither is a hard problem to fix -- a `@see`, a
-   first-use warning, or accepting both forms -- and both are the kind of failure where every
-   diagnostic you reach for reports success.
+11. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+    main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
+    concurrent executor and a worker pool. A real level is several times that size (GAP-008).
 
-7. **Baked lightmaps cannot be imported, only baked.** The vertex channel exists, the attribute
-   is literally named "used for light map", and there is a whole `shade/renderer/lightmap/`
-   subsystem — but it is a *baker*, and no material has a lightmap slot. Every level format
-   that predates real-time GI ships baked lighting and none of it can come in. Large flat
-   surfaces therefore read as uniformly lit, which is a real quality gap — though smaller than
-   the first version of this report claimed, because I attributed "the floors are flat grey" to
-   it when the floors were not rendering at all (GAP-018).
+12. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+    correctly does not have — and the honest count of what the engine actually carried is smaller
+    than this report used to claim.** Of 309 distinct `trap_*` syscalls, 227 belong to subsystems
+    this port deletes outright. Of the rest: **31 map onto a meep facility the port actually
+    calls**, 18 map onto one that exists and was never needed (no menus, so no fonts; no 2D HUD
+    art, so no image drawing; four settings, so no cvar system), 4 are hybrids where meep does part
+    of the job and ported Q3 code does the rest, 7 are ported outright, 22 are worked around, and
+    none is left as a bare syscall-level gap.
 
-8. **Clustered lighting is as good as advertised, and this port depends on it existing.** 147
-   dynamic point lights on a 198k-triangle level cost 7.28 ms of CPU per frame; light count did
-   not register against geometry count. That matters more than a benchmark: q3map2 strips every
-   `light` entity from a compiled BSP (measured: zero across six maps), so with lightmaps
-   unavailable, reconstructing the lighting as dynamic lights was not a showcase choice — it
-   was the only remaining route to a lit level. It worked with no tuning.
+    Those numbers replace `mapped 77 / ported 19 / workaround 9 / GAP 1 / not needed 203`, and
+    every one of the old ones was wrong in the same direction for the same reason: a note is free
+    to describe an *intended* design and reads exactly like one describing a shipped one. The
+    matrix now requires every disposition claiming shipped code to cite `path::token` in this
+    repository, and `--check` fails if the file or the token is gone. Section 2 lists what moved.
 
-9. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
-   main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
-   concurrent executor and a worker pool. A real level is several times that size (GAP-008).
+13. **The measurement was good and the summary statistic was wrong, which is a lesson about
+    verification rather than about meep.** The physics backend was signed off at 88% sweep
+    agreement with a bit-exact control, and a player was frozen in an open corridor. The
+    disagreements were rare and every single one of them was catastrophic rather than small —
+    a distribution where the mean and the median tell you nothing useful. Meanwhile phases 4 and 5
+    were signed off by *looking at the running application*, which produced two wrong fixes in a
+    row from screenshots. Both criteria now run headlessly in Node (`test/presentation.test.ts`,
+    `test/match.test.ts`), and writing them immediately found a defect nobody had noticed:
+    `am_thornish`, the largest map in the build, has no `info_player_deathmatch` at all, so it had
+    been running with zero bots and respawning the player at the world origin.
 
-10. **Generated `.d.ts` files do not typecheck standalone**, and the failures are not cosmetic:
-   `LabelView` rejects a call its own implementation explicitly supports, `Engine`'s constructor
-   options are typed as one of their own fields' types, and `entityManager` is `any`. Consumers
-   are forced into `skipLibCheck: true`, which disables checking of every *other* dependency
-   they have (GAP-001).
-
-11. **`/samples` contains no runnable engine sample.** The published package ships
-   `samples/generation/**` and nothing else — procedural-generation fixtures. Nothing boots the
-   engine, loads a model, or draws a frame, and `exports` has no `./samples/*` entry so the
-   folder cannot be imported even though it is shipped. `EngineHarness` turns out to be the
-   real worked example; finding that took reading a directory listing (GAP-002).
-
-12. **A scene with no environment map renders black, silently.** Shade assumes global
-   illumination and `make_default_environment` documents this well — but you only read that
-   docblock if you already suspect the environment. `EngineHarness.buildBasics` sets one up for
-   you, so this bites exactly when you stop using the all-or-nothing helper, which is the moment
-   you stop being a beginner. A first-frame warning would remove it entirely.
-
-13. **The camera uses the object convention (+Z forward), not glTF's.** Defensible, and
-   documented — inside the docblock of a function consumers never call. A hand-built view
-   quaternion assuming -Z points the camera exactly backwards, which in a closed level presents
-   as *a dark scene* rather than a reversed one. I diagnosed it as a lighting problem first.
-
-14. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
-    correctly does not have.** Of 309 distinct `trap_*` syscalls, 203 belong to subsystems this
-    port deletes outright; of the 106 that remain, 77 map onto an existing meep facility, 19 are
-    deliberately ported, 9 worked around, 1 a genuine gap. Worth stating plainly before the gap
-    register below makes things look worse than they are.
+14. **Smaller things that each cost under an hour and would each cost the next person the same.**
+    The camera uses the object convention (+Z forward), documented inside the docblock of a
+    function consumers never call — a hand-built view quaternion assuming −Z points the camera
+    exactly backwards, which in a closed level presents as *a dark scene* rather than a reversed
+    one, and was diagnosed as a lighting problem first. Particle parameter names are string-typed
+    and case-trapped (GAP-010), though the error message is excellent. `ShadeMaterial.draw_side`'s
+    docblock describes a limitation that no longer exists, and cost this port double-sided
+    surfaces for its entire duration because a careful reader believed it (BUG-6). The engine's
+    own per-second FPS report goes to `console.warn`, which buried real warnings during the
+    diagnosis of item 2.
 
 ### What this port did not use, and why
 
@@ -166,21 +273,29 @@ finding, not a footnote to it.
 
 ### State of the work
 
-| phase | status |
-|---|---|
-| 0 — setup | complete; `tsc --noEmit` clean, engine rendering |
-| 1 — asset pipeline | complete; 6 maps, 76 props, 15 characters, 58 sounds |
-| 2 — collision and movement | complete; ported `cm_trace` **bit-exact**, shipping backend is meep physics tuned against it (D-029) |
-| 3 — game simulation | weapons, damage, items, movers, triggers, jump pads, teleporters |
-| 4 — presentation | particles, decals, lights, HUD, characters, positional audio |
-| 5 — bots | behaviour trees on a floor-sampled navigation graph; they route, fight and pick up |
-| 6 — report | this document, written continuously |
+| phase | status | exit criterion, and how it is checked |
+|---|---|---|
+| 0 — setup | complete | `tsc --noEmit` clean; engine rendering |
+| 1 — asset pipeline | complete | 6 maps, 76 props, 15 characters, 97 sound names; `npm run check` |
+| 2 — collision and movement | complete | ported `cm_trace` **bit-exact** against a WASM oracle; shipping backend is meep physics measured against it, median divergence now exactly zero (`npm run divergence`) |
+| 3 — game simulation | complete | weapons, damage, items, movers, triggers, jump pads, teleporters; 27 unit tests against the OA gamecode's own numbers |
+| 4 — presentation | complete, with one measured shortfall | particles, decals, lights, HUD, characters, positional audio; `test/presentation.test.ts` (36 tests) — **the lighting reconstruction fails on 2 of 6 maps**, see item 6 above and GAP-006 |
+| 5 — bots | complete, with the cuts in D-055 | behaviour trees on a floor-sampled navigation graph; `test/match.test.ts` runs a 30-second six-bot match headlessly on the shipping backend |
+| 6 — report | this document, written continuously; matrix re-derived and exit criteria re-verified in this phase |
+
+**Phases 4 and 5 were re-verified in phase 6**, because both had originally been signed off by
+looking at the running application and this project's record with that method is poor (item 13).
+Both now have headless tests, both pass, and writing them found two things that were not known:
+the lighting shortfall above, and a defect where `am_thornish` — the largest map in the build and
+the one every performance number is quoted from — had been running with zero bots, because it is a
+Team Arena map with no `info_player_deathmatch` entity for the spawn filter to find.
 
 What is *not* done is listed per phase in `DECISIONS.md` rather than summarised away: patch
 collision (D-017), capsule traces (D-018), the weapon state machine (D-022), mover crush and
-shootable doors (D-041), smooth skin weights and character LOD (D-045), and the bots' missing
-half — no jumping to reach anything, no aim prediction, no bot-versus-bot target selection
-(D-055).
+shootable doors (D-041), smooth skin weights and character LOD (D-045), the bots' missing half —
+no jumping to reach anything, no aim prediction, no bot-versus-bot target selection (D-055, now
+asserted directly by a test so the claim cannot drift) — and a lightgrid importer that would
+close the lighting shortfall (D-069).
 
 The brief said a half-finished demo with an excellent report is a success and the reverse is a
 failure. Effort went to the report throughout, and to phase 2, which is the one place the brief
@@ -584,6 +699,23 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 
 ## 3. Gap register
 
+Twenty entries, one withdrawn. Severities were normalised in phase 6 onto the brief's own
+vocabulary — three of them had drifted onto an ad-hoc `high`/`medium`/`low` scale, which makes a
+register unsortable and this document is meant to become a backlog.
+
+| severity | entries | what it means here |
+|---|---|---|
+| **blocker** | GAP-014, GAP-017, GAP-019, GAP-020 | the port could not ship with this unaddressed. All four are silent: the application builds, runs, reports success at every diagnostic, and does not work. |
+| **major** | GAP-001, GAP-002, GAP-003, GAP-004, GAP-005, GAP-006, GAP-008, GAP-012, GAP-015, GAP-016 | cost real time, or would cost any consumer real time on adoption. |
+| **minor** | GAP-009, GAP-013 | a workaround exists and is cheap; the cost is confidence rather than hours. GAP-009 is a positioning finding about what `FirstPersonPlayerController` is *for*, not a defect. |
+| **papercut** | GAP-010, GAP-011 | noticed, worked around in minutes, recorded so the pattern is visible. |
+| **withdrawn** | GAP-007 | was a gap, is not, and the entry keeps the mistake because how it was got wrong is the useful part. |
+| *(not the engine's)* | GAP-018 | mine: Quake III winds its triangles clockwise and nothing complained. Kept because the silence is the finding. |
+
+The four blockers are the ranking in section 1's item 1 and item 3. Read together they are one
+finding: **meep fails loudly and specifically when it fails at all** (section 7 says so with
+examples) **and has no story whatsoever for the case where a plausible call quietly does nothing.**
+
 ### GAP-001: Published `.d.ts` files do not typecheck on their own
 
 - **Needed:** consume meep from TypeScript in `strict` mode with library checking on, so that
@@ -819,6 +951,39 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   wound backwards (GAP-018). I had a plausible explanation for a symptom and stopped looking. The
   visible cost of this entry is real but ordinary: a level that looks flatly lit rather than one
   that looks wrong.
+  **What it costs, measured — added in phase 6.** The reconstruction is not uniformly good, and
+  until phase 6 nobody had checked. `test/presentation.test.ts` computes illuminance at every
+  spawn point and pickup on every shipped map, in lux, using the same photometric arithmetic
+  `loadMap` hands the engine — `cd = lm / 4π`, inverse-square in scene metres, cut off at the
+  light's `distance`:
+
+  | map | triangles | reconstructed point lights | sun | median lux at player positions | positions under 1 lux |
+  |---|---:|---:|---|---:|---:|
+  | `am_thornish` | 198,740 | 147 | yes | 58.0 | 0 / 95 |
+  | `oa_dm4` | 4,089 | 22 | yes | 31.4 | 0 / 47 |
+  | `aggressor` | 3,263 | 63 | yes | 22.5 | 0 / 38 |
+  | `oa_dm1` | 7,532 | 22 | no | 8.8 | 0 / 38 |
+  | `oa_dm7` | 2,947 | 13 | yes | **0.0** | **70 / 79** |
+  | `oa_dm5` | 107,414 | **0** | yes | **0.0** | **36 / 36** |
+
+  The reconstruction reads `q3map_surfacelight` off the shader set and `q3map_sun` off
+  worldspawn. Where a map's lighting came from `light` *entities* and the lightmap, there is
+  nothing left to read: q3map2 strips every `light` entity from a compiled BSP — measured, zero
+  across all six maps, and asserted in that test file so it stays measured. `oa_dm5` is 107k
+  triangles of level with a single dim blue `q3map_sun` and no fixtures at all.
+
+  So the honest form of this gap's cost is: **the workaround succeeds on four of six maps and
+  fails on two, and which two is not predictable from anything except the shader set.** That is
+  worse than a uniform quality loss, because it is invisible until someone loads that map.
+
+  There is a route that was scoped out rather than tried: the BSP's lightgrid lump (15) is the
+  *other* baked product of q3map2, it survives compilation, and it holds an ambient plus
+  directional sample per grid cell. Turning bright cells into point lights offline would give
+  `oa_dm5` a lighting solution without any rendering code, any engine change, or any lightmap
+  slot. It is asset-pipeline work, roughly half a day, and it is recorded in D-069 as not done
+  rather than quietly omitted. It would not close this gap — a lightgrid is a coarse
+  approximation of the lightmap, which is the thing that cannot be imported — but it would
+  remove the cliff.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.
@@ -826,7 +991,8 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   and multiplied into diffuse. The vertex channel and the attribute name already exist and
   already say "light map"; what is missing is the consumer.
 - **Evidence:** `src/shade/renderer/lightmap/**`, `StandardAttributes.js`,
-  `StandardShadeMaterial.d.ts`. Recorded at phase 1.
+  `StandardShadeMaterial.d.ts`. Recorded at phase 1; measured in phase 6 by
+  `test/presentation.test.ts`.
 
 ### GAP-007 (withdrawn): `draw_side` works; its docblock is stale
 
@@ -968,7 +1134,7 @@ the expensive way.
 
 ### GAP-012: `shape_cast` returns the minimum-penetration normal; character control needs the latest entering plane
 
-- **Severity:** medium — a correct answer to a different question, but the one a character
+- **Severity:** major — a correct answer to a different question, but the one a character
   controller asks is not available and cannot be derived from the result.
 - **What happened:** With movement on meep's physics, the player wedged permanently on outside
   corners — velocity went to zero about a metre short of the corner and stayed there. Traced to
@@ -1013,7 +1179,7 @@ the expensive way.
 
 ### GAP-013: `Collider.shape` is typed such that no concrete shape is assignable to it
 
-- **Severity:** low — a pure type-level defect, one cast, but it is in the first line of code
+- **Severity:** minor — a pure type-level defect, one cast, but it is in the first line of code
   anyone writes against the physics API.
 - **What happened:** `attach_collider(body, new BoxShape3D(...))` does not typecheck.
   `AbstractShape3D` declares `equals(other: this): boolean`; `BoxShape3D` narrows it to
@@ -1032,7 +1198,7 @@ the expensive way.
 
 ### GAP-014: `PhysicsSystem` needs a second system registered, and without it every body is intangible
 
-- **Severity:** high -- the failure is total, silent, and presents as a bug in the consumer's own
+- **Severity:** blocker -- the failure is total, silent, and presents as a bug in the consumer's own
   code.
 - **What happened:** 537 static bodies, built from a level's collision brushes, and every
   `shape_cast` against them returned a miss. Not a near miss: `fraction === 1` for a sweep
@@ -1073,7 +1239,7 @@ the expensive way.
 
 ### GAP-015: `new Animation({clips})` takes JSON, is documented as taking components, and silently accepts either
 
-- **Severity:** medium -- a wrong-but-plausible call that produces no error and no animation.
+- **Severity:** major -- a wrong-but-plausible call that produces no error and no animation.
 - **What happened:** `new Animation({ clips: [clip1, clip2] })` with real `AnimationClip`
   instances builds an `Animation` whose list is the right length, whose clips are real
   `AnimationClip`s, and whose every clip name is the **empty string**. Nothing then matches any
@@ -1105,7 +1271,7 @@ the expensive way.
 
 ### GAP-016: A navmesh needs a surface, and brush-based level geometry is a pile of solids
 
-- **Severity:** medium, and narrower than the first version of this entry claimed. **That version
+- **Severity:** major for adoption, minor for this port, and narrower than the first version of this entry claimed. **That version
   was wrong and is withdrawn**; what follows replaces it, with the correction kept because how I
   got it wrong is the useful part.
 - **What I claimed, and why it was wrong.** I fed the brush solids to `NavigationMesh`, got 5% of
@@ -1180,7 +1346,7 @@ the expensive way.
 
 ### GAP-017: The element the input devices listen on is `pointer-events: none` and never focused
 
-- **Severity:** high. The application renders perfectly at 160 FPS and cannot be played, and
+- **Severity:** blocker. The application renders perfectly at 160 FPS and cannot be played, and
   nothing anywhere says why.
 - **What happened:** the game loaded, drew, ran its simulation, updated its HUD — and WASD did
   nothing and the mouse did not turn the view. No error, no warning, no failed assertion.
@@ -1281,7 +1447,7 @@ the expensive way.
 
 ### GAP-019: `shape_cast` answers "does the swept volume touch this body"; movement code asks "does this brush block this move"
 
-- **Severity:** high — the two predicates disagree systematically at exactly the distances a
+- **Severity:** blocker — the two predicates disagree systematically at exactly the distances a
   character controller lives at, and the disagreement is not a tolerance to tune. It is
   load-bearing: taken at face value it stops the player dead, permanently.
 - **What happened:** two reports in one session. A player stuck in an open corridor with velocity
@@ -1324,6 +1490,16 @@ the expensive way.
   meep's physics to a broadphase for this use. It would measure better than the workaround. That
   is the real price of the gap: for character control specifically, the engine's own sweep stops
   being the thing you use it for.
+- **And it now has a number** (`npm run bench-match`, added in phase 6). One trace on the shipping
+  path costs **4.53 µs**; the ported clipmap answers the entire question — tree descent, leaf
+  gather, every brush test — in **0.42 µs**. `shape_cast` alone is 3.49 µs of the shipping path,
+  `overlap_shape` 1.18, and `traceBrushList`, which is the code that actually produces the
+  fraction, the plane, `startsolid` and `allsolid`, is **0.29**. A six-bot deathmatch costs 356 µs
+  a frame on meep's physics and 31 µs on the clipmap, for an identical match. The part of the
+  shipping path that decides the answer is the cheapest line in it, and the query in front of it
+  is doing work that is then discarded on every blocking contact. None of that is a criticism of
+  `shape_cast`'s implementation — it is doing strictly more, generally — but it is what the gap
+  costs at runtime, every frame, in addition to the four hours it cost to find.
 - **What would fix it:** a directional predicate on the result — the separating-axis distance at
   `t = 0` signed against the sweep direction would be enough, since it is already computed — plus
   an `initially_overlapping` flag so a consumer can implement `allsolid` semantics. Both are
@@ -1340,7 +1516,7 @@ the expensive way.
 
 ### GAP-020: There is no way to ask a swept query to stop short of contact
 
-- **Severity:** medium — a one-line need with no expression in the API, whose absence is invisible
+- **Severity:** blocker, in combination with GAP-019 — a one-line need with no expression in the API, whose absence is invisible
   until something downstream integrates the error.
 - **What happened:** characters hovering above the floor, reported by a player. Underneath it, a
   falling player who never landed: Q3 stops a box `SURFACE_CLIP_EPSILON` (1/8 unit) short of a
@@ -1370,10 +1546,20 @@ the expensive way.
   reported when the swept shape comes within `standoff` of a body rather than when it touches.
   PhysX, Bullet and Unity all expose some form of this, under various names, because character
   controllers all need it. It is a subtraction on an existing comparison.
-- **Evidence:** `src/client/PhysicsTrace.ts` (`boxShape`'s `grow`, and the `trace` docblock),
-  `test/physics-wedge.test.ts` (the `standing` block). Measured improvement on `oa_dm1`: trace
-  hit/miss agreement 99.9% → 100.0%, fraction absolute error p90 1.3e-3 → 5.3e-8, chaos
-  divergence p90 0.18 → 0.00 with every frame inside one unit. See D-064.
+- **Evidence:** `src/client/PhysicsTrace.ts` (`boxShape`'s `grow`, and the comment above the
+  fraction computation, which in phase 6 still described the removed approach and has been
+  corrected), `test/physics-wedge.test.ts` (the `standing` block). Measured improvement on
+  `oa_dm1`: trace hit/miss agreement 99.9% → 100.0%, fraction absolute error p90 1.3e-3 →
+  5.3e-8, chaos divergence p90 0.18 → 0.00 with every frame inside one unit. See D-064.
+- **A note on how this was found, because it generalises.** Nothing in the measurement harness
+  flagged it. Agreement with the C oracle was already 99.9% and the fraction error was 1.3e-3 —
+  a thousandth of a Q3 unit, three hundredths of a millimetre, indistinguishable from noise on
+  any summary statistic. That error was not noise: it was a systematic bias in one direction,
+  integrated by a controller that fed its own output back in, and it produced a player who could
+  not land. **A rare, systematic, single-signed error is invisible to every percentile and fatal
+  to a feedback loop**, which is the argument for the standoff being an engine concern rather
+  than a consumer's: a consumer measuring their own controller will not see it until something
+  downstream is already broken.
 
 ## 4. Ergonomics
 
@@ -1583,37 +1769,120 @@ Same levels, same input, three configurations: the C oracle under Emscripten, th
 (control divergence reads exactly `0.0e+0`), so every figure below is attributable to the
 physics backend. Distances are Q3 units — one unit is about 3 cm, a player is 56 units tall.
 
+**These are the phase 6 numbers, after GAP-019 and GAP-020 were fixed.** The phase 2b figures
+they replace are kept below them, because the delta is the entire argument for both gap entries.
+Reproduce with `npm run divergence`.
+
 | | `oa_dm1` | `aggressor` |
 |---|---|---|
-| solid brushes → static bodies | 575 → 537 | 835 → 824 |
-| hull generation | 9 ms | 12 ms |
-| body + collider construction | 11 ms | 16 ms |
+| solid brushes → static bodies | 575 → 529 | 835 → 820 |
+| hull generation | 7 ms | 7 ms |
+| body + collider construction | 12 ms | 8 ms |
 | sweeps sampled | 20,000 | 20,000 |
-| agree on hit/miss | 88.2% | 89.6% |
-| contact normals agreeing | 99.6% of 1,076 valid-plane hits | 98.2% of 1,300 |
-| sweep fraction error, median / p90 | 0.0 / 1.5e-3 | 0.0 / 1.4e-3 |
+| agree on hit/miss | **100.0%** | **100.0%** |
+| sweeps the physics blocks and the clipmap does not | 5 | 1 |
+| sweeps the clipmap blocks and the physics does not | **0** | **0** |
+| contact normals agreeing | 99.5% of 1,120 valid-plane hits | 99.9% of 1,319 |
+| sweep fraction error, median / p90 | 0.0 / **5.3e-8** | 0.0 / **1.3e-7** |
 
-Position divergence after 400 frames of identical input, `oa_dm1`:
+Against phase 2b's 88.2% / 89.6% hit-miss agreement and 1.5e-3 fraction error, that is three
+orders of magnitude on the fraction and a clean sweep on the predicate. The direction matters
+more than the size: **zero** sweeps where the physics passes through something Q3 blocks. That
+asymmetry is the safety property — a backend that misses a wall puts a player inside geometry,
+and a backend that invents one costs a little movement.
 
-| input pattern | median | p90 | max | within 1 unit |
-|---|---|---|---|---|
-| strafe-jump | 0.17 | 271.0 | 762.1 | 62% |
-| bunny-hop | 0.06 | 0.12 | 1.3 | 98% |
-| walk-into-walls | 0.09 | 2.60 | 299.1 | 89% |
-| chaos | 0.00 | 1.28 | 188.0 | 90% |
+Position divergence after 240 frames of identical input, both maps:
 
-Read the medians, not the maxima. Two runs that separate at frame 200 and then explore different
-parts of a level produce an arbitrarily large number; that is chaos, not error. What the medians
-say is that the physics backend and Q3 agree to well under a centimetre on typical frames, and
-that strafe-jumping — the input pattern most sensitive to which plane a grazing contact reports
-— is the one that eventually separates. D-031 records what is still different and why one
-plausible fix for it was 8x worse.
+| input pattern | `oa_dm1` median / p90 / ≤1u | `aggressor` median / p90 / ≤1u |
+|---|---|---|
+| strafe-jump | 0.00 / 38.15 / 77% | 0.00 / 9.20 / 88% |
+| bunny-hop | 0.00 / 0.09 / 97% | 0.00 / 0.68 / 91% |
+| walk-into-walls | 0.00 / 0.11 / 94% | 0.05 / 3.66 / 85% |
+| chaos | 0.00 / 0.00 / 100% | 0.00 / 0.00 / 99% |
+| *control (ported clipmap), max* | *0.0e+0* | *0.0e+0* |
 
-Cost of the swap, for a maintainer estimating similar work: ~14 hours, of which roughly 2 were
-`brushHull.ts` (the plane-set-to-polyhedron conversion), 2 were GAP-012, and the remaining 10
-were building the three-way measurement harness. The harness is why the other four hours were
-enough — without a bit-exact control, "close enough" is a matter of opinion and the corner bug
-in particular would have been indistinguishable from a movement-code bug.
+Read the medians, not the maxima. Two runs that separate at frame 100 and then explore different
+parts of a level produce an arbitrarily large number; that is chaos, not error, and the `first>1u`
+frame in the tool's own output is the honest way to read it. What the medians say is that the
+physics backend and Q3 now agree **exactly** on the typical frame — the median is zero, not
+merely small — and that strafe-jumping, the pattern most sensitive to which plane a grazing
+contact reports, is still the one that eventually separates. D-031 records what is still
+different and why one plausible fix for it was 8× worse.
+
+For the record, phase 2b's table before the two gaps were fixed: strafe-jump 0.17 / 271.0 / 62%,
+bunny-hop 0.06 / 0.12 / 98%, walk-into-walls 0.09 / 2.60 / 89%, chaos 0.00 / 1.28 / 90%.
+
+Cost of the swap, for a maintainer estimating similar work: ~14 hours to get it shipping, of
+which roughly 2 were `brushHull.ts` (the plane-set-to-polyhedron conversion), 2 were GAP-012, and
+the remaining 10 were building the three-way measurement harness — **plus a further ~6 hours in a
+later session** for GAP-019 and GAP-020, which is the part worth flagging to anyone estimating
+this work. The first fourteen hours produced something that measured well and could not be
+played; the last six are what made it playable, and they arrived as four separate bug reports
+from someone in front of the screen rather than from any number in the table above.
+
+The harness is still why the whole thing was possible — without a bit-exact control, "close
+enough" is a matter of opinion — but the harness measured 88% agreement and called it acceptable
+while a player was frozen in an open corridor. The lesson is not that measurement failed. It is
+that *sweep agreement* was the wrong summary statistic: the disagreements were rare, and every
+one of them was catastrophic rather than small.
+
+### Phase 6 — what a match costs, and where the collision time actually goes
+
+Reproduce with `npm run bench-match`. Six bots and one standing player, 30 simulated seconds at
+125 Hz (Q3's `sv_fps`), no renderer, no engine boot. Node v24.15.0.
+
+| | `oa_dm1` | | `aggressor` | |
+|---|---:|---:|---:|---:|
+| collision backend | meep physics | ported clipmap | meep physics | ported clipmap |
+| static body construction | 24 ms | — | 15 ms | — |
+| navigation graph build | 165 ms | 31 ms | 120 ms | 18 ms |
+| **simulation, per frame** | **356 µs** | **31 µs** | **248 µs** | **25 µs** |
+| traces per frame (6 bots) | 30.4 | same by construction | 25.2 | same by construction |
+| distance walked, all bots | 30,269 | 31,073 | 25,029 | 25,003 |
+
+The two backends produce the same match — the bots walk the same distance to within 3%, take the
+same pickups, fire the same number of shots — and one costs **eleven times** what the other does.
+A whole deathmatch at 356 µs a frame is still nothing next to a 16.7 ms budget, so this is not a
+performance problem for this port. It is a *finding*, and it wanted decomposing:
+
+| one trace on `oa_dm1` | |
+|---|---:|
+| `PhysicsTrace.trace` — the shipping path | 4.53 µs |
+| `boxTrace` — ported clipmap, answering the entire question | 0.42 µs |
+| of the shipping path: `shape_cast` alone | 3.49 µs |
+| of the shipping path: `overlap_shape` alone | 1.18 µs |
+| of the shipping path: `traceBrushList` over 8 brushes | 0.29 µs |
+
+Mean of 20,000 calls after a 2,000-call warm-up, shapes cached exactly as `PhysicsTrace` caches
+them, so this is not measuring allocation.
+
+**The part that decides the answer is the cheapest line in the table.** `traceBrushList` is the
+ported `CM_TraceThroughBrush`: it produces the fraction, the contact plane, `startsolid` and
+`allsolid`, and it costs 0.29 µs. `shape_cast` costs twelve times that to find which body is
+nearest, and its own fraction and normal are then discarded on every blocking contact (GAP-019,
+GAP-012). The complete ported clipmap — BSP tree descent, leaf gather, every brush test — answers
+the whole question for less than an eighth of what `shape_cast` costs on its own.
+
+Two things follow, and the maintainer should weigh them separately:
+
+- **This is not a criticism of `shape_cast`'s implementation.** It is doing more: a general
+  convex-vs-convex sweep against a broadphase that supports arbitrary shapes and moving bodies,
+  where the clipmap is a BSP descent over axis-aligned brushes with precomputed planes and a
+  fixed contents mask. Special-purpose beats general-purpose; that is what special-purpose is
+  for. The number is here because a maintainer sizing "should the engine offer a character
+  controller" needs to know the shape of the trade.
+- **It is a cost attributable to the two gaps.** If `shape_cast` had a `standoff` parameter
+  (GAP-020) and a directional blocking predicate (GAP-019), the second and third rows of that
+  table would not be needed and the shipping path would be one query rather than three. The
+  ratio would not close to 1:1, but the argument for using the engine's physics at all would
+  stop needing a footnote.
+
+The ratio is also worse in the match (11×) than in the microbenchmark (7×), and the reason is
+worth a sentence: the expensive branch of `PhysicsTrace` is the one taken at a *resting* contact,
+where `shape_cast` reports `t ≈ 0` and the whole GAP-019 machinery — `overlap_shape`, the
+neighbour gather, the per-brush re-derivation — has to run to decide what kind of contact it is.
+A player standing on a floor is in that branch on every frame. The microbenchmark's mid-air
+sweeps mostly are not.
 
 ### Phases 3b-5 — items, movers, characters, audio, bots
 
@@ -1625,22 +1894,30 @@ one and is called out where it differs.
 | static bodies from brushes | 8-22 ms | 529 bodies on `oa_dm1` |
 | items: place and build | 36-88 ms | 31 pickups, 55 drawn pieces, meshlets built lazily |
 | movers | <1 ms | 6 brush entities, 6 kinematic bodies |
-| navigation graph | 214 ms | 766 nodes, 1,957 links, 205 drops -- built through the *physics* trace, which is why it is not the 25 ms the clipmap takes |
+| navigation graph | 165 ms | 766 nodes, 1,957 links, 205 drops -- built through the *physics* trace, which is why it is not the 31 ms the clipmap takes |
 | characters | ~40 ms each, async | 15 models, 3 to 10 mesh nodes each; fetched and built off the critical path |
-| sound bank | one fetch | 77 names over 58 files, 3.3 MB |
+| sound bank | one fetch | 97 names over 77 files, 8.0 MB |
 
 Per frame, measured by driving the simulation directly:
 
 | | cost |
 |---|---|
-| 6 bots: perception, tree, `Pmove`, character placement | 1.3-1.8 ms |
+| 6 bots: perception, tree, `Pmove`, character placement (browser, with models) | 1.3-1.8 ms |
+| 6 bots: the same simulation with no presentation layer (`npm run bench-match`) | 0.36 ms |
 | of which planning, when it runs | one BFS plus one A* per bot, at most every 0.25 s |
 
-The bot cost is worth two notes. It started at 3.7 ms a frame for *six stationary bots*, all of
-it A* failing to route to the same unreachable item every frame -- a reachability pass before
-scoring fixed the behaviour and the cost together. And the planning rate limit is not a tuning
-knob for performance so much as a correctness one: the planning branch is the tree's fallback, so
-it runs on every frame a bot has nothing else to do.
+Those two rows are the same code and differ by a factor of four, which is worth stating plainly:
+roughly three quarters of "bot cost" in the browser is `Character.place` writing 30 rigged parts'
+worth of `Transform`s and the clip player consuming them, not AI. The headless figure is the
+honest cost of the *simulation*; the browser figure is the cost of the simulation plus drawing
+six animated characters, and a maintainer reading "bots cost 1.8 ms" should know which one they
+are looking at.
+
+The bot cost is worth two further notes. It started at 3.7 ms a frame for *six stationary bots*,
+all of it A* failing to route to the same unreachable item every frame -- a reachability pass
+before scoring fixed the behaviour and the cost together. And the planning rate limit is not a
+tuning knob for performance so much as a correctness one: the planning branch is the tree's
+fallback, so it runs on every frame a bot has nothing else to do.
 
 The character pipeline is offline and worth recording for anyone estimating similar work: 15
 characters, 30 rigged parts, 5.8 seconds total, including the skinning decomposition (k-means over
@@ -1660,8 +1937,181 @@ here.
 
 ## 6. Engine bugs
 
-> Behaviour that contradicts the engine's own documentation or assertions, each with a minimal
-> reproduction. Nothing qualifying recorded yet.
+Behaviour that contradicts the engine's own documentation, its own package manifest, or its own
+emitted types. Each one below was re-run in phase 6 against `@woosh/meep-engine@3.0.2` as
+installed, and every reproduction here is the whole reproduction — no engine boot, no graphics
+device, no application.
+
+These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
+bug is "the engine says it does this and does something else". The second kind is more expensive
+per line of documentation, because the reader who checks first is the one who gets caught.
+
+### BUG-1: `new Animation({ clips })` accepts the documented type and silently discards it
+
+`Animation`'s constructor documents `@property {List.<AnimationClip>} clips` and its field is
+`@type {List<AnimationClip>}`. It forwards to `fromJSON`, which rebuilds each entry with
+`AnimationClip.fromJSON` — and that reads `json.name` only `if (typeof json.name === "string")`.
+On a real `AnimationClip`, `name` is an `ObservedString`, so the branch does not fire.
+
+```js
+import { Animation } from '@woosh/meep-engine/src/engine/ecs/animation/Animation.js';
+import { AnimationClip } from '@woosh/meep-engine/src/engine/ecs/animation/AnimationClip.js';
+
+const clip = new AnimationClip();
+clip.name.set('TORSO_STAND');
+clip.repeatCount.set(-1);
+
+const animation = new Animation({ clips: [clip] });
+const stored = animation.clips.get(0);
+
+stored instanceof AnimationClip;   // true
+stored === clip;                   // false  <- rebuilt
+stored.name.getValue();            // ""     <- name gone
+stored.repeatCount.getValue();     // 1      <- -1 gone
+```
+
+Every diagnostic reports success: the list is the right length, the entry is an `AnimationClip`,
+no error is thrown. The model is loaded, both skins are present, and nothing ever plays, because
+no clip in the model matches a clip named `""`. Cost: about an hour, all of it spent looking at
+the *model* pipeline, since the clip list looked correct.
+
+Fix: accept both forms — `if (c instanceof AnimationClip) use it` before falling through to
+`fromJSON` — or make the JSDoc say `Object[]`. Either is a two-line change. Filed at phase 4 as
+GAP-015; restated here because it is a contradiction rather than an absence.
+
+### BUG-2: `EngineHarness` hard-imports a peer dependency the package's own manifest marks optional
+
+`@woosh/meep-engine/package.json` declares:
+
+```json
+"peerDependencies":     { "dat.gui": ">=0.7.0", "stats.js": ">=0.17.0" },
+"peerDependenciesMeta": { "stats.js": { "optional": true } }
+```
+
+and `src/engine/EngineHarness.js` line 1 is:
+
+```js
+import Stats from "stats.js";
+```
+
+Top level, unconditional, in the module that is in practice the entry point. Install the package
+without the optional peer and the documented on-ramp fails to resolve. The manifest and the
+module disagree, and the manifest is the one a consumer reads.
+
+Fix: dynamic `import()` inside `addFpsCounter`, or drop the `optional: true`. Filed as GAP-003.
+
+### BUG-3: `exports` omits `./package.json`
+
+```js
+require.resolve('@woosh/meep-engine/package.json');
+// Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath './package.json' is not
+// defined by "exports"
+```
+
+`exports` lists `./build/*`, `./src/*`, `./editor/*` and `./*.md`. Locating a package root by
+resolving its `package.json` is what build tooling does; here it throws, and the error arrives
+from inside a bundler config rather than from anything the consumer wrote. Node's own
+documentation recommends exporting it for exactly this reason. One line. Filed as GAP-003.
+
+### BUG-4: `Terrain` cannot be told where its worker lives
+
+```js
+// src/engine/ecs/terrain/ecs/makeTerrainWorkerProxy.js
+export function makeTerrainWorkerProxy() {       // <- no parameters
+    workerBuilder.importScript('bundle-worker-terrain.js');   // <- resolved against document origin
+}
+
+// src/engine/ecs/terrain/ecs/Terrain.js:99
+__buildWorker = makeTerrainWorkerProxy();        // <- no argument
+```
+
+The file ships in `@woosh/meep-engine/build/`, which is not the web root of any application, and
+there is no parameter to say so. The sibling case, `ThreadedImageDecoder`, *does* take a
+`worker_path` — so the API shape exists and this one call site did not get it. Two uncaught
+promise rejections per terrain, and terrain is on by default in `EngineHarness.buildBasics()`.
+Filed as GAP-004.
+
+### BUG-5: the emitted `.d.ts` files do not typecheck, and it is systematic
+
+With this project's own import surface and `skipLibCheck: false`:
+
+```bash
+npx tsc --noEmit --skipLibCheck false
+```
+
+**664 errors across 152 `.d.ts` files.** The distribution says what is wrong:
+
+| errors | code | cause |
+|---:|---|---|
+| 533 | TS2304 / TS2552 | a name used in the type is never imported into the `.d.ts` |
+| 79 | TS2339 | property does not exist on the declared type |
+| 32 | TS2416 | an override is incompatible with the base class it declares |
+| 8 | TS2425 | a class declares a property the base declares as a method |
+
+The top undefined names are `BinaryBuffer` (58), `Class` (30), `Vector3` (26), `int` (21),
+`AssetManager` (17), `View` (15). Two distinct generator faults, both mechanical: a JSDoc type
+referenced without a matching `import` produces a declaration referring to a name that is not in
+scope, and JSDoc pseudo-types (`int`, `Class`, bare `T`) are emitted verbatim as TypeScript
+identifiers.
+
+The consequence is not cosmetic. `skipLibCheck: true` is forced on the consumer, and it is not
+scoped to one package — it disables declaration checking for **every** dependency in the project.
+A TypeScript consumer of this engine cannot typecheck any of their other libraries.
+
+Two individual cases cost this port real time and are worth naming, because they are the ones
+where the emitted type contradicts working code rather than merely failing to resolve:
+
+- **`LabelView`.** Its implementation is `constructor(model, { classList = [], ..., size, css } =
+  {})` — the whole bag defaults, so every field is optional at runtime. Its JSDoc brackets four of
+  the six and forgets `size` and `css`, so the emitted type declares those two **required**:
+
+  ```ts
+  new LabelView(new ObservedString('hi'), { classList: ['x'] });
+  // TS2345: ... is missing the following properties: size, css
+  ```
+
+  A call the implementation explicitly supports is rejected at compile time.
+- **`Collider.shape`** is `AbstractShape3D`, and `AbstractShape3D.equals` is declared
+  `<T extends AbstractShape3D>(other: T) => boolean`. Every concrete shape narrows it to
+  `(other: BoxShape3D) => boolean`, which is not assignable to the generic form — so *no concrete
+  shape is assignable to the field that exists to hold one*. Filed as GAP-013.
+
+Both are corrected in this port with narrow local types rather than `any`, per the brief:
+`src/client/Hud.ts` and `src/client/PhysicsWorld.ts`.
+
+### BUG-6: `ShadeMaterial.draw_side`'s docblock describes a limitation that no longer exists
+
+```js
+// src/shade/renderer/material/ShadeMaterial.js:26
+/**
+ * Does not affect the actual drawing. Drawing is always done with "Front" mode, with
+ * backfaces always being culled.
+ * If you want double-sided drawing - you need to clone the geometry and flip normals.
+ */
+draw_side = ShadeDrawSide.Front;
+```
+
+`ShadeDrawSide.Double` works. Setting it is all that is required, and it is what Q3's `cull none`
+surfaces need — grates, railings, banners, flags, flame sprites; five materials on `oa_dm1`,
+eight on `oa_dm5`, seven on `am_thornish`.
+
+The cost of this one is the clearest argument in the report for treating stale documentation as a
+defect: double-sided surfaces went unimplemented for the whole port on the strength of a comment,
+by a reader who checked before using the field. It was found only when a later pass questioned
+the note. `Back` is the value that genuinely misbehaves on a hand-built material, and the docblock
+does not say so. Filed, and withdrawn as a gap, as GAP-007.
+
+### Not bugs, recorded so nobody re-files them
+
+- **`shape_cast` reporting the minimum-penetration normal** (GAP-012) is a documented, defensible
+  choice for a physics query. It is the wrong answer for character control, which is a gap in the
+  API surface rather than a defect in the implementation.
+- **`shape_cast` reporting contact for a graze** (GAP-019) is likewise correct for the question it
+  is asked. The gap is that a character controller needs a different question.
+- **The per-second FPS line on `console.warn`** is a design decision, not a bug, but it is the
+  wrong channel: `FPS: 238.12, RENDER: 1.58ms, SIMULATION: 0.06ms` every second at warn level
+  buries real warnings, and it did during the GAP-003/GAP-004 diagnosis. `console.info`, or off
+  by default.
 
 ---
 
@@ -1764,18 +2214,114 @@ Specific things that would be a loss to regress.
   where they are on the frame they are there. That collapsed Q3's entire `SV_ClipMoveToEntities`
   loop -- world trace, then every solid entity by hand -- into one query.
 
+### Added during phase 6
+
+- **The physics engine runs headless, and this turned out to be the single most valuable
+  property in the package.** `new PhysicsSystem()`, `link`, `attach_collider`, `shape_cast` and
+  `overlap_shape` need no graphics device, no `Engine`, no entity manager and no DOM. That is
+  what made the three-way differential harness possible in phase 2, and in phase 6 it is what
+  made "a real match is playable" a test rather than an opinion: `test/match.test.ts` runs six
+  bots for thirty simulated seconds against the shipping collision backend, in Node, in under a
+  second. Most physics engines cannot be driven this way -- they own a world object that owns a
+  scene that owns a device -- and the difference between "can be regression-tested in CI" and
+  "must be verified by a human looking at it" is the difference between the four player-reported
+  bugs in this project's record being caught in CI and being caught by a player.
+
+  Worth stating as a design property to protect, because it is easy to lose by accident: the
+  queries take the system, not a world; the shapes are plain data; nothing reaches for a device.
+
+- **The simulation seam is real, and nothing had to be built to prove it.** `WeaponSystem`,
+  `ItemSystem`, `MoverSystem` and `BotRuntime` all take plain interfaces -- `WeaponEvents`,
+  `DropTrace`, `BotWorld` -- and `BotRuntime.spawn` already accepted a null `Character`. Swapping
+  the entire presentation layer for a counter in `test/match.test.ts` needed no change to any
+  shipping file. That is partly this port's own design, but it was possible because meep's ECS
+  never demanded to own the game state: components are attached to entities the application
+  builds, systems are registered by the application, and there is no framework lifecycle to
+  inherit from. An engine that required `extends GameObject` would have made the headless match
+  a rewrite.
+
+- **`AudioEmitter` routes on exactly the two axes Q3's sound API varies on, so one component
+  expresses all four of its sound syscalls.** Q3 has `S_StartSound` (positional one-shot),
+  `S_StartLocalSound` (2D one-shot), `S_AddLoopingSound` (positional loop) and
+  `S_StartBackgroundTrack` (2D loop on a music bus). `AudioEmitterSystem` picks its routing once,
+  at link, on `is3D` and on whether the event is finite — and a looping 3D emitter goes into the
+  `LiveEmitterSet` where only the nearest in range are promoted to voices, which is precisely what
+  `S_AddLoopSounds` does by rebuilding its set every frame. This port initially kept a second,
+  direct code path for one-shots on cost grounds and then deleted it (D-065), because the
+  component route arrives at the same `sopra.playEvent` one link later and the second path was
+  buying nothing but a second answer to every question. That the four Q3 calls collapse onto one
+  component is not luck; it is the component having been designed around the right two axes.
+
+- **The engine turned out to have more than this port needed, and being able to say which parts
+  were idle is worth as much as the coverage number.** The phase 6 audit separates 31 facilities
+  this port actually exercises from 18 that exist, would plainly have done the job, and were
+  never reached: fonts, 2D image drawing, UI tinting, the clipboard, the cvar/options system, the
+  console, `DebugDrawSystem3`, `ArrayBufferLoader`, `R_ModelBounds`. A maintainer prioritising
+  work should know that a Quake III port never touched any of them — not as a criticism of those
+  facilities, but because "what did a real consumer actually lean on" is a different and more
+  useful question than "what does the engine have".
+
 ---
 
 ## 8. Docs and samples gaps
 
-- No runnable engine sample of any kind in the package (GAP-002).
-- No document that names the entry point. `EngineHarness` is discoverable only by reading a
-  directory listing.
-- The README links to `meep.company-named.com/docs` and to a GitLab quick-start template.
-  Neither is inside the package, so an engineer working from `node_modules` — which is where
-  you end up when the samples are not useful — has neither.
-- No stated import convention. That the package is deep-import-only is inferable from
-  `exports` and from a failed import, and from nowhere else.
+This is the section the maintainer can act on most cheaply, so it is specific about what was
+being attempted at the moment each one bit.
+
+**Nothing runnable ships.**
+
+- No runnable engine sample of any kind in the package (GAP-002). `samples/` contains
+  procedural-generation fixtures and `exports` has no `./samples/*` entry, so the folder cannot
+  even be imported from a consumer project.
+- No document names the entry point. `EngineHarness` is the real worked example and is
+  discoverable only by reading a directory listing. Half a page saying "start here, call
+  `bootstrap()`, then `buildBasics()`, then register the systems you need" would have removed the
+  first two hours of this project.
+- The README links to `meep.company-named.com/docs` and to a GitLab quick-start template. Neither
+  is inside the package, so an engineer working from `node_modules` — which is exactly where you
+  end up when the samples are not useful — has neither.
+- No stated import convention. That the package is deep-import-only is inferable from `exports`
+  and from a failed import, and from nowhere else.
+
+**No document says which systems you must register.** This is the highest-value missing page in
+the package. `PhysicsSystem` without `ColliderObserverSystem` gives you bodies that are present
+in the broadphase, report sane AABBs, and are completely intangible (GAP-014); `AnimationSystem3`
+without `MeshSystem3` by reference cannot drive a clip; a system constructed with a different
+`Scene` than the harness draws renders into nothing. Every one of those fails silently and
+succeeds at every diagnostic you reach for. A table of "system → what it needs registered
+alongside it → what breaks if you forget" would have saved this port perhaps three hours across
+four separate incidents, and it can be generated from the existing constructors.
+
+**No reference values for photometric lighting.** `PointLight.intensity` is candela, falloff is
+inverse-square in scene units, and the design is right (see section 7). What is missing is a
+five-row table: a candle, a 60 W bulb, an office ceiling, overcast daylight, direct sun. Without
+it, "my scene is black" and "my scene is white" are both unactionable, and both happened here —
+90 minutes on the first (GAP-005) and ten on the second (GAP-011). The absence also makes world
+scale silently load-bearing, which nothing says anywhere.
+
+**No document about the semantics of the physics queries**, as opposed to their signatures.
+`shape_cast` returns the minimum-penetration normal (GAP-012), reports contact for a graze
+against a resting surface (GAP-019), has no standoff parameter (GAP-020), and `skip_initial_overlaps`
+`continue`s rather than `break`s. All four are correct, defensible choices, and all four were
+established by reading the implementation. A page on "what these queries mean, and what a
+character controller needs that they do not give you" would be the difference between a consumer
+diagnosing the engine and diagnosing themselves — which is what happened here, twice, at a cost
+of about six hours.
+
+**No note that `Animation`, and things like it, take JSON rather than components.** BUG-1 is a
+one-line `@see`.
+
+**No worked example of a hand-built (non-glTF) skinned model.** The glTF path is excellent and
+took everything thrown at it (section 7). The port needed a *converter* to that path, which meant
+establishing offline what meep expects — joint counts, weight normalisation, clip naming, how
+tags become nodes. All of that was inferred from the loader source. `make_box_geometry` is the
+model for what would help here: a small, honest, public-API-only example of the thing.
+
+**No statement of what is deliberately not finished.** The README is unusually honest about
+`NavigationMeshAgent` being a placeholder and runtime obstacle carving being absent, and that
+honesty was worth a great deal — phase 5 was planned around it from the start. The same treatment
+for the rest of the package would be worth as much: `ShadeMaterial.draw_side`'s docblock (BUG-6)
+is the counter-example, and it cost a feature.
 
 ---
 
@@ -1792,3 +2338,15 @@ Specific things that would be a loss to regress.
 | ioquake3 | `ioquake/ioq3` @ `588393618dbc82e7207c21c6ddecca229944a03a` |
 | Oracle toolchain | Emscripten 6.0.8 (`aeb67926e7de656da38bc807d83050af93578758`) |
 | Host | Windows 11, WebGPU via Chrome |
+| Test suite | 183 tests across 11 files; `npm run check` typechecks, verifies the trap matrix and balance tables against their sources, and runs all of them |
+
+Every number in this document has a command that reproduces it:
+
+| claim | command |
+|---|---|
+| collision and movement divergence from the C oracle | `npm run divergence` |
+| match simulation cost, and the per-trace decomposition | `npm run bench-match` |
+| `NavigationMesh` routability from a Q3 level, three ways | `npm run navmesh-probe` |
+| what the two collision backends say at one point, or along a walk | `node tools/trace-compare.ts <map> point <x,y,z>` |
+| the `trap_` matrix, and that every citation in it still resolves | `node tools/trap-matrix.mjs --check` |
+| lighting coverage, asset integrity, a played match | `npm test` |

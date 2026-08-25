@@ -61,7 +61,22 @@ TypeScript port is then run against it frame by frame and must agree bit-for-bit
 randomised traces and roughly 50,000 simulated movement frames, tolerance zero. Emscripten is
 expected at `.refs/emsdk`; `oracle/build.mjs` prints the install commands if it is missing.
 
-One finding in the report is reproducible on its own:
+Three findings in the report are reproducible on their own:
+
+```bash
+npm run divergence
+```
+
+which runs identical input through the C oracle, the ported clipmap and meep's physics and
+reports how far the third drifts from the first, with the second as a bit-exact control.
+
+```bash
+npm run bench-match
+```
+
+which plays a six-bot deathmatch headlessly on both collision backends and then decomposes the
+cost of a single trace. It is where section 5's claim comes from that the ported Q3 rule which
+decides the answer costs 0.29 µs and the `shape_cast` in front of it costs 3.49.
 
 ```bash
 npm run navmesh-probe
@@ -76,10 +91,13 @@ what that difference is, and includes a claim I got wrong twice before getting i
 ## What works
 
 - **Six OpenArena maps** convert and render at 137–253 FPS, with lighting reconstructed as
-  dynamic lights from the map's own `.shader` data.
+  dynamic lights from the map's own `.shader` data. Four of the six come out well lit; `oa_dm5`
+  and `oa_dm7` do not, because their lighting was authored as `light` entities that q3map2
+  deletes at compile time. That is measured rather than estimated — see GAP-006.
 - **Movement** is Q3's, on meep's physics. The ported `cm_trace` is bit-exact against the C and
-  is what the physics backend was tuned against: contact normals agree 98–99.6%, and position
-  divergence over 400 frames of identical input is 0.06–0.22 units at the median.
+  is what the physics backend is measured against: the two agree on hit-or-miss for 100.0% of
+  20,000 sampled sweeps, fraction error is 5.3e-8 at the p90, and position divergence over 240
+  frames of identical input is **zero at the median** on every input pattern.
 - **Weapons** fire with Q3's own damage numbers and fire rates, extracted from the sources
   rather than transcribed.
 - **Items** spawn, drop to the floor, bob, spin, get picked up under `BG_CanItemBeGrabbed`'s

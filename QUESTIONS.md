@@ -10,11 +10,28 @@ Format: **Q-nnn** — the question, the default in use, and what changes if the 
 
 ## Still open
 
-*Nothing. Q-001, Q-003 and Q-005 were answered; the rest were settled by doing.*
+### Q-006 — Should the asset pipeline read the BSP lightgrid, to fix the two dark maps?
 
-New questions, if any, would go here. There are none: every open decision at this point has a
-default that is cheap to reverse, and they are recorded in `DECISIONS.md` rather than raised as
-questions.
+Raised at the phase 6 boundary, by measuring something that had been assumed.
+
+The lighting reconstruction reads `q3map_surfacelight` off the shader set and `q3map_sun` off
+worldspawn, because those are the only lighting inputs that survive compilation. Phase 6 measured
+what that yields, in lux, at every spawn point and pickup on every shipped map (D-069, GAP-006):
+four of six maps come out well lit, `oa_dm7` leaves 70 of 79 player positions under 1 lux, and
+`oa_dm5` — 107,414 triangles — reconstructs to **zero** point lights, because its lighting was
+authored entirely as `light` entities that q3map2 deletes.
+
+There is a route: the BSP's lightgrid (lump 15) is the other baked product of q3map2, it *does*
+survive compilation, and it holds an ambient plus a directional sample per grid cell over the
+whole playable volume. Emitting point lights from bright cells is asset-pipeline work only — no
+rendering code, no engine change, no lightmap slot — and is roughly half a day.
+
+**Default in use:** not done. The shortfall is measured, pinned by a test that fails if it
+silently changes, and attributed in GAP-006; the brief's phase 6 is report finalisation, and
+building a feature during the reporting phase is the wrong trade against leaving the report
+incomplete.
+**If different:** half a day in `tools/convert-map.ts`, and `test/presentation.test.ts` will fail
+on the two pinned maps and have to be updated — which is the intended behaviour of that pin.
 
 ---
 
@@ -71,8 +88,11 @@ What remained was the `.shader` scripts, which still carry the light data q3map2
 those as real dynamic lights, 13 to 147 per map (D-012). Clustered lighting absorbed it without
 tuning.
 
-No answer needed, but flagging the visible cost: without baked lighting, large flat surfaces
-read as uniform. It is the most noticeable quality gap in the demo.
+No answer needed, but flagging the visible cost, which phase 6 revised twice over. Without baked
+lighting, large flat surfaces read as uniform — that part stands. What was not known when this
+was written is that the reconstruction does not work *at all* on two of the six maps, because the
+`.shader` route only carries light for maps whose authors lit them with surface shaders. See
+Q-006, which is the open half of this question.
 
 ### Q-004 — Q3-faithful HUD, or a meep-native one? — **settled, provisionally**
 
