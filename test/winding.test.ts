@@ -326,3 +326,93 @@ describe('converted character winding', () => {
         ).toBeCloseTo(expected, 1);
     });
 });
+
+/* ------------------------------------------------------------------ *
+ * Collision hulls
+ * ------------------------------------------------------------------ */
+
+/*
+ * The other winding in this port, and the one with an engine behaviour attached.
+ *
+ * `brushHull` turns a Q3 brush's plane set into a polyhedron, and every one of
+ * those becomes a `ConvexHullShape3D` the physics world queries. Measured on
+ * meep 3.2.0, a hull whose faces are not consistently wound is accepted by the
+ * constructor without complaint, answers `overlap` and `support` correctly --
+ * and `raycast` against it **silently returns nothing** (BUG-8).
+ *
+ * `KinematicMover` decides whether the ground under a character is walkable
+ * with a raycast. So a winding error here would not read as a winding error: it
+ * would read as a player who cannot stand on some floors, which is exactly what
+ * BUG-7 read as and cost a session to find.
+ *
+ * D-073 asserted in prose that `brushHull` emits correctly-wound hulls and used
+ * that to conclude the whole-level measurements were sound. This is that claim,
+ * checked. No vertex normals here to compare against -- a brush has planes, not
+ * normals -- so the ground truth is convexity itself: every face of a convex
+ * solid must have the whole solid behind it.
+ */
+describe.each(['oa_dm1', 'aggressor'])('collision hull winding [%s]', (name) => {
+    it('winds every brush hull outward, which is what raycast needs', async () => {
+        const { BspFile } = await import('../src/q3/bsp/BspFile.ts');
+        const { ClipMap, MASK_PLAYERSOLID } = await import('../src/q3/cm/ClipMap.ts');
+        const { buildHulls } = await import('../src/q3/cm/brushHull.ts');
+
+        const raw = readFileSync(join(BUILT, name, 'collision.bsp'));
+        const cm = new ClipMap(
+            new BspFile(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), name)
+        );
+
+        const world = cm.models[0]!;
+        const set = buildHulls(cm, MASK_PLAYERSOLID, world.firstBrush, world.numBrushes);
+
+        let faces = 0;
+        let inverted = 0;
+        let firstBad = '';
+
+        for (const hull of set.hulls) {
+            const v = hull.vertices;
+            const n = v.length / 3;
+
+            // The centroid of a convex hull's vertices is inside it.
+            let cx = 0, cy = 0, cz = 0;
+            for (let i = 0; i < n; i++) {
+                cx += v[i * 3]!; cy += v[i * 3 + 1]!; cz += v[i * 3 + 2]!;
+            }
+            cx /= n; cy /= n; cz /= n;
+
+            for (let t = 0; t < hull.indices.length; t += 3) {
+                const a = hull.indices[t]! * 3;
+                const b = hull.indices[t + 1]! * 3;
+                const c = hull.indices[t + 2]! * 3;
+
+                const e1 = [v[b]! - v[a]!, v[b + 1]! - v[a + 1]!, v[b + 2]! - v[a + 2]!];
+                const e2 = [v[c]! - v[a]!, v[c + 1]! - v[a + 1]!, v[c + 2]! - v[a + 2]!];
+
+                const nx = e1[1]! * e2[2]! - e1[2]! * e2[1]!;
+                const ny = e1[2]! * e2[0]! - e1[0]! * e2[2]!;
+                const nz = e1[0]! * e2[1]! - e1[1]! * e2[0]!;
+
+                const area = Math.hypot(nx, ny, nz);
+                if (area < MIN_AREA) continue;
+
+                // Signed distance from the face plane to the interior point. A
+                // face wound outward puts the centroid strictly behind it.
+                const behind =
+                    (cx - v[a]!) * nx + (cy - v[a + 1]!) * ny + (cz - v[a + 2]!) * nz;
+
+                faces += 1;
+                if (behind >= 0) {
+                    inverted += 1;
+                    if (firstBad === '') firstBad = `brush ${hull.brush}, face at index ${t}`;
+                }
+            }
+        }
+
+        expect(faces, 'no non-degenerate faces to check').toBeGreaterThan(1000);
+        expect(
+            inverted,
+            `${inverted} of ${faces} hull faces wound inward` +
+            (firstBad === '' ? '' : ` (first: ${firstBad})`)
+        ).toBe(0);
+    });
+});

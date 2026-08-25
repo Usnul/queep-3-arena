@@ -2242,7 +2242,8 @@ device, no application — and every one was re-run against **3.2.0** after the 
 
 **Status after 3.2.0:** BUG-6 and BUG-7 are fixed. BUG-1 to BUG-5 still reproduce exactly as
 written; the `.d.ts` error count moved from 664 across 152 files to **674 across 154**, which is
-drift rather than change.
+drift rather than change. **BUG-8 is new and live on 3.2.0** — it was found while confirming
+BUG-7's fix, in the defect in BUG-7's own published reproduction.
 
 These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
 bug is "the engine says it does this and does something else". The second kind is more expensive
@@ -2512,11 +2513,12 @@ is not one. Re-running with correct winding is what produced the table above.
 
 Two things follow. The bug was real and is fixed, on evidence that never depended on the bad
 hull: the whole-level measurements were taken against `brushHull`'s output, which is correctly
-wound. And there is a small live finding underneath: **a convex hull with inconsistent winding is
-accepted without complaint and then behaves correctly under every query except `raycast`**, where
-it silently reports nothing. `.volume` cannot be used to detect it. A winding check in
-`ConvexHullShape3D.from`, or a signed volume, would turn a silent wrong answer into a constructor
-error.
+wound — and `test/winding.test.ts` now asserts that over every brush of two maps rather than
+leaving it as a claim. And there is a live finding underneath, which turned out to be worth its
+own entry once it was measured properly rather than described: **a convex hull with inconsistent
+winding is accepted without complaint and then behaves correctly under every query except
+`raycast`**, where it silently reports nothing. See BUG-8, which also corrects what was written
+here about `.volume`.
 
 **Severity:** was major -- silent, plausible-looking, and in the walkability decision of the
 engine's own character solver. **Fixed in 3.2.0**; this port now depends on `^3.2.0` for that
@@ -2526,6 +2528,67 @@ reason.
 navigation-graph node; `test/meepmove.test.ts` ("grounds at every spawn point") and
 `test/match.test.ts`, both of which now assert the correct behaviour unconditionally. D-071,
 D-072, D-073.
+
+### BUG-8: a `ConvexHullShape3D` with inconsistent face winding is accepted, works under every query except `raycast`, and silently returns nothing there
+
+**Live on 3.2.0.** Found while confirming BUG-7's fix: the reproduction published in this report
+was itself wound wrong, and the way that manifested is the finding.
+
+`ConvexHullShape3D.from` takes vertices and a triangle index list. Winding is never checked. The
+support function does not care — it takes a max over vertices — so `overlap`, `support` and every
+GJK-based query behave correctly whatever the faces say. `raycast` uses the face list, and against
+a badly wound hull it reports a **miss**.
+
+```js
+const verts = new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,-1, -1,-1,1, 1,-1,1, 1,1,1]);
+const good  = [0,2,1, 3,4,5, 0,1,4, 0,4,3, 1,2,5, 1,5,4, 0,5,2, 0,3,5];  // a ramp
+
+// ...link it into a PhysicsSystem as in BUG-7 above, then fire a ray that
+// must hit the slope:
+ray.setOrigin(-0.9, 0.9, 0); ray.setDirection(0, -1, 0); ray.tMax = 5;
+sys.raycast(ray, new PhysicsSurfacePoint());
+```
+
+Flipping faces of `good` and re-running, all on 3.2.0:
+
+| index list | constructor | `overlap`, outside / inside | `.volume` | `raycast` |
+|---|---|---|---:|---|
+| consistent | accepts | 0 / 1 | **4.000** | hit, `t = 1.8` |
+| one face flipped | accepts | 0 / 1 | 2.667 | **miss** |
+| a different one face | accepts | 0 / 1 | 2.667 | **miss** |
+| two faces flipped | accepts | 0 / 1 | 1.333 | **miss** |
+| **every** face flipped | accepts | 0 / 1 | **4.000** | **miss** |
+
+Two things in that table matter more than the headline.
+
+**The last row is the trap.** A uniformly inverted hull — the easiest mistake to make, and the one
+this report made, importing from a format with the opposite convention — reports the *correct*
+volume. So the obvious self-check does not fire on the most likely error. `.volume` catches
+partial inconsistency and misses total inversion, which is close to the least useful place to draw
+that line. D-073 concluded from the inverted case alone that `.volume` could not be used to detect
+winding problems at all; that was too strong, and the table is the corrected version.
+
+**The consequence is not "rays are wrong", it is "characters cannot stand up".** `KinematicMover`
+decides whether ground is walkable with a raycast, so a hull imported with the wrong winding
+produces a player who falls through, or hangs above, floors that are geometrically fine — while
+`overlap` insists the geometry is correct and every debug visualisation agrees with it. That is
+the same symptom BUG-7 produced and it cost a session to trace.
+
+- **Severity:** major. Silent, plausible, asymmetric across the query surface, and it lands in the
+  one subsystem where the failure looks like something else.
+- **Suggested fix:** check it in the constructor. The signed volume computed with the sign kept
+  rather than discarded is one pass over the faces and detects total inversion (it comes out
+  negative) as well as partial (it comes out wrong). Throwing is defensible; so is repairing, since
+  a consistent orientation can be derived from the vertex set and the faces re-emitted. What is
+  not defensible is the current arrangement, where the shape is accepted and one query out of
+  several then disagrees with the others without saying so.
+- **Cheaper alternative if a constructor check is unwanted:** have `raycast` fall back to the
+  support function when the face list yields no intersection but the origin is inside the AABB.
+  That converts a silent wrong answer into a slow right one.
+- **Evidence:** the snippet above and the table, run against 3.2.0.
+  `src/core/geom/3d/shape/ConvexHullShape3D.js`. This port's own hulls are consistently wound and
+  `test/winding.test.ts` now asserts it over every brush of two maps — 6,256 and 9,310 faces —
+  rather than claiming it in prose as D-073 did. Found in phase 7.
 
 ### Not bugs, recorded so nobody re-files them
 
