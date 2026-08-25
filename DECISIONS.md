@@ -2197,3 +2197,80 @@ term would be double-counting -- is settled by reading the solver rather than gu
 moving-platform support at all, and its `MoveResult` is `{hit, grounded, groundNormal}` with no
 identity for what you are standing on. There is nothing to double-count with, and a consumer
 could not write the carry themselves from what `move()` returns. Filed as GAP-022.
+
+### D-076: The between-frames block moved out of `main()`, because a test of a copied ordering is a test of the copy
+
+`test/player-controller.test.ts` originally reproduced `main.ts`'s frame by hand -- build the
+player's box, run the movers, apply the carry, apply the teleport. That is the same mistake in a
+new place. D-072's lesson was "a test that reads the source of a value cannot catch a bug in the
+copy of it"; a test that re-implements an ordering cannot catch a bug in the ordering.
+
+`src/game/WorldEffects.ts` is the four things the world does to a player between two frames --
+carried by a plat, teleported, launched by a jump pad, hurt by a trigger -- plus the frame that
+applies them in `G_RunFrame`'s order. `main.ts` and the test now both call it. Fifty lines left
+`main()`; the mover event callbacks there keep the audio and hand the state to a recorder.
+
+Worth stating why the block was untestable and not merely untested: it was an inline closure
+between an engine boot and a render loop, closing over four mutable locals. Nothing could reach
+it without a browser and a GPU. The extraction is the same move as `sceneFromQ3` and
+`spawnPoints`, applied to the one part of the frame that three separate bugs have now passed
+through.
+
+Two things the extraction made visible on its own:
+
+- **Teleport turns the player one frame late**, because the effects run after the solve and
+  `setYaw` writes the command accumulator that `PM_UpdateViewAngles` has already read. Q3 has the
+  same one-frame structure -- `TeleportPlayer` writes `ps->delta_angles` and the *next* pmove
+  turns it into a view angle -- so this is correct, and it is now asserted frame-by-frame rather
+  than left as "eventually", which would have hidden a teleport that stopped turning the player
+  entirely.
+- **`trigger_hurt` is the one effect that does not land in `playerState_t`.** Health lives in the
+  inventory, so `apply` returns the number and the caller spends it. A return value nobody reads
+  is how a mover event goes missing, so there is a case for it.
+
+### D-077: What the browser could and could not verify, and why
+
+The browser build had not been run since the movement rewrite. It has now been, on every shipped
+map and every movement mode, against meep 3.2.0 -- and the ceiling on what that proves is worth
+recording rather than glossing.
+
+**Verified, live, no errors or warnings beyond the two known ones:** `oa_dm1`, `oa_dm4`,
+`oa_dm5`, `oa_dm7`, `aggressor` and `am_thornish` all boot; `?move=q3` and `?trace=clipmap` both
+select the ported path and boot; the WebGPU device comes up; the asset pipeline, physics body
+construction (529-820 static bodies), mover kinematic bodies, navigation graph, bots, characters
+and audio all initialise. Three numbers confirm findings that until now were only measured
+headlessly: `oa_dm5` reports **0 lights over 107,414 triangles** (Q-006), `am_thornish` reports
+**520 patches not solid** (D-017), and `oa_dm7` rejects two `item_health` as spawned in a solid.
+
+**Not verified: a single simulated frame.** meep's `Ticker` bootstraps its loop with one
+`requestAnimationFrame` and suspends outright if `document.visibilityState` is `hidden` at
+`start()`. The browser pane available here is never displayed, so the page is permanently hidden,
+rAF never fires, and the fallback `setTimeout` chain is downstream of the rAF that would have
+started it. The engine's own overlay says so: `FPS: Infinity, RENDER: 0.00ms, SIMULATION:
+0.00ms`. Nothing about the frame loop, the HUD text, rendering or input can be checked from here,
+and no amount of driving the page changes that.
+
+That is why the work went into `player-controller.test.ts` rather than into a screenshot. The
+headless rig runs the real `PlayerController`, the real `KinematicMover` against a real
+`PhysicsSystem`, the real `WorldEffects`, the real `Footsteps` and the real map collision; the
+only stub in the movement path is `ecd.getComponent`, two methods. What genuinely cannot be
+reached without a display is rendering and the tick source -- and the port writes no rendering
+code by the brief.
+
+**Not a suggestion that anyone verify visually.** If a frame loop bug exists it will be found the
+way the last three were: by asking what `PmoveSingle` maintained that its replacement does not,
+and writing the parity case. That question has now been asked of every field, and it
+turned up one more: `ps.stats[STAT_HEALTH]`, which `Bot` mirrors every frame and
+`PlayerController` never has, so the player's copy held its spawn value for the whole game. Three
+places in `bg_pmove` read it -- `PM_UpdateViewAngles` refuses to turn a corpse, `PmoveSingle`
+drops `CONTENTS_BODY` so a corpse falls through players, and the medium-fall event is suppressed
+for the dead -- and none of them ever saw a dead player. Unlike D-072, D-074 and D-075 this one
+predates the movement rewrite and was wrong on both paths, which is why it is written up here
+rather than as a fourth instance.
+
+Fixed with the mirror plus two things the mirror does not give for free: the look accumulator
+freezes with the view, so two seconds of unread mouse movement does not arrive at once on
+respawn (Q3 avoids the same snap with `ps->delta_angles`, which is a server telling a client
+where it now looks; there is no server here, so the client simply stops), and the movement
+command and trigger are gated on the same test, so a corpse does not walk off holding forward or
+keep firing.

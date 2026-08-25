@@ -366,7 +366,18 @@ export class PlayerController {
      * makes the device swappable for a gamepad or a replay.
      */
     private readonly onPointerMove: PointerMoveHandler = (_position, _event, delta): void => {
-        if (!this.active) return;
+        /*
+         A dead player does not turn, and the accumulator stops with the view.
+
+         Freezing the view is `PM_UpdateViewAngles`'s own rule and comes for
+         free once `ps.stats` is honest. Freezing the *accumulator* is this
+         class's job and does not: without it the mouse keeps integrating
+         behind a frozen camera and the whole two seconds of it arrives at once
+         on respawn. Q3 avoids the same snap with `ps->delta_angles`, which is
+         the server telling the client where it is now looking; there is no
+         server here, so the client simply does not move while it is dead.
+        */
+        if (!this.active || this.dead) return;
 
         // `| 0` after each accumulation so yaw wraps in 32 bits and is then
         // truncated to 16 by `usercmd_t.angles`, exactly as the engine does.
@@ -397,6 +408,22 @@ export class PlayerController {
         const msec = Math.min(200, Math.max(1, Math.round(deltaSeconds * 1000)));
         this.time += msec;
 
+        /*
+         The one `playerState_t` field left that nothing maintained.
+
+         `Bot` mirrors its health into `ps.stats` every frame and this class
+         never did, so the player's copy sat at its spawn value forever. Three
+         places in `bg_pmove` read it -- `PM_UpdateViewAngles` refuses to turn a
+         corpse, `PmoveSingle` drops `CONTENTS_BODY` from the trace mask so a
+         corpse can fall through players, and the medium-fall event is
+         suppressed for the dead -- and none of them ever saw a dead player.
+
+         Found by asking what `Bot` maintains that this does not, which is the
+         same question that found D-072, D-074 and D-075. Unlike those three
+         this one predates the movement rewrite and is wrong on both paths.
+        */
+        this.ps.stats[C.STAT_HEALTH] = this.inventory.health;
+
         const cmd = this.pmove.cmd;
         cmd.serverTime = this.time;
         cmd.angles[0] = this.pitch;
@@ -405,10 +432,11 @@ export class PlayerController {
         cmd.buttons = 0;
         cmd.weapon = 1;
 
-        this.attacking = this.active && this.devices.pointer.mouseButtonLeft.is_down;
+        this.attacking =
+            this.active && !this.dead && this.devices.pointer.mouseButtonLeft.is_down;
         this.crouching = this.active && this.has(KEY_CROUCH);
 
-        if (this.active) {
+        if (this.active && !this.dead) {
             cmd.moves[FORWARDMOVE] =
                 (this.has(KEY_FORWARD) ? 127 : 0) + (this.has(KEY_BACK) ? -127 : 0);
             cmd.moves[RIGHTMOVE] =
@@ -529,5 +557,16 @@ export class PlayerController {
 
     get onGround(): boolean {
         return this.ps.groundEntityNum !== C.ENTITYNUM_NONE;
+    }
+
+    /**
+     * Q3's own death test, and the inventory is the authority on it.
+     *
+     * `ps.stats[STAT_HEALTH]` is a mirror written once a frame in `update`, so
+     * reading it here instead would be a frame stale in exactly the frame that
+     * matters -- the one the killing shot landed in.
+     */
+    get dead(): boolean {
+        return this.inventory.health <= 0;
     }
 }

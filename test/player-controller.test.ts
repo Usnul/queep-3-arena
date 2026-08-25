@@ -50,7 +50,8 @@ import {
 import { STAND_MAXS, STAND_MINS, CROUCH_MAXS } from '../src/client/MeepMove.ts';
 import { Footsteps } from '../src/client/Audio.ts';
 import { Character } from '../src/client/Characters.ts';
-import { carryDisplacement, type Mover, type Vec3 as MoverVec3 } from '../src/game/Movers.ts';
+import { type Mover, type Vec3 as MoverVec3 } from '../src/game/Movers.ts';
+import { WorldEffects, type MoverWorld } from '../src/game/WorldEffects.ts';
 import { angleVectors, vec3, type Vec3 } from '../src/q3/math.ts';
 import * as C from '../src/q3/pmove/constants.ts';
 
@@ -238,12 +239,28 @@ class Rig {
     /** Every `onFire` the weapon code would have received. */
     readonly shots: { eye: number[]; angles: number[] }[] = [];
 
-    /** The player's Q3 world box, as `main.ts` computes it for the movers. */
-    readonly boxMins: Vec3 = vec3();
-    readonly boxMaxs: Vec3 = vec3();
+    /**
+     * The world's writes into `ps`, and the frame that applies them.
+     *
+     * The same object `main.ts` builds, not a re-creation of it: the ordering
+     * inside `apply` is `G_RunFrame`'s and is load-bearing, and a test that
+     * copies an ordering is a test of the copy. That is how D-075 lasted -- the
+     * seam test D-074 added drove `PlayerMovement` directly and never went near
+     * what the app does around it.
+     */
+    readonly effects = new WorldEffects();
+
+    /** Damage from `trigger_hurt`, which `main.ts` bills to the inventory. */
+    damageTaken = 0;
+
+    /** A mover world holding exactly the movers a case hands to `frame`. */
+    private readonly world: MoverWorld & { movers: Mover[] } = {
+        movers: [],
+        update: () => {},
+        touchButtons: () => {},
+    };
 
     private readonly element = dom.element();
-    private readonly carry: Vec3 = vec3();
 
     constructor(mapName: string, solver: Solver, spawnIndex = 0) {
         const { physics, spawns } = world(mapName);
@@ -292,20 +309,8 @@ class Rig {
         const step = this.footsteps.update(this.player.speed, this.player.onGround, dt);
         if (step !== null) this.steps.push(step);
 
-        const ps = this.player.ps;
-        for (let i = 0; i < 3; i++) {
-            this.boxMins[i] = ps.origin[i]! + this.player.mins[i]!;
-            this.boxMaxs[i] = ps.origin[i]! + this.player.maxs[i]!;
-        }
-
-        if (
-            movers.length > 0 &&
-            carryDisplacement(movers, this.boxMins, this.boxMaxs, this.carry as unknown as MoverVec3)
-        ) {
-            ps.origin[0] = ps.origin[0]! + this.carry[0]!;
-            ps.origin[1] = ps.origin[1]! + this.carry[1]!;
-            ps.origin[2] = ps.origin[2]! + this.carry[2]!;
-        }
+        this.world.movers = movers as Mover[];
+        this.damageTaken += this.effects.apply(this.player, this.world, dt).damage;
     }
 
     run(frames: number, dt = TICK, movers: readonly Mover[] = []): void {
@@ -327,6 +332,15 @@ class Rig {
 
     get origin(): number[] {
         return [...this.player.ps.origin];
+    }
+
+    /** The player's world box, as `WorldEffects` last computed it. */
+    get boxMins(): MoverVec3 {
+        return this.effects.playerMins;
+    }
+
+    get boxMaxs(): MoverVec3 {
+        return this.effects.playerMaxs;
     }
 }
 
@@ -749,14 +763,10 @@ describe.each<Solver>(['meep', 'q3'])('the world writes into ps between frames [
         const destination = other.origin;
         const ps = rig.player.ps;
 
-        // `TeleportPlayer`, as `main.ts` performs it.
-        ps.origin[0] = destination[0]!;
-        ps.origin[1] = destination[1]!;
-        ps.origin[2] = destination[2]! + 1;
-        ps.velocity[0] = 0;
-        ps.velocity[1] = 0;
-        ps.velocity[2] = 0;
-        rig.player.setYaw(90);
+        // Through the recorder a `trigger_teleport` calls, not by writing `ps`
+        // here: the deferral to the end of the frame is the part with a bug in
+        // it, and a case that performs the write itself has already skipped it.
+        rig.effects.teleport(destination, 90);
 
         rig.frame();
 
@@ -765,8 +775,20 @@ describe.each<Solver>(['meep', 'q3'])('the world writes into ps between frames [
             'dragged back to where it was before the teleport'
         ).toBeLessThan(2);
 
-        // And the view went with it, which is the half `setYaw` owns.
-        expect(ps.viewangles[1]).toBeCloseTo(90, 1);
+        /*
+         And the view goes with it, one frame later.
+
+         The effects run after the solve, so `setYaw` lands on the command
+         accumulator after this frame's `PM_UpdateViewAngles` has already read
+         it. Q3 has the same one-frame structure for the same reason:
+         `TeleportPlayer` writes `ps->delta_angles` and the *next* pmove turns
+         it into a view angle. Asserted on the following frame rather than
+         relaxed to "eventually", so a teleport that silently stopped turning
+         the player still fails.
+        */
+        expect(ps.viewangles[1], 'view angle on the teleport frame').toBe(0);
+        rig.frame();
+        expect(ps.viewangles[1], 'view angle one frame later').toBeCloseTo(90, 1);
 
         rig.run(125);
         expect(rig.player.onGround, 'never landed after the teleport').toBe(true);
@@ -783,11 +805,9 @@ describe.each<Solver>(['meep', 'q3'])('the world writes into ps between frames [
         rig.activate();
 
         const ps = rig.player.ps;
-        ps.velocity[0] = 0;
-        ps.velocity[1] = 0;
-        ps.velocity[2] = 500;
-
         const from = ps.origin[2]!;
+
+        rig.effects.push([0, 0, 500]);
         rig.run(30);
 
         expect(ps.origin[2]! - from, 'height gained from a 500 u/s pad').toBeGreaterThan(50);
@@ -795,6 +815,83 @@ describe.each<Solver>(['meep', 'q3'])('the world writes into ps between frames [
 
         rig.run(220);
         expect(rig.player.onGround, 'never came back down').toBe(true);
+    });
+
+    it('mirrors health into ps.stats, and a corpse stops playing', () => {
+        /*
+         `Bot` writes `ps.stats[STAT_HEALTH]` every frame and `PlayerController`
+         never did, so the player's copy held its spawn value for the whole
+         game and the three places `bg_pmove` reads it never saw a dead player.
+
+         The visible half is `PM_UpdateViewAngles`, which refuses to turn a
+         corpse. Asserted on both paths because this one is not a bridge bug --
+         it predates D-071 and was wrong on the ported path too.
+        */
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+        rig.face(openHeading('oa_dm1'));
+
+        rig.look(200, 0);
+        rig.frame();
+
+        expect(rig.player.ps.stats[C.STAT_HEALTH], 'health mirrored while alive')
+            .toBe(rig.player.inventory.health);
+
+        const aliveYaw = rig.player.ps.viewangles[1]!;
+        expect(aliveYaw).not.toBe(0);
+
+        // Killed by anything -- a rocket, a trigger_hurt, the void.
+        rig.player.inventory.health = 0;
+        rig.devices.hold('w');
+        rig.devices.mouseButtonLeft.is_down = true;
+        const restingAt = rig.origin;
+        const shotsBefore = rig.shots.length;
+
+        rig.look(400, 100);
+        rig.run(60);
+
+        expect(rig.player.ps.stats[C.STAT_HEALTH], 'health mirrored while dead').toBe(0);
+        expect(rig.player.ps.viewangles[1], 'a corpse turned with the mouse')
+            .toBeCloseTo(aliveYaw, 6);
+        expect(rig.shots.length, 'a corpse kept firing').toBe(shotsBefore);
+        expect(
+            Math.hypot(rig.origin[0]! - restingAt[0]!, rig.origin[1]! - restingAt[1]!),
+            'a corpse walked off holding forward'
+        ).toBeLessThan(4);
+
+        // And it all comes back on respawn -- at the angle it died at, not at
+        // the angle two seconds of unread mouse movement would have produced.
+        rig.player.inventory.health = 125;
+        rig.devices.release();
+        rig.frame();
+
+        expect(rig.player.ps.viewangles[1], 'the view snapped on respawn')
+            .toBeCloseTo(aliveYaw, 6);
+
+        rig.look(100, 0);
+        rig.frame();
+        expect(rig.player.ps.viewangles[1], 'still frozen after respawn')
+            .not.toBeCloseTo(aliveYaw, 6);
+    });
+
+    it('bills a trigger_hurt to the caller rather than to ps', () => {
+        /*
+         Damage is the one effect that does not land in `playerState_t`: health
+         lives in the inventory, and `apply` returns the number so the caller
+         can spend it. Asserted because a return value nobody reads is exactly
+         how the mover events went missing in the first place.
+        */
+        const rig = new Rig('oa_dm1', solver).settle();
+
+        rig.effects.hurt(15);
+        rig.effects.hurt(10);
+        rig.frame();
+
+        expect(rig.damageTaken, 'damage from two triggers in one frame').toBe(25);
+
+        // And it is not billed again on the next frame.
+        rig.frame();
+        expect(rig.damageTaken).toBe(25);
     });
 
     it('honours a respawn', () => {

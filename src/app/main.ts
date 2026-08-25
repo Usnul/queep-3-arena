@@ -32,7 +32,8 @@ import { loadMap } from '../client/map/loadMap.ts';
 import { loadModels } from '../client/map/loadModels.ts';
 import { ItemsView } from '../client/ItemsView.ts';
 import { ItemSystem, newInventory, type DropTrace } from '../game/Items.ts';
-import { MoverSystem, carryDisplacement, type Vec3 } from '../game/Movers.ts';
+import { MoverSystem, type Vec3 } from '../game/Movers.ts';
+import { WorldEffects } from '../game/WorldEffects.ts';
 import type { Damageable } from '../game/Weapons.ts';
 import { vec3 as q3vec3 } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
@@ -372,10 +373,13 @@ async function main(): Promise<void> {
 
         /* ---- movers: doors, plats, buttons, triggers ---- */
 
-        let teleportTo: Vec3 | null = null;
-        let teleportYaw = 0;
-        let hurtPending = 0;
-        let pushVelocity: Vec3 | null = null;
+        /*
+         The four things the world can do to a player between two frames, and
+         the frame that applies them. Shared with `player-controller.test.ts`
+         rather than reproduced there: the ordering is load-bearing and a test
+         of a hand-copied ordering is a test of the copy. See D-075.
+        */
+        const effects = new WorldEffects();
 
         const movers = new MoverSystem({
             moverSound: (mover, which) => {
@@ -401,17 +405,13 @@ async function main(): Promise<void> {
             teleport: (destination) => {
                 audio.play('world/telein', player.ps.origin);
                 audio.play('world/teleout', destination.origin);
-                teleportTo = [...destination.origin];
-                teleportYaw = destination.angle;
+                effects.teleport(destination.origin, destination.angle);
             },
             hurt: (damage) => {
-                hurtPending += damage;
+                effects.hurt(damage);
             },
             push: (velocity) => {
-                // `BG_TouchJumpPad` overwrites velocity outright rather than
-                // adding to it, which is why a jump pad launches you the same
-                // way however fast you ran onto it.
-                pushVelocity = [velocity[0]!, velocity[1]!, velocity[2]!];
+                effects.push(velocity);
                 audio.playLocal('world/jumppad');
             },
         });
@@ -437,10 +437,6 @@ async function main(): Promise<void> {
             (movers.unhandled.length > 0 ? `
   unhandled: ${movers.unhandled.join(', ')}` : '')
         );
-
-        const playerMins: Vec3 = [0, 0, 0];
-        const playerMaxs: Vec3 = [0, 0, 0];
-        const carry: Vec3 = [0, 0, 0];
 
         /* ---- navigation ---- */
 
@@ -700,52 +696,12 @@ async function main(): Promise<void> {
                 audio.playLocal('weapon/change');
             }
 
-            /* ---- movers ---- */
+            /* ---- movers, and everything they do to the player ---- */
 
-            const ps = player.ps;
-            for (let i = 0; i < 3; i++) {
-                playerMins[i] = ps.origin[i]! + player.mins[i]!;
-                playerMaxs[i] = ps.origin[i]! + player.maxs[i]!;
-            }
-
-            movers.update(deltaSeconds, playerMins, playerMaxs, true);
-            movers.touchButtons(playerMins, playerMaxs);
+            const world = effects.apply(player, movers, deltaSeconds);
             moversView.update();
 
-            /*
-             Carrying happens after the movers have moved and before the next
-             pmove, which is the order `G_RunFrame` uses: movers push, then
-             clients think. The other way round and a plat leaves from under you.
-            */
-            if (carryDisplacement(movers.movers, playerMins, playerMaxs, carry)) {
-                ps.origin[0]! += carry[0];
-                ps.origin[1]! += carry[1];
-                ps.origin[2]! += carry[2];
-            }
-
-            if (teleportTo !== null) {
-                ps.origin[0] = teleportTo[0];
-                ps.origin[1] = teleportTo[1];
-                // `TeleportPlayer` drops the player 1 unit clear of the mark.
-                ps.origin[2] = teleportTo[2] + 1;
-                ps.velocity[0] = 0;
-                ps.velocity[1] = 0;
-                ps.velocity[2] = 0;
-                player.setYaw(teleportYaw);
-                teleportTo = null;
-            }
-
-            if (hurtPending > 0) {
-                player.inventory.health -= hurtPending;
-                hurtPending = 0;
-            }
-
-            if (pushVelocity !== null) {
-                ps.velocity[0] = pushVelocity[0];
-                ps.velocity[1] = pushVelocity[1];
-                ps.velocity[2] = pushVelocity[2];
-                pushVelocity = null;
-            }
+            if (world.damage > 0) player.inventory.health -= world.damage;
 
             /*
              `ClientTimerActions` runs on a 1000 ms cadence, not per frame. Health
