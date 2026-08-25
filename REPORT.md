@@ -105,7 +105,8 @@ section is supposed to answer.
 
    - `PhysicsSystem` links `(RigidBody, Transform)`; attaching the *collider* is a separate
      `ColliderObserverSystem` the consumer must also register. Register only the first and every
-     body is real, present in the broadphase, and completely intangible — 537 static bodies and
+     body is real, present in the broadphase, and completely intangible — 537 static bodies at
+     the time it was measured, 529 in the current build — and
      `fraction === 1` for a sweep from a metre above a floor to 128 m below it, with nothing in
      the console (GAP-014).
    - `new Animation({ clips })` documents `List<AnimationClip>`, forwards to `fromJSON`, and

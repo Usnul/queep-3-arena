@@ -67,17 +67,6 @@ export class HeadlessPhysics {
      */
     private readonly queries: PhysicsTrace;
 
-
-
-    /** Scratch for `overlap_shape`; only the count is used. */
-
-
-    /** Entity id -> the brush it came from, for contact-plane selection. */
-
-
-    /** Packed body id -> the same, for `overlap_shape` results. */
-
-
     constructor(cm: ClipMap) {
         this.cm = cm;
         this.system = new PhysicsSystem();
