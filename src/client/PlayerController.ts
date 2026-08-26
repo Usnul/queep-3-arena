@@ -49,6 +49,7 @@ import {
     type MoverSource,
     type PhysicsTraceBackend,
 } from '../game/PmoveHost.ts';
+import { takePointerLock } from './pointerLock.ts';
 
 /*
  Re-exported because `main.ts` and `PhysicsWorld` both name it, and moving the
@@ -405,7 +406,7 @@ export class PlayerController {
     /** First click takes the pointer lock; every click after it fires. */
     private readonly onPointerDown = (): void => {
         if (document.pointerLockElement !== this.element) {
-            void this.element.requestPointerLock();
+            void takePointerLock(this.element);
         }
     };
 

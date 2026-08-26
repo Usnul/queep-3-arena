@@ -10,6 +10,27 @@ Format: **Q-nnn** — the question, the default in use, and what changes if the 
 
 ## Still open
 
+### Q-008 — Should the map converter emit a manifest, so the menu can list what is actually built?
+
+The menu is a shell over a list of pages and the next two pages are a map picker and a match
+setup screen (D-097). The match screen needs a gameplay decision and is not blocked on anything
+here; the map picker is blocked on one small pipeline fact.
+
+There is no list of built maps. `assets/built/` is gitignored, `convert-map.ts` converts whatever
+it is given on the command line, and what is in any particular checkout is whatever the person
+running the pipeline asked for. A picker needs to know what is there.
+
+**Default in use:** no map page. A hardcoded list of the six converted here would be wrong on
+anybody else's checkout, and a picker that offers a map the checkout does not have is worse than
+no picker.
+
+**If different:** `convert-map.ts` writes `assets/built/maps.json` — name, and whatever else is
+worth showing, which is probably the spawn count and the triangle count it already computes and
+logs. The menu fetches it and lists what is in it, falling back to no map page when the file is
+absent. Perhaps twenty lines each side. The reason it is a question rather than a decision is
+that it puts a new artefact in the pipeline's output contract, and `presentation.test.ts` and
+`ASSETS.md` both have opinions about what is in there.
+
 ### Q-007 — Is a renderer-settings hole in `GraphicsEngine3` something you can get fixed, or do I design around it permanently?
 
 Raised at the phase 8 boundary and the only thing in this document that is not already decided.
@@ -130,3 +151,9 @@ built on meep's `View` hierarchy as the brief requires.
 positions, same numbers, rendered with meep UI primitives and modern typography rather than Q3's
 bitmap font.
 **If different:** cheap to change at any point; it is presentation only.
+
+**Phase 9 note.** The menu answers the other half of this question the same way. It is a modern
+settings screen on meep's `View` hierarchy, not Q3's `ui/` — which was a full immediate-mode
+widget kit driving `trap_R_DrawStretchPic`, and is exactly the kind of 1999 constraint the brief
+says to throw away. What is kept from Q3 is the *content*: `cg_fov`, `cg_drawCrosshair` and
+`cg_crosshairHealth` are the settings and are named as such in the notes under each label.

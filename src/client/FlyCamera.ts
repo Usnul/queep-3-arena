@@ -16,6 +16,7 @@
  */
 
 import type { InputDevices, PointerMoveHandler } from './PlayerController.ts';
+import { takePointerLock } from './pointerLock.ts';
 
 interface TransformLike {
     position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number };
@@ -80,7 +81,7 @@ export class FlyCamera {
 
     private readonly onPointerDown = (): void => {
         if (document.pointerLockElement !== this.element) {
-            void this.element.requestPointerLock();
+            void takePointerLock(this.element);
         }
     };
 

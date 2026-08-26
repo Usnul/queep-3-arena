@@ -3637,3 +3637,196 @@ mean luminance back where the source had it (D-092's measurement was made withou
 uniform scale on the albedo is exactly what the fitted light absorbs, so every recovery figure in
 D-092 is unchanged by it -- which is the point: it is a change to how the map sits against this
 port's photometry, not a change to the decomposition.
+
+---
+
+## Phase 9 — the menu
+
+### D-096: Settings persist through meep's option model, and deliberately not through `engine.options`
+
+The engine has everything a settings screen needs for persistence and assembles it in an order
+that puts it out of reach. `Engine` owns an `OptionGroup` at `engine.options`; `Option`
+serialises to JSON; `OptionGroup.attachToStorage(key, storage)` loads on attach and saves on
+every write; `engine.storage` is an `IndexedDBStorage`. An application should have nothing to
+build and nothing to decide.
+
+What it has instead is `Engine.start()`, whose last statement is
+
+```js
+await this.options.attachToStorage('lazykitty.komrade.options', this.storage);
+```
+
+and `attachToStorage`, which binds the save hook by walking the options that exist at that
+moment and never walks again. `EngineHarness.bootstrap()` awaits `start()`. So every option an
+application adds is added after the walk: not loaded, not saved, and not reported. On a stock
+engine the walk binds **zero** hooks, because nothing in the engine puts anything in that group.
+
+So this port builds an `OptionGroup` of its own, populates it, and attaches it itself under
+`queep-3-arena.settings`. Same classes, same storage, right order. GAP-026 has the evidence.
+
+**Two things follow from using meep's `Option` rather than a plain map, and both are worth
+having.** `Option.write` is a wrapper that raises `on.written` after the real write returns, and
+`attachToStorage` hangs the save hook off exactly that signal — so `Settings` has two entry
+points rather than one. A value arriving *through* the option, which is how a loaded value
+arrives, is announced by the wrapper; a value arriving from the menu is announced by `Settings`
+explicitly. Collapsing the two would either save twice for one change or, in the arrangement
+that looks tidier, never save at all: a model that holds its own values and never tells the
+option works perfectly for a whole session and remembers nothing. That is the failure
+`settings.test.ts` exists to refuse.
+
+The second is `Option.settings`, which is dat.GUI's shape — `{min, max, values}`. The port fills
+it in properly even though it draws its own menu, because it is three lines and it means meep's
+own `OptionsView` renders these settings correctly if anybody ever wants the debug view.
+
+### D-097: The menu is a shell over a list of pages, and the pages are data
+
+The ask was a menu with graphics settings, and map switching and match setup "later on". The
+second half is a statement about shape rather than about scope, so the shape is what this
+decides.
+
+A page is a value: `{ id, title, settings, note }`, where a setting is one of three shapes —
+slider, toggle, choice — each carrying its own `apply` closure over whatever it configures.
+`Menu` takes the list and builds a page list, a content area, sections and rows from it. There
+is no page class, no subclassing, and nothing in `Menu.ts` that names "graphics".
+
+So a map picker is `mapsPage(...)` returning a `SettingsPage` whose one `choice` setting has the
+built maps as its options and an `apply` that loads one; a match screen is `matchPage(...)` with
+a bot count and a frag limit. Neither needs the shell to change. That claim is not left as an
+assertion: the shell was driven with a three-page settings model in the running application —
+Graphics, Maps, Match — and checked for exactly one visible page, the right nav item marked
+active, and a choice on the *Maps* page writing through to its `apply`.
+
+**What is not built, and why.** Map switching needs a list of built maps, and there is no
+manifest: `assets/built/` is gitignored, produced per map by `convert-map.ts` on demand, and its
+contents are whatever the person running the pipeline asked for. A hardcoded list of the six
+that happen to be converted here would be wrong on anybody else's checkout and would look like a
+feature. The honest version emits a manifest from the converter, and that is a pipeline change
+rather than a menu one — Q-008.
+
+Match setup needs the bot roster to be a runtime quantity, and it is currently derived: one bot
+per spawn point beyond the player's, capped by the roster (D-068's reasoning — "a map built for
+eight players gets seven opponents"). Making it a setting means deciding what overrides that,
+which is a gameplay decision and not a menu one.
+
+### D-098: One stylesheet with defines, and the HUD moved onto it
+
+There was no stylesheet. `index.html` carried four properties inline and `Hud.ts` carried the
+rest as a template literal appended to `<head>`, with a comment explaining that three rules did
+not justify a file. That was true and stopped being true the moment there was a second screen:
+the HUD and the menu have to agree about what "muted text" and "one step of space" mean, and two
+files cannot agree about a constant that lives inside one of them as a string.
+
+`sass` as a dev dependency, `src/style/`, and one entry point that `main.ts` imports.
+
+**Two layers from one source.** `_tokens.scss` holds the Sass variables — colour, type, space,
+shape, motion, stacking — and `emit-custom-properties()` writes the same values out as
+`--queep-*` custom properties. Sass variables are what arithmetic and `map.get` read and they
+vanish from the output; custom properties are what a subtree can override and what devtools can
+be poked at while the game runs. Writing the second from the first is what stops them drifting.
+
+**And a third consumer, which is the part that is not housekeeping.** meep's
+`view/layout/layout.scss` routes every colour and font through a `--meep-*` property with a dark
+fallback, explicitly so that "a host theme can re-skin the constructs by defining the tokens on
+an ancestor". `emit-meep-aliases()` is this port being that host theme. It currently emits eight
+declarations nothing reads, because the port mounts none of those constructs; it is eight lines
+against a documented contract, and the alternative is discovering the mismatch when a
+`TabbedView` is first mounted and renders in the editor's blue. The names and the *shapes* come
+from reading the file rather than from guessing — `--meep-font` is consumed as a `font:`
+shorthand, so a bare family list would be an invalid declaration and every construct would
+silently fall back to its default.
+
+**The HUD's sizes moved onto the scales, and a few of them shifted by a pixel or two.** 12px
+state text onto 11px `micro`, 6px and 10px margins onto the 4px grid, a 2px flex gap onto 4px.
+Deliberate: a scale with a hole punched in it for every value the HUD happened to have first is
+not a scale. Geometry — where the readouts sit, where the crosshair sits, what takes pointer
+events — is unchanged.
+
+**No viewport units, and that is not a style preference.** The menu is a child of meep's view
+stack, which is an absolutely positioned element the engine sizes from the window -- so `100vw`
+and the surface the UI is actually drawn on agree on a full-window game and nowhere else. The
+panel is `max-width: 100%` against a padded parent rather than `calc(100vw - 32px)`, and the
+compact layout is a **container query** on the menu's own width rather than a media query on the
+window's.
+
+The case that found it is a browser reporting `innerWidth: 0`, where `calc(100vw - 32px)` clamps
+to zero and the panel vanishes entirely rather than being merely wrong; the cases that matter are
+an embedded viewport and a split pane. It also made the breakpoint checkable -- the compact switch
+was verified at six view-stack widths in the running application, in an environment where the
+window itself has no width at all, which a media query would have made impossible to test.
+
+### D-099: What a graphics menu for this engine can contain, which is four things
+
+The page has a field of view, a render scale, adaptive resolution and its target, and four
+reticle-and-readout toggles. There is no anti-aliasing, no shadow quality, no ambient occlusion,
+no reflections and no quality preset, and that is not an omission.
+
+`GraphicsEngine3` is a deliberately narrow facade whose own docblock names what it will not hand
+out — `renderer` above all, at a cost it counts in callers. Shadow resolution, AA, GTAO, SSR and
+the indirect-lighting mode are all properties of a `Renderer` this application cannot reach.
+That wall is GAP-024, first hit when it cut the lighting half of phase 8, and this is the second
+thing it has now cost. The page says so in its own footer rather than looking thin for no stated
+reason.
+
+What is reachable is reachable properly:
+
+| setting | route | note |
+|---|---|---|
+| field of view | `Camera.fov` | the port's own component; `cg_fov`, default 90 |
+| render scale | `pixelRatio` + `updateSize()` | the `updateSize()` is GAP-027 |
+| adaptive resolution | `dynamic_resolution.enabled` | the engine explicitly invites this |
+| frame-rate target | `dynamic_resolution.target_frame_rate` | default moved from 30 to 60 |
+| frame-rate counter | the view `addFpsCounter` added | GAP-028 |
+| crosshair, health tint, speedometer | `Hud` | `cg_drawCrosshair`, `cg_crosshairHealth` |
+
+`dynamic_resolution` is the one the engine asks for by name: "exposed so that it can be turned
+off or re-targeted — a measurement that wants a fixed resolution, **or a settings screen that
+offers the choice**".
+
+**The frame-rate target defaults to 60 rather than the engine's 30.** `GraphicsEngine3` sets 30
+and says why: it is a floor-holder rather than a governor, and "the game's target is the game's
+decision (D39)". This is the game making it. A 30 Hz floor means the resolution controller sits
+still through the whole range where a Quake player can feel the difference, which is the wrong
+trade for this game and the right one for the engine's default.
+
+**The menu does not pause the game, and the scrim is translucent and unblurred.** Both follow
+from what the screen is for: a render-scale or field-of-view change is judged by what it does to
+the picture, so the picture has to still be there and still be sharp. A `backdrop-filter: blur()`
+was written and then removed for exactly that reason — it hides the aliasing the setting exists
+to trade against. It is also Q3's own behaviour; its menu never paused a deathmatch.
+
+### D-100: The menu takes the input while it is open, and hands it back on the way out
+
+meep's `PointerDevice` and `KeyboardDevice` listen on the view stack, which is the menu's own
+ancestor. Three consequences, all of which had to be handled and none of which are the engine
+doing anything wrong:
+
+- **A click on a slider is also a click on the game.** `PlayerController.onPointerDown` answers
+  any click by asking for the pointer lock back, which would shut the menu in the same frame it
+  opened. Every pointer and key event is stopped at the menu's root while it is open.
+- **Stopped, not flagged.** `PointerDevice` calls `preventDefault()` on `pointermove` and on
+  `wheel`. A cancelled `pointermove` is a range input that will not drag and a cancelled `wheel`
+  is a settings page that will not scroll, so the events have to not arrive rather than arrive
+  and be ignored.
+- **Escape is handled on `document`, in the capture phase.** Bubble would not work, because the
+  menu's own root is what stops key events from reaching anything above it — a bubble listener on
+  the document would open the menu and never close it.
+
+On the way out the focus goes back to the view stack unconditionally, because the controls inside
+the menu are focusable and closing while one has focus leaves focus on an element that has just
+become invisible: the browser moves it to `<body>`, and the game silently stops answering the
+keyboard.
+
+The pointer lock goes back only when the gesture that closed the menu was a pointer one.
+`requestPointerLock` needs a transient user activation and Escape does not grant one — the
+specification excludes it, being the key that ends things — so asking after an Escape is a
+guaranteed rejection and a console error to go with it. `Menu.close` therefore carries a cause,
+and the application asks only when the answer will be yes. Closing with Escape leaves the HUD
+saying "click to play", which is what it has always said.
+
+**A related pre-existing defect, fixed while in the area.** Both older call sites wrote `void
+this.element.requestPointerLock()`. `void` discards the value and does nothing about the
+rejection, so every refused lock was an unhandled promise rejection in the console — which is how
+this was noticed at all. All three now go through `takePointerLock`, which also normalises the
+return type: the method is specified to return a promise and older engines return `undefined`,
+so `.catch` cannot be called on the result directly.
+

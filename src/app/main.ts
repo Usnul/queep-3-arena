@@ -52,9 +52,15 @@ import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
 import { CROSSHAIR_DEFAULT, Hud } from '../client/Hud.ts';
+import { NUM_CROSSHAIRS } from '../client/crosshair.ts';
 import { ViewWeapon } from '../client/ViewWeapon.ts';
 import { Arena } from '../client/Arena.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
+import { takePointerLock } from '../client/pointerLock.ts';
+import { Menu } from '../client/ui/Menu.ts';
+import { Settings, type SettingsStorage } from '../client/ui/Settings.ts';
+import { graphicsPage } from '../client/ui/graphics.ts';
+import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
@@ -66,14 +72,27 @@ function requestedMap(): string {
  *
  * Defaults to Q3's own default, which is a dot rather than the cross most
  * people picture. All ten convert, so disagreeing with id about that is a
- * query parameter rather than a rebuild.
+ * query parameter rather than a rebuild -- or, now, the menu.
+ *
+ * `null` for "not asked for", which is what lets the parameter beat the stored
+ * setting without a stored setting having to lose to an absent parameter.
  */
-function requestedCrosshair(): number {
+function requestedCrosshair(): number | null {
     const raw = new URLSearchParams(window.location.search).get('crosshair');
-    if (raw === null) return CROSSHAIR_DEFAULT;
+    if (raw === null) return null;
 
     const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed : CROSSHAIR_DEFAULT;
+
+    /*
+     Out of range is "not asked for" rather than something to clamp, so that the
+     parameter and the menu's own setting agree about what a legal answer is.
+     Clamping here and rejecting there is what produced the one visible symptom
+     worth avoiding: `?crosshair=-3` drew crosshair A for a frame, because the
+     HUD clamped it, and then jumped to E, because the setting refused it.
+    */
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed >= NUM_CROSSHAIRS) return null;
+
+    return parsed;
 }
 
 /** `?fly=1` swaps the player for a noclip camera, for inspecting conversions. */
@@ -234,7 +253,13 @@ async function main(): Promise<void> {
     */
     graphics.set_environment_map(make_default_environment());
 
-    EngineHarness.addFpsCounter(engine);
+    /*
+     `addFpsCounter` returns nothing, so the panel it adds cannot be turned off
+     by anyone who did not build it themselves. `addFrameRateCounter` calls it
+     and takes the child it appended, which is what the menu's toggle writes to.
+     GAP-028.
+    */
+    const frameRateCounter = addFrameRateCounter(engine);
 
     /*
      The element that owns input.
@@ -332,8 +357,92 @@ async function main(): Promise<void> {
     if (!ecd.isComponentTypeRegistered(SoundListener)) ecd.registerComponentType(SoundListener);
     cameraEntity.add(transform).add(camera).add(new SoundListener()).build(ecd);
 
-    const hud = new Hud({ crosshair: requestedCrosshair() });
+    const crosshair = requestedCrosshair();
+
+    const hud = new Hud({ crosshair: crosshair ?? CROSSHAIR_DEFAULT });
     hud.link(engine.viewStack);
+
+    /* ---- the menu ---- */
+
+    /*
+     Built here, before the fly/play branch, because both branches want it: the
+     noclip camera is the tool the conversions are inspected with and a field of
+     view and a render scale are exactly what that inspection wants to change.
+
+     `camera` and not `graphics.camera.camera` this time -- unlike the view
+     weapon (D-081), this writes a value that `CameraSystem3` copies forward
+     rather than reads a pose it has already copied.
+    */
+    const settings = new Settings([
+        graphicsPage({ graphics, camera, hud, frameRateCounter }),
+    ]);
+
+    settings.applyAll();
+
+    const menu = new Menu({
+        settings,
+        onOpened: () => {
+            // The pointer belongs to the menu now. `PlayerController` and
+            // `FlyCamera` both stop on their own when the lock goes, because
+            // both already treat losing it as "the player is not playing".
+            if (document.pointerLockElement !== null) document.exitPointerLock();
+        },
+        onClosed: (cause) => {
+            /*
+             Focus first, and unconditionally. The keyboard device listens on
+             the view stack, and closing the menu while a slider had focus
+             leaves focus on an element that has just become invisible -- the
+             browser moves it to `<body>` and the game stops answering keys.
+            */
+            input.focus();
+
+            /*
+             Then the pointer, but only when the gesture that closed the menu
+             was one the browser counts as a user activation. Escape is not one,
+             so asking after an Escape is a guaranteed rejection and a console
+             error to go with it; the player clicks to resume instead, which is
+             what the HUD has always told them to do.
+            */
+            if (cause === 'pointer') {
+                // Refused is normal and not an error -- the HUD's "click to
+                // play" is what covers it. See `takePointerLock`.
+                void takePointerLock(input);
+            }
+        },
+    });
+
+    menu.link(engine.viewStack);
+
+    /*
+     Storage last, and not awaited. It is an IndexedDB round trip, every setting
+     it carries is applied live, and the alternative is a game that does not
+     start because a browser in private mode would not open a database.
+
+     The query parameter is re-applied afterwards so that it beats the stored
+     value: `?crosshair=7` is someone saying what they want now, and a setting
+     saved three sessions ago is not.
+    */
+    /*
+     The cast is meep's declaration being wrong in the way that compiles.
+     `Engine.d.ts` says `storage: Storage` and imports nothing called `Storage`,
+     so TypeScript resolves it to the **DOM**'s `Storage` -- the type of
+     `localStorage`. `engine.storage.getItem('x')` therefore typechecks and
+     throws at runtime, and the real API (`load`, `store`, `list`, `remove`) is
+     invisible. GAP-029.
+    */
+    const storage = engine.storage as unknown as SettingsStorage;
+
+    void settings
+        .attach(storage)
+        .then(() => {
+            if (crosshair !== null) settings.set('crosshair', crosshair);
+        })
+        .catch((e: unknown) => {
+            // `attach` swallows its own storage failures, so anything arriving
+            // here is a bug in the line above rather than a browser refusing to
+            // open a database -- and an unhandled rejection at startup is silent.
+            console.error('[queep] settings failed to load', e);
+        });
 
     if (flyMode()) {
         transform.position.set(
@@ -354,7 +463,7 @@ async function main(): Promise<void> {
             });
         });
 
-        expose(engine, { loaded, clipMap, fly, audio, mapSound });
+        expose(engine, { loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera });
     } else {
         const clipmapOnly = useClipmapTrace();
 
@@ -844,7 +953,7 @@ async function main(): Promise<void> {
         expose(engine, {
             loaded, clipMap, player, arena, physicsWorld, items, models,
             movers, moversView, characters, audio, mapSound, graph, botRuntime,
-            viewWeapon,
+            viewWeapon, hud, menu, settings, camera,
         });
     }
 

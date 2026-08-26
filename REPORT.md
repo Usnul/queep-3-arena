@@ -1874,6 +1874,62 @@ That is an accurate description of a component that cannot be used for its state
 
 **A second, smaller finding from the same read.** SSR and Brick4 are alternatives rather than a stack: `Renderer.js:768` runs the SSR pass only when the indirect mode is *not* Brick4, with a comment calling it a known limitation. The plan for this phase had them as successive improvements — enable SSR cheaply, then bake brick4 for the real gain — and that is not the shape they have. Worth knowing before designing around it.
 
+### GAP-025: the UI kit has no slider, and a settings screen is mostly sliders
+
+- **Needed:** a bounded numeric control -- a field of view between 60 and 130 in steps of 1, a render scale between 0.5 and 2 in steps of 0.05. The two most common controls on any graphics menu ever shipped.
+- **meep offers:** `CheckboxView`, `DropDownSelectionView`, `ColorPickerView`, `ConfirmationDialogView`, a progress bar and a radial menu -- and no bounded numeric input at all. `view/elements/` has no range, slider, spinner or stepper, and neither does `view/common/`. The nearest thing in the package is `dat.GUI`, which `OptionsView` wraps and which does have one; it is a peer dependency for exactly that reason.
+- **Workaround:** built one out of `EmptyView` and an `<input type="range">`, 40 lines including the two-way binding and the readout beside it (`src/client/ui/controls.ts`). Straightforward, because that is precisely what `CheckboxView` does with `<input type="checkbox">` -- 30 lines wrapping an input and binding an `ObservedBoolean`. The observation is that the same 30 lines for the *other* input type is not in the package.
+- **Severity:** papercut
+- **Suggested fix:** `SliderView({ value, min, max, step })` binding a `Vector1`, alongside `CheckboxView`. The engine already has `BoundedValue` -- a value with an upper limit, which `LabelView` has a formatter for -- so the model half exists and has no view.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/view/elements/`, `src/view/elements/CheckboxView.js`, `src/client/ui/controls.ts`
+
+### GAP-026: `engine.options` is attached to storage before an application can put anything in it, and additions afterwards are silently transient
+
+- **Needed:** persist a handful of graphics settings across reloads.
+- **meep offers:** exactly the right machinery. `Engine` owns an `OptionGroup` at `engine.options`, `Option` serialises to JSON, `OptionGroup.attachToStorage(key, storage)` loads on attach and saves on every write, and `engine.storage` is an `IndexedDBStorage`. An application should have nothing to build.
+- **The problem is one line of ordering.** `Engine.start()` ends with `await this.options.attachToStorage('lazykitty.komrade.options', this.storage)` (`Engine.js:630`), and `attachToStorage` binds the save hook by walking the options that exist *at that moment*:
+
+  ```js
+  return p.then(loaded => { ... group.fromJSON(JSON.parse(loaded)); })
+          .finally(() => { group.traverseOptions(op => op.on.written.add(store)); });
+  ```
+
+  It never walks again. `EngineHarness.bootstrap()` awaits `start()`, so **every** option an application adds is added after that walk: it is not loaded, its writes are not saved, and nothing anywhere reports it. The root group is empty when the walk runs -- nothing in the engine populates it -- so on a stock engine the walk binds zero hooks and the feature is inert by construction.
+- **Workaround:** an `OptionGroup` of the port's own, populated first and attached second, under the port's own key (`src/client/ui/Settings.ts`). Same machinery, same storage, right order. Ten minutes once the cause was found; the finding itself was a test that set a value, reloaded, and got the default back.
+- **Severity:** major. A silent no-op on the engine's own persistence API, on the only path an application can take to it.
+- **Suggested fix:** either bind the hook on `addChild` rather than by traversal, or expose the attach so an application can call it after populating -- or both, since the second is the fix for load ordering and the first is the fix for late additions. A one-line assertion that the group is non-empty at attach time would have turned this from a silent failure into a startup warning.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/Engine.js:241,630`, `src/engine/options/OptionGroup.js:attachToStorage`, `src/client/ui/Settings.ts`, `test/settings.test.ts`
+
+### GAP-027: `pixelRatio` has an `onChanged` signal and nothing subscribed to it
+
+- **Needed:** a render-scale setting -- write `graphics.pixelRatio` and have the picture change.
+- **meep offers:** `GraphicsEngine3.pixelRatio` is a public `Vector1`, and `updateSize()` reads it (`const pixel_ratio = this.pixelRatio.getValue()`) to size the drawing buffer. A `Vector1` raises `onChanged` on every write.
+- **The gap:** the constructor binds `this.viewport.size.onChanged.add(this.updateSize, this)` and nothing binds `pixelRatio.onChanged`. So writing the ratio changes nothing until the window happens to be resized, which on a full-screen game is never. The first symptom is a setting that appears to do nothing and then works perfectly the moment the window is dragged.
+- **Workaround:** call `graphics.updateSize()` after writing the ratio. One line, and covered by a test so it cannot be dropped by a later tidy-up.
+- **Severity:** papercut
+- **Suggested fix:** one more `bindSignal` beside the one that is already there. Both quantities feed the same computation and only one of them is live.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/graphics3/GraphicsEngine3.js:209,227,691-693`, `src/client/ui/graphics.ts`, `test/settings.test.ts`
+
+### GAP-028: `EngineHarness.addFpsCounter` returns nothing, so the panel it adds cannot be turned off
+
+- **Needed:** a "frame-rate counter" toggle in the menu, which is `cg_drawFPS` and is on every graphics menu.
+- **meep offers:** `addFpsCounter(engine)` -- it builds a `Stats`, subscribes it to `postRender`, wraps `stats.domElement` in an `EmptyView` and adds it to the view stack. All four steps are right and all four are private to the function: it returns `undefined`, and neither the view nor the `Stats` is reachable afterwards.
+- **Workaround:** read `viewStack.children.length` before the call and take the child that appeared, checking that exactly one did (`src/client/ui/frameRateCounter.ts`). It works and it is obviously a workaround; if the helper ever adds two views the port turns the setting off rather than guessing.
+- **Severity:** papercut
+- **Suggested fix:** `return view`. One word.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/EngineHarness.js:132-147`, `src/client/ui/frameRateCounter.ts`
+
+### GAP-029: `Engine.storage` is typed as the browser's `Storage`, which is a different class with a different API
+
+- **Needed:** call `engine.storage.load(key, resolve, reject)`.
+- **meep offers:** an `IndexedDBStorage extends Storage`, where `Storage` is meep's own `engine/save/Storage.js` -- `load`, `store`, `list`, `remove`, `contains`, and the binary and promise variants. That is what is there at runtime.
+- **The gap:** `Engine.d.ts` declares `storage: Storage` and imports nothing called `Storage`, so TypeScript resolves it to the **DOM lib's** `Storage` -- the type of `localStorage`. This is the failure mode of GAP-001 that does not announce itself: the name resolves, to a real and completely different interface. `engine.storage.getItem('x')` typechecks and throws at runtime; `engine.storage.load(...)` is a compile error against a method that exists.
+- **Workaround:** a structural interface for the two methods used, and one cast at the call site with a comment saying why.
+- **Severity:** minor, and worth separating from GAP-001's 544 unresolved names because those *fail*. This one succeeds, wrongly.
+- **Suggested fix:** the missing import. More generally: a generator check that flags a JSDoc type name which resolves to a global rather than to something in the file, since that is the subset of GAP-001 that cannot be caught by compiling the declarations.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/Engine.d.ts:92-94`, `src/engine/save/Storage.d.ts`, `src/app/main.ts`
+
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.
@@ -2026,6 +2082,43 @@ Observations that are not gaps — the facility exists and works — but cost ti
   stated anywhere the person packing an ORM would look. This port writes R at 1.0 and lets GTAO
   own occlusion, which is what the engine is set up for, but the decision had to be reconstructed
   from the shader source rather than read.
+- **`View.visible` writes `display: none`, so a view cannot be animated in or out.** It is the
+  obvious property to reach for when a screen is shown and hidden, and it is the one thing a
+  fade cannot be built on: `display` is not an animatable property, and a view that sets it is
+  invisible for the whole of any transition on anything else. The port's menu therefore does not
+  use `visible` for its own root — it toggles a class and moves `visibility` and `opacity` — while
+  using `visible` for the individual pages inside it, where an instant switch is what is wanted.
+  Having both mechanisms in one screen is not confusing so much as it is a thing that has to be
+  explained in a comment. `View` could offer the second: a `fade` flag, or simply documenting
+  that `visible` is the instant one.
+- **The engine's `attachToStorage` and the engine's `options` were built for each other and
+  cannot be used together.** Filed as GAP-026 because the consequence is a silent no-op, but the
+  ergonomic half is worth stating separately: everything an application needs for settings
+  persistence is present, correct, and assembled in an order that means an application cannot
+  reach it. Three separate readings of `OptionGroup.js` were needed before the `finally` was the
+  thing that mattered.
+- **`Option.fromJSON` is `this.write(json)`, with no validation of any kind.** That is a
+  reasonable primitive, but it means the *only* thing standing between whatever is in persistent
+  storage and the engine is the application's own `write`. A field of view of `1e9`, a `null` left
+  by an older build, a boolean where a number belongs: all of them arrive. Worth a sentence in the
+  docblock, because the failure is delayed to the next load and lands on a user's machine rather
+  than a developer's. The port's `coerce` is where this is stopped, and it is the most-tested
+  function in the menu for that reason.
+- **`OptionsView` is the only shipped view for the options model, and it is `dat.GUI`.** It
+  needs a `Localization` for its labels, re-reads `system_option.<path>` keys on every locale
+  change, and has to clear inline styles on `requestAnimationFrame` for as long as it is linked
+  because "DAT.GUI sets styles directly on the element internally" — its own comment. That is an
+  entirely sensible debug view and it is not a thing a game can put in front of a player. The
+  model layer underneath it (`Option`, `OptionGroup`) is good and is what this port used; the
+  gap is that the only worked example of using it is the one that cannot ship.
+- **`frameThrottle` makes `LabelView` text unverifiable in a hidden tab, which is where automated
+  checks run.** Every `LabelView` update goes through `requestAnimationFrame`, so in a
+  backgrounded tab the model moves and the DOM does not, indefinitely — the pending flag is set
+  before the frame is requested and only cleared when it runs. Correct for a game and a real
+  cost for a headless check: the port verified label bindings by calling `updateTransform()`
+  directly and reading the model, having first spent time on a "the readout does not update" that
+  was the harness. Related to D-077, and the same lesson.
+
 
 ## 5. Performance
 
@@ -2524,9 +2617,26 @@ where the emitted type contradicts working code rather than merely failing to re
   `<T extends AbstractShape3D>(other: T) => boolean`. Every concrete shape narrows it to
   `(other: BoxShape3D) => boolean`, which is not assignable to the generic form — so *no concrete
   shape is assignable to the field that exists to hold one*. Filed as GAP-013.
+- **`CheckboxView`**, found while building the menu, and the worst of the three because it is
+  wrong in the direction that still compiles. The implementation is
+  `constructor({ value, invert = false })`. The emitted declaration is
+  `constructor(_: ObservedBoolean)` — the generator took the JSDoc's `@param {ObservedBoolean}
+  value` for the whole parameter — so the call the class supports is *rejected* and a call that
+  destructures to `{ value: undefined }` and throws is *accepted*:
 
-Both are corrected in this port with narrow local types rather than `any`, per the brief:
-`src/client/Hud.ts` and `src/client/PhysicsWorld.ts`.
+  ```ts
+  new CheckboxView({ value: model });  // TS2345: rejected. Works at runtime.
+  new CheckboxView(model);             // accepted. Throws at runtime.
+  ```
+
+  `EmptyView`, `ButtonView` and `DropDownSelectionView` have the same fault with less
+  consequence — the bag is typed as one of its own fields, so correct calls are rejected but the
+  wrong call does not typecheck either. `EmptyView.group`, two lines below the constructor with
+  the same shape, is typed correctly, because its options bag has an `@param` of its own. That is
+  the whole difference, and it is a difference in how the JSDoc was formatted.
+
+All of these are corrected in this port with narrow local types rather than `any`, per the brief:
+`src/client/ui/meep.ts` and `src/client/PhysicsWorld.ts`.
 
 ### BUG-6 (fixed in 3.2.0): `ShadeMaterial.draw_side`'s docblock described a limitation that no longer existed
 

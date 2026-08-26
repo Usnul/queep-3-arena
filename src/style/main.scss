@@ -22,6 +22,7 @@
 @use 'tokens' as *;
 
 @use 'hud';
+@use 'menu';
 
 :root {
     @include emit-custom-properties;
@@ -34,14 +35,18 @@
 // describes a 722px panel and `$menu-nav-width: 168px` a 193px column. A token
 // that has to be read with its own padding subtracted is not a token.
 //
-// Scoped to this port's own UI roots rather than declared on `*`, because the
+// Scoped to this port's two UI roots rather than declared on `*`, because the
 // document also holds meep's own views -- the view stack, the game view, the
 // `stats.js` panel -- and a global reset is this port silently changing the
 // layout model underneath somebody else's CSS.
 .queep-hud-root,
 .queep-hud-root *,
 .queep-hud-root *::before,
-.queep-hud-root *::after {
+.queep-hud-root *::after,
+.queep-menu,
+.queep-menu *,
+.queep-menu *::before,
+.queep-menu *::after {
     box-sizing: border-box;
 }
 

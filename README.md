@@ -57,8 +57,35 @@ Then re-run the converters. What each channel is worth, and why two of the four 
 are thrown away and replaced by a hand table, is D-092 and D-093.
 
 Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
-to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon. Input runs on meep's
-own `engine.devices` rather than DOM listeners — see GAP-017 for why that is not optional.
+to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon, **escape for the
+menu**. Input runs on meep's own `engine.devices` rather than DOM listeners — see GAP-017 for why
+that is not optional.
+
+### The menu
+
+Escape opens it, escape or the scrim closes it. The game keeps running behind it and the scrim is
+translucent and unblurred on purpose: a render-scale or field-of-view change is judged by what it
+does to the picture, so the picture has to still be there (D-099). Settings are saved to
+IndexedDB and applied on the next load.
+
+| setting | what it writes |
+|---|---|
+| Field of view | `Camera.fov`; `cg_fov`, 60–130, default 90 |
+| Render scale | `graphics.pixelRatio`, 50–200%. Below 100% upscales, above supersamples |
+| Adaptive resolution | meep's `DynamicResolutionScaling`, which trades internal resolution for frame time |
+| Frame-rate target | what it aims to hold. Default 60, against the engine's own 30 |
+| Frame-rate counter | the `stats.js` panel |
+| Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]` |
+| Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
+| Speedometer | the port's own readout, off for screenshots |
+
+There is no anti-aliasing, shadow, ambient-occlusion or reflection setting, because those are all
+properties of a `Renderer` that `GraphicsEngine3` deliberately does not expose to an application.
+That is GAP-024, and the menu says so in its own footer rather than looking thin for no reason.
+
+A map picker and a match setup screen are the next two pages. The shell takes a list of pages and
+nothing in it names "graphics"; what is missing for maps is a manifest of what the pipeline has
+actually built (D-097, Q-008).
 
 | query parameter | effect |
 |---|---|
@@ -67,7 +94,7 @@ own `engine.devices` rather than DOM listeners — see GAP-017 for why that is n
 | `?move=q3` | runs the ported `bg_pmove.c` whole -- slide-move, ground trace and all -- instead of Q3's motor on meep's `KinematicMover` |
 | `?trace=clipmap` | runs collision on the ported `cm_trace` instead of meep's physics, for an A/B; implies `?move=q3` |
 | `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
-| `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Defaults to id's own 4, which is a dot |
+| `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Beats the saved setting for the session; out of range is ignored rather than clamped |
 
 ## Verification
 
@@ -159,6 +186,17 @@ what that difference is, and includes a claim I got wrong twice before getting i
   authored, bobbing on `CG_CalculateWeaponPosition`'s sway. What it does not have is the two
   render flags Q3 leans on — `RF_DEPTHHACK`, so the gun clips into a wall you press against, and
   `RF_MINLIGHT`, so a dark room gets a dark gun (D-080).
+
+- **The menu**, on meep's `View` hierarchy over meep's own `Option` model, with the settings
+  saved to IndexedDB. Escape opens it, the game keeps running behind it, and it is a shell over a
+  list of pages rather than a screen — a map picker and a match setup screen go in beside
+  Graphics without the shell changing (D-097). What is on the graphics page is bounded by what
+  the engine hands an application: everything behind `Renderer` is unreachable, which is GAP-024
+  for the second time.
+- **A stylesheet with defines.** `src/style/_tokens.scss` is the single source for colour, type,
+  space, shape, motion and stacking; it emits the same values as `--queep-*` custom properties
+  for runtime overrides, and feeds meep's own `--meep-*` theme hooks from the same variables
+  (D-098).
 
 Every one of those has an edge it does not reach, and each is written down rather than left to
 be discovered: see [DECISIONS.md](DECISIONS.md) D-041, D-045 and D-055 for what movers,

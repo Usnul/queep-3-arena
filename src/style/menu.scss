@@ -1,0 +1,540 @@
+// menu.scss -- the in-game menu and the settings rows inside it.
+//
+// Copyright (C) 2026 queep-3-arena contributors
+//
+// This program is free software; you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation; either version 2 of the License, or (at your option) any later
+// version. See LICENSE.
+//
+// ---
+//
+// Three things this file has to get right, none of them decorative:
+//
+//   - **The arena stays visible.** Every setting on the graphics page is judged
+//     against what it does to the picture, so the scrim is translucent and the
+//     panel is a panel rather than a full screen.
+//   - **Open and closed are a class, not `display`.** meep's `View.visible`
+//     writes `display: none`, which cannot be transitioned from; the menu uses
+//     `.is-open` and moves `visibility`/`opacity` instead, and takes pointer
+//     events only while it is open.
+//   - **The controls line up.** Every control in a row is `$control-width`
+//     wide, so the page reads as two columns rather than as a ragged edge.
+
+@use 'tokens' as *;
+@use 'mixins' as *;
+
+/* ------------------------------------------------------------------ *
+ * Shell
+ * ------------------------------------------------------------------ */
+
+.queep-menu {
+    position: absolute;
+    inset: 0;
+    z-index: $z-menu;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: $menu-inset;
+
+    // The measure the compact layout at the bottom of this file switches on. Its
+    // own width, because that is what decides whether a row fits -- a media
+    // query would ask the window, which is a different quantity whenever the
+    // game is not the whole of one.
+    container: queep-menu / inline-size;
+
+    font-family: $font-ui;
+    color: $color-text;
+    line-height: $line-height-body;
+
+    // Closed. `visibility` rather than `display` so the panel can fade, and
+    // `pointer-events: none` so a closed menu cannot swallow a click meant for
+    // the game -- the root covers the whole viewport either way.
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+
+    @include motion-safe {
+        // Opacity fades. `visibility` does not interpolate, so it is switched at
+        // one end of the fade or the other, and the default -- giving it the
+        // same duration -- switches it at the halfway mark: you see the second
+        // half of a fade in and the first half of a fade out. Zero duration with
+        // the fade's delay on the way out (stay visible until the fade is done)
+        // and no delay on the way in (be visible before it starts) is the whole
+        // fix, and it also means the menu is never invisible while it is open,
+        // however the transition itself is doing.
+        transition: opacity $duration-fast $easing-standard,
+            visibility 0s linear $duration-fast;
+    }
+
+    &.is-open {
+        visibility: visible;
+        opacity: 1;
+        pointer-events: auto;
+
+        @include motion-safe {
+            transition: opacity $duration-fast $easing-standard, visibility 0s linear 0s;
+        }
+    }
+}
+
+// Dims the arena a little and gives "click outside to resume" something to be a
+// click on. Kept translucent on purpose -- see the file header.
+//
+// Deliberately *not* a `backdrop-filter: blur()`, which is the obvious thing to
+// put here and is wrong on this particular screen: the arena around the panel is
+// what a render-scale or a field-of-view change is being judged by, and blurring
+// it hides exactly the aliasing the setting is there to trade against.
+.queep-menu__scrim {
+    position: absolute;
+    inset: 0;
+    background: $scrim;
+}
+
+.queep-menu__panel {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+
+    /*
+     `100%`, and not `100vw`/`vh`.
+
+     The menu is a child of meep's view stack, which is an absolutely positioned
+     element the engine sizes from the window -- so on a full-window game the two
+     agree, and everywhere else they do not. Sizing against the parent means the
+     panel is bounded by the surface it is actually drawn on: an embedded
+     viewport, a split editor pane, or -- the case that found this -- a browser
+     window reporting `innerWidth` of 0, where `calc(100vw - 32px)` clamps to
+     zero and the panel disappears rather than merely being wrong.
+
+     The inset comes from the parent's padding for the same reason: a margin here
+     would be added to `max-width: 100%` and overflow it.
+    */
+    width: $menu-width;
+    max-width: 100%;
+    max-height: 100%;
+
+    @include panel;
+
+    // Focused when the menu opens, so the first Tab lands on a control inside it
+    // rather than walking the document. It is a container and not a control, so
+    // it takes the focus without drawing a ring for it.
+    &:focus {
+        outline: none;
+    }
+
+    @include motion-safe {
+        transform: translateY(space(2));
+        transition: transform $duration-fast $easing-standard;
+
+        .queep-menu.is-open & {
+            transform: translateY(0);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * Header and footer
+ * ------------------------------------------------------------------ */
+
+.queep-menu__header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: space(4);
+
+    padding: space(4) space(5);
+    border-bottom: $border-width solid $color-border;
+}
+
+.queep-menu__title {
+    font-size: font-size('title');
+    font-weight: $font-weight-bold;
+    letter-spacing: $letter-spacing-wide;
+    text-transform: uppercase;
+    line-height: $line-height-tight;
+    color: $color-accent;
+}
+
+.queep-menu__hint {
+    font-size: font-size('small');
+    color: $color-text-muted;
+    font-family: $font-mono;
+}
+
+.queep-menu__footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: space(2);
+
+    padding: space(3) space(5);
+    border-top: $border-width solid $color-border;
+}
+
+/* ------------------------------------------------------------------ *
+ * Body: page list on the left, page on the right
+ * ------------------------------------------------------------------ */
+
+.queep-menu__body {
+    display: flex;
+    min-height: 0; // so the page below can scroll instead of stretching the panel
+    flex: 1 1 auto;
+}
+
+.queep-menu__nav {
+    flex: 0 0 $menu-nav-width;
+    display: flex;
+    flex-direction: column;
+    gap: space(1);
+
+    padding: space(3);
+    border-right: $border-width solid $color-border;
+    overflow-y: auto;
+}
+
+.queep-menu__nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+
+    padding: space(2) space(3);
+    border: $border-width solid transparent;
+    border-radius: $radius-medium;
+    background: transparent;
+
+    font-family: inherit;
+    font-size: font-size('body');
+    color: $color-text-muted;
+
+    @include interactive;
+
+    &:hover {
+        background: $color-surface-raised;
+        color: $color-text;
+    }
+
+    &.is-active {
+        background: $color-accent-dim;
+        border-color: $color-accent;
+        color: $color-text;
+    }
+}
+
+.queep-menu__page {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: space(4) space(5) space(5);
+    overflow-y: auto;
+}
+
+/* ------------------------------------------------------------------ *
+ * Sections and rows
+ * ------------------------------------------------------------------ */
+
+.queep-menu__section + .queep-menu__section {
+    margin-top: space(5);
+}
+
+.queep-menu__section-title {
+    @include section-heading;
+    padding-bottom: space(2);
+    border-bottom: $border-width solid $color-border;
+}
+
+.queep-menu__note {
+    font-size: font-size('small');
+    color: $color-text-muted;
+    margin-top: space(3);
+}
+
+.queep-setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: space(4);
+
+    padding: space(3) space(2);
+    border-radius: $radius-medium;
+
+    & + & {
+        border-top: $border-width solid $color-border;
+    }
+
+    &:hover {
+        background: $color-surface-raised;
+    }
+
+    // A setting whose value cannot currently do anything -- a frame-rate target
+    // with adaptive resolution switched off. Shown rather than hidden, because a
+    // control that vanishes reads as a bug and one that greys out explains
+    // itself.
+    &.is-inert {
+        opacity: 0.45;
+    }
+}
+
+.queep-setting__text {
+    min-width: 0;
+}
+
+.queep-setting__label {
+    font-size: font-size('body');
+    color: $color-text;
+}
+
+.queep-setting__note {
+    font-size: font-size('small');
+    color: $color-text-muted;
+    margin-top: space(1);
+}
+
+.queep-setting__control {
+    flex: 0 0 $control-width;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: space(3);
+}
+
+/* ------------------------------------------------------------------ *
+ * Controls
+ * ------------------------------------------------------------------ */
+
+// The value beside a slider. Monospaced and fixed-width so that dragging from
+// "60" to "100" does not move the slider under the pointer.
+.queep-control__value {
+    flex: 0 0 auto;
+    min-width: 5ch;
+    text-align: right;
+
+    font-family: $font-mono;
+    font-size: font-size('small');
+    color: $color-text-muted;
+    font-variant-numeric: tabular-nums;
+}
+
+.queep-control__slider {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: $control-height;
+    margin: 0;
+
+    appearance: none;
+    background: transparent;
+
+    @include interactive;
+
+    &::-webkit-slider-runnable-track {
+        height: $slider-track-height;
+        border-radius: $radius-pill;
+        background: $color-surface-raised;
+        border: $border-width solid $color-border;
+    }
+
+    &::-moz-range-track {
+        height: $slider-track-height;
+        border-radius: $radius-pill;
+        background: $color-surface-raised;
+        border: $border-width solid $color-border;
+    }
+
+    &::-webkit-slider-thumb {
+        appearance: none;
+        width: $slider-thumb-size;
+        height: $slider-thumb-size;
+        border-radius: $radius-pill;
+        background: $color-accent;
+        border: none;
+        // Centre the thumb on the track: half the thumb, less half the track and
+        // its border.
+        margin-top: calc((#{$slider-track-height} + #{$border-width} * 2 - #{$slider-thumb-size}) / 2);
+    }
+
+    &::-moz-range-thumb {
+        width: $slider-thumb-size;
+        height: $slider-thumb-size;
+        border-radius: $radius-pill;
+        background: $color-accent;
+        border: none;
+    }
+
+    &:hover::-webkit-slider-thumb {
+        background: $color-accent-bright;
+    }
+
+    &:hover::-moz-range-thumb {
+        background: $color-accent-bright;
+    }
+}
+
+// `CheckboxView` renders a bare `<input type="checkbox">`, so the switch is
+// drawn here rather than composed: the track is the input, the knob is its
+// `::before`.
+.queep-control__toggle {
+    flex: 0 0 auto;
+    position: relative;
+    width: 44px;
+    height: 24px;
+    margin: 0;
+
+    appearance: none;
+    border-radius: $radius-pill;
+    border: $border-width solid $color-border;
+    background: $color-surface-raised;
+
+    @include interactive;
+
+    &::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: $radius-pill;
+        background: $color-text-faint;
+        transform: translateY(-50%);
+
+        @include motion-safe {
+            transition: transform $duration-instant $easing-standard,
+                background-color $duration-instant $easing-standard;
+        }
+    }
+
+    &:checked {
+        background: $color-accent-dim;
+        border-color: $color-accent;
+    }
+
+    &:checked::before {
+        background: $color-accent;
+        transform: translate(20px, -50%);
+    }
+}
+
+// `DropDownSelectionView` renders a `<select>`.
+.queep-control__select {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: $control-height;
+    padding: 0 space(2);
+
+    border-radius: $radius-medium;
+    border: $border-width solid $color-border;
+    background: $color-surface-raised;
+    color: $color-text;
+
+    font-family: inherit;
+    font-size: font-size('small');
+
+    @include interactive;
+
+    &:hover {
+        border-color: $color-border-strong;
+    }
+
+    // The popup is drawn by the platform, which does not inherit the panel's
+    // colours; stating them keeps a dark menu from opening a white list.
+    option {
+        background: $color-surface;
+        color: $color-text;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * Buttons
+ * ------------------------------------------------------------------ */
+
+.queep-button {
+    padding: space(2) space(4);
+
+    border-radius: $radius-medium;
+    border: $border-width solid $color-border;
+    background: $color-surface-raised;
+    color: $color-text;
+
+    font-family: inherit;
+    font-size: font-size('small');
+    font-weight: $font-weight-medium;
+
+    @include interactive;
+
+    &:hover {
+        border-color: $color-border-strong;
+        background: $color-border;
+    }
+
+    &.queep-button--primary {
+        background: $color-accent-dim;
+        border-color: $color-accent;
+
+        &:hover {
+            background: $color-accent;
+            color: $color-void;
+        }
+    }
+}
+
+// `ButtonView` wraps its label in `.foreground` / `.background` siblings that
+// are never styled here; they are absolutely positioned by nothing and would
+// otherwise take up a line of their own inside the button.
+.ui-button-view > .foreground,
+.ui-button-view > .background {
+    display: none;
+}
+
+/* ------------------------------------------------------------------ *
+ * Narrow windows
+ * ------------------------------------------------------------------ */
+
+// A row is a label beside a fixed-width control, and the page it sits in is the
+// panel less the page list. Below `$breakpoint-compact` those two stop adding
+// up: the control keeps its width, the label is squeezed to nothing, and the
+// page scrolls sideways.
+//
+// So below it the two rules that assume width are dropped. The page list goes
+// across the top instead of down the side, and each setting puts its control
+// under its label. Nothing is hidden and nothing shrinks below its usable size.
+//
+// A **container** query, not a media query. The question is whether the menu has
+// room, and the menu's width is the view stack's -- which is the window's on a
+// full-window game and is not the window's in an embedded viewport, a split
+// editor pane, or a window whose `innerWidth` reads zero. Asking the element
+// that has to fit is both more correct and, unlike `vw`, checkable without a
+// real window to check in.
+@container queep-menu (max-width: #{$breakpoint-compact}) {
+    .queep-menu__body {
+        flex-direction: column;
+    }
+
+    .queep-menu__nav {
+        flex: 0 0 auto;
+        flex-direction: row;
+        overflow-x: auto;
+
+        border-right: none;
+        border-bottom: $border-width solid $color-border;
+    }
+
+    .queep-menu__nav-item {
+        width: auto;
+        white-space: nowrap;
+    }
+
+    .queep-menu__page {
+        padding: space(4);
+    }
+
+    .queep-setting {
+        flex-direction: column;
+        align-items: stretch;
+        gap: space(2);
+    }
+
+    .queep-setting__control {
+        flex: 0 0 auto;
+        justify-content: space-between;
+    }
+}
