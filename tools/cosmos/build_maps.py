@@ -302,7 +302,7 @@ def main() -> None:
         # fake reflection, a powerup shell, a glyph on black -- so there is no
         # painted shading in it to take out and de-lighting it means nothing. The
         # table already refuses it a normal map for the same reason; refusing it a
-        # replacement albedo is the same statement about the same sixteen images,
+        # replacement albedo is the same statement about the same twelve images,
         # and it leaves `writeTexture` binding the artwork unchanged.
         #
         if job["effect"]:

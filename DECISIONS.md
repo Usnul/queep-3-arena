@@ -3539,51 +3539,78 @@ is "necessary for Brick4 lighting and not sufficient for it", because the settin
 renderer read it is on the other side of a boundary the facade holds for good reasons. Both halves
 were designed carefully. The seam between them is where this stopped.
 
-### D-095: The set, generated -- 183 images, 136 normal maps, and 35 refusals with reasons
+### D-095: The set, generated -- 183 images, 133 normal maps, and 38 refusals with reasons
 
-537 network passes over **183 unique images**, about ninety minutes on the 4090, then assembly.
+> **Re-measured 2026-08-26.** The set this decision originally described was destroyed with the
+> rest of `assets/` (D-104) and regenerated from scratch. Every number below is the *regenerated*
+> set. The generator is seeded (`--seed 1000`) and the deterministic half reproduced exactly --
+> 183 images, 171 normals asked for, 537 passes, 204 materials sharing 183 textures, and the whole
+> ORM story -- but the diffusion half did not. The differences are called out inline as
+> "previously N", and the reasons they moved are in the last section. What the phase *claims* is
+> unchanged; several of the numbers it claims it with are not.
+
+537 network passes over **183 unique images**, two and a half hours on the 4090, then assembly.
 The count is 183 rather than 204 because the classification is per material and the maps are per
 image: 21 materials share a texture with another.
 
 **What shipped:**
 
-| | |
-|---|---:|
-| images | 183 |
-| de-lit albedos | 171 |
-| normal maps kept | **130** of 171 asked for |
-| ORMs | 183 |
-
-Read out of the live engine on `oa_dm1` with items spawned: **59 materials, 34 with a normal map,
-41 with an ORM**, `roughness_factor` 1.0 on those 41 and 0.85 on the 18 without, `metallic_factor`
-1.0 and 0. Against the sentence this phase started from -- 93 of 93 at roughness 0.85, metallic 0,
-no ORM and no normal map -- that is the placeholder gone from every surface the table had something
-to say about.
-
-The ORM says what it was told to say. R is 1.00 everywhere; G is the table's level with the
-network's variation around it (`blocks10` 0.829 +/- 0.098 against a table level of 0.85, `pewter`
-0.352 +/- 0.144 against 0.35); B is 0.00 or 1.00 and nothing between.
-
-**35 normal maps were refused, and the reasons are the interesting part.**
-
-| reason | count | what it means |
+| | | |
 |---|---:|---|
-| seam | 17 | wraps visibly worse than the source does |
-| flat | 15 | nothing left once the lean was removed; see below |
-| refused by the table | 12 | effect artwork; see D-093 |
-| inverted | 5 | mean tilt over 90 degrees; the average texel faces *into* the surface |
-| implausible relief | 4 | mean tilt 45 to 90 degrees -- not inverted, just not a surface |
+| images | 183 | same |
+| de-lit albedos | 171 | same |
+| normal maps kept | **133** of 171 asked for | previously 130 |
+| ORMs | 183 | same |
 
-The five inversions include `acc_dm3/rivets` at 126 degrees, which is the failure the pilot found by
-hand on eight textures. Finding four more of it in 171 is the check earning its place: one in
-thirty-four, invisible in a thumbnail, and it would have lit every rivet from the wrong side.
+Read out of the live engine on `oa_dm1` with items spawned: **59 materials, 31 with a normal map,
+41 with an ORM** (previously 34 with a normal map; the other two are unchanged), `roughness_factor`
+1.0 on those 41 and 0.85 on the 18 without, `metallic_factor` 1.0 and 0. Against the sentence this
+phase started from -- 93 of 93 at roughness 0.85, metallic 0, no ORM and no normal map -- that is
+the placeholder gone from every surface the table had something to say about.
+
+That `oa_dm1` moved *down* by three while the set as a whole moved *up* by three is not a
+contradiction: the maps that changed status are not the same maps. On `oa_dm1` the ten materials
+that have an ORM and no normal are refused for reasons the report names --
+`base_light/xlight5` and `gothic_trim/baseboard10_f` on seams, `clown/light_base` and
+`weapons2/grenadel/newgren` as flat, `base_trim/dirty_pewter` inverted at 179.1 degrees, and the
+four env-mapped pickups plus `armor/shard` which the table refuses outright.
+
+The ORM says what it was told to say, and this is the part of the phase that re-inferred *without*
+moving. R is 1.00 on all 183; G is the table's level with the network's variation around it
+(`blocks10` 0.833 +/- 0.102 against a table level of 0.85, `pewter` 0.352 +/- 0.143 against 0.35 --
+previously 0.829 +/- 0.098 and 0.352 +/- 0.144); B is 0.00 or 1.00 across the whole set and nothing
+between. That the ORM is stable while the normal maps are not is exactly what the design predicts:
+G takes only the *shape* of the network's roughness, centred on its own mean and scaled by the
+table's `variation`, so a different draw has to disagree about the texture's internal contrast
+before it can move the number. The normal map takes the network's answer directly.
+
+**38 normal maps were refused, and the reasons are the interesting part.** The table below is the
+whole 183: the first four rows are the 38 refusals out of the 171 asked for, and the last row is
+the 12 the table never asked about.
+
+| reason | count | previously | what it means |
+|---|---:|---:|---|
+| seam | 15 | 17 | wraps visibly worse than the source does |
+| flat | 14 | 15 | nothing left once the lean was removed; see below |
+| inverted | 5 | 5 | mean tilt over 90 degrees; the average texel faces *into* the surface |
+| implausible relief | 4 | 4 | mean tilt 45 to 90 degrees -- not inverted, just not a surface |
+| refused by the table | 12 | 12 | effect artwork; see D-093 -- never asked for, so not one of the 38 |
+
+The five inversions include `acc_dm3/rivets` at **172.4 degrees** (previously 126), which is the
+failure the pilot found by hand on eight textures. Finding four more of it in 171 is the check
+earning its place: one in thirty-four, invisible in a thumbnail, and it would have lit every rivet
+from the wrong side. That the count is five both times while the angle moved by forty-six degrees
+is the shape of this whole re-measurement: the model disagrees with itself about *how* wrong a map
+is, and agrees about *which* maps are wrong.
 
 **The systematic error nobody was looking for: every normal map leaned.**
 
-Across the 171 the network produced, the X channel means average 0.4945 and the Y channel means
-average **0.5417** -- 49 maps past 0.55 in Y against 16 in X. That is a whole-map tilt of about five
-degrees on average and much more on some: `gothic_floor/q1metal7_99stair` came back at 0.813, a
-forty-degree average lean across a flat stair tread.
+Across the 171 the network produced, the X channel means average 0.5003 and the Y channel means
+average **0.5566** -- 71 maps past 0.55 in Y against 31 in X. That is a whole-map tilt of about six
+degrees on average and much more on some: `gothic_floor/q1metal7_99stair` came back leaning 22.9
+degrees across a flat stair tread. (Previously 0.4945 and 0.5417, 49 in Y against 16 in X, and that
+stair at forty degrees. The lean got *worse* on re-inference, which is the one direction that makes
+the correction below matter more rather than less.)
 
 It is the model's own prior showing through, and it is not really its fault. It estimates normals
 for photographs of scenes, where surfaces genuinely do tilt away from the camera -- and a photograph
@@ -3596,26 +3623,39 @@ flat. So the DC is removed from the two tangent components before anything else 
 median 9.1 degrees taken out, mean 12.8, 22 maps over 20 degrees, one at 70.
 
 It is done *before* the tilt test rather than after, and that reshuffles the refusals rather than
-just reducing them. Eleven maps that would have been thrown out as implausible relief were a
-plausible map with a large offset on it, and came back. Fifteen turned out to be *nothing but* the
-offset -- mean tilt under one degree once centred -- and are now refused as flat, correctly: they
-were carrying a lean and no relief at all. Net 130 rather than 136, and the 130 are centred to
-within 0.003 on both channels.
+just reducing them. Measured on the regenerated set by running the tilt test both ways: **8** maps
+that would have been thrown out as implausible relief were a plausible map with a large offset on
+it, and came back (previously 11). **14** turned out to be *nothing but* the offset -- mean tilt
+under one degree once centred -- and are now refused as flat, correctly: they were carrying a lean
+and no relief at all (previously 15). On the tilt test alone that is 153 maps before centring and
+148 after; the seam test then takes it to the 133 that shipped.
+
+The centring is not as tight as it was, and the reason is worth keeping. Subtracting the DC makes
+the mean exactly zero, but the renormalise-and-encode after it does not preserve that, and a map
+with strong relief clips against 0 and 1. The 133 come out with a **median deviation of 0.0016**
+and 88 of them within 0.003 -- but 22 are past 0.01 and `evil8_trim/e8basictrim_blue` is at 0.116.
+D-095 previously claimed all 130 within 0.003 on both channels, which is not true of this set and,
+given the mechanism, was probably a happier draw rather than a property of the method.
 
 **Two mistakes in the checks themselves, both caught by running them.**
 
 *The seam rule was wrong before it was right.* It refused any map whose seam was more than four
-units worse than its source -- and refused `textures/sfx/metalfloor_wall_14b` at a seam of **-0.1**,
-which is edges *closer* than ordinary interior neighbours and no line to see at all, because its
-source scores -5.5. Comparing only against the source punishes a texture for having been unusually
-continuous to begin with. The rule now needs the seam to be both visible in absolute terms and
-worse than the source, and six units separates the two framings the pilot measured with room on
-both sides. Six maps came back.
+units worse than its source -- and refused `textures/sfx/metalfloor_wall_14b` at a seam of **-1.5**
+(previously -0.1), which is edges *closer* than ordinary interior neighbours and no line to see at
+all, because its source scores -5.5. That source figure is measured off the extracted texture
+rather than off the network, so it is the one number in this section that came back identical, and
+it is why the example still holds: the map is still well under the 6-unit visibility floor and
+still more than 4 worse than its unusually continuous source. Comparing only against the source
+punishes a texture for having been unusually continuous to begin with. The rule now needs the seam
+to be both visible in absolute terms and worse than the source, and six units separates the two
+framings the pilot measured with room on both sides. Six maps came back.
 
 *"Inverted" was doing two jobs.* Fifteen of the nineteen original refusals were between 45 and 90
 degrees, which is not inversion -- it is a normal map describing relief no painted wall has. Both
 are refused and the report now says which, because a claim in a report should be the claim that was
-tested.
+tested. (That 15-of-19 was measured on the destroyed set and is left as the history it is. The same
+split on the regenerated set, taken before centring so it is the same question, is **13 of 18**:
+still the large majority, still not inversion.)
 
 **Two things that only showed up once the maps existed, both in the pipeline rather than the maps.**
 
@@ -3637,6 +3677,34 @@ mean luminance back where the source had it (D-092's measurement was made withou
 uniform scale on the albedo is exactly what the fitted light absorbs, so every recovery figure in
 D-092 is unchanged by it -- which is the point: it is a change to how the map sits against this
 port's photometry, not a change to the decomposition.
+
+**What the forced re-run proved: `--seed 1000` does not make this reproducible, and the checks are
+why that is survivable.**
+
+Regenerating the whole set after D-104 was not planned, and it answered a question this phase had
+only assumed the answer to. The seed is fixed, the manifest is byte-identical, the model and its
+weights never moved, and the second run still produced a *different set of maps*. Not wildly
+different -- 133 kept against 130, with the categories of refusal holding to within two -- but
+different map by map, and on individual textures the disagreement is large: `acc_dm3/rivets`
+inverted at 126 degrees one run and 172.4 the next, `q1metal7_99stair` leaning forty degrees one
+run and 22.9 the next. Anything downstream that pinned an exact per-image number to this pipeline
+was pinning it to a draw.
+
+The useful part is *which* numbers held. Everything decided by the table, the manifest or the
+extracted art came back identical -- 183 images, 171 asked, 12 refused by the table, 204 materials
+over 183 textures, 537 passes, R and B in every ORM, and `metalfloor_wall_14b`'s source seam of
+-5.5 to the decimal. Everything decided by the network moved. The ORM sits in between and barely
+moved, because it only ever takes the network's *shape*.
+
+So the refusal checks are not a filter that happens to run after inference; they are what makes an
+unreproducible generator usable at all. The categories are stable to within two out of 171 across
+two independent draws, which is the sense in which this pipeline can be said to work: not that it
+produces a particular normal map, but that it recognises the same *kinds* of failure whichever map
+it is handed. A pipeline whose output is a draw needs its acceptance test to be the reproducible
+part, and here it is.
+
+Practically, for whoever regenerates this next: do not expect these counts, expect these
+categories, and re-measure rather than re-cite. ASSETS.md's rebuild table now says so too.
 
 ---
 

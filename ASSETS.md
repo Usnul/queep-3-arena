@@ -114,8 +114,18 @@ and most of it is not cheap to make again:
 | `assets/download/` | `fetch-assets.mjs` | a 425 MB fetch, and it assumes the upstream mirror is still serving 0.8.8 |
 | `assets/extracted/` | `extract-pk3.mjs` | minutes, from `download/` |
 | `assets/built/` | `convert-map.ts` × 6 maps, then `convert-fx.ts` and `npm run assets` | tens of minutes, and `convert-sounds` has to run again after the maps |
-| `assets/generated/` | `material-maps.ts`, `inverse_render.py`, `build_maps.py` | **about ninety minutes on an NVIDIA GPU.** Seeded (`--seed 1000`), so a re-run should land in the same place — but it is a diffusion model, and the set D-095's counts and the report's per-channel verdicts were measured against is the one that was on disk |
+| `assets/generated/` | `material-maps.ts`, `inverse_render.py`, `build_maps.py` | **about two and a half hours on an NVIDIA 4090.** Seeded (`--seed 1000`) and *still not reproducible*: regenerating it after the D-104 deletion, from a byte-identical manifest and unmoved weights, gave 133 normal maps where the first run gave 130, and moved individual textures a long way (`acc_dm3/rivets` 126° → 172.4°). Expect D-095's **categories**, not its counts, and re-measure rather than re-cite |
 | `assets/ml/` | `fetch-material-model.mjs`, then a venv rebuild | a 31 GB model download |
+
+**`built/` and `generated/` are rebuilt interleaved, not in that order.** The two rows above read
+as a sequence and are not one: `material-maps.ts` takes its scope from `inScopeNames`, which reads
+the material names out of the *built bundles*, so it cannot be the first thing a rebuild runs. From
+nothing on disk it goes converters → `material-maps.ts` → `inverse_render.py` → `build_maps.py` →
+**converters again**. The first pass exists only to name the materials; with `generated/materials/`
+still empty it writes exactly the pre-material-phase bundles, which is why it is safe to run twice.
+The second pass is the one that binds the maps. Skipping the first pass does not fail — it writes a
+manifest of zero images and every later step then succeeds at doing nothing, which is why
+`material-maps.ts` now refuses an empty scope instead of writing that manifest.
 
 So: **no tool, script or cleanup step may run a recursive delete that can reach `assets/`** — and
 that includes deletes aimed somewhere else that reach it through a symlink or a Windows junction,

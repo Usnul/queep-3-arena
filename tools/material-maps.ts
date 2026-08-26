@@ -174,6 +174,34 @@ function main(): void {
         return;
     }
 
+    //
+    // The scope comes from the *built bundles* -- `inScopeNames` reads what the
+    // converters wrote under `assets/built` -- so with no bundles on disk there
+    // is nothing to ask for and this writes an empty manifest. That is not an
+    // empty answer, it is the question never having been asked: the generator
+    // then has no work, `build_maps.py` writes no maps, and the converters run
+    // again quite happily and produce exactly the pre-material-phase bundles.
+    // Every step reports success and the material phase is silently gone.
+    //
+    // `--check` has always refused this (it exits on `scoped.size === 0`). The
+    // write path did not, which is the asymmetry that made it a trap rather
+    // than an error, and it is how a rebuild after the D-104 deletion first
+    // went: `material-maps.ts` before the converters, "0 images", exit 0.
+    //
+    if (jobs.length === 0) {
+        console.error(
+            'no images in scope, so there is nothing to generate maps for.\n' +
+            'The scope is read out of the built bundles under assets/built, which means the\n' +
+            'converters have to have run at least once before this does:\n' +
+            '  node tools/convert-map.ts oa_dm1 aggressor oa_dm4 oa_dm5 oa_dm7 am_thornish\n' +
+            '  node tools/convert-fx.ts && npm run assets\n' +
+            'With assets/generated/materials empty those write the pre-material-phase bundles\n' +
+            '(ASSETS.md says so); run this again afterwards, then the generator, then convert\n' +
+            'a second time so the maps reach the bundles.'
+        );
+        process.exit(1);
+    }
+
     mkdirSync(GENERATED, { recursive: true });
     const out = join(GENERATED, 'manifest.json');
     writeFileSync(out, `${JSON.stringify({ jobs }, null, 2)}\n`, 'utf8');
