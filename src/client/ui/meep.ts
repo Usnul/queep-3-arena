@@ -10,7 +10,7 @@
  *
  * ---
  *
- * Five of meep's view classes take a destructured options bag, and the generated
+ * Six of meep's view classes take a destructured options bag, and the generated
  * `.d.ts` gets the type of that bag wrong for every one of them. The failures
  * are all the same shape -- the declaration generator read the JSDoc's several
  * `@param` tags as several parameters, and typed the single real one as the
@@ -32,6 +32,9 @@
  *                            rejected and a bare `ObservedBoolean` is accepted
  *                            -- the one case where the wrong type also compiles
  *                            the wrong call.
+ *   SegmentedResourceBarView `constructor({values, max, classList})` emits as
+ *                            `constructor(_: (Vector1|ObservedInteger)[])`, the
+ *                            type of `values` alone.
  *
  * Per the brief, these are corrected with narrow local types rather than papered
  * over with `any`: each class keeps its real signature at every call site, the
@@ -48,6 +51,8 @@ import LabelViewImpl from '@woosh/meep-engine/src/view/common/LabelView.js';
 import ButtonViewImpl from '@woosh/meep-engine/src/view/elements/button/ButtonView.js';
 import { CheckboxView as CheckboxViewImpl } from '@woosh/meep-engine/src/view/elements/CheckboxView.js';
 import DropDownSelectionViewImpl from '@woosh/meep-engine/src/view/elements/DropDownSelectionView.js';
+import { SegmentedResourceBarView as SegmentedResourceBarViewImpl }
+    from '@woosh/meep-engine/src/view/elements/progress/segmented/SegmentedResourceBarView.js';
 
 export type { View };
 
@@ -83,7 +88,7 @@ export interface ButtonViewOptions {
  *
  * `View.el` is declared `Element | NodeDescription | null`, which is honest --
  * a view built from a description has not made an element yet -- and useless to
- * a caller that has just constructed one of these five and knows it has. The
+ * a caller that has just constructed one of these six and knows it has. The
  * per-class element types below are the ones each class's own `.d.ts` states.
  */
 export type ViewWithElement<T extends Element> = View & { el: T };
@@ -91,6 +96,38 @@ export type ViewWithElement<T extends Element> = View & { el: T };
 type EmptyViewCtor = new (options?: EmptyViewOptions) => ViewWithElement<HTMLElement>;
 type LabelViewCtor = new (model: unknown, options?: LabelViewOptions) => ViewWithElement<HTMLElement>;
 type ButtonViewCtor = new (options: ButtonViewOptions) => ViewWithElement<HTMLElement>;
+
+/**
+ * A number with a change signal: `Vector1`, `ObservedInteger`, a `Stat`.
+ *
+ * Structural rather than a union of the classes, because that is all any of the
+ * views below actually require of one -- `getValue()` for the number and
+ * `onChanged` to `bindSignal` against -- and naming the classes would drag their
+ * generated declarations in behind them.
+ */
+export interface ObservedNumber {
+    getValue(): number;
+    readonly onChanged: unknown;
+}
+
+/**
+ * `SegmentedResourceBarView`: a fill, a ghost behind it, and notches over it.
+ *
+ * `values` is an array because the bar can stack several into one track; the
+ * ghost is their total, which is what makes a drop visible after the fill has
+ * already moved. `max` is where the track is full, and it also decides the notch
+ * spacing -- `RESOURCE_BAR_SEGMENTS` picks the largest of 2/10/40/200/1000 that
+ * fits, so the notches are a *quantity* rather than a percentage.
+ *
+ * It ships no stylesheet: the element and its four children (`.fill-container`,
+ * `.ghost`, `.notch-overlay`, `.highlights`) have classes and no rules anywhere
+ * in the engine, so the port's own `hud.scss` is what makes it a bar at all.
+ */
+type SegmentedResourceBarCtor = new (options: {
+    values: ObservedNumber[];
+    max?: ObservedNumber;
+    classList?: string[];
+}) => ViewWithElement<HTMLDivElement>;
 
 /** `CheckboxView` binds an `ObservedBoolean`; `invert` flips the sense of it. */
 type CheckboxViewCtor = new (options: {
@@ -126,3 +163,5 @@ export const LabelView = LabelViewImpl as unknown as LabelViewCtor;
 export const ButtonView = ButtonViewImpl as unknown as ButtonViewCtor;
 export const CheckboxView = CheckboxViewImpl as unknown as CheckboxViewCtor;
 export const DropDownSelectionView = DropDownSelectionViewImpl as unknown as DropDownCtor;
+export const SegmentedResourceBarView =
+    SegmentedResourceBarViewImpl as unknown as SegmentedResourceBarCtor;

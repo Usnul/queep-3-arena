@@ -269,7 +269,7 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
         {
             kind: 'choice',
             id: 'crosshair',
-            section: 'Reticle and readouts',
+            section: 'Reticle',
             label: 'Crosshair',
             note: "cg_drawCrosshair. id's default, E, is a dot rather than a cross.",
             initial: CROSSHAIR_DEFAULT,
@@ -286,22 +286,13 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
         {
             kind: 'toggle',
             id: 'crosshair-health',
-            section: 'Reticle and readouts',
+            section: 'Reticle',
             label: 'Colour crosshair by health',
             note: 'cg_crosshairHealth, which Q3 defaults on.',
             initial: true,
             apply: (v) => {
                 hud.crosshairHealth = v;
             },
-        },
-        {
-            kind: 'toggle',
-            id: 'speedometer',
-            section: 'Reticle and readouts',
-            label: 'Speedometer',
-            note: 'Units per second, and the peak it decays from.',
-            initial: true,
-            apply: (v) => hud.setSpeedometerVisible(v),
         },
     ];
 

@@ -25,6 +25,58 @@
     text-shadow: $shadow-text;
 }
 
+/// One corner of the HUD, turned toward the player.
+///
+/// `$edge` is which side of the screen the cluster is pinned to, and everything
+/// else follows from it, because the two halves are one shape mirrored:
+///
+///   - **The turn is about the inner edge.** `transform-origin` goes on the side
+///     facing the middle of the screen, so that edge stays put and the outer one
+///     swings forward. Turning about the centre instead pushes the inner half
+///     *away*, and a readout that recedes toward the crosshair is the opposite
+///     of a wrap.
+///   - **The sign flips with the side.** A positive `rotateY` brings negative x
+///     forward, so the left cluster -- whose outer end is at negative x from its
+///     own right-hand origin -- takes the positive angle and the right cluster
+///     the negative one. Both outer ends end up nearer the player, which is the
+///     whole effect.
+///   - **The shear goes the same way.** `skewY` displaces y by `x·tan(a)`, so
+///     the same sign that brings the outer end forward also lifts it.
+///   - **The whole thing is pushed back first.** `translateZ` is written last
+///     and therefore applies last, in the parent's space, so it moves both ends
+///     of the turned cluster equally: the near end lands on the screen plane
+///     instead of in front of it, and nothing can be magnified off the edge of
+///     the window. `$hud-wrap-depth` is where the arithmetic is.
+///
+/// The perspective itself is deliberately *not* here. It belongs to the parent
+/// both clusters sit in, so that they share one vanishing point and read as two
+/// ends of one curved surface; a `perspective()` inside each transform would
+/// give each its own eye and they would not agree.
+@mixin hud-wrap($edge) {
+    $sign: -1;
+    $inner: left;
+    $outer: right;
+
+    @if $edge == 'left' {
+        $sign: 1;
+        $inner: right;
+        $outer: left;
+    } @else if $edge != 'right' {
+        @error 'hud-wrap takes "left" or "right"; got "#{$edge}"';
+    }
+
+    transform-origin: $inner center;
+    transform: translateZ(-$hud-wrap-depth) rotateY($sign * $hud-wrap-angle)
+        skewY($sign * $hud-wrap-shear);
+
+    // The ground the turn is read against. A HUD over an arena has no edges of
+    // its own, so a surface that is nearer at one end has nothing to show for
+    // it; this darkens toward the outer end, which is the shading a curve away
+    // from the light would have and is also what keeps a white number legible
+    // over a lit wall.
+    background: linear-gradient(to $outer, transparent, rgba($color-void, 0.55));
+}
+
 /// A floating surface: the menu panel, and anything else that sits in front of
 /// the game rather than in it.
 @mixin panel {

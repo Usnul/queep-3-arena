@@ -3776,7 +3776,7 @@ What is reachable is reachable properly:
 | adaptive resolution | `dynamic_resolution.enabled` | the engine explicitly invites this |
 | frame-rate target | `dynamic_resolution.target_frame_rate` | default moved from 30 to 60 |
 | frame-rate counter | the view `addFpsCounter` added | GAP-028 |
-| crosshair, health tint, speedometer | `Hud` | `cg_drawCrosshair`, `cg_crosshairHealth` |
+| crosshair, health tint | `Hud` | `cg_drawCrosshair`, `cg_crosshairHealth` |
 
 `dynamic_resolution` is the one the engine asks for by name: "exposed so that it can be turned
 off or re-targeted — a measurement that wants a fixed resolution, **or a settings screen that
@@ -3904,3 +3904,68 @@ take the rest of the page down, which means a setting that throws is a log line 
 test failure. The test therefore watches `console.error` inside the loop, so that what a failure
 reads out is `x must be an integer, instead was 863.5` rather than whatever went stale
 downstream of it.
+
+### D-102: The status bar is three bars in two turned corners, and the speedometer is gone
+
+Q3's status bar is health, armour and ammo, drawn as three numbers along the bottom of the
+screen. This port's was a speedometer, a peak-speed line and one run-on line of text — which was
+the right HUD for the phase that built it, when the open question was whether strafe jumping
+worked and there was no inventory behind the numbers to draw (Q-004). The state exists now, so
+the readout is the one the game actually has.
+
+**The three resources are `SegmentedResourceBarView`, which meep ships and does not style.** The
+view builds a fill, a ghost, a notch canvas and a highlight list, gives each a class, and there
+is no rule for any of them anywhere in the engine — so `hud.scss` is not decorating the
+component, it is the whole of its appearance. Two of its details are worth having and are why it
+was worth using over a `<progress>`:
+
+- **The notches are a quantity, not a percentage.** `RESOURCE_BAR_SEGMENTS` picks the largest of
+  2/10/40/200/1000 that fits the maximum, so a bar full at 200 is notched every 40 and a bar full
+  at 10 is notched every 2. Health and armour share one maximum and therefore one notch spacing,
+  which is what makes "80 health and 120 armour" a thing you see rather than read.
+- **The ghost is the trailing edge.** It is sized to the total and painted behind the fill, so
+  with a transition on its width the fill drops instantly on a hit and the ghost follows it down.
+  The eye catches that where it misses two digits changing.
+
+**Where full is, for ammo, is per weapon, and it is the one number the game never states.** Q3
+draws ammo as a count and has no bar, so nothing in the source says what a full rocket launcher
+is. `MAX_AMMO` is the obvious answer and is wrong in play: it is 200 for everything, so a rocket
+launcher holding every rocket on the map would draw at 5% and read as empty. `ammoFull` takes the
+largest amount Q3 itself hands the player at once — the weapon pickup's load, a box of its
+ammunition, or the spawn loadout, which is the largest only for the machinegun — so a full
+rocket launcher is 10 and notched every 2. Going red is Q3's own arithmetic and not a threshold
+chosen here: `CG_CheckAmmo` prices a round of the heavy weapons at 1000 and everything else at
+200 and warns below 5000, which is five rockets and twenty-five bullets.
+
+**The two corners are turned toward the player, and one number keeps them on the screen.** One
+`perspective` on the row both clusters sit in, so they share a vanishing point and read as two
+ends of one curved surface rather than two tilted panels; each cluster then turns about its
+*inner* edge, so the outer end swings forward. That last part is what makes it a wrap and is also
+what nearly broke it: a near edge is magnified, magnification is about the vanishing point, and
+so the outer end is thrown away from the middle of the screen by an amount that grows with how
+far from the middle it already is. The bottom-left corner cleared the window at 1280 and hung 51px
+off it at 1920. No inset can fix that, because the overflow scales with the screen width and the
+inset does not.
+
+`$hud-wrap-depth` fixes it: push the cluster back by at least the depth its own turn will lift it
+through, and every corner of it sits at or behind the screen plane where the projection can only
+shrink it. Nothing overflows at any width — measured at 1280, 1920, 2560 and 3440 — and the
+turn is untouched, because what the eye reads is the *difference* in depth across the cluster and
+subtracting a constant from both ends leaves that alone.
+
+**What the corners cost is width, and below 1100px they give some back.** Two clusters and their
+insets are about 660px before anything is left for what sits between them, and the line of
+controls in the middle wraps to three lines at 1024 and eight at 800. A container query — on the
+HUD's own root, for the same reason the menu's is on its own panel: meep's view stack is not
+always the whole window — takes the bars from 224px to 160px and the numbers one step down the
+scale. Nothing moves and nothing is dropped.
+
+**The weapon icon is Q3's `iconw_*`, and neither side of it holds a list.** `convert-fx.ts` reads
+the icon field of every `IT_WEAPON` row in `balance.generated.json` and writes the leaf of the
+path; `statusBar.ts` slices the same field of the same file to build the URL. A weapon added to
+the table is converted and drawn without either file being edited, which is the same rule the
+trap matrix is under (D-066): a duplicated list is a list that goes stale.
+
+**The gauntlet draws no bar.** `ammo > -1` is the test `CG_DrawStatusBar` guards its whole ammo
+readout with, and a negative count is the absence of a count rather than a small one. The icon
+stays: what is in your hands is worth showing whether or not it consumes anything.

@@ -620,7 +620,6 @@ export class PlayerController {
         orientToQ3Angles(ps.viewangles, t.rotation);
     }
 
-    /** Horizontal speed in Q3 units per second, for the debug readout. */
     /**
      * The player's current bounding box, in Q3 units relative to `ps.origin`.
      *
@@ -641,6 +640,7 @@ export class PlayerController {
         this.yaw = Math.round((degrees * 65536) / 360) & 65535;
     }
 
+    /** Horizontal speed in Q3 units per second. Scales the view weapon's sway. */
     get speed(): number {
         return Math.hypot(this.ps.velocity[0]!, this.ps.velocity[1]!);
     }

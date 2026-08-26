@@ -1,5 +1,5 @@
 /*
- * Hud.ts -- speed and state readout, built on meep's UI.
+ * Hud.ts -- the status readout, built on meep's UI.
  *
  * Copyright (C) 2026 queep-3-arena contributors
  *
@@ -10,10 +10,22 @@
  *
  * ---
  *
- * A speedometer, not decoration. Strafe jumping is invisible without one: the
- * player's base speed is 320 units/s and a good jump chain reaches 500+, and
- * "does the movement port work" is a question you answer by watching that number
- * climb. Q3's own HUD has no speed readout; every movement-focused mod adds one.
+ * Q3's status bar is health, armour and ammo, and this is those three -- as
+ * meep's `SegmentedResourceBarView` rather than as numbers alone, because a bar
+ * with notches answers "how much is left" in the glance a fight allows and three
+ * digits do not.
+ *
+ * **The two ends of the screen wrap toward the player.** Health and armour sit
+ * together in the bottom-left corner, ammo and the weapon's own icon in the
+ * bottom-right, and each cluster is turned about its inner edge under a shared
+ * perspective so the outer edge comes forward -- the inside of a visor rather
+ * than a sticker on the glass. It is one `perspective` and two `rotateY`s
+ * sharing a vanishing point, which is the whole of why it reads as one curved
+ * surface instead of two tilted panels; `_mixins.scss` holds it.
+ *
+ * **There is no speedometer.** There was, and it was a movement diagnostic from
+ * the phase where the question was whether strafe jumping worked. It is not part
+ * of the game and it is not on the screen any more.
  *
  * The crosshair *is* Q3's, artwork and rules alike: `gfx/2d/crosshair[a-j]` at
  * `cg_crosshairSize`, tinted by `CG_GetColorForHealth` because
@@ -28,17 +40,25 @@
 import ObservedString from '@woosh/meep-engine/src/core/model/ObservedString.js';
 
 import { EmptyView, LabelView, type View, type ViewWithElement } from './ui/meep.ts';
+import { Gauge } from './ui/Gauge.ts';
 import {
     crosshairColor,
     crosshairScale,
     crosshairTexture,
     NUM_CROSSHAIRS,
 } from './crosshair.ts';
+import {
+    ammoFull,
+    ammoIsInfinite,
+    ammoIsLow,
+    LOW_HEALTH,
+    POOL_MAX,
+    weaponIcon,
+    weaponLabel,
+} from './statusBar.ts';
 
 export interface HudState {
     readonly mode: 'play' | 'fly' | 'click-to-play';
-    /** Horizontal speed, Q3 units per second. */
-    readonly speed: number;
     readonly onGround: boolean;
     readonly map: string;
     /** Weapon id, or empty in fly mode. */
@@ -57,14 +77,8 @@ export interface HudState {
     readonly pickupAgeSeconds: number;
 }
 
-/** Q3's own thresholds: the health number turns red below 25. */
-const LOW_HEALTH = 25;
-
 /** How long a pickup name stays on screen. `cg_drawStatus`'s is 3 seconds. */
 const PICKUP_SECONDS = 3;
-
-/** Peak speed decays this fast once the player slows, in units per second. */
-const PEAK_DECAY = 40;
 
 /**
  * `cg_crosshairSize`, as a fraction of the viewport height.
@@ -88,26 +102,30 @@ export interface HudOptions {
 export class Hud {
     readonly root: View;
 
-    private readonly speedModel = new ObservedString('');
-    private readonly peakModel = new ObservedString('');
     private readonly stateModel = new ObservedString('');
-    private readonly statusModel = new ObservedString('');
     private readonly pickupModel = new ObservedString('');
 
     /** The crosshair element, written to directly every frame. */
     private readonly crosshair: ViewWithElement<HTMLElement>;
 
-    /** The speed pair, which the menu can turn off. */
-    private readonly speedViews: View[];
+    private readonly health = new Gauge({ label: 'health', modifier: 'health', max: POOL_MAX });
+    private readonly armor = new Gauge({ label: 'armor', modifier: 'armor', max: POOL_MAX });
+    private readonly ammo = new Gauge({ label: 'ammo', modifier: 'ammo', max: 1 });
+
+    /** The weapon's icon, beside the ammo it belongs to. */
+    private readonly weapon: ViewWithElement<HTMLElement>;
+
+    /** The two wrapped corners, hidden together when there is no player. */
+    private readonly clusters: View[];
 
     /** `cg_drawCrosshair`, as last set. Kept so a redundant swap is free. */
     private crosshairIndex: number;
 
+    /** Last weapon drawn, so the icon is written on a change and not per frame. */
+    private weaponId = '';
+
     /** `cg_crosshairHealth`, which Q3 defaults on. */
     crosshairHealth = true;
-
-    private peak = 0;
-    private lastUpdate = 0;
 
     constructor(options: HudOptions = {}) {
         const crosshairView = new EmptyView({
@@ -119,27 +137,52 @@ export class Hud {
         this.crosshairIndex = -1;
         this.setCrosshair(options.crosshair ?? CROSSHAIR_DEFAULT);
 
-        const speed = new LabelView(this.speedModel, { classList: ['queep-hud__speed'] });
-        const peak = new LabelView(this.peakModel, { classList: ['queep-hud__peak'] });
+        /*
+         `role="img"` with a name that is written on every weapon change: the
+         icon is a background image, and a background image is the one kind of
+         picture that has no text of its own for a screen reader to read.
+        */
+        this.weapon = new EmptyView({
+            classList: ['queep-hud__weapon'],
+            tag: 'div',
+            attr: { role: 'img', 'aria-label': '' },
+        });
 
-        this.speedViews = [speed, peak];
+        const left = EmptyView.group([this.health.root, this.armor.root], {
+            classList: ['queep-hud__cluster', 'queep-hud__cluster--left'],
+            tag: 'div',
+        });
 
-        const readouts = EmptyView.group(
+        const right = EmptyView.group([this.ammo.root, this.weapon], {
+            classList: ['queep-hud__cluster', 'queep-hud__cluster--right'],
+            tag: 'div',
+        });
+
+        this.clusters = [left, right];
+
+        /*
+         The middle column faces the player square on, and that is what makes
+         the two beside it read as wrapped rather than as crooked: a curve needs
+         something flat to be curved away from.
+        */
+        const middle = EmptyView.group(
             [
                 new LabelView(this.pickupModel, { classList: ['queep-hud__pickup'] }),
-                speed,
-                peak,
-                new LabelView(this.statusModel, { classList: ['queep-hud__status'] }),
                 new LabelView(this.stateModel, { classList: ['queep-hud__state'] }),
             ],
-            { classList: ['queep-hud'], tag: 'div' }
+            { classList: ['queep-hud__middle'], tag: 'div' }
         );
+
+        const readouts = EmptyView.group([left, middle, right], {
+            classList: ['queep-hud'],
+            tag: 'div',
+        });
 
         /*
          One root, because `link` adds one child to the stack. The crosshair
          cannot live inside `.queep-hud`: that element is anchored to the bottom
-         of the screen and is only as tall as its text, so a child centred in it
-         would be centred on the speedometer.
+         of the screen and is only as tall as its readouts, so a child centred in
+         it would be centred on the status bar.
         */
         this.root = EmptyView.group([crosshairView, readouts], {
             classList: ['queep-hud-root'],
@@ -166,49 +209,25 @@ export class Hud {
         this.crosshair.css({ mask, webkitMask: mask });
     }
 
-    /**
-     * The speedometer, which is the port's own readout rather than Q3's.
-     *
-     * Worth being able to turn off for exactly the reason it is worth having:
-     * it is a movement diagnostic, and a screenshot of the arena is not a
-     * movement diagnostic.
-     */
-    setSpeedometerVisible(visible: boolean): void {
-        for (const view of this.speedViews) view.visible = visible;
-    }
-
     /** Attach to the engine's view stack. */
     link(viewStack: { addChild(v: View): void }): void {
         viewStack.addChild(this.root);
     }
 
     update(state: HudState): void {
-        const now = performance.now();
-        const dt = this.lastUpdate === 0 ? 0 : (now - this.lastUpdate) / 1000;
-        this.lastUpdate = now;
-
-        if (state.speed > this.peak) {
-            this.peak = state.speed;
-        } else {
-            this.peak = Math.max(state.speed, this.peak - PEAK_DECAY * dt);
-        }
-
-        this.speedModel.set(`${Math.round(state.speed)}`);
-        this.peakModel.set(`peak ${Math.round(this.peak)} ups`);
-
         /*
-         Q3's status bar is health, armour, ammo, in that order and nothing
-         else. Resisting the urge to add more is part of the point: the reason
-         a Q3 HUD reads at a glance mid-fight is that there are three numbers.
+         Q3's status bar is health, armour and ammo, in that order and nothing
+         else. Resisting the urge to add more is part of the point: the reason a
+         Q3 HUD reads at a glance mid-fight is that there are three numbers.
         */
-        if (state.mode !== 'fly') {
-            const ammo = state.ammo < 0 ? '--' : `${state.ammo}`;
-            const low = state.health <= LOW_HEALTH ? ' !' : '';
-            this.statusModel.set(
-                `${state.health} health${low}   ${state.armor} armor   ${ammo} ammo`
-            );
-        } else {
-            this.statusModel.set('');
+        const playing = state.mode !== 'fly';
+
+        for (const cluster of this.clusters) cluster.visible = playing;
+
+        if (playing) {
+            this.health.set(state.health, state.health <= LOW_HEALTH);
+            this.armor.set(state.armor, false);
+            this.updateAmmo(state);
         }
 
         if (state.pickup !== '' && state.pickupAgeSeconds < PICKUP_SECONDS) {
@@ -227,13 +246,46 @@ export class Hud {
         } else if (state.mode === 'fly') {
             this.stateModel.set(`${state.map}  ·  noclip`);
         } else {
-            const weapon = state.weapon.replace(/^WP_/, '').toLowerCase().replace(/_/g, ' ');
             this.stateModel.set(
-                `${state.map}  ·  ${weapon}  ·  ${state.kills}/${state.deaths}  ·  ` +
+                `${state.map}  ·  ${state.kills}/${state.deaths}  ·  ` +
                 `${state.damage} damage  ·  ${state.onGround ? 'ground' : 'air'}  ·  ` +
                 `${state.backend}`
             );
         }
+    }
+
+    /**
+     * The right-hand corner: the icon, and the bar the weapon scales.
+     *
+     * Two things move with the weapon and not with the count. The icon is one;
+     * the other is where the bar is full, which is per weapon because a full
+     * load is (`ammoFull`). Both are written on a change rather than per frame,
+     * because setting `background-image` to the URL it already holds is a style
+     * recalculation for nothing sixty times a second.
+     *
+     * The gauntlet has no ammunition rather than none left, so its bar is not
+     * drawn at all -- `CG_DrawStatusBar` guards the whole readout with
+     * `ammo > -1` for the same reason. The icon stays: what is in your hands is
+     * still worth showing.
+     */
+    private updateAmmo(state: HudState): void {
+        if (state.weapon !== this.weaponId) {
+            this.weaponId = state.weapon;
+
+            const icon = weaponIcon(state.weapon);
+
+            this.weapon.visible = icon !== null;
+            this.weapon.css({ backgroundImage: icon === null ? 'none' : `url("${icon}")` });
+            this.weapon.attr({ 'aria-label': weaponLabel(state.weapon) });
+
+            this.ammo.setMax(ammoFull(state.weapon));
+        }
+
+        const infinite = ammoIsInfinite(state.ammo);
+
+        this.ammo.visible = !infinite;
+
+        if (!infinite) this.ammo.set(state.ammo, ammoIsLow(state.weapon, state.ammo));
     }
 
     /**

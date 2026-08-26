@@ -81,9 +81,9 @@ const fractional: SliderSetting = {
 
 const toggle: ToggleSetting = {
     kind: 'toggle',
-    id: 'speedometer',
+    id: 'crosshair-health',
     section: 'HUD',
-    label: 'Speedometer',
+    label: 'Colour crosshair by health',
     initial: true,
     apply: () => undefined,
 };
@@ -259,13 +259,13 @@ describe('Settings', () => {
         const settings = new Settings([page(slider, toggle, choice)]);
 
         settings.set('fov', 120);
-        settings.set('speedometer', false);
+        settings.set('crosshair-health', false);
         settings.set('crosshair', 1);
 
         settings.reset();
 
         expect(settings.get('fov')).toBe(90);
-        expect(settings.get('speedometer')).toBe(true);
+        expect(settings.get('crosshair-health')).toBe(true);
         expect(settings.get('crosshair')).toBe(4);
     });
 
@@ -295,11 +295,11 @@ describe('Settings persistence', () => {
 
         await settings.attach(storage, 'test');
         settings.set('fov', 115);
-        settings.set('speedometer', false);
+        settings.set('crosshair-health', false);
 
         const stored = JSON.parse(storage.contents.get('test') ?? '{}') as Record<string, unknown>;
         expect(stored['fov']).toBe(115);
-        expect(stored['speedometer']).toBe(false);
+        expect(stored['crosshair-health']).toBe(false);
     });
 
     it('does not write while it is loading', async () => {
@@ -331,7 +331,7 @@ describe('Settings persistence', () => {
         const storage = memoryStorage({
             test: JSON.stringify({
                 fov: 1e9, // out of range
-                speedometer: 'yes', // not a boolean
+                'crosshair-health': 'yes', // not a boolean
                 crosshair: 99, // not an option
                 gone: 12, // a setting this build no longer has
             }),
@@ -351,7 +351,7 @@ describe('Settings persistence', () => {
         // other two are not values these settings can take at all, so they keep
         // their defaults and nothing is applied for them.
         expect(settings.get('fov')).toBe(130);
-        expect(settings.get('speedometer')).toBe(true);
+        expect(settings.get('crosshair-health')).toBe(true);
         expect(settings.get('crosshair')).toBe(4);
         expect(applied).toEqual([130]);
     });
@@ -369,7 +369,7 @@ describe('Settings persistence', () => {
 
         expect(second.get('fov')).toBe(105);
         expect(second.get('crosshair')).toBe(0);
-        expect(second.get('speedometer')).toBe(true);
+        expect(second.get('crosshair-health')).toBe(true);
     });
 
     it('survives a stored blob that is not the shape it expects', async () => {
@@ -429,10 +429,8 @@ describe('Settings persistence', () => {
  */
 interface HudStub {
     crosshair: number;
-    speedometer: boolean;
     crosshairHealth: boolean;
     setCrosshair(index: number): void;
-    setSpeedometerVisible(visible: boolean): void;
 }
 
 /**
@@ -559,13 +557,9 @@ function hosts(): {
 
     const hud: HudStub = {
         crosshair: -1,
-        speedometer: false,
         crosshairHealth: false,
         setCrosshair(index: number): void {
             hud.crosshair = index;
-        },
-        setSpeedometerVisible(visible: boolean): void {
-            hud.speedometer = visible;
         },
     };
 
@@ -592,7 +586,7 @@ describe('the graphics page', () => {
         expect(h.camera.value).toBe(FOV_DEFAULT);
         expect(h.graphics.dynamic_resolution.target_frame_rate).toBe(FRAME_RATE_TARGET_DEFAULT);
         expect(h.hud.crosshair).toBe(4);
-        expect(h.hud.speedometer).toBe(true);
+        expect(h.hud.crosshairHealth).toBe(true);
     });
 
     it('never hands the renderer a scale it refuses, at any step of the slider', () => {

@@ -590,7 +590,7 @@ export class PlayerMovement {
         return this.state;
     }
 
-    /** Q3 units/s, horizontal -- what the speedometer reads. */
+    /** Q3 units/s, horizontal -- what the view weapon's sway is scaled by. */
     get speed(): number {
         return Math.hypot(this.state.velocity[0]!, this.state.velocity[1]!);
     }

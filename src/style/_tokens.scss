@@ -73,6 +73,19 @@ $color-accent-dim: #7a4212 !default;
 /// Low health, and anything else that should stop the eye.
 $color-danger: #e5484d !default;
 
+// The three pools the HUD draws. Distinct hues rather than three shades of the
+// accent, because health and armour sit against each other in one corner and two
+// bars a step apart in lightness are one bar with a kink in it.
+
+/// Health. Q3's own status-bar colour: `colors[0]` in `CG_DrawStatusBar` is
+/// (1.0, 0.69, 0.0), which is this.
+$color-health: #ffb000 !default;
+/// Armour. The cold half of the pair -- Q3's armour is steel, and the point of
+/// the hue is that it is not the health bar.
+$color-armor: #6ea8d8 !default;
+/// Ammo. Quietest of the three: it is the one you look at between fights.
+$color-ammo: #c3ccd8 !default;
+
 /// The HUD draws over the world with no panel behind it, so its text carries a
 /// shadow instead of a background. One definition, used by every readout.
 $shadow-text: 0 1px 3px rgba(0, 0, 0, 0.9) !default;
@@ -153,6 +166,10 @@ $space-scale: (
 
 /// How far the HUD sits off the bottom edge.
 $hud-inset-bottom: space(5) !default;
+/// And off the left and right ones. Wider than the bottom inset, because the
+/// wrap swings the outer edge of each cluster forward and a forward edge is a
+/// larger edge -- see `$hud-wrap-angle`.
+$hud-inset-side: space(6) !default;
 
 /* ------------------------------------------------------------------ *
  * Shape and size
@@ -172,6 +189,18 @@ $focus-ring-width: 2px !default;
 /// The menu panel. Width is capped rather than proportional: settings rows are
 /// label-plus-control, and a 2000px-wide row puts the two ends of one setting at
 /// opposite corners of the screen.
+/// One resource readout: the name, the number, and the bar under them. Wide
+/// enough that 200 health has five notched segments to be read against, narrow
+/// enough that two of them stacked in a corner are a corner and not a sidebar.
+$gauge-width: 224px !default;
+/// The same readout on a narrow window; see `$breakpoint-hud-compact`.
+$gauge-width-compact: 160px !default;
+$gauge-bar-height: 10px !default;
+/// The weapon icon beside the ammo. Q3's own art is 64x64 and `ICON_SIZE` is 32
+/// in its 640x480 screen, which is 1/15th of the height -- 48px here is that on
+/// a 720p window and it does not grow, because the rest of the HUD does not.
+$weapon-icon-size: 48px !default;
+
 $menu-width: 720px !default;
 /// How much of the screen is left around the panel when it runs out of room.
 $menu-inset: space(6) !default;
@@ -196,6 +225,73 @@ $slider-thumb-size: 14px !default;
 /// This is a narrow *window*, not a phone. The game wants a pointer lock and a
 /// keyboard; a half-width browser on a 1024 display is where it shows up.
 $breakpoint-compact: 560px !default;
+
+/// Below this the HUD's two corners give some of their width back.
+///
+/// The status bar is corners now, not a centred column, so it spends width in a
+/// way the old one did not: two clusters plus their insets are about 660px
+/// before anything is left for what sits between them. At 1024 the line of
+/// controls in the middle wraps to three, and it gets worse from there.
+///
+/// Measured against the HUD's own root rather than the window, for the reason
+/// `$breakpoint-compact` is -- meep's view stack is not always the whole window,
+/// and an embedded viewport is exactly the case that needs this.
+$breakpoint-hud-compact: 1100px !default;
+
+/* ------------------------------------------------------------------ *
+ * The wrap
+ * ------------------------------------------------------------------ */
+
+// The HUD's two corners are turned about their inner edges under one shared
+// perspective, so that the outer ends come forward and the whole readout reads
+// as the inside of a visor rather than as two panels stuck on the glass.
+//
+// The three numbers below are one shape and have to be read together, which is
+// why they are here rather than inline in `hud.scss`. `_mixins.scss` spends
+// them, once, for both sides.
+
+/// How far the eye is from the plane the HUD is drawn on.
+$hud-wrap-perspective: 1200px !default;
+
+/// How far each cluster turns about its inner edge.
+///
+/// The ceiling is set by legibility rather than by taste: past roughly 30° the
+/// far end of a bar is foreshortened enough that its notches merge, and a
+/// segmented bar whose segments have run together is a plain bar drawn slowly.
+$hud-wrap-angle: 24deg !default;
+
+/// How far the whole cluster is pushed back before it is turned.
+///
+/// **This is what keeps the HUD on the screen, and it is not decoration.** A
+/// turn about the inner edge swings the outer end *toward* the viewer, where the
+/// perspective magnifies it -- and magnification is about the vanishing point,
+/// so it throws the outer end away from the middle of the screen by an amount
+/// that grows with how far from the middle it already is. A bottom-left corner
+/// that clears the edge at 1280 hangs off it at 1920 and off a good deal more at
+/// 3440. No fixed inset can cover that, because the overflow is proportional to
+/// the screen width and the inset is not.
+///
+/// Pushing the cluster back by at least the depth the turn will lift it through
+/// puts every one of its corners at or behind the screen plane, where the
+/// projection can only shrink them. Nothing can overflow, at any width, and the
+/// turn is unchanged: what the eye reads is the *difference* in depth across the
+/// cluster, and subtracting a constant from both ends leaves that alone.
+///
+/// The number is the widest cluster's own reach: 320px of ammo gauge and weapon
+/// icon, times sin(24°), is 130 -- rounded up so a fourth readout does not
+/// silently cross back over zero. The cost is that the corners sit about a tenth
+/// smaller than the middle of the screen, which is the same thing the turn is
+/// already saying.
+$hud-wrap-depth: 136px !default;
+
+/// The shear, on top of the turn.
+///
+/// The perspective alone turns a rectangle into a trapezoid that is symmetric
+/// about the horizon; this lifts the outer end of it so the two clusters lean
+/// away from the middle of the screen, the way the corners of a curved surface
+/// do. Small on purpose -- it is the difference between "wrapped" and "falling
+/// over".
+$hud-wrap-shear: 3deg !default;
 
 /* ------------------------------------------------------------------ *
  * Motion
@@ -243,6 +339,9 @@ $z-menu: 10100 !default;
     --queep-color-accent-bright: #{$color-accent-bright};
     --queep-color-accent-dim: #{$color-accent-dim};
     --queep-color-danger: #{$color-danger};
+    --queep-color-health: #{$color-health};
+    --queep-color-armor: #{$color-armor};
+    --queep-color-ammo: #{$color-ammo};
 
     --queep-font-mono: #{$font-mono};
     --queep-font-ui: #{$font-ui};

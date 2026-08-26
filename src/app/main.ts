@@ -457,7 +457,7 @@ async function main(): Promise<void> {
             fly.update(dt);
             audio.update();
             hud.update({
-                mode: 'fly', speed: 0, onGround: false, map: mapName,
+                mode: 'fly', onGround: false, map: mapName,
                 weapon: '', damage: 0, kills: 0, deaths: 0, backend: 'noclip',
                 health: 0, armor: 0, ammo: -1, pickup: '', pickupAgeSeconds: 99,
             });
@@ -934,7 +934,6 @@ async function main(): Promise<void> {
 
             hud.update({
                 mode: player.active ? 'play' : 'click-to-play',
-                speed: player.speed,
                 onGround: player.onGround,
                 map: mapName,
                 weapon: player.weapon,

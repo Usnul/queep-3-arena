@@ -1,5 +1,5 @@
 /*
- * convert-fx.ts -- extract the textures the effects layer needs.
+ * convert-fx.ts -- extract the 2D artwork the port draws over the world.
  *
  * Copyright (C) 1999-2005 Id Software, Inc.
  * Copyright (C) 2026 queep-3-arena contributors
@@ -19,6 +19,18 @@
  * So this converts a small, explicit list of sprites and marks into PNG for
  * meep's particle system and GPU decals. Explicit rather than "everything under
  * gfx/", because the list is the record of which effects exist.
+ *
+ * Two things in here are not effects and are here anyway: the crosshairs, and
+ * the weapon icons the HUD draws beside the ammo. Both are Q3 2D artwork that
+ * the port puts on the screen rather than in the world, both are ten-odd small
+ * PNGs, and both would otherwise need a second tool that is this one with a
+ * different list. The directory is what it says on the outside -- the port's
+ * flat, shared, small-image bin -- rather than strictly "effects".
+ *
+ * The weapon icons are not a list at all: they are read out of
+ * `balance.generated.json`, which is where the runtime reads them from too
+ * (`statusBar.ts`). A second list here is a list that goes stale the first time
+ * a weapon is added.
  *
  * Output: `assets/built/fx/<name>.png`, shared across maps.
  *
@@ -82,6 +94,37 @@ const CROSSHAIRS: readonly FxTexture[] = Array.from({ length: 10 }, (_, i) => {
     return { name: `crosshair${letter}`, sources: [`gfx/2d/crosshair${letter}.tga`] };
 });
 
+/**
+ * `cg_weapons[w].weaponIcon`: the icon Q3 draws for the weapon in hand.
+ *
+ * Taken from the generated balance table rather than listed here, because the
+ * table is what `statusBar.ts` asks at runtime -- so the set converted and the
+ * set drawn cannot disagree. The name on disk is the leaf of Q3's own path
+ * (`icons/iconw_rocket` -> `iconw_rocket.png`), which is what makes the runtime
+ * side a string slice rather than a second mapping.
+ *
+ * These are 64x64 32-bit TGAs with a real alpha channel, drawn by Q3 with a
+ * plain `blendfunc blend`, so there is no blend to undo -- see {@link FxBlend}.
+ */
+function weaponIcons(): readonly FxTexture[] {
+    const balance = JSON.parse(
+        readFileSync(join(ROOT, 'src', 'game', 'balance.generated.json'), 'utf8')
+    ) as { items: readonly { readonly type: string; readonly icon: string }[] };
+
+    const icons = new Set<string>();
+    for (const item of balance.items) {
+        if (item.type === 'IT_WEAPON') icons.add(item.icon);
+    }
+
+    return [...icons].map((icon) => ({
+        name: icon.slice(icon.lastIndexOf('/') + 1),
+        // Q3 registers icons by name and lets the image loader pick the
+        // extension, and OA ships some of these as both. TGA first is the load
+        // order `extract-pk3.mjs` already flattened the pk3s into.
+        sources: [`${icon}.tga`, `${icon}.png`, `${icon}.jpg`],
+    }));
+}
+
 const TEXTURES: readonly FxTexture[] = [
     // Particles.
     { name: 'smoke', sources: ['gfx/misc/smokepuff3.tga', 'gfx/misc/smokepuff2b.tga'] },
@@ -100,6 +143,7 @@ const TEXTURES: readonly FxTexture[] = [
     { name: 'mark_hole', sources: ['gfx/damage/hole_lg_mrk.tga'], blend: 'darken' },
 
     ...CROSSHAIRS,
+    ...weaponIcons(),
 ];
 
 async function convertOne(fx: FxTexture): Promise<boolean> {
@@ -167,7 +211,7 @@ async function main(): Promise<void> {
 
     mkdirSync(OUT, { recursive: true });
 
-    console.log('converting effect textures...');
+    console.log('converting 2D textures...');
 
     let ok = 0;
     for (const fx of TEXTURES) {

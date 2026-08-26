@@ -104,6 +104,24 @@ export function weaponItemByTag(tag: string): ItemDef | null {
     return WEAPON_BY_TAG.get(tag) ?? null;
 }
 
+/**
+ * The ammo box for a `WP_*` id, which is the other half of the same split.
+ *
+ * Its own map for the reason `WEAPON_BY_TAG` has one: `giTag` is shared between
+ * a weapon and the box that feeds it, so one map over the whole list answers
+ * with whichever came last. The two together are the whole of what the table
+ * says about a weapon's ammunition -- what the gun arrives with, and what a box
+ * of it is worth -- which is what the HUD scales its ammo bar by (`statusBar.ts`).
+ */
+const AMMO_BY_TAG = new Map<string, ItemDef>();
+for (const item of ITEMS) {
+    if (item.type === 'IT_AMMO') AMMO_BY_TAG.set(item.tag, item);
+}
+
+export function ammoItemByTag(tag: string): ItemDef | null {
+    return AMMO_BY_TAG.get(tag) ?? null;
+}
+
 /* ---- player inventory ---- */
 
 export interface Inventory {

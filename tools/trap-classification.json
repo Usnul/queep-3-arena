@@ -374,7 +374,7 @@
       "status": "mapped",
       "meep": "meep UI image view",
       "note": "464 call sites, almost all 2D HUD and menu icons.",
-      "unused": "The HUD here is text -- numbers, a speedometer, a pickup line -- built from `LabelView`. No 2D image is drawn anywhere, so the facility was never reached."
+      "unused": "The HUD does draw Q3's own 2D art -- `gfx/2d/crosshair[a-j]` and the `iconw_*` weapon icons -- but as a CSS mask and a `background-image` on the DOM element a `View` already owns, so nothing registers a shader and no image view is constructed. The facility is bypassed rather than unwanted."
     },
     "trap_R_RegisterFont": {
       "status": "mapped",

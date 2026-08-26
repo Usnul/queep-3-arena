@@ -141,7 +141,7 @@ was written is that the reconstruction does not work *at all* on two of the six 
 `.shader` route only carries light for maps whose authors lit them with surface shaders. See
 Q-006, which is the open half of this question.
 
-### Q-004 — Q3-faithful HUD, or a meep-native one? — **settled, provisionally**
+### Q-004 — Q3-faithful HUD, or a meep-native one? — **settled**
 
 The HUD is currently a speedometer and a status line, not a Q3 HUD, because until there is
 health/armour/ammo state behind it a faithful layout would be showing placeholder numbers. It is
@@ -157,3 +157,11 @@ settings screen on meep's `View` hierarchy, not Q3's `ui/` — which was a full 
 widget kit driving `trap_R_DrawStretchPic`, and is exactly the kind of 1999 constraint the brief
 says to throw away. What is kept from Q3 is the *content*: `cg_fov`, `cg_drawCrosshair` and
 `cg_crosshairHealth` are the settings and are named as such in the notes under each label.
+
+**Settled.** The state exists, so the promise above came due, and it was kept on the half that
+matters: the HUD shows health, armour and ammo and nothing else, and the speedometer — which was
+only ever a movement diagnostic — is off the screen entirely. It is *not* the faithful layout.
+Q3's three numbers sat in a row along the bottom; these are three segmented bars in the two
+bottom corners, turned toward the player under a shared perspective. The information is Q3's and
+the arithmetic behind it is Q3's — where a bar goes red is `CG_DrawStatusBar` and `CG_CheckAmmo`
+— and the presentation is the port's. D-102 is the whole of it.

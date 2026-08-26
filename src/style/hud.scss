@@ -1,4 +1,4 @@
-// hud.scss -- the speedometer, status line and crosshair.
+// hud.scss -- the status readouts, the crosshair, and the wrap they sit on.
 //
 // Copyright (C) 2026 queep-3-arena contributors
 //
@@ -9,32 +9,44 @@
 //
 // ---
 //
-// Lifted out of the template literal `Hud.ts` used to append to `<head>`. That
-// was the right size for three rules and stopped being it the moment a second
-// screen existed: the HUD and the menu have to agree about what "muted text"
-// and "one step of space" mean, and two files cannot agree about a constant that
-// lives inside one of them as a string.
+// Three readouts, two of them in the bottom-left corner and one in the
+// bottom-right, and the two corners turned toward the player so the screen
+// reads as something wrapped around them rather than something laid on top.
 //
-// The sizes moved onto the type and space scales in the process, which shifts a
-// few of them by a pixel or two -- 12px state text onto 11px `micro`, 6px and
-// 10px margins onto the 4px grid. Deliberate: the alternative is a scale with a
-// hole punched in it for every value the HUD happened to have first.
+// What the file has to get right, in the order it does it:
 //
-// Geometry is unchanged. Every readout is still centred at the bottom, the
-// crosshair is still centred on the screen and sized per frame from
-// `CROSSHAIR_FRACTION`, and nothing here takes pointer events.
+//   - **The wrap is one surface.** `perspective` is declared once, on the row
+//     both clusters sit in, so the two turns share a vanishing point.
+//     `@include hud-wrap` per side is the only place a transform appears.
+//   - **A gauge is one rule.** Health, armour and ammo are the same block three
+//     times; what differs is a colour, and the colour arrives through
+//     `--queep-gauge-color` from the modifier class. A fourth resource is four
+//     lines at the bottom of that section and nothing else.
+//   - **The bar is styled here or not at all.** meep's `SegmentedResourceBarView`
+//     builds a fill, a ghost, a notch canvas and a highlight list, gives each a
+//     class, and ships no stylesheet anywhere in the engine. Every rule those
+//     four elements have is below.
+//
+// Geometry that has not changed: the crosshair is still centred on the screen
+// and sized per frame from `CROSSHAIR_FRACTION`, and nothing here takes pointer
+// events.
 
 @use 'tokens' as *;
 @use 'mixins' as *;
 
 // One root, covering the viewport. The crosshair cannot live inside `.queep-hud`
-// -- that element is anchored to the bottom and is only as tall as its text, so
-// a child centred in it would be centred on the speedometer.
+// -- that element is anchored to the bottom and is only as tall as its readouts,
+// so a child centred in it would be centred on the status bar.
 .queep-hud-root {
     position: absolute;
     inset: 0;
     z-index: $z-hud;
     pointer-events: none;
+
+    // The measure the compact block at the bottom of this file switches on. Its
+    // own width and not the window's, because meep's view stack is not always
+    // the whole window and an embedded viewport is the case that needs it.
+    container: queep-hud / inline-size;
 }
 
 // Sized and coloured per frame from `Hud.updateCrosshair`: `width`/`height` in
@@ -49,48 +61,92 @@
     background-color: #fff;
 }
 
+/* ------------------------------------------------------------------ *
+ * The wrap
+ * ------------------------------------------------------------------ */
+
+// The row the whole status bar lives in, and the one element with a
+// `perspective`. Declaring it here rather than inside each cluster's transform
+// is what makes the two ends agree: one eye, one vanishing point, one surface.
+//
+// `perspective-origin` is the middle of the bottom edge rather than the middle
+// of the row, because that is roughly where the player is looking from when they
+// glance down at a corner -- and it is what tips the two clusters' near edges
+// outward instead of straight at the camera.
 .queep-hud {
     position: absolute;
     left: 0;
     right: 0;
     bottom: $hud-inset-bottom;
+    padding: 0 $hud-inset-side;
+
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: space(5);
+
+    pointer-events: none;
+
+    font-family: $font-mono;
+    @include over-world-text;
+
+    perspective: $hud-wrap-perspective;
+    perspective-origin: 50% 100%;
+}
+
+.queep-hud__cluster {
+    display: flex;
+    align-items: flex-end;
+    gap: space(4);
+
+    // The gradient the wrap paints needs somewhere to be, and the turn needs the
+    // outer edge to have some room past the readout to swing into.
+    padding: space(3) space(4);
+    border-radius: $radius-medium;
+
+    // Health over armour, in one column and one step of space apart, because
+    // "how much of me is left" is one question asked of two pools. Ammo is the
+    // other corner and the other question.
+    &--left {
+        flex-direction: column;
+        align-items: stretch;
+        gap: space(2);
+
+        @include hud-wrap('left');
+    }
+
+    // The icon is outboard of the bar it belongs to, so the two corners are the
+    // same shape: the quiet thing on the outside, the number on the inside where
+    // the eye already is.
+    &--right {
+        @include hud-wrap('right');
+    }
+}
+
+// Square on to the player, and the reason the two beside it read as turned: a
+// curve needs something flat to be curved away from. It also takes what is left
+// of the row, so the two corners keep their own width at any window size.
+.queep-hud__middle {
+    flex: 1 1 auto;
+    min-width: 0;
 
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: space(1);
 
-    pointer-events: none;
+    /*
+     Room for the lean. A turned cluster's *projected* footprint is not its
+     layout box: the perspective scales it about the middle of the screen, so its
+     inner edge ends up inboard of where the flex row put it -- by about 36px at
+     1280 and more as the screen widens. The gap between the boxes does not know
+     that. This is the margin that keeps the longest line of text -- the
+     click-to-play one, which fills the column at 1280 -- from sliding underneath
+     a corner instead of wrapping.
+    */
+    padding: 0 space(4);
 
-    font-family: $font-mono;
-    @include over-world-text;
-}
-
-.queep-hud__speed {
-    font-size: font-size('readout');
-    font-weight: $font-weight-bold;
-    line-height: 1;
-}
-
-.queep-hud__peak {
-    font-size: font-size('small');
-    opacity: 0.75;
-}
-
-// Map, weapon, score, backend. The line that says which build you are looking
-// at, which is why it is the quietest thing on the screen.
-.queep-hud__state {
-    font-size: font-size('micro');
-    opacity: 0.55;
-    margin-top: space(2);
-}
-
-// Q3's status bar: health, armour, ammo, in that order and nothing else.
-.queep-hud__status {
-    font-size: font-size('large');
-    font-weight: $font-weight-bold;
-    letter-spacing: $letter-spacing-status;
-    margin-top: space(2);
+    text-align: center;
 }
 
 // The pickup name, for `PICKUP_SECONDS` after a pickup. It holds its line height
@@ -101,5 +157,235 @@
     line-height: $line-height-body;
     min-height: calc(1em * #{$line-height-body});
     opacity: 0.85;
-    margin-bottom: space(3);
+}
+
+// Map, score, damage, backend. The line that says which build you are looking
+// at, which is why it is the quietest thing on the screen.
+.queep-hud__state {
+    font-size: font-size('micro');
+    opacity: 0.55;
+}
+
+/* ------------------------------------------------------------------ *
+ * A gauge: name, number, bar
+ * ------------------------------------------------------------------ */
+
+// One block, three instances. Everything that differs between health, armour and
+// ammo is `--queep-gauge-color`, which the modifiers at the end of this section
+// set and which the number and the bar's fill both read.
+.queep-gauge {
+    display: flex;
+    flex-direction: column;
+    gap: space(1);
+
+    width: $gauge-width;
+}
+
+.queep-gauge__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: space(2);
+}
+
+.queep-gauge__label {
+    @include section-heading;
+
+    // The heading mixin is the menu's, and the menu's headings sit on a panel.
+    // Over an arena the same grey is a shade too quiet to find in a fight.
+    color: $color-text;
+    opacity: 0.7;
+}
+
+// Q3 draws its status numbers at `CHAR_WIDTH` 32 in a 640x480 screen, which is
+// a fifteenth of the screen height -- larger than this. `readout` is as far up
+// the scale as a number can go while three of them still leave the middle of the
+// bottom edge to the pickup line.
+.queep-gauge__value {
+    font-size: font-size('readout');
+    font-weight: $font-weight-bold;
+    letter-spacing: $letter-spacing-status;
+    line-height: 1;
+
+    color: var(--queep-gauge-color);
+}
+
+// Through the emitted custom properties rather than the Sass variables, so the
+// runtime layer is the one in force: `--queep-color-health` set on an ancestor
+// re-skins the bar and the number together, which is what `_tokens.scss` says
+// that layer is *for*. The fallbacks are the same values, for a document that
+// somehow has the HUD without the token block.
+.queep-gauge--health {
+    --queep-gauge-color: var(--queep-color-health, #{$color-health});
+}
+
+.queep-gauge--armor {
+    --queep-gauge-color: var(--queep-color-armor, #{$color-armor});
+}
+
+.queep-gauge--ammo {
+    --queep-gauge-color: var(--queep-color-ammo, #{$color-ammo});
+}
+
+/* ------------------------------------------------------------------ *
+ * The bar underneath it
+ * ------------------------------------------------------------------ */
+
+// meep's `SegmentedResourceBarView`, which has classes and no rules of its own.
+// Four children, stacked back to front in this order and *not* in the order the
+// view builds them in -- the ghost is appended after the fill and has to sit
+// behind it, which is the whole reason these carry a `z-index`:
+//
+//   `.ghost`          the total, trailing the fill down after a hit
+//   `.fill-container` one `.fill` per value, side by side
+//   `.notch-overlay`  a canvas the view draws segment marks into
+//   `.highlights`     ranges something wants to point at; unused so far
+.queep-gauge__bar {
+    position: relative;
+    overflow: hidden;
+
+    height: $gauge-bar-height;
+    border-radius: $radius-small;
+
+    background: rgba($color-void, 0.65);
+    box-shadow: inset 0 0 0 $border-width rgba($color-text, 0.14);
+
+    > * {
+        position: absolute;
+        inset: 0;
+    }
+
+    // Several values share one track by sitting in a row, which is what the
+    // view's `value-<i>` classes are for. One is the common case and looks the
+    // same either way.
+    .fill-container {
+        display: flex;
+        z-index: 1;
+    }
+
+    .fill {
+        height: 100%;
+        background: var(--queep-gauge-color);
+    }
+
+    // Sized to the total by the view, so on a hit the fill drops immediately and
+    // this follows it down over the next fraction of a second. That trailing
+    // edge is the damage: the eye catches the movement, where it would miss two
+    // digits changing.
+    .ghost {
+        z-index: 0;
+        right: auto;
+        background: rgba($color-text, 0.55);
+
+        @include motion-safe {
+            transition: width $duration-fast * 3 $easing-standard;
+        }
+    }
+
+    // A canvas, sized in device-independent pixels by the view's own
+    // `ResizeObserver`. It draws translucent black and white hairlines, which
+    // land on the fill rather than on the track -- so the segments are legible
+    // exactly where there is something to segment.
+    .notch-overlay {
+        z-index: 2;
+        width: 100%;
+        height: 100%;
+    }
+
+    .highlights {
+        z-index: 3;
+    }
+
+    .highlight {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        background: rgba($color-text, 0.18);
+    }
+}
+
+// Q3's own low-health behaviour, which is not a colour but a flash: the four-way
+// branch in `CG_DrawStatusBar` picks between orange and red on `(cg.time >> 8)
+// & 1`, a toggle every 256 ms. The bar goes red and stays red -- it is the
+// number that flashes, because the number is what Q3 flashed.
+.queep-gauge.is-low {
+    .fill {
+        background: $color-danger;
+    }
+
+    .queep-gauge__value {
+        // The alarm without the flash, which is also what is left of it under
+        // `prefers-reduced-motion`: the colour the toggle spends half its time
+        // on. Declared first so the animation overrides it rather than the other
+        // way round.
+        color: $color-danger;
+
+        @include motion-safe {
+            animation: queep-gauge-flash 512ms linear infinite;
+        }
+    }
+}
+
+// 512 ms, half on each colour: `(cg.time >> 8) & 1` is a bit that turns over
+// every 256 ms. The jump is written as two keyframes a tenth of a percent apart
+// rather than with a `steps()` timing function, because `steps()` interacts with
+// `alternate` and with iteration direction in ways that differ by browser and
+// this does not -- half a millisecond of interpolation is not a fade.
+@keyframes queep-gauge-flash {
+    0%,
+    49.9% {
+        color: var(--queep-gauge-color);
+    }
+
+    50%,
+    100% {
+        color: $color-danger;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * The weapon icon
+ * ------------------------------------------------------------------ */
+
+// `cg_weapons[w].weaponIcon`, beside the ammo it is the ammo for. Q3's own 64x64
+// art, drawn at `ICON_SIZE`; `background-image` is written by `Hud.updateAmmo`
+// on a weapon change.
+//
+// The drop shadow is the same trick the readouts' `text-shadow` is: the icons
+// are transparent-background artwork of dark metal, and dark metal over a dark
+// wall is nothing at all.
+.queep-hud__weapon {
+    flex: 0 0 auto;
+    width: $weapon-icon-size;
+    height: $weapon-icon-size;
+
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
+}
+
+/* ------------------------------------------------------------------ *
+ * Narrow
+ * ------------------------------------------------------------------ */
+
+// Two corners cost more width than the centred column they replaced, and what
+// runs out first is the middle: at 1024 the click-to-play line of controls wraps
+// to three. So the corners give some back -- a shorter bar, a number one step
+// down the scale, a smaller icon -- and nothing changes about what is on the
+// screen or where it is. See `$breakpoint-hud-compact`.
+@container queep-hud (width < #{$breakpoint-hud-compact}) {
+    .queep-gauge {
+        width: $gauge-width-compact;
+    }
+
+    .queep-gauge__value {
+        font-size: font-size('title');
+    }
+
+    .queep-hud__weapon {
+        width: $weapon-icon-size * 0.75;
+        height: $weapon-icon-size * 0.75;
+    }
 }
