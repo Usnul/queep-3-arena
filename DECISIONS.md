@@ -4041,3 +4041,49 @@ walks `Scene.lights.elements` after `loadMap` has built the entities and matches
 to its bundle record by position. The alternatives were worse: duplicating `LightSystem3` to get
 at the object it creates, or shipping delta sources. See GAP-030 for the two-line fix that would
 remove the whole file.
+
+### D-104: The asset tree was deleted by a cleanup step, because a junction is a door that opens both ways
+
+On 2026-08-26 `assets/built`, `assets/download`, `assets/extracted` and `assets/generated` were
+destroyed. Recorded here rather than quietly rebuilt, because the mechanism is not obvious, the
+same shape of mistake is available to anyone working in this repository, and the rule it produces
+constrains the tooling.
+
+**What happened.** Two sessions were working in this worktree at once. To typecheck a commit
+without the other session's in-flight, non-compiling changes in it, one of them made a throwaway
+`git worktree`, and — because `node_modules`, `assets` and `oracle` are all gitignored and
+therefore absent from a fresh checkout — junctioned all three into it so the tools would resolve.
+`git worktree remove --force` then walked that directory, followed the `assets` junction into the
+real tree, and deleted through it. It got as far as `assets/ml/build` before aborting on a path
+too long for the Win32 API, which is the only reason the 28 GB of model checkpoints beside it
+survived. What it printed was `failed to delete ...: Filename too long`, so the interesting half
+of the message was the half it did not print.
+
+**Why the obvious defences do not apply.** A junction is not a symlink and is not marked as one in
+a directory listing; `Test-Path`, `ls` and every recursive delete treat it as an ordinary
+directory. `git worktree remove` is not a delete you wrote, so nothing about the call site says
+"recursive". And the tree it ate is gitignored on purpose (brief section 3: no large binaries
+committed), so git had nothing to restore and nothing to warn about — the same property that makes
+the repository small makes this unrecoverable. A command-line delete does not reach the recycle
+bin.
+
+**The rules that follow**, in the order they would each have stopped it:
+
+- **Nothing links to real repository data from a directory that will be deleted.** If an isolated
+  tree needs `node_modules` or `assets`, it gets a copy or it does without. This is the one that
+  matters; the rest are belt and braces.
+- **Verification does not need a second checkout.** `git show <sha>:<path>` reads any committed
+  file and `git diff <sha> <sha>` compares trees, which is what the isolated typecheck was
+  actually after. Where a real checkout is unavoidable, it is left in the scratchpad — an
+  abandoned temporary directory costs nothing, and deleting it is the only step in the whole
+  sequence that can lose data.
+- **`--force` on a cleanup command is a request to skip the check that would have caught this.**
+  The plain `git worktree remove` refuses a worktree with untracked content in it, and untracked
+  content is exactly what those junctions were.
+
+**What it cost, honestly.** The maps, models, characters, sounds and fx are a re-run of the
+pipeline. `assets/generated` is ninety minutes of GPU inference, and while `inverse_render.py`
+takes a seed, a diffusion model reproduced across a re-run is a claim to test rather than assume —
+D-095's counts and the per-channel verdicts in the report were measured against the set that was
+on disk, not against a set that can be conjured back. ASSETS.md now carries the rebuild cost of
+every tree, so the next person to reach for `rm -rf` can read what it is worth first.

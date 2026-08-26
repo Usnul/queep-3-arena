@@ -106,6 +106,21 @@ same maths. `DECISIONS.md` D-091 records the whole of it.
 Everything the pipeline writes lands in `assets/` and is gitignored. It is all derivative of
 the GPLv2/CC inputs above and carries their terms.
 
+**Gitignored is not disposable.** Nothing under `assets/` can be restored from this repository,
+and most of it is not cheap to make again:
+
+| tree | rebuilt by | cost |
+|---|---|---|
+| `assets/download/` | `fetch-assets.mjs` | a 425 MB fetch, and it assumes the upstream mirror is still serving 0.8.8 |
+| `assets/extracted/` | `extract-pk3.mjs` | minutes, from `download/` |
+| `assets/built/` | `convert-map.ts` × 6 maps, then `convert-fx.ts` and `npm run assets` | tens of minutes, and `convert-sounds` has to run again after the maps |
+| `assets/generated/` | `material-maps.ts`, `inverse_render.py`, `build_maps.py` | **about ninety minutes on an NVIDIA GPU.** Seeded (`--seed 1000`), so a re-run should land in the same place — but it is a diffusion model, and the set D-095's counts and the report's per-channel verdicts were measured against is the one that was on disk |
+| `assets/ml/` | `fetch-material-model.mjs`, then a venv rebuild | a 31 GB model download |
+
+So: **no tool, script or cleanup step may run a recursive delete that can reach `assets/`** — and
+that includes deletes aimed somewhere else that reach it through a symlink or a Windows junction,
+which is how it happened once already. D-104 has the mechanism.
+
 | path | produced by | contents |
 |---|---|---|
 | `assets/download/` | `fetch-assets.mjs` | the untouched upstream archive |
