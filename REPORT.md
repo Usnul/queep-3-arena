@@ -213,7 +213,7 @@ the strongest argument in this report for the maintainer's instinct over mine.
    for thirty simulated seconds against the shipping collision backend, in Node, in under a second
    — rather than an opinion. Most physics engines cannot be driven this way. Every one of the four
    player-reported bugs in this project's record was, in principle, catchable in CI because of it;
-   that they were not is this port's failure and is item 12.
+   that they were not is this port's failure and is item 13.
 
 10. **A navmesh needs a surface and a Quake III map is a pile of interpenetrating solids — and the
    engine has more tooling for this than I first credited.** `NavigationMesh` is real and good:
@@ -231,7 +231,21 @@ the strongest argument in this report for the maintainer's instinct over mine.
    routes 100% of the same pairs, because a trace does not care how many surfaces the world is
    made of (GAP-016).
 
-11. **Nothing runnable ships, and no document says which systems you have to register.** The
+11. **Two features 3.3.0 shipped for applications cannot be turned on by one.** Added in phase 8
+    and placed here because it is narrow — one consumer shape, two settings — and because it is
+    the cheapest thing on this list to fix after item 1. `feature_ssr_enabled` and
+    `indirect_lighting_mode` are properties of `Renderer`, which `GraphicsEngine3` constructs
+    privately and never hands out. That refusal is deliberate, argued in one of the best docblocks
+    in the package, and right. The cost is that 3.3.0 then added `VolumetricLightMap` — a
+    *component*, in the ECS layer, whose whole purpose is to let an application carry a baked
+    brick4 lightmap — and its own system's docblock has to say that uploading one is "necessary
+    for Brick4 lighting and not sufficient for it", because the setting that makes the renderer
+    read it is on the other side of that line. `brick4_bake_for_scene` takes a renderer as an
+    argument and is unreachable for the same reason. Two forwarded properties in the shape
+    `set_environment_map` already has would close it. This port cut its entire lighting phase here
+    (GAP-024).
+
+12. **Nothing runnable ships, and no document says which systems you have to register.** The
     published package contains `samples/generation/**` and nothing else — no sample boots the
     engine, loads a model or draws a frame, and `exports` has no `./samples/*` entry so the folder
     cannot be imported even though it is shipped (GAP-002). `EngineHarness` turns out to be the
@@ -240,11 +254,11 @@ the strongest argument in this report for the maintainer's instinct over mine.
     → what breaks silently if you forget.** That table is derivable from the existing constructors
     and would have prevented items 3a and part of 3b outright.
 
-12. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
+13. **Meshlet construction is synchronous and is 92% of level load time.** 1,246 ms of unbroken
     main-thread work for a 198k-triangle level, in an engine that has an asset streamer, a
     concurrent executor and a worker pool. A real level is several times that size (GAP-008).
 
-13. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
+14. **Two thirds of Q3's engine surface is netcode, bot AI and 1999 platform plumbing that meep
     correctly does not have — and the honest count of what the engine actually carried is smaller
     than this report used to claim.** Of 309 distinct `trap_*` syscalls, 227 belong to subsystems
     this port deletes outright. Of the rest: **31 map onto a meep facility the port actually
@@ -259,7 +273,7 @@ the strongest argument in this report for the maintainer's instinct over mine.
     matrix now requires every disposition claiming shipped code to cite `path::token` in this
     repository, and `--check` fails if the file or the token is gone. Section 2 lists what moved.
 
-14. **Replacing something that maintained state as a side effect drops the bookkeeping, not the
+15. **Replacing something that maintained state as a side effect drops the bookkeeping, not the
     behaviour -- twice, and the second one was player-reported.** Swapping `PmoveSingle` for a
     meep-native mover took the movement across and left two `playerState_t` fields behind:
     `ps.groundEntityNum`, written with Q3's two sentinels inverted so that everything asking "am I
@@ -283,7 +297,7 @@ the strongest argument in this report for the maintainer's instinct over mine.
     Verified to catch it: removing the fix fails three of the five new tests. D-072, D-074.
 
 
-15. **The measurement was good and the summary statistic was wrong, which is a lesson about
+16. **The measurement was good and the summary statistic was wrong, which is a lesson about
     verification rather than about meep.** The physics backend was signed off at 88% sweep
     agreement with a bit-exact control, and a player was frozen in an open corridor. The
     disagreements were rare and every single one of them was catastrophic rather than small —
@@ -303,7 +317,7 @@ the strongest argument in this report for the maintainer's instinct over mine.
     and none of them was flagged by any test, because they are failures to look rather than
     failures to check.
 
-16. **Smaller things that each cost under an hour and would each cost the next person the same.**
+17. **Smaller things that each cost under an hour and would each cost the next person the same.**
     The camera uses the object convention (+Z forward), documented inside the docblock of a
     function consumers never call — a hand-built view quaternion assuming −Z points the camera
     exactly backwards, which in a closed level presents as *a dark scene* rather than a reversed

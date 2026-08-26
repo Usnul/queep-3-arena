@@ -187,8 +187,38 @@ def build_normal(net: np.ndarray | None, wraps: bool, source_seam: float) -> tup
     usable = length > 1e-3
 
     unit = np.where(usable, n / np.maximum(length, 1e-9), np.array([0.0, 0.0, 1.0]))
+
+    #
+    # Re-centre the tangent components, and this is a correction rather than a
+    # tidy-up.
+    #
+    # A normal map for a *texture* has to average to the flat normal, because the
+    # surface it will be applied to is what carries the slope. A map whose mean is
+    # (0, 0.3, ...) is saying the wall leans, and the wall does not lean -- the
+    # brush it is painted on decides that, and the brush is flat.
+    #
+    # Across the 171 maps the network produced, the X means average 0.4945 and the
+    # Y means average 0.5417: a systematic lean of about five degrees in +Y, with
+    # 49 maps past 0.55 against 16 in X. That is the model's own prior showing
+    # through -- it estimates normals for photographs of scenes, where surfaces
+    # genuinely do tilt away from the camera, and there is no tangent frame in a
+    # photograph for it to have been relative to. `gothic_floor/q1metal7_99stair`
+    # came back at 0.813, a forty-degree average lean across a flat stair tread.
+    #
+    # Removing the DC is done before the tilt test below, not after, because some
+    # of what that test would have refused as implausible relief is a plausible
+    # map with a large offset on it.
+    #
+    centred = unit.copy()
+    lean = unit[..., :2].mean(axis=(0, 1))
+    centred[..., 0] -= lean[0]
+    centred[..., 1] -= lean[1]
+    length = np.linalg.norm(centred, axis=-1, keepdims=True)
+    unit = centred / np.maximum(length, 1e-9)
+
     tilt = np.degrees(np.arccos(np.clip(unit[..., 2], -1.0, 1.0)))
     mean_tilt = float(tilt.mean())
+    lean_deg = float(np.degrees(np.arcsin(np.clip(np.linalg.norm(lean), 0, 1))))
 
     if mean_tilt > INVERTED_TILT_DEG:
         return None, f"mean tilt {mean_tilt:.1f} deg, inverted"
@@ -204,7 +234,7 @@ def build_normal(net: np.ndarray | None, wraps: bool, source_seam: float) -> tup
         if seam > SEAM_VISIBLE and seam > source_seam + MAX_SEAM_EXCESS:
             return None, f"seam {seam:.1f} against source {source_seam:.1f}"
 
-    return encoded, f"kept, mean tilt {mean_tilt:.1f} deg"
+    return encoded, f"kept, mean tilt {mean_tilt:.1f} deg, lean removed {lean_deg:.1f} deg"
 
 
 def build_orm(

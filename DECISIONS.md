@@ -3551,7 +3551,7 @@ image: 21 materials share a texture with another.
 |---|---:|
 | images | 183 |
 | de-lit albedos | 171 |
-| normal maps kept | **136** of 171 asked for |
+| normal maps kept | **130** of 171 asked for |
 | ORMs | 183 |
 
 Read out of the live engine on `oa_dm1` with items spawned: **59 materials, 34 with a normal map,
@@ -3568,15 +3568,39 @@ network's variation around it (`blocks10` 0.829 +/- 0.098 against a table level 
 
 | reason | count | what it means |
 |---|---:|---|
-| seam | 15 | wraps visibly worse than the source does |
-| implausible relief | 15 | mean tilt 45 to 90 degrees -- not inverted, just not a surface |
+| seam | 17 | wraps visibly worse than the source does |
+| flat | 15 | nothing left once the lean was removed; see below |
 | refused by the table | 12 | effect artwork; see D-093 |
-| inverted | 4 | mean tilt over 90 degrees; the average texel faces *into* the surface |
-| flat | 1 | nothing in it worth a texture fetch |
+| inverted | 5 | mean tilt over 90 degrees; the average texel faces *into* the surface |
+| implausible relief | 4 | mean tilt 45 to 90 degrees -- not inverted, just not a surface |
 
-The four inversions include `acc_dm3/rivets` at 126 degrees, which is the failure the pilot found by
-hand on eight textures. Finding three more of it in 171 is the check earning its place: one in
-forty-three, invisible in a thumbnail, and it would have lit every rivet from the wrong side.
+The five inversions include `acc_dm3/rivets` at 126 degrees, which is the failure the pilot found by
+hand on eight textures. Finding four more of it in 171 is the check earning its place: one in
+thirty-four, invisible in a thumbnail, and it would have lit every rivet from the wrong side.
+
+**The systematic error nobody was looking for: every normal map leaned.**
+
+Across the 171 the network produced, the X channel means average 0.4945 and the Y channel means
+average **0.5417** -- 49 maps past 0.55 in Y against 16 in X. That is a whole-map tilt of about five
+degrees on average and much more on some: `gothic_floor/q1metal7_99stair` came back at 0.813, a
+forty-degree average lean across a flat stair tread.
+
+It is the model's own prior showing through, and it is not really its fault. It estimates normals
+for photographs of scenes, where surfaces genuinely do tilt away from the camera -- and a photograph
+has no tangent frame for the answer to have been relative to. Handing it a texture and reading the
+result as tangent-space is this pipeline's interpretation, not the model's claim.
+
+The correction follows from what a texture *is*. A normal map for a texture has to average to the
+flat normal, because the surface it will be painted on is what carries the slope, and a Q3 brush is
+flat. So the DC is removed from the two tangent components before anything else looks at the map:
+median 9.1 degrees taken out, mean 12.8, 22 maps over 20 degrees, one at 70.
+
+It is done *before* the tilt test rather than after, and that reshuffles the refusals rather than
+just reducing them. Eleven maps that would have been thrown out as implausible relief were a
+plausible map with a large offset on it, and came back. Fifteen turned out to be *nothing but* the
+offset -- mean tilt under one degree once centred -- and are now refused as flat, correctly: they
+were carrying a lean and no relief at all. Net 130 rather than 136, and the 130 are centred to
+within 0.003 on both channels.
 
 **Two mistakes in the checks themselves, both caught by running them.**
 
