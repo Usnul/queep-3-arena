@@ -24,7 +24,7 @@
  * Usage:  node tools/convert-map.ts <mapname> [<mapname>...]
  */
 
-import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -297,7 +297,15 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     );
 
     const outDir = join(BUILT, mapName);
+    /*
+     Emptied rather than added to. A conversion decides the *name* of a file from
+     what it did to the image, so a run that restates something differently
+     leaves the old name behind: turning on the de-lit albedos renamed 33 of the
+     model bundle's textures to `.delit.png` and left 33 orphans beside them,
+     which is a third of the bundle in files nothing references.
+    */
     const textureDir = join(outDir, 'textures');
+    rmSync(textureDir, { recursive: true, force: true });
     mkdirSync(textureDir, { recursive: true });
 
     const shaders = bsp.shaders;

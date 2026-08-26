@@ -70,17 +70,32 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: Above this mean tilt off the surface, the map is not describing a painted
-#: texture's relief -- it is inverted, or it is a different quantity altogether.
+#: Past 90 degrees the average texel faces *into* the surface, which is not a
+#: strong normal map, it is a sign-flipped one. Four of 171 came back like this.
+INVERTED_TILT_DEG = 90.0
+
+#: And past this, without being inverted, the average texel is at an angle no
+#: painted wall or skin has. Kept separate from the number above because
+#: "inverted" is a specific claim and a 47-degree map is not inverted, it is
+#: implausible -- both are refused, and saying which is which is free.
 MAX_MEAN_TILT_DEG = 45.0
 
 #: Below this, there is nothing in it worth a texture fetch.
 MIN_MEAN_TILT_DEG = 1.0
 
-#: How much worse than the source a wrapping map's seam may be, in 8-bit units.
-#: The pilot's surviving framing held every channel to within about one unit;
-#: four is loose enough not to reject on noise and tight enough that a real
-#: discontinuity -- the 17 to 89 units the rejected framing produced -- cannot pass.
+#: A wrapping map is refused only when its seam is *both* visible and worse than
+#: the source's.
+#:
+#: The excess alone was the first rule and it was wrong. It refused
+#: `textures/sfx/metalfloor_wall_14b` at a seam of -0.1 -- edges *closer* than
+#: ordinary interior neighbours, no line to see -- because its source scores -5.5
+#: and the difference is 5.4. Comparing only to the source punishes a texture for
+#: having been unusually continuous to begin with.
+#:
+#: The floor is set from the pilot: the framing that works produced 0.06 to 4.75
+#: across every channel and the framing that does not produced 17 to 89, so six
+#: separates them with room on both sides.
+SEAM_VISIBLE = 6.0
 MAX_SEAM_EXCESS = 4.0
 
 
@@ -175,17 +190,19 @@ def build_normal(net: np.ndarray | None, wraps: bool, source_seam: float) -> tup
     tilt = np.degrees(np.arccos(np.clip(unit[..., 2], -1.0, 1.0)))
     mean_tilt = float(tilt.mean())
 
+    if mean_tilt > INVERTED_TILT_DEG:
+        return None, f"mean tilt {mean_tilt:.1f} deg, inverted"
     if mean_tilt > MAX_MEAN_TILT_DEG:
-        return None, f"mean tilt {mean_tilt:.1f} deg, inverted or not a normal map"
+        return None, f"mean tilt {mean_tilt:.1f} deg, implausible relief"
     if mean_tilt < MIN_MEAN_TILT_DEG:
         return None, f"mean tilt {mean_tilt:.2f} deg, flat"
 
     encoded = unit * 0.5 + 0.5
 
     if wraps:
-        excess = seam_excess(encoded)
-        if excess > source_seam + MAX_SEAM_EXCESS:
-            return None, f"seam {excess:.1f} against source {source_seam:.1f}"
+        seam = seam_excess(encoded)
+        if seam > SEAM_VISIBLE and seam > source_seam + MAX_SEAM_EXCESS:
+            return None, f"seam {seam:.1f} against source {source_seam:.1f}"
 
     return encoded, f"kept, mean tilt {mean_tilt:.1f} deg"
 
@@ -250,9 +267,20 @@ def main() -> None:
             p = args.raw / f"{stem}.{framing}.{kind}.png"
             return read(p) if p.exists() else None
 
-        albedo, albedo_why = build_albedo(source, load("basecolor"))
-        save(args.out / f"{stem}.albedo.png", albedo)
-        counts["albedo"] += 1
+        #
+        # An effect image is not artwork of a surface -- a `tcGen environment`
+        # fake reflection, a powerup shell, a glyph on black -- so there is no
+        # painted shading in it to take out and de-lighting it means nothing. The
+        # table already refuses it a normal map for the same reason; refusing it a
+        # replacement albedo is the same statement about the same sixteen images,
+        # and it leaves `writeTexture` binding the artwork unchanged.
+        #
+        if job["effect"]:
+            albedo_why = "left alone, effect artwork"
+        else:
+            albedo, albedo_why = build_albedo(source, load("basecolor"))
+            save(args.out / f"{stem}.albedo.png", albedo)
+            counts["albedo"] += 1
 
         normal_why = "refused by the table"
         if job["normal"] == "keep":

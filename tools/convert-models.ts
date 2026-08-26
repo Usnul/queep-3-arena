@@ -29,7 +29,7 @@
  * Usage:  node tools/convert-models.ts
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -249,7 +249,15 @@ async function convertModels(): Promise<void> {
     const index = new ShaderIndex(EXTRACTED).load();
 
     const outDir = join(BUILT, 'models');
+    /*
+     Emptied rather than added to. A conversion decides the *name* of a file from
+     what it did to the image, so a run that restates something differently
+     leaves the old name behind: turning on the de-lit albedos renamed 33 of the
+     model bundle's textures to `.delit.png` and left 33 orphans beside them,
+     which is a third of the bundle in files nothing references.
+    */
     const textureDir = join(outDir, 'textures');
+    rmSync(textureDir, { recursive: true, force: true });
     mkdirSync(textureDir, { recursive: true });
 
     const hands = handModelPaths();

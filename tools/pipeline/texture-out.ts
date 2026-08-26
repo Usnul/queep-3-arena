@@ -89,17 +89,40 @@ export function luminance8(r: number, g: number, b: number): number {
 export interface TextureCache {
     readonly byKey: Map<string, string>;
     readonly byFile: Map<string, string>;
+    /**
+     * The generated maps, memoised separately.
+     *
+     * They are not in `byKey` because `textureCounts` reads that to say how many
+     * references resolved to nothing, and a *Q3* reference that resolves to
+     * nothing is a conversion failure worth failing a test over -- the shader
+     * named an image and the image is not there. A generated map that has not
+     * been produced is not that. Thirty-five normal maps were refused by
+     * `build_maps.py` on purpose, and counting them as missing textures broke
+     * `presentation.test.ts` on all six maps while nothing was wrong.
+     */
+    readonly byDerived: Map<string, string>;
 }
 
 export function textureCache(): TextureCache {
-    return { byKey: new Map(), byFile: new Map() };
+    return { byKey: new Map(), byFile: new Map(), byDerived: new Map() };
 }
 
-/** Files actually written, and references that resolved to nothing. */
+/**
+ * Files actually written, and Q3 references that resolved to nothing.
+ *
+ * `missing` counts only the Q3 side. A generated map that has not been produced
+ * is absent by design -- 35 normal maps were refused outright by `build_maps.py`
+ * -- and reporting those as missing textures says a conversion failed when it
+ * did exactly what it was told. `written` counts both, because a file is a file.
+ */
 export function textureCounts(cache: TextureCache): { written: number; missing: number } {
     let missing = 0;
     for (const v of cache.byKey.values()) if (v === '') missing += 1;
-    return { written: cache.byFile.size, missing };
+
+    let derived = 0;
+    for (const k of cache.byDerived.keys()) if (k.startsWith('file:')) derived += 1;
+
+    return { written: cache.byFile.size + derived, missing };
 }
 
 /**
@@ -138,7 +161,7 @@ export type DerivedMap = 'normal' | 'orm';
  * authored for. See {@link writeTexture}.
  */
 export function delitAlbedoPath(mapsRoot: string, virtualPath: string): string {
-    return join(mapsRoot, `${virtualPath.replace(/[\/]/g, '_')}.albedo.png`);
+    return join(mapsRoot, `${virtualPath.replace(/[\\/]/g, '_')}.albedo.png`);
 }
 
 /**
@@ -177,15 +200,15 @@ export function writeDerivedTexture(
 ): string | null {
     const key = derivedTextureKey(virtualPath, map);
 
-    const existing = cache.byKey.get(key);
+    const existing = cache.byDerived.get(key);
     if (existing !== undefined) return existing === '' ? null : existing;
 
-    const flat = virtualPath.replace(/[\/]/g, '_');
+    const flat = virtualPath.replace(/[\\/]/g, '_');
     const out = `${flat}.${map}.png`;
     const src = join(mapsRoot, out);
 
     if (!existsSync(src)) {
-        cache.byKey.set(key, '');
+        cache.byDerived.set(key, '');
         return null;
     }
 
@@ -194,9 +217,9 @@ export function writeDerivedTexture(
      keyed the same way `byKey` is here rather than by an effective blend. Two
      materials sharing a texture share the copy.
     */
-    const shared = cache.byFile.get(key);
+    const shared = cache.byDerived.get(`file:${key}`);
     if (shared !== undefined) {
-        cache.byKey.set(key, shared);
+        cache.byDerived.set(key, shared);
         return shared;
     }
 
@@ -204,12 +227,12 @@ export function writeDerivedTexture(
         copyFileSync(src, join(outDir, out));
     } catch (e) {
         console.warn(`  texture ${key}: ${(e as Error).message}`);
-        cache.byKey.set(key, '');
+        cache.byDerived.set(key, '');
         return null;
     }
 
-    cache.byFile.set(key, out);
-    cache.byKey.set(key, out);
+    cache.byDerived.set(`file:${key}`, out);
+    cache.byDerived.set(key, out);
     return out;
 }
 

@@ -3232,11 +3232,21 @@ default pixel holds, so `ambient_factors` sees exactly what it saw before.
 
 **What is in scope, mechanically.** A material is owed both maps when it has an albedo and is not
 sky, not nodraw, not unlit, and not blended. Over the six built maps that is **108 of 128** world
-materials, which is the number the phase was planned against. Props and characters come out at 62
-of 93 and 34 of 41, against 74 and 41 in the planning note -- a difference of 19 materials, not
-reconciled here, because the planning note counted from a different enumeration and the rule is
-the rule either way. `test/materials.test.ts` pins 128 and 108, so a change to the rule that halves
-the job is a failing test rather than a quiet saving.
+materials, which is exactly the number the phase was planned against.
+
+Props and characters are not exact: 62 of 93 and 34 of 41 here, against 74 and 41 in the planning
+note. The 19-material difference is very close to the unlit exclusion on those two groups -- 16
+props and, with the four blended characters, most of the rest -- so the likely explanation is that
+the note counted before excluding unlit, and the world figure agrees because a world map has few
+unlit surfaces that survive to a bundle. That is a plausible reconciliation and not a demonstrated
+one, and it is recorded as such rather than tidied into agreement: the rule is the rule either way,
+and `test/materials.test.ts` pins 128 and 108 so that a change to it which halves the job is a
+failing test rather than a quiet saving.
+
+**The plan's other number reconciles exactly, and is worth stating because it looks like it does
+not.** "93 of 93 materials on `oa_dm1`" is a live-engine count and `oa_dm1`'s bundle holds 31
+materials. The other 62 are the static props, which are loaded into the same scene from the model
+bundle. 31 + 62 = 93.
 
 ### D-090: Cosmos DiffusionRenderer only works at 1280x704, and fails silently everywhere else
 
@@ -3528,3 +3538,78 @@ application carry a baked lightmap. Its system's docblock then says, accurately,
 is "necessary for Brick4 lighting and not sufficient for it", because the setting that makes the
 renderer read it is on the other side of a boundary the facade holds for good reasons. Both halves
 were designed carefully. The seam between them is where this stopped.
+
+### D-095: The set, generated -- 183 images, 136 normal maps, and 35 refusals with reasons
+
+537 network passes over **183 unique images**, about ninety minutes on the 4090, then assembly.
+The count is 183 rather than 204 because the classification is per material and the maps are per
+image: 21 materials share a texture with another.
+
+**What shipped:**
+
+| | |
+|---|---:|
+| images | 183 |
+| de-lit albedos | 171 |
+| normal maps kept | **136** of 171 asked for |
+| ORMs | 183 |
+
+Read out of the live engine on `oa_dm1` with items spawned: **59 materials, 34 with a normal map,
+41 with an ORM**, `roughness_factor` 1.0 on those 41 and 0.85 on the 18 without, `metallic_factor`
+1.0 and 0. Against the sentence this phase started from -- 93 of 93 at roughness 0.85, metallic 0,
+no ORM and no normal map -- that is the placeholder gone from every surface the table had something
+to say about.
+
+The ORM says what it was told to say. R is 1.00 everywhere; G is the table's level with the
+network's variation around it (`blocks10` 0.829 +/- 0.098 against a table level of 0.85, `pewter`
+0.352 +/- 0.144 against 0.35); B is 0.00 or 1.00 and nothing between.
+
+**35 normal maps were refused, and the reasons are the interesting part.**
+
+| reason | count | what it means |
+|---|---:|---|
+| seam | 15 | wraps visibly worse than the source does |
+| implausible relief | 15 | mean tilt 45 to 90 degrees -- not inverted, just not a surface |
+| refused by the table | 12 | effect artwork; see D-093 |
+| inverted | 4 | mean tilt over 90 degrees; the average texel faces *into* the surface |
+| flat | 1 | nothing in it worth a texture fetch |
+
+The four inversions include `acc_dm3/rivets` at 126 degrees, which is the failure the pilot found by
+hand on eight textures. Finding three more of it in 171 is the check earning its place: one in
+forty-three, invisible in a thumbnail, and it would have lit every rivet from the wrong side.
+
+**Two mistakes in the checks themselves, both caught by running them.**
+
+*The seam rule was wrong before it was right.* It refused any map whose seam was more than four
+units worse than its source -- and refused `textures/sfx/metalfloor_wall_14b` at a seam of **-0.1**,
+which is edges *closer* than ordinary interior neighbours and no line to see at all, because its
+source scores -5.5. Comparing only against the source punishes a texture for having been unusually
+continuous to begin with. The rule now needs the seam to be both visible in absolute terms and
+worse than the source, and six units separates the two framings the pilot measured with room on
+both sides. Six maps came back.
+
+*"Inverted" was doing two jobs.* Fifteen of the nineteen original refusals were between 45 and 90
+degrees, which is not inversion -- it is a normal map describing relief no painted wall has. Both
+are refused and the report now says which, because a claim in a report should be the claim that was
+tested.
+
+**Two things that only showed up once the maps existed, both in the pipeline rather than the maps.**
+
+*A refused normal map was being counted as a missing texture.* `textureCounts` reads the cache's
+`byKey` map and reports every empty entry as a reference that resolved to nothing, which for a Q3
+image is a conversion failure worth failing a test over -- the shader named it and it is not there.
+A generated map that was refused on purpose is not that, and `presentation.test.ts` failed on all
+six maps saying textures were missing while nothing was wrong. The generated maps now memoise
+separately.
+
+*Renaming a file left the old one behind.* The de-lit albedo is written as `<name>.delit.png`, and
+the converters had always added to `textures/` rather than emptying it -- so turning the de-lighting
+on left 33 orphaned albedos in the model bundle beside their replacements, a third of the bundle in
+files nothing references. The directory is now cleared per run. That was latent long before this
+phase: any change to how a restatement names its output would have done it.
+
+**The level hold does not move the round trip, and that is why it is safe.** `build_albedo` puts the
+mean luminance back where the source had it (D-092's measurement was made without that step). A
+uniform scale on the albedo is exactly what the fitted light absorbs, so every recovery figure in
+D-092 is unchanged by it -- which is the point: it is a change to how the map sits against this
+port's photometry, not a change to the decomposition.
