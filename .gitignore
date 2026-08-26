@@ -1,7 +1,22 @@
 node_modules/
 dist/
 .refs/
-assets/
+#
+# `assets/` is committed, apart from the two trees that cannot be. Everything
+# under it is derivative of the GPLv2/CC inputs ASSETS.md records and carries
+# their terms; the attribution lives there.
+#
+# `ml/` is 36 GB -- 28 GB of third-party model weights whose shards are each
+# well past GitHub's 100 MB hard limit, a 2.7 GB pip cache, and a venv full of
+# absolute Windows paths that would be broken for anyone else anyway.
+#
+# `download/` is the 425 MB upstream archive. `fetch-assets.mjs` re-fetches it
+# and checks it against a recorded SHA-256, and `extracted/` already holds every
+# file the port consumes, so committing it would buy nothing and would have cost
+# a Git LFS dependency for the whole repository.
+#
+assets/ml/
+assets/download/
 oracle/build/
 *.log
 .vite/
@@ -9,8 +24,6 @@ coverage/
 
 # JetBrains
 .idea/
-
-assets/shots/
 
 oracle/build/
 

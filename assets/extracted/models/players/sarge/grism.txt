@@ -1,0 +1,8 @@
+
+Title:    GRiSM (Generic Random Space Marine)
+Author:   Chris Holden
+Website:  http://chrisholden.net/
+Software: Maya, Photoshop
+Dev Time: 3 hours
+About:    Standard, generic soldier character segmented and design to fit in Quake 3: Arena.
+          Released as a software development kit (SDK) for anyone to texture or learn from.

@@ -1,0 +1,318 @@
+{
+ "generator": "queep-3-arena tools/convert-sounds.ts",
+ "sounds": {
+  "weapon/WP_GAUNTLET": [
+   "weapons_melee_fstatck.wav"
+  ],
+  "weapon/WP_MACHINEGUN": [
+   "weapons_machinegun_machgf1b.wav",
+   "weapons_machinegun_machgf2b.wav",
+   "weapons_machinegun_machgf3b.wav",
+   "weapons_machinegun_machgf4b.wav"
+  ],
+  "weapon/WP_SHOTGUN": [
+   "weapons_shotgun_sshotf1b.wav"
+  ],
+  "weapon/WP_GRENADE_LAUNCHER": [
+   "weapons_grenade_grenlf1a.wav"
+  ],
+  "weapon/WP_ROCKET_LAUNCHER": [
+   "weapons_rocket_rocklf1a.wav"
+  ],
+  "weapon/WP_LIGHTNING": [
+   "weapons_lightning_lg_fire.wav"
+  ],
+  "weapon/WP_RAILGUN": [
+   "weapons_railgun_railgf1a.wav"
+  ],
+  "weapon/WP_PLASMAGUN": [
+   "weapons_plasma_hyprbf1a.wav"
+  ],
+  "weapon/WP_BFG": [
+   "weapons_bfg_bfg_fire.wav"
+  ],
+  "weapon/empty": [
+   "weapons_noammo.wav"
+  ],
+  "weapon/change": [
+   "weapons_change.wav"
+  ],
+  "impact/bullet": [
+   "weapons_machinegun_ric1.wav",
+   "weapons_machinegun_ric2.wav",
+   "weapons_machinegun_ric3.wav"
+  ],
+  "impact/rocket": [
+   "weapons_rocket_rocklx1a.wav"
+  ],
+  "impact/plasma": [
+   "weapons_plasma_plasmx1a.wav"
+  ],
+  "impact/grenade": [
+   "weapons_grenade_hgrenb1a.wav"
+  ],
+  "impact/lightning": [
+   "weapons_lightning_lg_hit.wav"
+  ],
+  "impact/flesh": [
+   "player_gibimp1.wav",
+   "player_gibimp2.wav",
+   "player_gibimp3.wav"
+  ],
+  "feedback/hit": [
+   "feedback_hit.wav"
+  ],
+  "player/footstep": [
+   "player_footsteps_step1.wav",
+   "player_footsteps_step2.wav",
+   "player_footsteps_step3.wav",
+   "player_footsteps_step4.wav"
+  ],
+  "player/land": [
+   "player_land1.wav"
+  ],
+  "player/jump": [
+   "player_sarge_jump1.wav"
+  ],
+  "mover/door_start": [
+   "movers_doors_dr1_strt.wav"
+  ],
+  "mover/door_stop": [
+   "movers_doors_dr1_end.wav"
+  ],
+  "mover/plat_start": [
+   "movers_plats_pt1_strt.wav"
+  ],
+  "mover/plat_stop": [
+   "movers_plats_pt1_end.wav"
+  ],
+  "mover/button": [
+   "movers_switches_butn2.wav"
+  ],
+  "world/jumppad": [
+   "world_jumppad.wav"
+  ],
+  "world/telein": [
+   "world_telein.wav"
+  ],
+  "world/teleout": [
+   "world_teleout.wav"
+  ],
+  "missile/WP_ROCKET_LAUNCHER": [
+   "weapons_rocket_rockfly.wav"
+  ],
+  "missile/WP_PLASMAGUN": [
+   "weapons_plasma_lasfly.wav"
+  ],
+  "missile/WP_BFG": [
+   "weapons_rocket_rockfly.wav"
+  ],
+  "firing/WP_GAUNTLET": [
+   "weapons_melee_fstrun.wav"
+  ],
+  "firing/WP_LIGHTNING": [
+   "weapons_lightning_lg_hum.wav"
+  ],
+  "firing/WP_CHAINGUN": [
+   "weapons_vulcan_wvulfire.wav"
+  ],
+  "ready/WP_GAUNTLET": [
+   "weapons_melee_fsthum.wav"
+  ],
+  "ready/WP_RAILGUN": [
+   "weapons_railgun_rg_hum.wav"
+  ],
+  "ready/WP_BFG": [
+   "weapons_bfg_bfg_hum.wav"
+  ],
+  "item/hover": [
+   "weapons_weapon_hover.wav"
+  ],
+  "item/item_armor_shard": [
+   "misc_ar1_pkup.wav"
+  ],
+  "item/item_armor_combat": [
+   "misc_ar2_pkup.wav"
+  ],
+  "item/item_armor_body": [
+   "misc_ar2_pkup.wav"
+  ],
+  "item/item_health_small": [
+   "items_s_health.wav"
+  ],
+  "item/item_health": [
+   "items_n_health.wav"
+  ],
+  "item/item_health_large": [
+   "items_l_health.wav"
+  ],
+  "item/item_health_mega": [
+   "items_m_health.wav"
+  ],
+  "item/weapon_gauntlet": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_shotgun": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_machinegun": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_grenadelauncher": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_rocketlauncher": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_lightning": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_railgun": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_plasmagun": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_bfg": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_grapplinghook": [
+   "misc_w_pkup.wav"
+  ],
+  "item/ammo_shells": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_bullets": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_grenades": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_cells": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_lightning": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_rockets": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_slugs": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_bfg": [
+   "misc_am_pkup.wav"
+  ],
+  "item/holdable_teleporter": [
+   "items_holdable.wav"
+  ],
+  "item/holdable_medkit": [
+   "items_holdable.wav"
+  ],
+  "item/item_quad": [
+   "items_quaddamage.wav"
+  ],
+  "item/item_enviro": [
+   "items_protect.wav"
+  ],
+  "item/item_haste": [
+   "items_haste.wav"
+  ],
+  "item/item_invis": [
+   "items_invisibility.wav"
+  ],
+  "item/item_regen": [
+   "items_regeneration.wav"
+  ],
+  "item/item_flight": [
+   "items_flight.wav"
+  ],
+  "item/holdable_kamikaze": [
+   "items_holdable.wav"
+  ],
+  "item/holdable_portal": [
+   "items_holdable.wav"
+  ],
+  "item/holdable_invulnerability": [
+   "items_holdable.wav"
+  ],
+  "item/ammo_nails": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_mines": [
+   "misc_am_pkup.wav"
+  ],
+  "item/ammo_belt": [
+   "misc_am_pkup.wav"
+  ],
+  "item/item_scout": [
+   "items_scout.wav"
+  ],
+  "item/item_guard": [
+   "items_guard.wav"
+  ],
+  "item/item_doubler": [
+   "items_doubler.wav"
+  ],
+  "item/item_ammoregen": [
+   "items_ammoregen.wav"
+  ],
+  "item/item_redcube": [
+   "misc_am_pkup.wav"
+  ],
+  "item/item_bluecube": [
+   "misc_am_pkup.wav"
+  ],
+  "item/weapon_nailgun": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_prox_launcher": [
+   "misc_w_pkup.wav"
+  ],
+  "item/weapon_chaingun": [
+   "misc_w_pkup.wav"
+  ],
+  "music/OA14": [
+   "music_OA14.ogg"
+  ],
+  "world/wind1": [
+   "world_wind1.wav"
+  ],
+  "world/lava_amb_01_quiet": [
+   "world_lava_amb_01_quiet.wav"
+  ],
+  "world/ambient/x_ominous": [
+   "world_ambient_x_ominous.wav"
+  ],
+  "world/suck1": [
+   "world_suck1.wav"
+  ],
+  "world/ambient/x_forbidden": [
+   "world_ambient_x_forbidden.wav"
+  ],
+  "world/growl1": [
+   "world_growl1.wav"
+  ],
+  "world/firesoft": [
+   "world_firesoft.wav"
+  ],
+  "world/waterfall": [
+   "world_waterfall.wav"
+  ],
+  "world/drops": [
+   "world_drops.wav"
+  ]
+ },
+ "missing": [
+  "music/sonic6: music/sonic6.ogg",
+  "music/sonic3: music/sonic3.ogg"
+ ],
+ "stats": {
+  "names": 97,
+  "files": 77,
+  "kilobytes": 8168,
+  "missing": 2,
+  "maps": 6,
+  "fromMaps": 12
+ }
+}

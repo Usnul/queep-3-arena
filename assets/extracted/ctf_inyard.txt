@@ -1,0 +1,26 @@
+================================================================
+Title        		: Inner Yard
+Date         		: 25-05-2009
+Filename     		: ctf_inyard_V3_b1.pk3
+Author       		: cosmo
+Email Address		: cosmo-flash@gmx.net
+Website			    : http://oa.spaceboyz.net
+MappingBlog         : http://mapforce.blogspot.com
+
+Supported Gametypes : CTF, Domination, One Flag, Harvester, Overload
+
+Description		: Progress of a CTF map
+                
+Players         : 6 - 16
+
+Bots            : yes
+
+Missionpack     : Nailgun, Gametypes
+
+Buildtime       : about 10 days
+Changes         : Much of the core layout has been changed.
+                : There is an inner yard now and everything is
+                : far more arena themed. Fog of death removed
+                : and the map has a 90° corner and is less straight.
+
+Compile Options : -light -fast -patchshadows -bounce 4 -bouncegrid -samples 4 -dark -dirty -dirtmode 0 -dirtdepth 512 -dirtscale 1.25 -gamma 2.0 -compensate 2.0 -samplesize 8

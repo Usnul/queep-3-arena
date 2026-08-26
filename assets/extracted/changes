@@ -1,0 +1,226 @@
+0.8.1 (10/31/2008)
+- Uses protocol 71
+- Single player campaign re-organized (Thanks cosmo)
+- 'Depreciated' client for Windows 9X in addition (lacks ipv6 support)
+- New hitsound
+- New map: ps37ctf
+- New map: ctf_gate1
+- New map: am_galevish
+- Space Marine should no longer crash on old client
+- Chaingun works in unlagged now
+- non-Free texture folders from previous release removed (this also removes the schism and q3dm6ish-v2 map)
+
+0.8.0 (8/8/2008)
+- Better mouse control (it'd better be)
+- Initial release of 'missionpack'
+- Missionpack weapons added back into baseoa (this means NAILGUNS, PROXIMITY MINES AND CHAINGUNS in non-missionpack mode!)
+- New announcer voices from Fuzztooth
+- New player model : Sorceress
+- New map: oa_bases7
+- New map: pul1ctf
+- New map: schism
+- q3dm6ish retextured by TRaK, and is back in the maps menu
+- oa_bases3 recompiled with fast water (should perform 632% faster)
+- Classic version of oa_bases3 snuck in :)
+- oa_minia updated
+- dm6ish updated (retextured, and bots aren't dumb at the door anymore)
+- New plasma gun model and skin from enki
+- New sound effects for shotgun, railgun, and weapon switching
+- New CTF event sounds
+- New Kyonshi voices, courtesy of aeri_s
+- Ayumi optimized, at the cost of the Jenna skin :(
+- Beret greatly improved, in skin and animation and taunt sound
+- Some simple stress and flyby demo files (intended for timedemo)
+- All TGAs that had broken headers are now corrected 
+- Other stuff like random asset polish
+
+0.7.7 (5/28/2008)
+- Fixed "Getting stuck bug"
+- Fixed logging bug
+- Fixed UI crash
+- Fixed overflow in Multiplayer list + Some of beast's changes to server list (longer names)
+- Instantgib and All rockets disabled during single player startup
+- Clears nextmap after single player
+- Windows only: new SDL.dll allows Caps Lock and Num Luck to be used as keys.
+- Using protocol number 69, this should only now show servers running 0.7.7
+
+
+0.7.6 (4/20/2008)
+- New player model : Assassin
+- New player model : Smarine
+- New player skin : Angelyss/Neko
+- New player skin : Grism/Indigo
+- Ayumi/Neko, Angelyss/Sly have been atticed due to quality reasons.
+- Current music scrapped due to license issues. (No source, and license)
+- Text font (bigchars.tga) used by console and hud messages now doesn't bleed anymore
+- Special characters added for text font (bigchars.tga) used by some mods
+- lots of maps, at least 8!
+- oa_ctf2 is more balanced, slightly retextured
+- Elimination and CTF eliminaiton game types
+- Double domination game type
+- Last Man Standing game type
+- Instant Gib option
+- All Rockets option
+- Unlagged tracehits option
+- Alt-tab working
+- Classic Grism aren't teamskins anymore
+- A lot of the block textures were reworked and improved
+- A lot of other stuff we forgot like minor polishings
+
+0.7.1 (8/8/2007)
+- Angelyss/dark_blue is more blue on costume
+- New item icons from anyone
+- Less bots for oa_dm2 in single player campaign
+- Fan crash fix
+- You can no longer walk in the sky on Suspended
+- Beret is more polished, wears his beret properly
+- Announcer is a bit louder and much cleaner
+
+0.7.0 (7/7/2007)
+- lots of crap.
+- New player model : Arachna
+- New player model : Angelyss
+- New player model : Ayumi
+- New player model : Beret
+- New player model : Liz
+- New player model : Merman
+- New player model : Penguin
+- New player model : Skelebot
+- New player model : Sergei
+- New player model : Tony
+- New voice and skins for Grism
+- 26 new maps
+- Quake's DM maps converted, from dm1 to dm7
+- ce1m7's teleport bug fixed
+- oa_bases3 had an overhaul, now more balanced too
+- various weapon sounds are new
+- new announcer voice
+- dm4ish, dm6ish, and cbctf1 also had several changes
+- new gibs
+- new music
+- uses ioquake3 revision 1107
+- a lot of other stuff we forgot 
+
+0.6.0 (12/2/2006)
+- Botfiles code from dmn_clown!
+- Binaries updated to ioquake3 revision 982
+- Engine now uses "baseoa" as a base folder as well as its own local user settings folder 
+- Pk3 files are now split into components again
+- New splash video. 
+- Ogg support enabled.
+- New player model : Kyonshi! She's based on the Chinese jiang-shi (hopping corpse) mythology. Created by enki and leileilol. Voice provided by pixie.
+- New player model : Major! Created by JKM Makowka, animated and exported by leileilol. Voice also provided by pixie.
+- Ed's conversion of Quake's E1M7 converted over (GPL v2)
+- Vondur's Kaos map converted over. (GPL v2)
+- Tyrann's Aggressor map converted over. (GPL v2)
+- C.Brutail's cbctf1 converted over. (GPL v2 also)
+- Gargoyle is reskinned by enki
+- Gargoyle's wings are finally fixed and added.
+- New lightning gun skin from enki
+- New plasma gun skin from enki
+- New railgun skin from enki
+- New gauntlet skin from slyus
+- New machinegun skin from slyus
+- New lightning gun effects
+- Health items reworked; they all have spheres with LODs and shaders
+- Decals are slightly more polished.
+- A lot of sounds are polished. 
+- New flesh footsteps
+- New win32 icon
+- Removed oa_bubctf1. Apparently the OGSL isn't so "Free" after all :(
+- More 2D icons
+- Mega health model
+- Machinegun repositioned
+- Machinegun flash rotated (to be a bit like q3's)
+- Other little things I might have forgotten
+
+0.5.1 (8/26/2006)
+- Removed Fox_DF's sounds due to possible copyright issues
+- "Mouth" weapon sounds take the old weapon sounds place
+- LOD models added for: shotgun, gargoyle, grism(sarge)
+- Alternate simple "sprite" muzzleflashes also included (low geometry detail mode)
+- A couple new of benchmark demos added to demonstrate how well the new low detail meshes help game performance ;)
+- Chaingun model added (for the 'missionpack' like project that may be done in the future)
+
+0.5.0 (8/20/2006)
+- New map! oa_bubctf1, based on ButtahB's bubctf1 (The Vast and the Furious). CPMA players might recognize it ;)
+- New (and still temporary) machinegun texture
+- New menu buttons, thanks to MilesTeg.
+- New explosion sound and texture
+- Flares! Toggle with r_flares 0 or 1.
+- Detail textures! Toggle with r_detailTextures 0 or 1.
+- Now based on icculus.org/quake3 source code.
+- New skin for gargoyle - "tech" by Morphed.
+- Gargoyle skins improved (mostly in musculature detail but the detail overlay has been changed too)
+- Removed "ALPHA 4" and id software credits in menu
+- Fire textures and shader!
+- New liquid textures
+- New grenade explosion
+- Railtrail/plasmatrail shader implemented (cg_oldRail 0 / cg_oldPlasma 0)
+- Rocket sparks shader implemented (cg_oldRocket 0)
+- A new skybox from Nexuiz
+- A new skybox (space) by MilesTeg
+- dm4ish and q3dm6ish should have less zfighting and better texture alignment, thanks to div0
+- some other things i forgot
+
+Alpha 0.4.1 (6/6/2006)
+- DM6ISH added, map by SavageX (adapted from Nexuiz map sources)
+- New sound effects for the rocket launcher and shotgun
+- New rocket launcher, with a quick skin and also a weapon hand! (So it doesn't look so big)
+- New Gargoyle mapobject
+- New door and menu sounds (lifted from openquartz)
+- Fixed several decal shaders being overrided
+- Sun flare shader fixed
+- Reorganized files into seperate pk3 components
+- InfoZIP is now used to pack the pk3s (slightly smaller now)
+- Due to balance issues, oa_bases3 (CTF) is left out of the arenas.txt (it is still there, but play at your own risk!)
+- "Tiny" build for slower and disk space deprived machines 
+- Windows installer now defaults its path to Program Files
+
+Alpha 4 (5/7/2006)
+- New shotgun skin and uvs from BlackThief.
+- New railgun by leileilol. Crap skin unfortunately
+- New gauntlet by leileilol. no skin yet
+- New gargoyle player model by leileilol, however wings are broken so they are not exported.
+- New flag by leileilol (very simple and small though)
+- New remodeled low poly plasma gun by leileilol
+- Chaingun muzzleflash by leileilol (made ahead of time for the future Team edition)
+- New explosion sprites (sampled from a public domain "explosion" found on wikimedia commons)
+- New CTF ditties by leileilol (corny and quickly tracked)
+- New ambient sounds
+- New "Sarge" sounds 
+- New banner5.md3 (The title logo)
+- Fixed in some missing menu graphics
+- Changed menu backgrounds to non-animated dark ones
+- New oa_rpg3dm2 DM map by RPG, retextured for OA. (some bugs still remain, such as bright water, lack of flares, etc)
+- flare shaders (not enabled in oa yet, you can use ioq3 though)
+- added silly intro logo video
+
+Alpha 3 DM Test (2-25-2006)
+- internet play fixed! Thanks mewse for compiling the binaries too
+- added announcer voices by Mancubus (http://mikelightner.org)
+- Removed terrarena
+- Removed tux as it's a small cheating model. Don't worry tux fans, he will be remodeled at proper size again surely :)
+- DM4ish added, along with .MAP
+- Q3DM6ish added, along with .MAP (Quick conversions of Aardappel's q1 maps of the same name)
+- GRiSM player model animated, exported and available! Replaces the sarge gargoyle (there is no default "sarge" model yet) Model by Chris Holden, skins by Morphed, and rig/anims by leileilol.
+- VMs seperated from content
+- New machinegun, similar to the original (as it spins). UVW'd, but not skinned, so for now it is chromed.
+- new temporary grenade launcher, with grenade model
+- New machinegun and shotgun muzzleflashes 
+- crosshairs
+- Some new textures from mewse
+- fixed levelshot screen
+- added levelshots :D
+- a bunch of sounds are added from Nexuiz 1.5. props to alientrap
+- vms are now recompiled from the gpl source.
+- ui.qvm : alot of credits changes, cdkey screen has a notice, etc
+- new plasma impact, pretty
+- new railgun impact, just as pretty
+- rocket and grenade explosions are tweaked to expand now. much better
+- new bullet/shell impact, looks much better than the "firefly" sparks from before.
+- new teleport effect
+- plenty of new sounds now
+- new armor
+- lightning effect now works!
+- basic gib 

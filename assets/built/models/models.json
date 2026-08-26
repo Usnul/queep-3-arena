@@ -1,0 +1,4002 @@
+{
+ "name": "models",
+ "generator": "queep-3-arena tools/convert-models.ts",
+ "coordinateSystem": "Y-up, right-handed; Q3 units (unscaled, see D-011)",
+ "vertexStride": 12,
+ "vertexLayout": [
+  "position:3",
+  "normal:3",
+  "uv0:2",
+  "uv1:2",
+  "color_rg:2"
+ ],
+ "vertexBytes": 705120,
+ "indexBytes": 218220,
+ "materials": [
+  {
+   "name": "BlueDomSkin",
+   "albedo": "textures/effects/envmapblue#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapblue#normal.flat",
+   "orm": "textures/effects/envmapblue#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "RedDomSkin",
+   "albedo": "textures/effects/envmapred#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapred#normal.flat",
+   "orm": "textures/effects/envmapred#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "WhiteDomSkin",
+   "albedo": "textures/effects/tinfx#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/tinfx#normal.flat",
+   "orm": "textures/effects/tinfx#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/flags/pole.tga",
+   "albedo": "models/flags/pole",
+   "albedoBlend": "opaque",
+   "normal": "models/flags/pole#normal",
+   "orm": "models/flags/pole#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/flags/b_flag.tga",
+   "albedo": "models/flags/b_flag#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/flags/b_flag#normal",
+   "orm": "models/flags/b_flag#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/flags/n_flag.tga",
+   "albedo": "models/flags/n_flag#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/flags/n_flag#normal",
+   "orm": "models/flags/n_flag#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/flags/r_flag.tga",
+   "albedo": "models/flags/r_flag#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/flags/r_flag#normal",
+   "orm": "models/flags/r_flag#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/gibs/skull-4.tga",
+   "albedo": "models/gibs/skull-4",
+   "albedoBlend": "opaque",
+   "normal": "models/gibs/skull-4#normal",
+   "orm": "models/gibs/skull-4#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/gibs/veins.tga",
+   "albedo": "models/gibs/veins#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/gibs/veins#normal",
+   "orm": "models/gibs/veins#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "ameatygib",
+   "albedo": "models/gibs/genericgibmeat",
+   "albedoBlend": "opaque",
+   "normal": "models/gibs/genericgibmeat#normal",
+   "orm": "models/gibs/genericgibmeat#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/gibs/heart.tga",
+   "albedo": "models/gibs/heart",
+   "albedoBlend": "opaque",
+   "normal": "models/gibs/heart#normal",
+   "orm": "models/gibs/heart#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/gibs/splurt.tga",
+   "albedo": "models/gibs/splurt#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/gibs/splurt#normal",
+   "orm": "models/gibs/splurt#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/gibs/f_veins.tga",
+   "albedo": "models/gibs/f_veins#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/gibs/f_veins#normal",
+   "orm": "models/gibs/f_veins#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "E:/projects/oa/newtele/Circle",
+   "albedo": null,
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "RuneAmreg",
+   "albedo": "textures/effects/tinfx2b#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/tinfx2b#normal.flat",
+   "orm": "textures/effects/tinfx2b#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/bfgammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/bfgammo2",
+   "albedo": "models/powerups/ammo/bfgammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/bfgammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/vulcammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/vulcammo2",
+   "albedo": "models/powerups/ammo/vulcammo",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/vulcammo",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/grenammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/grenammo2",
+   "albedo": "models/powerups/ammo/grenammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/grenammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/lighammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/lighammo2",
+   "albedo": "models/powerups/ammo/lighammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/lighammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/machammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/machammo2",
+   "albedo": "models/powerups/ammo/machammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/machammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/nailammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/nailammo2",
+   "albedo": "models/powerups/ammo/nailammo",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/nailammo",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/plasammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/plasammo2",
+   "albedo": "models/powerups/ammo/plasammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/plasammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/proxammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/proxammo2",
+   "albedo": "models/powerups/ammo/proxammo",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/proxammo",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/railammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/railammo2",
+   "albedo": "models/powerups/ammo/railammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/railammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/rockammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/rockammo2",
+   "albedo": "models/powerups/ammo/rockammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/rockammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/shotammo",
+   "albedo": "models/powerups/ammo/ammobox",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/ammo/ammobox#normal",
+   "orm": "models/powerups/ammo/ammobox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/ammo/shotammo2",
+   "albedo": "models/powerups/ammo/shotammo2",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/ammo/shotammo2",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "redArmor",
+   "albedo": "models/powerups/armor/redarmor",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/armor/redarmor#normal",
+   "orm": "models/powerups/armor/redarmor#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "yellowArmor",
+   "albedo": "models/powerups/armor/yellowarmor",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/armor/yellowarmor#normal",
+   "orm": "models/powerups/armor/yellowarmor#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/armor/shard.jpg",
+   "albedo": "models/powerups/armor/shard_env#flat",
+   "albedoBlend": "opaque",
+   "normal": "models/powerups/armor/shard_env#normal.flat",
+   "orm": "models/powerups/armor/shard_env#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/armor/shard_env.png",
+   "albedo": "models/powerups/armor/shard_env#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/armor/shard_env#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "RuneDoubler",
+   "albedo": "textures/effects/tinfx2c#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/tinfx2c#normal.flat",
+   "orm": "textures/effects/tinfx2c#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "RuneGuard",
+   "albedo": "textures/effects/tinfx2c#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/tinfx2c#normal.flat",
+   "orm": "textures/effects/tinfx2c#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "largeCross",
+   "albedo": "textures/oafx/orangechrm#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/oafx/orangechrm#normal.flat",
+   "orm": "textures/oafx/orangechrm#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "largeCrossEnv",
+   "albedo": "textures/effects/largehelth#addAlpha.flat",
+   "albedoBlend": "addAlpha",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/largehelth#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "mediumCross",
+   "albedo": "textures/effects/envmapligh#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapligh#normal.flat",
+   "orm": "textures/effects/envmapligh#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "mediumCrossEnv",
+   "albedo": "textures/effects/mediumhelth#addAlpha.flat",
+   "albedoBlend": "addAlpha",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/mediumhelth#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "megaCross",
+   "albedo": "textures/effects/envmapblue2#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapblue2#normal.flat",
+   "orm": "textures/effects/envmapblue2#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "megaCrossEnv",
+   "albedo": "textures/effects/megahelth#addAlpha.flat",
+   "albedoBlend": "addAlpha",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/megahelth#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "smallCross",
+   "albedo": "textures/oafx/greenchrm#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/oafx/greenchrm#normal.flat",
+   "orm": "textures/oafx/greenchrm#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "smallCrossEnv",
+   "albedo": "textures/effects/smallhelth#addAlpha.flat",
+   "albedoBlend": "addAlpha",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/smallhelth#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "invulitem2",
+   "albedo": "textures/effects/tinfx2c#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/tinfx2c#normal.flat",
+   "orm": "textures/effects/tinfx2c#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "invulitem1",
+   "albedo": "gfx/fx/spec/spots#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "gfx/fx/spec/spots#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/holdable/medkit_slime.png",
+   "albedo": "textures/liquids/slime9#add",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/liquids/slime9",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/holdable/medkit_plunger.png",
+   "albedo": "textures/effects/envmapdimb#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/envmapdimb#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/holdable/medkit_base.png",
+   "albedo": "textures/base_wall/chrome_env#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/base_wall/chrome_env#normal.flat",
+   "orm": "textures/base_wall/chrome_env#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/holdable/teleport_center.png",
+   "albedo": "textures/base_wall/chrome_env#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/base_wall/chrome_env#normal.flat",
+   "orm": "textures/base_wall/chrome_env#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/holdable/teleport_outer.png",
+   "albedo": "textures/liquids/lavafloor#add",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/liquids/lavafloor",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/instant/ebase.png",
+   "albedo": "textures/effects/envmapgold#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapgold#normal.flat",
+   "orm": "textures/effects/envmapgold#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/instant/ering.png",
+   "albedo": "textures/effects/envmapgold#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapgold#normal.flat",
+   "orm": "textures/effects/envmapgold#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/instant/flight_body.png",
+   "albedo": "textures/effects/flightenv#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/flightenv#normal.flat",
+   "orm": "textures/effects/flightenv#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/instant/flight_ring.png",
+   "albedo": "textures/effects/flightenv#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/flightenv#normal.flat",
+   "orm": "textures/effects/flightenv#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/instant/h_center.png",
+   "albedo": "textures/effects/hastenv#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/hastenv#normal.flat",
+   "orm": "textures/effects/hastenv#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/instant/h_ring.png",
+   "albedo": "textures/effects/hastenv#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/hastenv#normal.flat",
+   "orm": "textures/effects/hastenv#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "invisItem",
+   "albedo": "textures/effects/tinfx#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/tinfx#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "quadDamage",
+   "albedo": "textures/oafx/quadshell#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/oafx/quadshell#normal.flat",
+   "orm": "textures/oafx/quadshell#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "quadAura",
+   "albedo": "models/powerups/instant/quadlite#add",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/powerups/instant/quadlite",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "rcad.png",
+   "albedo": "textures/effects/regenmap2#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/regenmap2#normal.flat",
+   "orm": "textures/effects/regenmap2#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "rring.png",
+   "albedo": "textures/effects/regenmap2#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/regenmap2#normal.flat",
+   "orm": "textures/effects/regenmap2#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "kamikazePowerup",
+   "albedo": "textures/effects/envmapdimb#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/envmapdimb#normal.flat",
+   "orm": "textures/effects/envmapdimb#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "kamikazeShell",
+   "albedo": "textures/flares/lava#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/flares/lava#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/orb/b_orb.png",
+   "albedo": "textures/effects/tin_blue#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/tin_blue#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/orb/shell.png",
+   "albedo": "textures/effects/envmapdimb#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/envmapdimb#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/powerups/orb/r_orb.png",
+   "albedo": "textures/effects/tin_red#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/tin_red#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "RuneScout",
+   "albedo": "textures/effects/tinfx2c#flat",
+   "albedoBlend": "opaque",
+   "normal": "textures/effects/tinfx2c#normal.flat",
+   "orm": "textures/effects/tinfx2c#orm.flat",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons/nailgun/nailgun",
+   "albedo": "models/weapons/nailgun/nailgun",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons/nailgun/nailgun#normal",
+   "orm": "models/weapons/nailgun/nailgun#orm",
+   "emissive": "models/weapons/nailgun/glow",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons/proxmine/prox",
+   "albedo": "models/weapons/proxmine/prox",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons/proxmine/prox#normal",
+   "orm": "models/weapons/proxmine/prox#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons/vulcan/skin",
+   "albedo": "models/weapons/vulcan/skin",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons/vulcan/skin#normal",
+   "orm": "models/weapons/vulcan/skin#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/bfg/bfgtube",
+   "albedo": "models/weapons2/bfg/bfgtube#alpha",
+   "albedoBlend": "alpha",
+   "normal": null,
+   "orm": null,
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/bfg/bfgbody",
+   "albedo": "models/weapons2/bfg/bfgbody",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/bfg/bfgbody#normal",
+   "orm": "models/weapons2/bfg/bfgbody#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/gauntlet/gauntlet2",
+   "albedo": "models/weapons2/gauntlet/gauntlet2",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/gauntlet/gauntlet2#normal",
+   "orm": "models/weapons2/gauntlet/gauntlet2#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/grapple/hookgun",
+   "albedo": "models/weapons2/grapple/hookgun",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/grapple/hookgun#normal",
+   "orm": "models/weapons2/grapple/hookgun#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/grenadel/newgren.tga",
+   "albedo": "models/weapons2/grenadel/newgren",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/grenadel/newgren#normal",
+   "orm": "models/weapons2/grenadel/newgren#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/lightning/skinlightning",
+   "albedo": "models/weapons2/lightning/skinlightning",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/lightning/skinlightning#normal",
+   "orm": "models/weapons2/lightning/skinlightning#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/machinegun/skin",
+   "albedo": "models/weapons2/machinegun/mgun",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/machinegun/mgun#normal",
+   "orm": "models/weapons2/machinegun/mgun#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/machinegun/sight",
+   "albedo": "models/weapons2/machinegun/sight#alpha",
+   "albedoBlend": "alpha",
+   "normal": "models/weapons2/machinegun/sight#normal",
+   "orm": "models/weapons2/machinegun/sight#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "mask",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/plasma/skin",
+   "albedo": "models/weapons2/plasma/skin",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/plasma/skin#normal",
+   "orm": "models/weapons2/plasma/skin#orm",
+   "emissive": "models/weapons2/plasma/skin",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/railgun/skin",
+   "albedo": "models/weapons2/railgun/skin",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/railgun/skin#normal",
+   "orm": "models/weapons2/railgun/skin#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/railgun/energy",
+   "albedo": "models/weapons2/railgun/scrolly",
+   "albedoBlend": "opaque",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/weapons2/railgun/scrolly",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/railgun/glass",
+   "albedo": "textures/effects/tinfx2#add.flat",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "textures/effects/tinfx2#flat",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/rocketl/skin",
+   "albedo": "models/weapons2/rocketl/skin",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/rocketl/skin#normal",
+   "orm": "models/weapons2/rocketl/skin#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/shotgun/skinoa",
+   "albedo": "models/weapons2/shotgun/shotgun",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/shotgun/shotgun#normal",
+   "orm": "models/weapons2/shotgun/shotgun#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/shotgun/shotgun_laser",
+   "albedo": "models/weapons2/shotgun/shotgun_laser#add",
+   "albedoBlend": "add",
+   "normal": null,
+   "orm": null,
+   "emissive": "models/weapons2/shotgun/shotgun_laser",
+   "emissiveLuminance": 16.233804195373324,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transparency": "blend",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  }
+ ],
+ "textures": {
+  "textures/effects/envmapblue#flat": "textures_effects_envmapblue.flat.png",
+  "textures/effects/envmapblue#orm.flat": "textures_effects_envmapblue.orm.flat.png",
+  "textures/effects/envmapred#flat": "textures_effects_envmapred.flat.png",
+  "textures/effects/envmapred#orm.flat": "textures_effects_envmapred.orm.flat.png",
+  "textures/effects/tinfx#flat": "textures_effects_tinfx.flat.png",
+  "textures/effects/tinfx#orm.flat": "textures_effects_tinfx.orm.flat.png",
+  "models/flags/pole": "models_flags_pole.delit.png",
+  "models/flags/pole#normal": "models_flags_pole.normal.png",
+  "models/flags/pole#orm": "models_flags_pole.orm.png",
+  "models/flags/b_flag#alpha": "models_flags_b_flag.alpha.delit.png",
+  "models/flags/b_flag#normal": "models_flags_b_flag.normal.png",
+  "models/flags/b_flag#orm": "models_flags_b_flag.orm.png",
+  "models/flags/n_flag#alpha": "models_flags_n_flag.alpha.delit.png",
+  "models/flags/n_flag#normal": "models_flags_n_flag.normal.png",
+  "models/flags/n_flag#orm": "models_flags_n_flag.orm.png",
+  "models/flags/r_flag#alpha": "models_flags_r_flag.alpha.delit.png",
+  "models/flags/r_flag#normal": "models_flags_r_flag.normal.png",
+  "models/flags/r_flag#orm": "models_flags_r_flag.orm.png",
+  "models/gibs/skull-4": "models_gibs_skull-4.delit.png",
+  "models/gibs/skull-4#normal": "models_gibs_skull-4.normal.png",
+  "models/gibs/skull-4#orm": "models_gibs_skull-4.orm.png",
+  "models/gibs/veins#alpha": "models_gibs_veins.alpha.delit.png",
+  "models/gibs/veins#normal": "models_gibs_veins.normal.png",
+  "models/gibs/veins#orm": "models_gibs_veins.orm.png",
+  "models/gibs/genericgibmeat": "models_gibs_genericgibmeat.delit.png",
+  "models/gibs/genericgibmeat#orm": "models_gibs_genericgibmeat.orm.png",
+  "models/gibs/heart": "models_gibs_heart.delit.png",
+  "models/gibs/heart#normal": "models_gibs_heart.normal.png",
+  "models/gibs/heart#orm": "models_gibs_heart.orm.png",
+  "models/gibs/splurt#alpha": "models_gibs_splurt.alpha.delit.png",
+  "models/gibs/splurt#normal": "models_gibs_splurt.normal.png",
+  "models/gibs/splurt#orm": "models_gibs_splurt.orm.png",
+  "models/gibs/f_veins#alpha": "models_gibs_f_veins.alpha.delit.png",
+  "models/gibs/f_veins#normal": "models_gibs_f_veins.normal.png",
+  "models/gibs/f_veins#orm": "models_gibs_f_veins.orm.png",
+  "textures/effects/tinfx2b#flat": "textures_effects_tinfx2b.flat.png",
+  "textures/effects/tinfx2b#orm.flat": "textures_effects_tinfx2b.orm.flat.png",
+  "models/powerups/ammo/ammobox": "models_powerups_ammo_ammobox.delit.png",
+  "models/powerups/ammo/ammobox#normal": "models_powerups_ammo_ammobox.normal.png",
+  "models/powerups/ammo/ammobox#orm": "models_powerups_ammo_ammobox.orm.png",
+  "models/powerups/ammo/bfgammo2": "models_powerups_ammo_bfgammo2.png",
+  "models/powerups/ammo/vulcammo": "models_powerups_ammo_vulcammo.png",
+  "models/powerups/ammo/grenammo2": "models_powerups_ammo_grenammo2.png",
+  "models/powerups/ammo/lighammo2": "models_powerups_ammo_lighammo2.png",
+  "models/powerups/ammo/machammo2": "models_powerups_ammo_machammo2.png",
+  "models/powerups/ammo/nailammo": "models_powerups_ammo_nailammo.png",
+  "models/powerups/ammo/plasammo2": "models_powerups_ammo_plasammo2.png",
+  "models/powerups/ammo/proxammo": "models_powerups_ammo_proxammo.png",
+  "models/powerups/ammo/railammo2": "models_powerups_ammo_railammo2.png",
+  "models/powerups/ammo/rockammo2": "models_powerups_ammo_rockammo2.png",
+  "models/powerups/ammo/shotammo2": "models_powerups_ammo_shotammo2.png",
+  "models/powerups/armor/redarmor": "models_powerups_armor_redarmor.delit.png",
+  "models/powerups/armor/redarmor#orm": "models_powerups_armor_redarmor.orm.png",
+  "models/powerups/armor/yellowarmor": "models_powerups_armor_yellowarmor.delit.png",
+  "models/powerups/armor/yellowarmor#normal": "models_powerups_armor_yellowarmor.normal.png",
+  "models/powerups/armor/yellowarmor#orm": "models_powerups_armor_yellowarmor.orm.png",
+  "models/powerups/armor/shard_env#flat": "models_powerups_armor_shard_env.flat.delit.png",
+  "models/powerups/armor/shard_env#orm.flat": "models_powerups_armor_shard_env.orm.flat.png",
+  "models/powerups/armor/shard_env#add.flat": "models_powerups_armor_shard_env.add.flat.delit.png",
+  "textures/effects/tinfx2c#flat": "textures_effects_tinfx2c.flat.png",
+  "textures/effects/tinfx2c#orm.flat": "textures_effects_tinfx2c.orm.flat.png",
+  "textures/oafx/orangechrm#flat": "textures_oafx_orangechrm.flat.png",
+  "textures/oafx/orangechrm#orm.flat": "textures_oafx_orangechrm.orm.flat.png",
+  "textures/effects/largehelth#addAlpha.flat": "textures_effects_largehelth.add.flat.png",
+  "textures/effects/largehelth#flat": "textures_effects_largehelth.flat.png",
+  "textures/effects/envmapligh#flat": "textures_effects_envmapligh.flat.png",
+  "textures/effects/envmapligh#orm.flat": "textures_effects_envmapligh.orm.flat.png",
+  "textures/effects/mediumhelth#addAlpha.flat": "textures_effects_mediumhelth.add.flat.png",
+  "textures/effects/mediumhelth#flat": "textures_effects_mediumhelth.flat.png",
+  "textures/effects/envmapblue2#flat": "textures_effects_envmapblue2.flat.png",
+  "textures/effects/envmapblue2#orm.flat": "textures_effects_envmapblue2.orm.flat.png",
+  "textures/effects/megahelth#addAlpha.flat": "textures_effects_megahelth.add.flat.png",
+  "textures/effects/megahelth#flat": "textures_effects_megahelth.flat.png",
+  "textures/oafx/greenchrm#flat": "textures_oafx_greenchrm.flat.png",
+  "textures/oafx/greenchrm#orm.flat": "textures_oafx_greenchrm.orm.flat.png",
+  "textures/effects/smallhelth#addAlpha.flat": "textures_effects_smallhelth.add.flat.png",
+  "textures/effects/smallhelth#flat": "textures_effects_smallhelth.flat.png",
+  "gfx/fx/spec/spots#add.flat": "gfx_fx_spec_spots.add.flat.png",
+  "gfx/fx/spec/spots#flat": "gfx_fx_spec_spots.flat.png",
+  "textures/liquids/slime9#add": "textures_liquids_slime9.add.png",
+  "textures/liquids/slime9": "textures_liquids_slime9.jpg",
+  "textures/effects/envmapdimb#add.flat": "textures_effects_envmapdimb.add.flat.png",
+  "textures/effects/envmapdimb#flat": "textures_effects_envmapdimb.flat.png",
+  "textures/base_wall/chrome_env#flat": "textures_base_wall_chrome_env.flat.delit.png",
+  "textures/base_wall/chrome_env#orm.flat": "textures_base_wall_chrome_env.orm.flat.png",
+  "textures/liquids/lavafloor#add": "textures_liquids_lavafloor.add.png",
+  "textures/liquids/lavafloor": "textures_liquids_lavafloor.jpg",
+  "textures/effects/envmapgold#flat": "textures_effects_envmapgold.flat.delit.png",
+  "textures/effects/envmapgold#orm.flat": "textures_effects_envmapgold.orm.flat.png",
+  "textures/effects/flightenv#flat": "textures_effects_flightenv.flat.delit.png",
+  "textures/effects/flightenv#orm.flat": "textures_effects_flightenv.orm.flat.png",
+  "textures/effects/hastenv#flat": "textures_effects_hastenv.flat.delit.png",
+  "textures/effects/hastenv#orm.flat": "textures_effects_hastenv.orm.flat.png",
+  "textures/effects/tinfx#add.flat": "textures_effects_tinfx.add.flat.png",
+  "textures/oafx/quadshell#flat": "textures_oafx_quadshell.flat.png",
+  "textures/oafx/quadshell#orm.flat": "textures_oafx_quadshell.orm.flat.png",
+  "models/powerups/instant/quadlite#add": "models_powerups_instant_quadlite.add.png",
+  "models/powerups/instant/quadlite": "models_powerups_instant_quadlite.png",
+  "textures/effects/regenmap2#flat": "textures_effects_regenmap2.flat.png",
+  "textures/effects/regenmap2#orm.flat": "textures_effects_regenmap2.orm.flat.png",
+  "textures/effects/envmapdimb#orm.flat": "textures_effects_envmapdimb.orm.flat.png",
+  "textures/flares/lava#add.flat": "textures_flares_lava.add.flat.png",
+  "textures/flares/lava#flat": "textures_flares_lava.flat.png",
+  "textures/effects/tin_blue#add.flat": "textures_effects_tin_blue.add.flat.png",
+  "textures/effects/tin_blue#flat": "textures_effects_tin_blue.flat.png",
+  "textures/effects/tin_red#add.flat": "textures_effects_tin_red.add.flat.png",
+  "textures/effects/tin_red#flat": "textures_effects_tin_red.flat.png",
+  "models/weapons/nailgun/nailgun": "models_weapons_nailgun_nailgun.delit.png",
+  "models/weapons/nailgun/glow": "models_weapons_nailgun_glow.png",
+  "models/weapons/nailgun/nailgun#normal": "models_weapons_nailgun_nailgun.normal.png",
+  "models/weapons/nailgun/nailgun#orm": "models_weapons_nailgun_nailgun.orm.png",
+  "models/weapons/proxmine/prox": "models_weapons_proxmine_prox.delit.png",
+  "models/weapons/proxmine/prox#normal": "models_weapons_proxmine_prox.normal.png",
+  "models/weapons/proxmine/prox#orm": "models_weapons_proxmine_prox.orm.png",
+  "models/weapons/vulcan/skin": "models_weapons_vulcan_skin.delit.png",
+  "models/weapons/vulcan/skin#normal": "models_weapons_vulcan_skin.normal.png",
+  "models/weapons/vulcan/skin#orm": "models_weapons_vulcan_skin.orm.png",
+  "models/weapons2/bfg/bfgtube#alpha": "models_weapons2_bfg_bfgtube.png",
+  "models/weapons2/bfg/bfgbody": "models_weapons2_bfg_bfgbody.delit.png",
+  "models/weapons2/bfg/bfgbody#normal": "models_weapons2_bfg_bfgbody.normal.png",
+  "models/weapons2/bfg/bfgbody#orm": "models_weapons2_bfg_bfgbody.orm.png",
+  "models/weapons2/gauntlet/gauntlet2": "models_weapons2_gauntlet_gauntlet2.delit.png",
+  "models/weapons2/gauntlet/gauntlet2#normal": "models_weapons2_gauntlet_gauntlet2.normal.png",
+  "models/weapons2/gauntlet/gauntlet2#orm": "models_weapons2_gauntlet_gauntlet2.orm.png",
+  "models/weapons2/grapple/hookgun": "models_weapons2_grapple_hookgun.delit.png",
+  "models/weapons2/grapple/hookgun#normal": "models_weapons2_grapple_hookgun.normal.png",
+  "models/weapons2/grapple/hookgun#orm": "models_weapons2_grapple_hookgun.orm.png",
+  "models/weapons2/grenadel/newgren": "models_weapons2_grenadel_newgren.delit.png",
+  "models/weapons2/grenadel/newgren#orm": "models_weapons2_grenadel_newgren.orm.png",
+  "models/weapons2/lightning/skinlightning": "models_weapons2_lightning_skinlightning.delit.png",
+  "models/weapons2/lightning/skinlightning#normal": "models_weapons2_lightning_skinlightning.normal.png",
+  "models/weapons2/lightning/skinlightning#orm": "models_weapons2_lightning_skinlightning.orm.png",
+  "models/weapons2/machinegun/mgun": "models_weapons2_machinegun_mgun.delit.png",
+  "models/weapons2/machinegun/mgun#normal": "models_weapons2_machinegun_mgun.normal.png",
+  "models/weapons2/machinegun/mgun#orm": "models_weapons2_machinegun_mgun.orm.png",
+  "models/weapons2/machinegun/sight#alpha": "models_weapons2_machinegun_sight.alpha.delit.png",
+  "models/weapons2/machinegun/sight#orm": "models_weapons2_machinegun_sight.orm.png",
+  "models/weapons2/plasma/skin": "models_weapons2_plasma_skin.delit.png",
+  "models/weapons2/plasma/skin#normal": "models_weapons2_plasma_skin.normal.png",
+  "models/weapons2/plasma/skin#orm": "models_weapons2_plasma_skin.orm.png",
+  "models/weapons2/railgun/skin": "models_weapons2_railgun_skin.delit.png",
+  "models/weapons2/railgun/skin#normal": "models_weapons2_railgun_skin.normal.png",
+  "models/weapons2/railgun/skin#orm": "models_weapons2_railgun_skin.orm.png",
+  "models/weapons2/railgun/scrolly": "models_weapons2_railgun_scrolly.png",
+  "textures/effects/tinfx2#add.flat": "textures_effects_tinfx2.add.flat.png",
+  "textures/effects/tinfx2#flat": "textures_effects_tinfx2.flat.png",
+  "models/weapons2/rocketl/skin": "models_weapons2_rocketl_skin.delit.png",
+  "models/weapons2/rocketl/skin#normal": "models_weapons2_rocketl_skin.normal.png",
+  "models/weapons2/rocketl/skin#orm": "models_weapons2_rocketl_skin.orm.png",
+  "models/weapons2/shotgun/shotgun": "models_weapons2_shotgun_shotgun.delit.png",
+  "models/weapons2/shotgun/shotgun#normal": "models_weapons2_shotgun_shotgun.normal.png",
+  "models/weapons2/shotgun/shotgun#orm": "models_weapons2_shotgun_shotgun.orm.png",
+  "models/weapons2/shotgun/shotgun_laser#add": "models_weapons2_shotgun_shotgun_laser.add.png",
+  "models/weapons2/shotgun/shotgun_laser": "models_weapons2_shotgun_shotgun_laser.jpg"
+ },
+ "models": [
+  {
+   "name": "models/dpoints/a_blue.md3",
+   "meshes": [
+    {
+     "material": 0,
+     "vertexOffset": 0,
+     "vertexCount": 88,
+     "indexOffset": 0,
+     "indexCount": 264
+    }
+   ],
+   "mins": [
+    -16.01239013671875,
+    -6.69275426864624,
+    -7.525985240936279
+   ],
+   "maxs": [
+    20.059722900390625,
+    37.213470458984375,
+    7.525984764099121
+   ],
+   "radius": 42.94036865234375,
+   "tags": []
+  },
+  {
+   "name": "models/dpoints/a_red.md3",
+   "meshes": [
+    {
+     "material": 1,
+     "vertexOffset": 88,
+     "vertexCount": 88,
+     "indexOffset": 264,
+     "indexCount": 264
+    }
+   ],
+   "mins": [
+    -16.01239013671875,
+    -6.69275426864624,
+    -7.525985240936279
+   ],
+   "maxs": [
+    20.059722900390625,
+    37.213470458984375,
+    7.525984764099121
+   ],
+   "radius": 42.94036865234375,
+   "tags": []
+  },
+  {
+   "name": "models/dpoints/a_white.md3",
+   "meshes": [
+    {
+     "material": 2,
+     "vertexOffset": 176,
+     "vertexCount": 88,
+     "indexOffset": 528,
+     "indexCount": 264
+    }
+   ],
+   "mins": [
+    -16.01239013671875,
+    -6.69275426864624,
+    -7.525985240936279
+   ],
+   "maxs": [
+    20.059722900390625,
+    37.213470458984375,
+    7.525984764099121
+   ],
+   "radius": 42.94036865234375,
+   "tags": []
+  },
+  {
+   "name": "models/dpoints/b_blue.md3",
+   "meshes": [
+    {
+     "material": 0,
+     "vertexOffset": 264,
+     "vertexCount": 328,
+     "indexOffset": 792,
+     "indexCount": 996
+    }
+   ],
+   "mins": [
+    -12.609466552734375,
+    -6.69275426864624,
+    -7.525985240936279
+   ],
+   "maxs": [
+    18.84682846069336,
+    37.26780700683594,
+    7.525984764099121
+   ],
+   "radius": 42.43504333496094,
+   "tags": []
+  },
+  {
+   "name": "models/dpoints/b_red.md3",
+   "meshes": [
+    {
+     "material": 1,
+     "vertexOffset": 592,
+     "vertexCount": 328,
+     "indexOffset": 1788,
+     "indexCount": 996
+    }
+   ],
+   "mins": [
+    -12.609466552734375,
+    -6.69275426864624,
+    -7.525985240936279
+   ],
+   "maxs": [
+    18.84682846069336,
+    37.26780700683594,
+    7.525984764099121
+   ],
+   "radius": 42.43504333496094,
+   "tags": []
+  },
+  {
+   "name": "models/dpoints/b_white.md3",
+   "meshes": [
+    {
+     "material": 2,
+     "vertexOffset": 920,
+     "vertexCount": 328,
+     "indexOffset": 2784,
+     "indexCount": 996
+    }
+   ],
+   "mins": [
+    -12.609466552734375,
+    -6.69275426864624,
+    -7.525985240936279
+   ],
+   "maxs": [
+    18.84682846069336,
+    37.26780700683594,
+    7.525984764099121
+   ],
+   "radius": 42.43504333496094,
+   "tags": []
+  },
+  {
+   "name": "models/flags/b_flag.md3",
+   "meshes": [
+    {
+     "material": 3,
+     "vertexOffset": 1248,
+     "vertexCount": 167,
+     "indexOffset": 3780,
+     "indexCount": 708
+    },
+    {
+     "material": 4,
+     "vertexOffset": 1415,
+     "vertexCount": 81,
+     "indexOffset": 4488,
+     "indexCount": 384
+    }
+   ],
+   "mins": [
+    -32.671875,
+    -12.59375,
+    -3.46875
+   ],
+   "maxs": [
+    5.171875,
+    68.453125,
+    6.703125
+   ],
+   "radius": 76.14600372314453,
+   "tags": []
+  },
+  {
+   "name": "models/flags/n_flag.md3",
+   "meshes": [
+    {
+     "material": 5,
+     "vertexOffset": 1496,
+     "vertexCount": 81,
+     "indexOffset": 4872,
+     "indexCount": 384
+    },
+    {
+     "material": 3,
+     "vertexOffset": 1577,
+     "vertexCount": 161,
+     "indexOffset": 5256,
+     "indexCount": 708
+    }
+   ],
+   "mins": [
+    -32.671875,
+    -12.59375,
+    -3.468749761581421
+   ],
+   "maxs": [
+    5.1875,
+    68.453125,
+    6.718751430511475
+   ],
+   "radius": 68.73698425292969,
+   "tags": []
+  },
+  {
+   "name": "models/flags/r_flag.md3",
+   "meshes": [
+    {
+     "material": 3,
+     "vertexOffset": 1738,
+     "vertexCount": 167,
+     "indexOffset": 5964,
+     "indexCount": 708
+    },
+    {
+     "material": 6,
+     "vertexOffset": 1905,
+     "vertexCount": 81,
+     "indexOffset": 6672,
+     "indexCount": 384
+    }
+   ],
+   "mins": [
+    -32.671875,
+    -12.59375,
+    -3.46875
+   ],
+   "maxs": [
+    5.171875,
+    68.453125,
+    6.703125
+   ],
+   "radius": 76.14600372314453,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/abdomen.md3",
+   "meshes": [
+    {
+     "material": 7,
+     "vertexOffset": 1986,
+     "vertexCount": 65,
+     "indexOffset": 7056,
+     "indexCount": 330
+    }
+   ],
+   "mins": [
+    -4.599307060241699,
+    -0.08168372511863708,
+    -4.124185562133789
+   ],
+   "maxs": [
+    4.405973434448242,
+    5.205440044403076,
+    4.760085582733154
+   ],
+   "radius": 7.969825267791748,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/arm.md3",
+   "meshes": [
+    {
+     "material": 7,
+     "vertexOffset": 2051,
+     "vertexCount": 42,
+     "indexOffset": 7386,
+     "indexCount": 240
+    },
+    {
+     "material": 7,
+     "vertexOffset": 2093,
+     "vertexCount": 78,
+     "indexOffset": 7626,
+     "indexCount": 432
+    },
+    {
+     "material": 8,
+     "vertexOffset": 2171,
+     "vertexCount": 8,
+     "indexOffset": 8058,
+     "indexCount": 12
+    }
+   ],
+   "mins": [
+    -3.1503071784973145,
+    -0.23995019495487213,
+    -8.731338500976562
+   ],
+   "maxs": [
+    3.2164053916931152,
+    4.274475574493408,
+    8.109600067138672
+   ],
+   "radius": 10.23975944519043,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/brain.md3",
+   "meshes": [
+    {
+     "material": 9,
+     "vertexOffset": 2179,
+     "vertexCount": 19,
+     "indexOffset": 8070,
+     "indexCount": 66
+    }
+   ],
+   "mins": [
+    -8.435404777526855,
+    -4.2904462814331055,
+    -12.629190444946289
+   ],
+   "maxs": [
+    8.982398986816406,
+    2.331873655319214,
+    11.071534156799316
+   ],
+   "radius": 16.08066749572754,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/chest.md3",
+   "meshes": [
+    {
+     "material": 7,
+     "vertexOffset": 2198,
+     "vertexCount": 94,
+     "indexOffset": 8136,
+     "indexCount": 504
+    }
+   ],
+   "mins": [
+    -10.82136058807373,
+    -0.7777791619300842,
+    -5.75265645980835
+   ],
+   "maxs": [
+    3.4463605880737305,
+    6.420350074768066,
+    6.565570831298828
+   ],
+   "radius": 12.68122673034668,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/fist.md3",
+   "meshes": [
+    {
+     "material": 7,
+     "vertexOffset": 2292,
+     "vertexCount": 41,
+     "indexOffset": 8640,
+     "indexCount": 225
+    },
+    {
+     "material": 7,
+     "vertexOffset": 2333,
+     "vertexCount": 22,
+     "indexOffset": 8865,
+     "indexCount": 93
+    }
+   ],
+   "mins": [
+    -1.0362151861190796,
+    -0.17898470163345337,
+    -2.2966930866241455
+   ],
+   "maxs": [
+    1.1656150817871094,
+    2.1541173458099365,
+    4.374992370605469
+   ],
+   "radius": 4.4995927810668945,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/foot.md3",
+   "meshes": [
+    {
+     "material": 10,
+     "vertexOffset": 2355,
+     "vertexCount": 42,
+     "indexOffset": 8958,
+     "indexCount": 240
+    },
+    {
+     "material": 7,
+     "vertexOffset": 2397,
+     "vertexCount": 68,
+     "indexOffset": 9198,
+     "indexCount": 390
+    },
+    {
+     "material": 11,
+     "vertexOffset": 2465,
+     "vertexCount": 26,
+     "indexOffset": 9588,
+     "indexCount": 144
+    }
+   ],
+   "mins": [
+    -22.065017700195312,
+    -0.11852400004863739,
+    -7.29115104675293
+   ],
+   "maxs": [
+    4.508301258087158,
+    15.530424118041992,
+    29.764772415161133
+   ],
+   "radius": 37.05159378051758,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/forearm.md3",
+   "meshes": [
+    {
+     "material": 9,
+     "vertexOffset": 2491,
+     "vertexCount": 19,
+     "indexOffset": 9732,
+     "indexCount": 66
+    }
+   ],
+   "mins": [
+    -8.435404777526855,
+    -4.2904462814331055,
+    -12.629190444946289
+   ],
+   "maxs": [
+    8.982398986816406,
+    2.331873655319214,
+    11.071534156799316
+   ],
+   "radius": 16.08066749572754,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/intestine.md3",
+   "meshes": [
+    {
+     "material": 9,
+     "vertexOffset": 2510,
+     "vertexCount": 19,
+     "indexOffset": 9798,
+     "indexCount": 66
+    }
+   ],
+   "mins": [
+    -1.3089094161987305,
+    -1.7988147735595703,
+    -1.2505512237548828
+   ],
+   "maxs": [
+    1.3855640888214111,
+    1.11073899269104,
+    1.18598473072052
+   ],
+   "radius": 2.5921807289123535,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/leg.md3",
+   "meshes": [
+    {
+     "material": 12,
+     "vertexOffset": 2529,
+     "vertexCount": 8,
+     "indexOffset": 9864,
+     "indexCount": 12
+    },
+    {
+     "material": 7,
+     "vertexOffset": 2537,
+     "vertexCount": 42,
+     "indexOffset": 9876,
+     "indexCount": 240
+    },
+    {
+     "material": 7,
+     "vertexOffset": 2579,
+     "vertexCount": 21,
+     "indexOffset": 10116,
+     "indexCount": 120
+    }
+   ],
+   "mins": [
+    -7.902230262756348,
+    -0.9196302890777588,
+    -9.312067031860352
+   ],
+   "maxs": [
+    -0.715082585811615,
+    5.273651123046875,
+    6.255618572235107
+   ],
+   "radius": 10.725545883178711,
+   "tags": []
+  },
+  {
+   "name": "models/gibs/skull.md3",
+   "meshes": [
+    {
+     "material": 7,
+     "vertexOffset": 2600,
+     "vertexCount": 33,
+     "indexOffset": 10236,
+     "indexCount": 129
+    },
+    {
+     "material": 7,
+     "vertexOffset": 2633,
+     "vertexCount": 28,
+     "indexOffset": 10365,
+     "indexCount": 99
+    }
+   ],
+   "mins": [
+    -4.5,
+    -0.6329845786094666,
+    -6.251195430755615
+   ],
+   "maxs": [
+    4.171875,
+    8.53295612335205,
+    3.678501605987549
+   ],
+   "radius": 11.370722770690918,
+   "tags": []
+  },
+  {
+   "name": "models/misc/telep.md3",
+   "meshes": [
+    {
+     "material": 13,
+     "vertexOffset": 2661,
+     "vertexCount": 64,
+     "indexOffset": 10464,
+     "indexCount": 96
+    }
+   ],
+   "mins": [
+    -47.767333984375,
+    -36.529205322265625,
+    -47.76734161376953
+   ],
+   "maxs": [
+    47.7673225402832,
+    35.43708038330078,
+    47.76732635498047
+   ],
+   "radius": 76.7972640991211,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo.md3",
+   "meshes": [
+    {
+     "material": 14,
+     "vertexOffset": 2725,
+     "vertexCount": 44,
+     "indexOffset": 10560,
+     "indexCount": 132
+    }
+   ],
+   "mins": [
+    -4.788916110992432,
+    0,
+    -12.578569412231445
+   ],
+   "maxs": [
+    4.788916110992432,
+    25.26466178894043,
+    11.644636154174805
+   ],
+   "radius": 28.626163482666016,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/bfgam.md3",
+   "meshes": [
+    {
+     "material": 15,
+     "vertexOffset": 2769,
+     "vertexCount": 75,
+     "indexOffset": 10692,
+     "indexCount": 177
+    },
+    {
+     "material": 16,
+     "vertexOffset": 2844,
+     "vertexCount": 9,
+     "indexOffset": 10869,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/chaingunam.md3",
+   "meshes": [
+    {
+     "material": 17,
+     "vertexOffset": 2853,
+     "vertexCount": 75,
+     "indexOffset": 10878,
+     "indexCount": 177
+    },
+    {
+     "material": 18,
+     "vertexOffset": 2928,
+     "vertexCount": 9,
+     "indexOffset": 11055,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/grenadeam.md3",
+   "meshes": [
+    {
+     "material": 19,
+     "vertexOffset": 2937,
+     "vertexCount": 75,
+     "indexOffset": 11064,
+     "indexCount": 177
+    },
+    {
+     "material": 20,
+     "vertexOffset": 3012,
+     "vertexCount": 9,
+     "indexOffset": 11241,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/lightningam.md3",
+   "meshes": [
+    {
+     "material": 21,
+     "vertexOffset": 3021,
+     "vertexCount": 75,
+     "indexOffset": 11250,
+     "indexCount": 177
+    },
+    {
+     "material": 22,
+     "vertexOffset": 3096,
+     "vertexCount": 9,
+     "indexOffset": 11427,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/machinegunam.md3",
+   "meshes": [
+    {
+     "material": 23,
+     "vertexOffset": 3105,
+     "vertexCount": 75,
+     "indexOffset": 11436,
+     "indexCount": 177
+    },
+    {
+     "material": 24,
+     "vertexOffset": 3180,
+     "vertexCount": 9,
+     "indexOffset": 11613,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/nailgunam.md3",
+   "meshes": [
+    {
+     "material": 25,
+     "vertexOffset": 3189,
+     "vertexCount": 75,
+     "indexOffset": 11622,
+     "indexCount": 177
+    },
+    {
+     "material": 26,
+     "vertexOffset": 3264,
+     "vertexCount": 9,
+     "indexOffset": 11799,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/plasmaam.md3",
+   "meshes": [
+    {
+     "material": 27,
+     "vertexOffset": 3273,
+     "vertexCount": 75,
+     "indexOffset": 11808,
+     "indexCount": 177
+    },
+    {
+     "material": 28,
+     "vertexOffset": 3348,
+     "vertexCount": 9,
+     "indexOffset": 11985,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/proxmineam.md3",
+   "meshes": [
+    {
+     "material": 29,
+     "vertexOffset": 3357,
+     "vertexCount": 75,
+     "indexOffset": 11994,
+     "indexCount": 177
+    },
+    {
+     "material": 30,
+     "vertexOffset": 3432,
+     "vertexCount": 9,
+     "indexOffset": 12171,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/railgunam.md3",
+   "meshes": [
+    {
+     "material": 31,
+     "vertexOffset": 3441,
+     "vertexCount": 75,
+     "indexOffset": 12180,
+     "indexCount": 177
+    },
+    {
+     "material": 32,
+     "vertexOffset": 3516,
+     "vertexCount": 9,
+     "indexOffset": 12357,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/rocketam.md3",
+   "meshes": [
+    {
+     "material": 33,
+     "vertexOffset": 3525,
+     "vertexCount": 75,
+     "indexOffset": 12366,
+     "indexCount": 177
+    },
+    {
+     "material": 34,
+     "vertexOffset": 3600,
+     "vertexCount": 9,
+     "indexOffset": 12543,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/ammo/shotgunam.md3",
+   "meshes": [
+    {
+     "material": 35,
+     "vertexOffset": 3609,
+     "vertexCount": 75,
+     "indexOffset": 12552,
+     "indexCount": 177
+    },
+    {
+     "material": 36,
+     "vertexOffset": 3684,
+     "vertexCount": 9,
+     "indexOffset": 12729,
+     "indexCount": 9
+    }
+   ],
+   "mins": [
+    -15.40625,
+    -10.03125,
+    -11.5
+   ],
+   "maxs": [
+    15.40625,
+    15.15625,
+    16.09375
+   ],
+   "radius": 26.94574546813965,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/armor/armor_red.md3",
+   "meshes": [
+    {
+     "material": 37,
+     "vertexOffset": 3693,
+     "vertexCount": 216,
+     "indexOffset": 12738,
+     "indexCount": 966
+    }
+   ],
+   "mins": [
+    -11.140579223632812,
+    -9.107088088989258,
+    -20.819555282592773
+   ],
+   "maxs": [
+    10.331952095031738,
+    16.029443740844727,
+    20.78809356689453
+   ],
+   "radius": 28.53961181640625,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/armor/armor_yel.md3",
+   "meshes": [
+    {
+     "material": 38,
+     "vertexOffset": 3909,
+     "vertexCount": 160,
+     "indexOffset": 13704,
+     "indexCount": 750
+    }
+   ],
+   "mins": [
+    -13.048140525817871,
+    -5.835436820983887,
+    -13.623895645141602
+   ],
+   "maxs": [
+    10.178237915039062,
+    21.35421371459961,
+    13.419736862182617
+   ],
+   "radius": 28.49327850341797,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/armor/shard.md3",
+   "meshes": [
+    {
+     "material": 39,
+     "vertexOffset": 4069,
+     "vertexCount": 27,
+     "indexOffset": 14454,
+     "indexCount": 150
+    },
+    {
+     "material": 40,
+     "vertexOffset": 4096,
+     "vertexCount": 27,
+     "indexOffset": 14604,
+     "indexCount": 150
+    }
+   ],
+   "mins": [
+    -1.9843753576278687,
+    0.23437505960464478,
+    -5.453125476837158
+   ],
+   "maxs": [
+    1.5312503576278687,
+    17.765625,
+    7.453125476837158
+   ],
+   "radius": 18.64668083190918,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/doubler.md3",
+   "meshes": [
+    {
+     "material": 41,
+     "vertexOffset": 4123,
+     "vertexCount": 120,
+     "indexOffset": 14754,
+     "indexCount": 360
+    }
+   ],
+   "mins": [
+    -4.788917064666748,
+    0,
+    -12.251225471496582
+   ],
+   "maxs": [
+    4.788915157318115,
+    24.207460403442383,
+    9.49548053741455
+   ],
+   "radius": 27.550451278686523,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/guard.md3",
+   "meshes": [
+    {
+     "material": 42,
+     "vertexOffset": 4243,
+     "vertexCount": 152,
+     "indexOffset": 15114,
+     "indexCount": 444
+    }
+   ],
+   "mins": [
+    -4.7889204025268555,
+    0,
+    -11.325488090515137
+   ],
+   "maxs": [
+    4.788911819458008,
+    26.21117401123047,
+    10.777212142944336
+   ],
+   "radius": 28.95213508605957,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/large_cross.md3",
+   "meshes": [
+    {
+     "material": 43,
+     "vertexOffset": 4395,
+     "vertexCount": 116,
+     "indexOffset": 15558,
+     "indexCount": 348
+    }
+   ],
+   "mins": [
+    -1.7087887525558472,
+    -10.420907020568848,
+    -10.405313491821289
+   ],
+   "maxs": [
+    1.9900387525558472,
+    10.512642860412598,
+    10.539581298828125
+   ],
+   "radius": 15.018610954284668,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/large_sphere.md3",
+   "meshes": [
+    {
+     "material": 44,
+     "vertexOffset": 4511,
+     "vertexCount": 162,
+     "indexOffset": 15906,
+     "indexCount": 960
+    }
+   ],
+   "mins": [
+    -11.367602348327637,
+    -11.367602348327637,
+    -11.367602348327637
+   ],
+   "maxs": [
+    11.367602348327637,
+    11.367602348327637,
+    11.367602348327637
+   ],
+   "radius": 19.68926429748535,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/medium_cross.md3",
+   "meshes": [
+    {
+     "material": 45,
+     "vertexOffset": 4673,
+     "vertexCount": 223,
+     "indexOffset": 16866,
+     "indexCount": 516
+    }
+   ],
+   "mins": [
+    -1.3437883853912354,
+    -9.76576042175293,
+    -9.867643356323242
+   ],
+   "maxs": [
+    1.4970605373382568,
+    9.971963882446289,
+    9.87007999420166
+   ],
+   "radius": 14.110270500183105,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/medium_sphere.md3",
+   "meshes": [
+    {
+     "material": 46,
+     "vertexOffset": 4896,
+     "vertexCount": 162,
+     "indexOffset": 17382,
+     "indexCount": 960
+    }
+   ],
+   "mins": [
+    -11.367602348327637,
+    -11.367602348327637,
+    -11.367602348327637
+   ],
+   "maxs": [
+    11.367602348327637,
+    11.367602348327637,
+    11.367602348327637
+   ],
+   "radius": 19.68926429748535,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/mega_cross.md3",
+   "meshes": [
+    {
+     "material": 47,
+     "vertexOffset": 5058,
+     "vertexCount": 52,
+     "indexOffset": 18342,
+     "indexCount": 300
+    }
+   ],
+   "mins": [
+    -1.3020292520523071,
+    -7.0761871337890625,
+    -7.896827697753906
+   ],
+   "maxs": [
+    1.210984706878662,
+    7.535728931427002,
+    7.896827697753906
+   ],
+   "radius": 10.992833137512207,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/mega_sphere.md3",
+   "meshes": [
+    {
+     "material": 48,
+     "vertexOffset": 5110,
+     "vertexCount": 162,
+     "indexOffset": 18642,
+     "indexCount": 960
+    }
+   ],
+   "mins": [
+    -11.367602348327637,
+    -11.367602348327637,
+    -11.367602348327637
+   ],
+   "maxs": [
+    11.367602348327637,
+    11.367602348327637,
+    11.367602348327637
+   ],
+   "radius": 19.68926429748535,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/small_cross.md3",
+   "meshes": [
+    {
+     "material": 49,
+     "vertexOffset": 5272,
+     "vertexCount": 84,
+     "indexOffset": 19602,
+     "indexCount": 204
+    }
+   ],
+   "mins": [
+    -1.657624363899231,
+    -5.799358367919922,
+    -6.069620132446289
+   ],
+   "maxs": [
+    1.8314961194992065,
+    6.215351104736328,
+    5.914749622344971
+   ],
+   "radius": 8.878358840942383,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/health/small_sphere.md3",
+   "meshes": [
+    {
+     "material": 50,
+     "vertexOffset": 5356,
+     "vertexCount": 162,
+     "indexOffset": 19806,
+     "indexCount": 960
+    }
+   ],
+   "mins": [
+    -11.367602348327637,
+    -11.367602348327637,
+    -11.367602348327637
+   ],
+   "maxs": [
+    11.367602348327637,
+    11.367602348327637,
+    11.367602348327637
+   ],
+   "radius": 19.68926429748535,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/holdable/invulnerability.md3",
+   "meshes": [
+    {
+     "material": 51,
+     "vertexOffset": 5518,
+     "vertexCount": 50,
+     "indexOffset": 20766,
+     "indexCount": 60
+    },
+    {
+     "material": 52,
+     "vertexOffset": 5568,
+     "vertexCount": 121,
+     "indexOffset": 20826,
+     "indexCount": 240
+    }
+   ],
+   "mins": [
+    -6.555482864379883,
+    -6.8928327560424805,
+    -6.8928608894348145
+   ],
+   "maxs": [
+    10.77676010131836,
+    8.26384449005127,
+    6.8928046226501465
+   ],
+   "radius": 15.229616165161133,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/holdable/medkit.md3",
+   "meshes": [
+    {
+     "material": 53,
+     "vertexOffset": 5689,
+     "vertexCount": 42,
+     "indexOffset": 21066,
+     "indexCount": 240
+    },
+    {
+     "material": 54,
+     "vertexOffset": 5731,
+     "vertexCount": 42,
+     "indexOffset": 21306,
+     "indexCount": 240
+    },
+    {
+     "material": 55,
+     "vertexOffset": 5773,
+     "vertexCount": 316,
+     "indexOffset": 21546,
+     "indexCount": 1872
+    }
+   ],
+   "mins": [
+    -2.000000238418579,
+    -12.984894752502441,
+    -11.228307723999023
+   ],
+   "maxs": [
+    2.000000238418579,
+    12.984894752502441,
+    11.228307723999023
+   ],
+   "radius": 17.28243064880371,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/holdable/teleporter.md3",
+   "meshes": [
+    {
+     "material": 56,
+     "vertexOffset": 6089,
+     "vertexCount": 48,
+     "indexOffset": 23418,
+     "indexCount": 108
+    },
+    {
+     "material": 57,
+     "vertexOffset": 6137,
+     "vertexCount": 138,
+     "indexOffset": 23526,
+     "indexCount": 192
+    }
+   ],
+   "mins": [
+    -2.500000238418579,
+    -12,
+    -12
+   ],
+   "maxs": [
+    2.500000238418579,
+    12,
+    12
+   ],
+   "radius": 17.153717041015625,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/enviro.md3",
+   "meshes": [
+    {
+     "material": 58,
+     "vertexOffset": 6275,
+     "vertexCount": 494,
+     "indexOffset": 23718,
+     "indexCount": 2784
+    }
+   ],
+   "mins": [
+    -1.4531257152557373,
+    -12.307283401489258,
+    -14.421875
+   ],
+   "maxs": [
+    1.4531257152557373,
+    12.703125,
+    14.421875
+   ],
+   "radius": 19.27359390258789,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/enviro_ring.md3",
+   "meshes": [
+    {
+     "material": 59,
+     "vertexOffset": 6769,
+     "vertexCount": 450,
+     "indexOffset": 26502,
+     "indexCount": 900
+    }
+   ],
+   "mins": [
+    -11.809130668640137,
+    -22.986589431762695,
+    -15.825181007385254
+   ],
+   "maxs": [
+    11.809130668640137,
+    0.19999806582927704,
+    15.825181007385254
+   ],
+   "radius": 30.303056716918945,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/flight.md3",
+   "meshes": [
+    {
+     "material": 60,
+     "vertexOffset": 7219,
+     "vertexCount": 165,
+     "indexOffset": 27402,
+     "indexCount": 912
+    }
+   ],
+   "mins": [
+    -8.97435474395752,
+    -10.767425537109375,
+    -6.095204830169678
+   ],
+   "maxs": [
+    8.97435474395752,
+    10.767425537109375,
+    6.095204830169678
+   ],
+   "radius": 15.284894943237305,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/flight_ring.md3",
+   "meshes": [
+    {
+     "material": 61,
+     "vertexOffset": 7384,
+     "vertexCount": 120,
+     "indexOffset": 28314,
+     "indexCount": 720
+    }
+   ],
+   "mins": [
+    -8.630044937133789,
+    -18.48762321472168,
+    -12.02678108215332
+   ],
+   "maxs": [
+    8.630044937133789,
+    -0.13579407334327698,
+    12.02678108215332
+   ],
+   "radius": 23.683609008789062,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/haste.md3",
+   "meshes": [
+    {
+     "material": 62,
+     "vertexOffset": 7504,
+     "vertexCount": 228,
+     "indexOffset": 29034,
+     "indexCount": 1080
+    }
+   ],
+   "mins": [
+    -0.8297041654586792,
+    -11.21863842010498,
+    -5.733608245849609
+   ],
+   "maxs": [
+    0.8297041654586792,
+    10.621349334716797,
+    5.884337902069092
+   ],
+   "radius": 12.695341110229492,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/haste_ring.md3",
+   "meshes": [
+    {
+     "material": 63,
+     "vertexOffset": 7732,
+     "vertexCount": 128,
+     "indexOffset": 30114,
+     "indexCount": 768
+    }
+   ],
+   "mins": [
+    -6.955582618713379,
+    -20.329248428344727,
+    -11.887344360351562
+   ],
+   "maxs": [
+    6.955582618713379,
+    -0.017487378790974617,
+    11.887345314025879
+   ],
+   "radius": 24.555395126342773,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/invis.md3",
+   "meshes": [
+    {
+     "material": 64,
+     "vertexOffset": 7860,
+     "vertexCount": 80,
+     "indexOffset": 30882,
+     "indexCount": 480
+    }
+   ],
+   "mins": [
+    -14.440421104431152,
+    -10.080110549926758,
+    -2.067267894744873
+   ],
+   "maxs": [
+    14.565597534179688,
+    10.172356605529785,
+    2.5645267963409424
+   ],
+   "radius": 17.95021629333496,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/quad.md3",
+   "meshes": [
+    {
+     "material": 65,
+     "vertexOffset": 7940,
+     "vertexCount": 100,
+     "indexOffset": 31362,
+     "indexCount": 540
+    }
+   ],
+   "mins": [
+    -13.098039627075195,
+    -7.628546237945557,
+    -2.111485004425049
+   ],
+   "maxs": [
+    11.142354965209961,
+    18.645566940307617,
+    2.0138070583343506
+   ],
+   "radius": 22.883928298950195,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/quad_ring.md3",
+   "meshes": [
+    {
+     "material": 66,
+     "vertexOffset": 8040,
+     "vertexCount": 4,
+     "indexOffset": 31902,
+     "indexCount": 6
+    }
+   ],
+   "mins": [
+    -30.26959800720215,
+    -2.8547606986673024e-13,
+    -30.26959800720215
+   ],
+   "maxs": [
+    30.269588470458984,
+    8.084728904140387e-14,
+    30.26959228515625
+   ],
+   "radius": 42.807674407958984,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/regen.md3",
+   "meshes": [
+    {
+     "material": 67,
+     "vertexOffset": 8044,
+     "vertexCount": 282,
+     "indexOffset": 31908,
+     "indexCount": 1680
+    }
+   ],
+   "mins": [
+    -0.32631930708885193,
+    -7.6138176918029785,
+    -3.517875909805298
+   ],
+   "maxs": [
+    0.3263193368911743,
+    8.028313636779785,
+    2.6597650051116943
+   ],
+   "radius": 8.771303176879883,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/instant/regen_ring.md3",
+   "meshes": [
+    {
+     "material": 68,
+     "vertexOffset": 8326,
+     "vertexCount": 249,
+     "indexOffset": 33588,
+     "indexCount": 1482
+    }
+   ],
+   "mins": [
+    -0.8933340907096863,
+    -25.792654037475586,
+    -13.495834350585938
+   ],
+   "maxs": [
+    0.8933340907096863,
+    0.15154685080051422,
+    13.375528335571289
+   ],
+   "radius": 29.068260192871094,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/kamikazi.md3",
+   "meshes": [
+    {
+     "material": 69,
+     "vertexOffset": 8575,
+     "vertexCount": 58,
+     "indexOffset": 35070,
+     "indexCount": 354
+    },
+    {
+     "material": 70,
+     "vertexOffset": 8633,
+     "vertexCount": 58,
+     "indexOffset": 35424,
+     "indexCount": 354
+    }
+   ],
+   "mins": [
+    -12.890625,
+    -7.312499523162842,
+    -12.484375
+   ],
+   "maxs": [
+    12.890625,
+    15.59375,
+    8.96875
+   ],
+   "radius": 23.773784637451172,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/orb/b_orb.md3",
+   "meshes": [
+    {
+     "material": 71,
+     "vertexOffset": 8691,
+     "vertexCount": 58,
+     "indexOffset": 35778,
+     "indexCount": 354
+    },
+    {
+     "material": 72,
+     "vertexOffset": 8749,
+     "vertexCount": 58,
+     "indexOffset": 36132,
+     "indexCount": 354
+    }
+   ],
+   "mins": [
+    -12.890625,
+    -7.312499523162842,
+    -12.484375
+   ],
+   "maxs": [
+    12.890625,
+    15.578125,
+    8.953125
+   ],
+   "radius": 23.763540267944336,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/orb/r_orb.md3",
+   "meshes": [
+    {
+     "material": 73,
+     "vertexOffset": 8807,
+     "vertexCount": 58,
+     "indexOffset": 36486,
+     "indexCount": 354
+    },
+    {
+     "material": 72,
+     "vertexOffset": 8865,
+     "vertexCount": 58,
+     "indexOffset": 36840,
+     "indexCount": 354
+    }
+   ],
+   "mins": [
+    -12.890625,
+    -7.312499523162842,
+    -12.484375
+   ],
+   "maxs": [
+    12.890625,
+    15.59375,
+    8.96875
+   ],
+   "radius": 23.773784637451172,
+   "tags": []
+  },
+  {
+   "name": "models/powerups/scout.md3",
+   "meshes": [
+    {
+     "material": 74,
+     "vertexOffset": 8923,
+     "vertexCount": 208,
+     "indexOffset": 37194,
+     "indexCount": 612
+    }
+   ],
+   "mins": [
+    -4.788918972015381,
+    0,
+    -9.496371269226074
+   ],
+   "maxs": [
+    4.788913249969482,
+    25.894012451171875,
+    8.73681640625
+   ],
+   "radius": 27.993118286132812,
+   "tags": []
+  },
+  {
+   "name": "models/weapons/nailgun/nailgun.md3",
+   "meshes": [
+    {
+     "material": 75,
+     "vertexOffset": 9131,
+     "vertexCount": 681,
+     "indexOffset": 37806,
+     "indexCount": 1575
+    },
+    {
+     "material": 75,
+     "vertexOffset": 9812,
+     "vertexCount": 346,
+     "indexOffset": 39381,
+     "indexCount": 750
+    }
+   ],
+   "mins": [
+    -6.845963001251221,
+    -6.474282264709473,
+    -3.771523952484131
+   ],
+   "maxs": [
+    13.987434387207031,
+    7.1004414558410645,
+    3.7535159587860107
+   ],
+   "radius": 16.133474349975586,
+   "tags": [
+    {
+     "name": "tag_flash.001",
+     "origin": [
+      14.240499496459961,
+      2.964524745941162,
+      -0.0006550459656864405
+     ]
+    },
+    {
+     "name": "tag_flash",
+     "origin": [
+      14.240499496459961,
+      2.964524745941162,
+      -0.0006550459656864405
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons/proxmine/proxmine.md3",
+   "meshes": [
+    {
+     "material": 76,
+     "vertexOffset": 10158,
+     "vertexCount": 376,
+     "indexOffset": 40131,
+     "indexCount": 1128
+    }
+   ],
+   "mins": [
+    -11.138155937194824,
+    -3.261986255645752,
+    -3.5186972618103027
+   ],
+   "maxs": [
+    14.787806510925293,
+    9.061690330505371,
+    3.5186972618103027
+   ],
+   "radius": 17.69674301147461,
+   "tags": []
+  },
+  {
+   "name": "models/weapons/proxmine/proxmine_hand.md3",
+   "meshes": [],
+   "mins": [
+    0,
+    0,
+    0
+   ],
+   "maxs": [
+    0,
+    0,
+    0
+   ],
+   "radius": 0,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      11.916594505310059,
+      -11.781898498535156,
+      5.7782111167907715
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons/vulcan/vulcan.md3",
+   "meshes": [
+    {
+     "material": 77,
+     "vertexOffset": 10534,
+     "vertexCount": 261,
+     "indexOffset": 41259,
+     "indexCount": 777
+    }
+   ],
+   "mins": [
+    -11.03452205657959,
+    -5.717730522155762,
+    -3.1426165103912354
+   ],
+   "maxs": [
+    7.940493106842041,
+    8.102609634399414,
+    3.1302080154418945
+   ],
+   "radius": 14.045960426330566,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      32.389678955078125,
+      5.463813304901123,
+      -0.5263045430183411
+     ]
+    },
+    {
+     "name": "tag_barrel",
+     "origin": [
+      -0.1424967497587204,
+      5.397428512573242,
+      0.009208738803863525
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons/vulcan/vulcan_hand.md3",
+   "meshes": [],
+   "mins": [
+    0,
+    0,
+    0
+   ],
+   "maxs": [
+    0,
+    0,
+    0
+   ],
+   "radius": 0,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      -4.683868408203125,
+      -9.231090545654297,
+      0.6562649011611938
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/bfg/bfg.md3",
+   "meshes": [
+    {
+     "material": 78,
+     "vertexOffset": 10795,
+     "vertexCount": 18,
+     "indexOffset": 42036,
+     "indexCount": 48
+    },
+    {
+     "material": 79,
+     "vertexOffset": 10813,
+     "vertexCount": 591,
+     "indexOffset": 42084,
+     "indexCount": 1698
+    }
+   ],
+   "mins": [
+    -5.59375,
+    -1.9375,
+    -4.46875
+   ],
+   "maxs": [
+    11.984375,
+    8.09375,
+    4.46875
+   ],
+   "radius": 15.136174201965332,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      1.6555599461330096e-14,
+      0,
+      1.6528794287816882e-21
+     ]
+    },
+    {
+     "name": "tag_flash",
+     "origin": [
+      18.537281036376953,
+      3.985126495361328,
+      0.0000015248961062752642
+     ]
+    },
+    {
+     "name": "tag_barrel",
+     "origin": [
+      11.98727798461914,
+      3.985124349594116,
+      0.0000010838284651981667
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/bfg/bfg_hand.md3",
+   "meshes": [],
+   "mins": [
+    0,
+    0,
+    0
+   ],
+   "maxs": [
+    0,
+    0,
+    0
+   ],
+   "radius": 0,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      5.697338581085205,
+      -13.22018051147461,
+      7.085205554962158
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/gauntlet/gauntlet.md3",
+   "meshes": [
+    {
+     "material": 80,
+     "vertexOffset": 11404,
+     "vertexCount": 43,
+     "indexOffset": 43782,
+     "indexCount": 240
+    }
+   ],
+   "mins": [
+    -3.029383659362793,
+    -4.962035655975342,
+    -1.2802891731262207
+   ],
+   "maxs": [
+    13.28581428527832,
+    4.68026065826416,
+    1.2802891731262207
+   ],
+   "radius": 14.239866256713867,
+   "tags": [
+    {
+     "name": "tag_barrel",
+     "origin": [
+      11.021736145019531,
+      -0.5934882164001465,
+      0.07341188192367554
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/grapple/grapple.md3",
+   "meshes": [
+    {
+     "material": 81,
+     "vertexOffset": 11447,
+     "vertexCount": 251,
+     "indexOffset": 44022,
+     "indexCount": 768
+    }
+   ],
+   "mins": [
+    -5.274599075317383,
+    -5.44735860824585,
+    -2.7016844749450684
+   ],
+   "maxs": [
+    13.553610801696777,
+    4.9964141845703125,
+    2.6937737464904785
+   ],
+   "radius": 14.855072975158691,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      14.171881675720215,
+      1.2548385858535767,
+      -3.26111795345696e-8
+     ]
+    },
+    {
+     "name": "tag_barrel",
+     "origin": [
+      11.862060546875,
+      1.277280330657959,
+      -2.7314905892694696e-8
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/grenadel/grenadel.md3",
+   "meshes": [
+    {
+     "material": 82,
+     "vertexOffset": 11698,
+     "vertexCount": 559,
+     "indexOffset": 44790,
+     "indexCount": 1614
+    }
+   ],
+   "mins": [
+    -7.546875,
+    -2.890625,
+    -3.125
+   ],
+   "maxs": [
+    14.9375,
+    5.765625,
+    3.124999761581421
+   ],
+   "radius": 16.313705444335938,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      15.310614585876465,
+      2.9332897663116455,
+      -1.674628435921477e-7
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/lightning/lightning.md3",
+   "meshes": [
+    {
+     "material": 83,
+     "vertexOffset": 12257,
+     "vertexCount": 689,
+     "indexOffset": 46404,
+     "indexCount": 2406
+    }
+   ],
+   "mins": [
+    -7.390625,
+    -7.15625,
+    -4.390625
+   ],
+   "maxs": [
+    29.015625,
+    4.020516395568848,
+    6.1875
+   ],
+   "radius": 30.518905639648438,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      26.41281509399414,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "tag_weapon",
+     "origin": [
+      0,
+      0,
+      0
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/machinegun/machinegun.md3",
+   "meshes": [
+    {
+     "material": 84,
+     "vertexOffset": 12946,
+     "vertexCount": 258,
+     "indexOffset": 48810,
+     "indexCount": 834
+    },
+    {
+     "material": 85,
+     "vertexOffset": 13204,
+     "vertexCount": 12,
+     "indexOffset": 49644,
+     "indexCount": 24
+    }
+   ],
+   "mins": [
+    -8.513842582702637,
+    -3.606642246246338,
+    -2.08528470993042
+   ],
+   "maxs": [
+    16.009777069091797,
+    6.216865539550781,
+    2.08528470993042
+   ],
+   "radius": 17.300600051879883,
+   "tags": [
+    {
+     "name": "tag_barrel",
+     "origin": [
+      5.764124393463135,
+      1.9938580989837646,
+      0.0006181448698043823
+     ]
+    },
+    {
+     "name": "tag_flash",
+     "origin": [
+      16.743986129760742,
+      2.0011110305786133,
+      0.03084874153137207
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/machinegun/machinegun_hand.md3",
+   "meshes": [],
+   "mins": [
+    99999,
+    99999,
+    99999
+   ],
+   "maxs": [
+    -99999,
+    -99999,
+    -99999
+   ],
+   "radius": 0,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      6.160070419311523,
+      -7.799996852874756,
+      5.832462310791016
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/plasma/plasma.md3",
+   "meshes": [
+    {
+     "material": 86,
+     "vertexOffset": 13216,
+     "vertexCount": 351,
+     "indexOffset": 49668,
+     "indexCount": 1260
+    }
+   ],
+   "mins": [
+    -5.078125,
+    -4.875,
+    -2.015625
+   ],
+   "maxs": [
+    13.796875,
+    6.046875,
+    2.015625
+   ],
+   "radius": 15.198065757751465,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      16.040376663208008,
+      4.25015115737915,
+      -0.0006551742553710938
+     ]
+    },
+    {
+     "name": "tag_flash.001",
+     "origin": [
+      18.823286056518555,
+      4.901101112365723,
+      -0.06042542681097984
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/railgun/railgun.md3",
+   "meshes": [
+    {
+     "material": 87,
+     "vertexOffset": 13567,
+     "vertexCount": 280,
+     "indexOffset": 50928,
+     "indexCount": 1194
+    },
+    {
+     "material": 88,
+     "vertexOffset": 13847,
+     "vertexCount": 9,
+     "indexOffset": 52122,
+     "indexCount": 24
+    },
+    {
+     "material": 89,
+     "vertexOffset": 13856,
+     "vertexCount": 9,
+     "indexOffset": 52146,
+     "indexCount": 24
+    }
+   ],
+   "mins": [
+    -12.90625,
+    -1.890625,
+    -4.171875
+   ],
+   "maxs": [
+    14.984375,
+    6.359375,
+    4.171875
+   ],
+   "radius": 16.80409812927246,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      14.912920951843262,
+      2.763434886932373,
+      -0.06042534112930298
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/rocketl/rocketl.md3",
+   "meshes": [
+    {
+     "material": 90,
+     "vertexOffset": 13865,
+     "vertexCount": 158,
+     "indexOffset": 52170,
+     "indexCount": 612
+    }
+   ],
+   "mins": [
+    -14.715429306030273,
+    -1.0129742622375488,
+    -4.172460556030273
+   ],
+   "maxs": [
+    14.375236511230469,
+    8.073586463928223,
+    4.172460556030273
+   ],
+   "radius": 17.295551300048828,
+   "tags": [
+    {
+     "name": "tag_flash",
+     "origin": [
+      14.768211364746094,
+      3.7451257705688477,
+      -0.0604252964258194
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/rocketl/rocketl_hand.md3",
+   "meshes": [],
+   "mins": [
+    0,
+    0,
+    0
+   ],
+   "maxs": [
+    0,
+    0,
+    0
+   ],
+   "radius": 0,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      11.916594505310059,
+      -11.781898498535156,
+      5.7782111167907715
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/shotgun/shotgun.md3",
+   "meshes": [
+    {
+     "material": 91,
+     "vertexOffset": 14023,
+     "vertexCount": 659,
+     "indexOffset": 52782,
+     "indexCount": 1755
+    },
+    {
+     "material": 92,
+     "vertexOffset": 14682,
+     "vertexCount": 8,
+     "indexOffset": 54537,
+     "indexCount": 18
+    }
+   ],
+   "mins": [
+    -4.359375,
+    -5.015625,
+    -1.390625
+   ],
+   "maxs": [
+    45.46875,
+    3.84375,
+    7.609375
+   ],
+   "radius": 46.37311935424805,
+   "tags": [
+    {
+     "name": "tag_flash.001",
+     "origin": [
+      23.079599380493164,
+      0.30209028720855713,
+      8.821947248508367e-15
+     ]
+    },
+    {
+     "name": "tag_weapon.001",
+     "origin": [
+      0,
+      1.764053347028203e-14,
+      -4.035683502934262e-7
+     ]
+    },
+    {
+     "name": "tag_weapon",
+     "origin": [
+      0,
+      1.764053347028203e-14,
+      -4.035683502934262e-7
+     ]
+    },
+    {
+     "name": "tag_flash",
+     "origin": [
+      23.079599380493164,
+      0.30209028720855713,
+      8.821947248508367e-15
+     ]
+    }
+   ]
+  },
+  {
+   "name": "models/weapons2/shotgun/shotgun_hand.md3",
+   "meshes": [],
+   "mins": [
+    99999,
+    99999,
+    99999
+   ],
+   "maxs": [
+    -99999,
+    -99999,
+    -99999
+   ],
+   "radius": 0,
+   "tags": [
+    {
+     "name": "tag_weapon",
+     "origin": [
+      6.160070419311523,
+      -7.799996852874756,
+      5.832462310791016
+     ]
+    }
+   ]
+  }
+ ],
+ "stats": {
+  "models": 82,
+  "missing": 4,
+  "meshes": 112,
+  "vertices": 14690,
+  "triangles": 18185,
+  "materials": 93,
+  "texturesWritten": 154,
+  "untexturedSurfaces": 1
+ }
+}

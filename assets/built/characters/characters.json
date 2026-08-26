@@ -1,0 +1,317 @@
+{
+ "generator": "queep-3-arena tools/convert-characters.ts",
+ "coordinateSystem": "Y-up, right-handed; Q3 units (unscaled, see D-011)",
+ "jointsPerPart": 32,
+ "characters": [
+  {
+   "name": "assassin",
+   "joints": 58,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.1427127333046767,
+    "rms": 0.3924558144788996,
+    "max": 4.932559088359333,
+    "within025": 0.8572447685478757
+   },
+   "torsoError": {
+    "mean": 0.024590374804329296,
+    "rms": 0.07034583942855006,
+    "max": 1.07918114338487,
+    "within025": 0.9789145761600262
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 361632
+  },
+  {
+   "name": "beret",
+   "joints": 57,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.11029100430676758,
+    "rms": 0.16844475998687153,
+    "max": 1.7507030950421565,
+    "within025": 0.8795458707196484
+   },
+   "torsoError": {
+    "mean": 0.12084820904134663,
+    "rms": 0.2346674770603092,
+    "max": 2.2725379228037403,
+    "within025": 0.8431688646669717
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 331564
+  },
+  {
+   "name": "gargoyle",
+   "joints": 64,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.11229983684400513,
+    "rms": 0.20958171057976435,
+    "max": 3.663870899581268,
+    "within025": 0.8565384301233357
+   },
+   "torsoError": {
+    "mean": 0.267349170947637,
+    "rms": 0.43781966363768776,
+    "max": 4.21015380155357,
+    "within025": 0.6385396518375241
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 477944
+  },
+  {
+   "name": "kyonshi",
+   "joints": 56,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.08232362506397392,
+    "rms": 0.26834290652028564,
+    "max": 5.444980849681064,
+    "within025": 0.9143223443223443
+   },
+   "torsoError": {
+    "mean": 0.02734407236719384,
+    "rms": 0.06872268564604976,
+    "max": 1.742296974664502,
+    "within025": 0.9917757401833835
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 403696
+  },
+  {
+   "name": "liz",
+   "joints": 54,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.016177971558178655,
+    "rms": 0.037236572936451946,
+    "max": 0.6455813012077201,
+    "within025": 0.995622174637164
+   },
+   "torsoError": {
+    "mean": 0.014415827458600164,
+    "rms": 0.048663855017859435,
+    "max": 0.7653853524981006,
+    "within025": 0.9922306238185256
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 335900
+  },
+  {
+   "name": "major",
+   "joints": 41,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.023284924482009004,
+    "rms": 0.07859513716068761,
+    "max": 1.6203619855940452,
+    "within025": 0.985407943154422
+   },
+   "torsoError": {
+    "mean": 0.012265513592642982,
+    "rms": 0.016632362595127174,
+    "max": 0.3639250419493534,
+    "within025": 0.9998396724384588
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 274000
+  },
+  {
+   "name": "merman",
+   "joints": 52,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.030477402157558155,
+    "rms": 0.06947439407477288,
+    "max": 0.9866215617805674,
+    "within025": 0.9797879023020359
+   },
+   "torsoError": {
+    "mean": 0.11488307121911566,
+    "rms": 0.2599671320122151,
+    "max": 2.0216593678392543,
+    "within025": 0.8536283304324541
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 368064
+  },
+  {
+   "name": "neko",
+   "joints": 30,
+   "clips": 18,
+   "legsError": {
+    "mean": 0.13366253031758965,
+    "rms": 0.2512989660404178,
+    "max": 2.780183509324168,
+    "within025": 0.8397945395707924
+   },
+   "torsoError": null,
+   "hasHead": true,
+   "hasTorso": false,
+   "untextured": 3,
+   "bytes": 307416
+  },
+  {
+   "name": "penguin",
+   "joints": 56,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.09441857353237103,
+    "rms": 0.19973724083525868,
+    "max": 2.4491507181538856,
+    "within025": 0.8857161803713528
+   },
+   "torsoError": {
+    "mean": 0.09151266463910897,
+    "rms": 0.16057007776021684,
+    "max": 2.1228510295764407,
+    "within025": 0.9105439814814815
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 370820
+  },
+  {
+   "name": "sarge",
+   "joints": 49,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.042245411130048656,
+    "rms": 0.11514285937078793,
+    "max": 1.8012246151259188,
+    "within025": 0.9522241361840106
+   },
+   "torsoError": {
+    "mean": 0.06616071926565933,
+    "rms": 0.15763983460291867,
+    "max": 1.542135939245471,
+    "within025": 0.9223581757508342
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 319220
+  },
+  {
+   "name": "sergei",
+   "joints": 58,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.0216387938306367,
+    "rms": 0.07527432736331134,
+    "max": 1.7750320997310267,
+    "within025": 0.9858684613663357
+   },
+   "torsoError": {
+    "mean": 0.020272495694888756,
+    "rms": 0.04516218985161938,
+    "max": 0.862154068182668,
+    "within025": 0.9955619025638066
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 426024
+  },
+  {
+   "name": "skelebot",
+   "joints": 54,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.0075624943719957176,
+    "rms": 0.009234462609221063,
+    "max": 0.03471214734701732,
+    "within025": 1
+   },
+   "torsoError": {
+    "mean": 0.005706150882148087,
+    "rms": 0.017534722895991825,
+    "max": 0.7798318474756911,
+    "within025": 0.9988552585090096
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 336028
+  },
+  {
+   "name": "smarine",
+   "joints": 50,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.009132896108455586,
+    "rms": 0.011307175659493218,
+    "max": 0.1501931906378353,
+    "within025": 1
+   },
+   "torsoError": {
+    "mean": 0.005036476150967941,
+    "rms": 0.007399988324051668,
+    "max": 0.10275739404660864,
+    "within025": 1
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 291000
+  },
+  {
+   "name": "sorceress",
+   "joints": 56,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.02947546770968318,
+    "rms": 0.06406607854607067,
+    "max": 1.0946799889184429,
+    "within025": 0.987039627039627
+   },
+   "torsoError": {
+    "mean": 0.07221739745938366,
+    "rms": 0.14518911587647995,
+    "max": 1.4842949788256936,
+    "within025": 0.9310859728506787
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 351208
+  },
+  {
+   "name": "tony",
+   "joints": 47,
+   "clips": 25,
+   "legsError": {
+    "mean": 0.07784950740824258,
+    "rms": 0.15745861487682264,
+    "max": 2.2327834851452173,
+    "within025": 0.9221302681992337
+   },
+   "torsoError": {
+    "mean": 0.0771749873025936,
+    "rms": 0.14075798975788548,
+    "max": 1.540719790648964,
+    "within025": 0.9089988718868416
+   },
+   "hasHead": true,
+   "hasTorso": true,
+   "untextured": 0,
+   "bytes": 260296
+  }
+ ]
+}

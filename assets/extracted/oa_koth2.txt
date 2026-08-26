@@ -1,0 +1,24 @@
+================================================================
+Title        		: Floating Spire
+Date         		: 25-05-2009
+Filename     		: oa_koth2.pk3
+Author       		: cosmo
+Email Address		: cosmo-flash@gmx.net
+Website			    : http://oa.spaceboyz.net
+MappingBlog         : http://mapforce.blogspot.com
+
+Supported Gametypes : FFA, TEAMDEATHMATCH, DOMINATION
+
+Description		: Remake of a well known map
+                
+Players         : 4 - 10
+
+Bots            : yes
+
+Missionpack     : Proxymine Launcher and chaingun support
+
+Buildtime       : 34h
+Type            : A new map from scratch with several new textures and mapmodels
+                  remake of a well known map.
+
+Compile Options : -light -fast -patchshadows -bounce 8 -bouncegrid -samples 8 -dark -dirty -dirtmode 1 -dirtdepth 256 -dirtscale 1.15 -gamma 2.85 -compensate 3.15 -samplesize 4

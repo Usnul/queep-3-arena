@@ -1,0 +1,1649 @@
+[
+  {
+    "image": "/models/players/merman/brac",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.18)",
+    "normal": "seam 9.3 against source -3.5",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "/models/players/merman/skin",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.81)",
+    "normal": "kept, mean tilt 30.7 deg, lean removed 28.8 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/flags/b_flag",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 16.7 deg, lean removed 34.1 deg",
+    "orm": "G 0.95 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.95
+  },
+  {
+    "image": "models/flags/n_flag",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.41)",
+    "normal": "kept, mean tilt 1.4 deg, lean removed 11.0 deg",
+    "orm": "G 0.95 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.95
+  },
+  {
+    "image": "models/flags/pole",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.21)",
+    "normal": "kept, mean tilt 2.4 deg, lean removed 5.9 deg",
+    "orm": "G 0.35 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.35
+  },
+  {
+    "image": "models/flags/r_flag",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.31)",
+    "normal": "kept, mean tilt 7.5 deg, lean removed 1.4 deg",
+    "orm": "G 0.95 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.95
+  },
+  {
+    "image": "models/gibs/f_veins",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x3603.14)",
+    "normal": "kept, mean tilt 3.3 deg, lean removed 8.8 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/gibs/genericgibmeat",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.21)",
+    "normal": "mean tilt 0.28 deg, flat",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/gibs/heart",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.22)",
+    "normal": "kept, mean tilt 11.0 deg, lean removed 1.2 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/gibs/skull-4",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.28)",
+    "normal": "kept, mean tilt 2.1 deg, lean removed 9.9 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/gibs/splurt",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.48)",
+    "normal": "kept, mean tilt 16.6 deg, lean removed 14.4 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/gibs/veins",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.37)",
+    "normal": "kept, mean tilt 12.2 deg, lean removed 10.4 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/mapobjects/torch/torch",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.41)",
+    "normal": "kept, mean tilt 24.0 deg, lean removed 7.0 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "models/players/assassin/lower",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.26)",
+    "normal": "mean tilt 72.2 deg, implausible relief",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/assassin/upper",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.25)",
+    "normal": "kept, mean tilt 1.3 deg, lean removed 1.9 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/beret/skin1",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.30)",
+    "normal": "kept, mean tilt 19.1 deg, lean removed 6.4 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/beret/skin2",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.53)",
+    "normal": "kept, mean tilt 23.0 deg, lean removed 18.3 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/gargoyle/bared",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.19)",
+    "normal": "kept, mean tilt 22.2 deg, lean removed 28.2 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/grism/enkiskin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.32)",
+    "normal": "kept, mean tilt 9.6 deg, lean removed 3.2 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/kyonshi/eyes",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.44)",
+    "normal": "kept, mean tilt 6.5 deg, lean removed 4.4 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/kyonshi/hair",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.38)",
+    "normal": "kept, mean tilt 20.8 deg, lean removed 2.5 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/kyonshi/lower",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.76)",
+    "normal": "kept, mean tilt 26.1 deg, lean removed 18.9 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/kyonshi/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.88)",
+    "normal": "kept, mean tilt 5.3 deg, lean removed 23.9 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/kyonshi/torso",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x2.16)",
+    "normal": "kept, mean tilt 25.3 deg, lean removed 22.5 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/liz/h_head",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x26.36)",
+    "normal": "kept, mean tilt 38.0 deg, lean removed 41.9 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/liz/l_legs",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.92)",
+    "normal": "kept, mean tilt 3.9 deg, lean removed 12.5 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/liz/u_torso",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.92)",
+    "normal": "kept, mean tilt 11.9 deg, lean removed 9.7 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/major/head",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.21)",
+    "normal": "kept, mean tilt 17.0 deg, lean removed 5.1 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/major/lower",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.36)",
+    "normal": "kept, mean tilt 7.0 deg, lean removed 3.6 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/major/torso",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.09)",
+    "normal": "kept, mean tilt 36.8 deg, lean removed 33.6 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/penguin/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x4.21)",
+    "normal": "kept, mean tilt 31.8 deg, lean removed 32.7 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/sergei/face",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.42)",
+    "normal": "mean tilt 0.26 deg, flat",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/sergei/hairs",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x13.01)",
+    "normal": "kept, mean tilt 14.9 deg, lean removed 70.2 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/sergei/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.23)",
+    "normal": "kept, mean tilt 11.5 deg, lean removed 1.7 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/skelebot/skin1",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.20)",
+    "normal": "kept, mean tilt 7.0 deg, lean removed 27.2 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/players/skelebot/skin2",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.59)",
+    "normal": "kept, mean tilt 1.0 deg, lean removed 4.3 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/players/smarine/2h_head",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.24)",
+    "normal": "mean tilt 0.30 deg, flat",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/smarine/2l_legs",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.23)",
+    "normal": "kept, mean tilt 38.5 deg, lean removed 58.1 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/smarine/2u_torso",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.36)",
+    "normal": "mean tilt 105.3 deg, inverted",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/sorceress/drowbody",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.48)",
+    "normal": "mean tilt 0.57 deg, flat",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/sorceress/drowhead",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.26)",
+    "normal": "kept, mean tilt 16.9 deg, lean removed 35.9 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/sorceress/rings",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.23)",
+    "normal": "kept, mean tilt 22.9 deg, lean removed 8.6 deg",
+    "orm": "G 0.30 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.3
+  },
+  {
+    "image": "models/players/tony/head",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.57)",
+    "normal": "mean tilt 0.38 deg, flat",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/players/tony/suit",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.16)",
+    "normal": "kept, mean tilt 19.5 deg, lean removed 24.1 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "models/powerups/ammo/ammobox",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.37)",
+    "normal": "kept, mean tilt 7.5 deg, lean removed 1.6 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.45
+  },
+  {
+    "image": "models/powerups/armor/redarmor",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.88)",
+    "normal": "mean tilt 0.34 deg, flat",
+    "orm": "G 0.30 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.3
+  },
+  {
+    "image": "models/powerups/armor/shard_env",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.15)",
+    "normal": "kept, mean tilt 26.4 deg, lean removed 66.6 deg",
+    "orm": "G 0.25 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.25
+  },
+  {
+    "image": "models/powerups/armor/yellowarmor",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.51)",
+    "normal": "kept, mean tilt 3.7 deg, lean removed 9.4 deg",
+    "orm": "G 0.30 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.3
+  },
+  {
+    "image": "models/weapons/nailgun/nailgun",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x2.04)",
+    "normal": "kept, mean tilt 7.2 deg, lean removed 34.9 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons/proxmine/prox",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.22)",
+    "normal": "kept, mean tilt 33.6 deg, lean removed 5.3 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons/vulcan/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.21)",
+    "normal": "kept, mean tilt 4.8 deg, lean removed 2.8 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/bfg/bfgbody",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.37)",
+    "normal": "kept, mean tilt 2.8 deg, lean removed 7.4 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/gauntlet/gauntlet2",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.35)",
+    "normal": "kept, mean tilt 17.9 deg, lean removed 3.3 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/grapple/hookgun",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.34)",
+    "normal": "kept, mean tilt 5.2 deg, lean removed 6.0 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/grenadel/newgren",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.14)",
+    "normal": "mean tilt 0.28 deg, flat",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/lightning/skinlightning",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.25)",
+    "normal": "kept, mean tilt 26.8 deg, lean removed 47.5 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/machinegun/mgun",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x1.82)",
+    "normal": "kept, mean tilt 40.0 deg, lean removed 18.5 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/machinegun/sight",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.57)",
+    "normal": "mean tilt 143.6 deg, inverted",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/plasma/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.67)",
+    "normal": "kept, mean tilt 13.3 deg, lean removed 24.5 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/railgun/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.17)",
+    "normal": "kept, mean tilt 2.4 deg, lean removed 5.9 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/rocketl/skin",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.16)",
+    "normal": "kept, mean tilt 6.0 deg, lean removed 11.9 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "models/weapons2/shotgun/shotgun",
+    "framing": "mirror",
+    "albedo": "retinted, level held (x0.25)",
+    "normal": "kept, mean tilt 20.8 deg, lean removed 6.5 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/acc_dm3/concrt",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.45)",
+    "normal": "mean tilt 0.78 deg, flat",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/acc_dm3/concrtcracka",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.03)",
+    "normal": "kept, mean tilt 2.8 deg, lean removed 13.2 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/acc_dm3/concrtmould",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.39)",
+    "normal": "kept, mean tilt 4.2 deg, lean removed 2.2 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/acc_dm3/cop",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.06)",
+    "normal": "kept, mean tilt 11.6 deg, lean removed 1.7 deg",
+    "orm": "G 0.60 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.6
+  },
+  {
+    "image": "textures/acc_dm3/rivets",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.57)",
+    "normal": "mean tilt 172.4 deg, inverted",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/acc_dm3/step",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.34)",
+    "normal": "kept, mean tilt 4.6 deg, lean removed 4.7 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/acc_dm5/doorarch",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.18)",
+    "normal": "kept, mean tilt 4.8 deg, lean removed 11.0 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/mud02",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.81)",
+    "normal": "kept, mean tilt 4.5 deg, lean removed 10.6 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/mud02b",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.71)",
+    "normal": "kept, mean tilt 10.4 deg, lean removed 10.1 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/roots_moss",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.28)",
+    "normal": "kept, mean tilt 33.7 deg, lean removed 22.9 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/rust",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.39)",
+    "normal": "kept, mean tilt 12.5 deg, lean removed 9.1 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/sand",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.16)",
+    "normal": "kept, mean tilt 2.5 deg, lean removed 6.4 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/stnlarge_dirty",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.09)",
+    "normal": "kept, mean tilt 4.4 deg, lean removed 12.7 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/stnlarge_dirty2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.26)",
+    "normal": "kept, mean tilt 9.5 deg, lean removed 4.8 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/stnsqr_dirty",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x2.37)",
+    "normal": "kept, mean tilt 9.6 deg, lean removed 8.2 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/stntiles_dirty",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.03)",
+    "normal": "kept, mean tilt 14.6 deg, lean removed 10.2 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/stntiles_moss2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.86)",
+    "normal": "kept, mean tilt 11.7 deg, lean removed 9.6 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/stonesteps_dirty",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.90)",
+    "normal": "kept, mean tilt 2.6 deg, lean removed 9.1 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/tiles_moss",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.24)",
+    "normal": "seam 31.3 against source 6.2",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/wall_dirty",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x2.34)",
+    "normal": "kept, mean tilt 8.6 deg, lean removed 10.7 deg",
+    "orm": "G 0.92 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.92
+  },
+  {
+    "image": "textures/acc_dm5/wood01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.77)",
+    "normal": "kept, mean tilt 6.8 deg, lean removed 7.5 deg",
+    "orm": "G 0.82 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.82
+  },
+  {
+    "image": "textures/acc_dm5/woodenbarrier",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.26)",
+    "normal": "kept, mean tilt 10.7 deg, lean removed 8.9 deg",
+    "orm": "G 0.82 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.82
+  },
+  {
+    "image": "textures/base_light/ceil1_22a",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.83)",
+    "normal": "kept, mean tilt 19.0 deg, lean removed 2.4 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/base_light/ceil1_38",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.51)",
+    "normal": "kept, mean tilt 3.8 deg, lean removed 6.4 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/base_light/light1",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.45)",
+    "normal": "seam 8.6 against source -2.3",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/base_light/light1blue",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.34)",
+    "normal": "seam 9.6 against source -4.6",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/base_light/light1red",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.45)",
+    "normal": "kept, mean tilt 10.0 deg, lean removed 7.8 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/base_light/proto_light",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x4.49)",
+    "normal": "seam 17.0 against source 1.3",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/base_light/xlight5",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.02)",
+    "normal": "seam 11.6 against source -4.5",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/base_trim/deeprust",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.18)",
+    "normal": "kept, mean tilt 2.5 deg, lean removed 8.9 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/base_trim/dirty_pewter",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.30)",
+    "normal": "mean tilt 179.1 deg, inverted",
+    "orm": "G 0.55 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.55
+  },
+  {
+    "image": "textures/base_trim/pewter",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.29)",
+    "normal": "kept, mean tilt 3.5 deg, lean removed 15.5 deg",
+    "orm": "G 0.35 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.35
+  },
+  {
+    "image": "textures/base_trim/tinfx",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.76)",
+    "normal": "mean tilt 0.07 deg, flat",
+    "orm": "G 0.25 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.25
+  },
+  {
+    "image": "textures/base_wall/atech2_c",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.16)",
+    "normal": "kept, mean tilt 25.7 deg, lean removed 7.8 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "textures/base_wall/atech3_a",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.50)",
+    "normal": "kept, mean tilt 6.7 deg, lean removed 22.6 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "textures/base_wall/bluemetal1b_shiny",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.53)",
+    "normal": "kept, mean tilt 7.6 deg, lean removed 9.9 deg",
+    "orm": "G 0.15 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.15
+  },
+  {
+    "image": "textures/base_wall/chrome_env",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.34)",
+    "normal": "kept, mean tilt 22.7 deg, lean removed 10.0 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/bubctf1/e8_launchpad1",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.25)",
+    "normal": "kept, mean tilt 3.6 deg, lean removed 7.7 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/bubctf1/e8_launchpad1r",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.17)",
+    "normal": "kept, mean tilt 10.1 deg, lean removed 6.7 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/clown/light_base",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "mean tilt 0.26 deg, flat",
+    "orm": "G 0.60 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.6
+  },
+  {
+    "image": "textures/cosmo_sfx/flag_oa_blue1",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.49)",
+    "normal": "kept, mean tilt 4.9 deg, lean removed 6.0 deg",
+    "orm": "G 0.95 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.95
+  },
+  {
+    "image": "textures/cosmo_sfx/flag_oa_red1",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.22)",
+    "normal": "seam 64.2 against source 19.0",
+    "orm": "G 0.95 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.95
+  },
+  {
+    "image": "textures/e7/e7beam01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.16)",
+    "normal": "mean tilt 0.93 deg, flat",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/e7/e7beam02",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.41)",
+    "normal": "mean tilt 0.31 deg, flat",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/e7/e7bmtrim",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.65)",
+    "normal": "kept, mean tilt 3.1 deg, lean removed 13.7 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/e7/e7bmtrim2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "mean tilt 150.8 deg, inverted",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/e7/e7brickfloor01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.26)",
+    "normal": "seam 9.8 against source -2.3",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e7/e7bricks01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x2.18)",
+    "normal": "kept, mean tilt 11.8 deg, lean removed 15.2 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e7/e7brnmetal",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 1.2 deg, lean removed 6.6 deg",
+    "orm": "G 0.55 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.55
+  },
+  {
+    "image": "textures/e7/e7panelwood",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.35)",
+    "normal": "kept, mean tilt 2.7 deg, lean removed 5.0 deg",
+    "orm": "G 0.82 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.82
+  },
+  {
+    "image": "textures/e7/e7panelwood2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.37)",
+    "normal": "kept, mean tilt 3.6 deg, lean removed 7.7 deg",
+    "orm": "G 0.82 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.82
+  },
+  {
+    "image": "textures/e7/e7sbrickfloor",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.18)",
+    "normal": "seam 17.3 against source 4.7",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e7/e7sbrickfloor_ow",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.26)",
+    "normal": "seam 39.3 against source 4.3",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e7/e7sbrickfloorbig",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.15)",
+    "normal": "kept, mean tilt 4.2 deg, lean removed 8.6 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e7/e7trim01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.17)",
+    "normal": "mean tilt 84.5 deg, implausible relief",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.45
+  },
+  {
+    "image": "textures/e7/e7walldesign01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.52)",
+    "normal": "kept, mean tilt 2.1 deg, lean removed 2.2 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e7/e7walldesign01b",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.35)",
+    "normal": "mean tilt 75.2 deg, implausible relief",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/e8/e8_base1",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.16)",
+    "normal": "kept, mean tilt 5.7 deg, lean removed 11.1 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.45
+  },
+  {
+    "image": "textures/e8/e8_base1c",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "mean tilt 0.48 deg, flat",
+    "orm": "G 0.88 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.88
+  },
+  {
+    "image": "textures/e8/e8jumpspawn02b",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.29)",
+    "normal": "kept, mean tilt 4.2 deg, lean removed 6.0 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/effects/envmapblue",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/envmapblue2",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/envmapdimb",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/envmapgold",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.77)",
+    "normal": "mean tilt 71.0 deg, implausible relief",
+    "orm": "G 0.35 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.35
+  },
+  {
+    "image": "textures/effects/envmapligh",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/envmapred",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/flightenv",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.05)",
+    "normal": "mean tilt 0.30 deg, flat",
+    "orm": "G 0.35 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.35
+  },
+  {
+    "image": "textures/effects/hastenv",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x2.05)",
+    "normal": "kept, mean tilt 16.2 deg, lean removed 24.9 deg",
+    "orm": "G 0.35 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.35
+  },
+  {
+    "image": "textures/effects/regenmap2",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/tinfx",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/tinfx2b",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/effects/tinfx2c",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/evil4_walls/drk_brnbrick",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.17)",
+    "normal": "kept, mean tilt 6.2 deg, lean removed 22.3 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/evil6_floors/e6c_floor",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 2.5 deg, lean removed 8.1 deg",
+    "orm": "G 0.55 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.55
+  },
+  {
+    "image": "textures/evil6_floors/e6c_floordented",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 4.3 deg, lean removed 5.6 deg",
+    "orm": "G 0.55 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.55
+  },
+  {
+    "image": "textures/evil6_floors/e6l_stepedge",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.34)",
+    "normal": "kept, mean tilt 11.8 deg, lean removed 11.9 deg",
+    "orm": "G 0.45 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.45
+  },
+  {
+    "image": "textures/evil8_lights/e8_rlight",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.15)",
+    "normal": "seam 30.0 against source -1.8",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/evil8_trim/e8basictrim_blue",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 37.1 deg, lean removed 57.2 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/evil8_trim/e8basictrim_red",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "seam 33.4 against source 1.3",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/gothic_block/blocks10",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.14)",
+    "normal": "kept, mean tilt 11.2 deg, lean removed 5.1 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/blocks17",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.18)",
+    "normal": "kept, mean tilt 9.1 deg, lean removed 9.8 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/blocks17g",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.50)",
+    "normal": "kept, mean tilt 9.5 deg, lean removed 10.6 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/blocks17slime",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.27)",
+    "normal": "kept, mean tilt 10.2 deg, lean removed 8.2 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/blocks18c",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.15)",
+    "normal": "kept, mean tilt 11.5 deg, lean removed 36.2 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/blocks18c_3",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.14)",
+    "normal": "kept, mean tilt 6.4 deg, lean removed 7.4 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/blocks18cblood",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.24)",
+    "normal": "kept, mean tilt 8.3 deg, lean removed 8.9 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/dark_block",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 11.1 deg, lean removed 8.3 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/pulpywalla",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.50)",
+    "normal": "kept, mean tilt 3.7 deg, lean removed 2.7 deg",
+    "orm": "G 0.75 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.75
+  },
+  {
+    "image": "textures/gothic_block/smblk3b3dim_wall",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.64)",
+    "normal": "kept, mean tilt 9.2 deg, lean removed 8.0 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_block/windowevil2c_block18c",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.27)",
+    "normal": "kept, mean tilt 9.4 deg, lean removed 3.8 deg",
+    "orm": "G 0.70 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.7
+  },
+  {
+    "image": "textures/gothic_ceiling/woodceiling1b_dark",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.21)",
+    "normal": "seam 23.0 against source 16.4",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_floor/largeblockfloor4",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.25)",
+    "normal": "kept, mean tilt 5.6 deg, lean removed 11.0 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_floor/largerblock3b",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x2.53)",
+    "normal": "kept, mean tilt 7.2 deg, lean removed 11.9 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_floor/largerblock3b3",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.45)",
+    "normal": "kept, mean tilt 3.9 deg, lean removed 5.8 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_floor/largerblock3b3dim",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.59)",
+    "normal": "kept, mean tilt 4.8 deg, lean removed 10.0 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_floor/q1metal7_99",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.19)",
+    "normal": "seam 46.3 against source 37.5",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/gothic_floor/q1metal7_99stair",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.24)",
+    "normal": "kept, mean tilt 12.2 deg, lean removed 22.9 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/gothic_floor/q1metal7_99stair2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.19)",
+    "normal": "kept, mean tilt 10.4 deg, lean removed 2.9 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/gothic_light/ironcrosslt2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.86)",
+    "normal": "kept, mean tilt 8.8 deg, lean removed 4.5 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/gothic_light/ironcrosslt2blue_1000",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.20)",
+    "normal": "kept, mean tilt 15.3 deg, lean removed 0.6 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/gothic_light/ironcrosslt2red_1000",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.19)",
+    "normal": "kept, mean tilt 13.8 deg, lean removed 15.6 deg",
+    "orm": "G 0.40 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.4
+  },
+  {
+    "image": "textures/gothic_light/skulllight01",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.04)",
+    "normal": "kept, mean tilt 12.4 deg, lean removed 8.8 deg",
+    "orm": "G 0.35 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.35
+  },
+  {
+    "image": "textures/gothic_trim/baseboard09",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.51)",
+    "normal": "kept, mean tilt 15.1 deg, lean removed 16.3 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_trim/baseboard10_f",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.28)",
+    "normal": "seam 36.1 against source 0.7",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_trim/border7",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.55)",
+    "normal": "kept, mean tilt 6.6 deg, lean removed 40.5 deg",
+    "orm": "G 0.80 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.8
+  },
+  {
+    "image": "textures/gothic_trim/metalsupport4j",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.69)",
+    "normal": "kept, mean tilt 5.1 deg, lean removed 11.5 deg",
+    "orm": "G 0.55 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.55
+  },
+  {
+    "image": "textures/gothic_trim/pitted_rust",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.89)",
+    "normal": "kept, mean tilt 28.3 deg, lean removed 16.7 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/gothic_trim/pitted_rust2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.49)",
+    "normal": "kept, mean tilt 14.7 deg, lean removed 16.2 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/gothic_trim/pitted_rust3",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.28)",
+    "normal": "kept, mean tilt 11.8 deg, lean removed 12.4 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/gothic_trim/pitted_rust3_black",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.38)",
+    "normal": "kept, mean tilt 7.6 deg, lean removed 7.4 deg",
+    "orm": "G 0.90 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.9
+  },
+  {
+    "image": "textures/gothic_trim/q_waste1",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.16)",
+    "normal": "kept, mean tilt 6.1 deg, lean removed 5.8 deg",
+    "orm": "G 0.88 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.88
+  },
+  {
+    "image": "textures/gothic_trim/wood2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.15)",
+    "normal": "kept, mean tilt 7.0 deg, lean removed 5.8 deg",
+    "orm": "G 0.82 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.82
+  },
+  {
+    "image": "textures/gothic_trim/zinc_shiny",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.62)",
+    "normal": "kept, mean tilt 2.9 deg, lean removed 32.0 deg",
+    "orm": "G 0.30 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.3
+  },
+  {
+    "image": "textures/gothic_wall/proto_brik",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.26)",
+    "normal": "kept, mean tilt 10.2 deg, lean removed 5.9 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_wall/skull2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x1.28)",
+    "normal": "kept, mean tilt 10.9 deg, lean removed 12.8 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/gothic_wall/streetbricks14",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.13)",
+    "normal": "kept, mean tilt 12.9 deg, lean removed 14.3 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/oafx/greenchrm",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/oafx/orangechrm",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/oafx/quadshell",
+    "framing": "wrap",
+    "albedo": "left alone, effect artwork",
+    "normal": "refused by the table",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.5
+  },
+  {
+    "image": "textures/savdm6ish/sfloor1_2",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.17)",
+    "normal": "kept, mean tilt 9.1 deg, lean removed 3.7 deg",
+    "orm": "G 0.85 +/- 0.15",
+    "metalness": 0,
+    "roughness": 0.85
+  },
+  {
+    "image": "textures/sfx/metalfloor_wall_14b",
+    "framing": "wrap",
+    "albedo": "retinted, level held (x0.48)",
+    "normal": "kept, mean tilt 4.5 deg, lean removed 6.0 deg",
+    "orm": "G 0.50 +/- 0.15",
+    "metalness": 1,
+    "roughness": 0.5
+  }
+]

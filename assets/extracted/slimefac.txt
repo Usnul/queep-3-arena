@@ -1,0 +1,22 @@
+================================================================
+Title           : Slime Facility
+Date            : 11-07-2010
+Filename        : slimefacV2.pk3
+Author          : cosmo
+Email Address   : cosmo-flash@gmx.net
+Website         : http://oa.spaceboyz.net
+MappingBlog     : http://mapforce.blogspot.com
+
+Supported Gametypes : FFA, TEAMDEATHMATCH, DOMINATION, DOUBLE DOMINATION, LAST MAN STANDING, CLAN ARENA ;)
+
+Description     : Improvement of well known slimefac
+                
+Players         : 2 - 6
+
+Bots            : yes
+
+Missionpack     : none
+
+Buildtime       : Improvements... a few days
+
+Compile options:  -fs_game baseoa -light -fast -patchshadows -bounce 8 -bouncegrid -samples 6 -shade -dirty -dirtmode 0 -dirtdepth 2048 -dirtscale 0.7 -samplesize 16 -gamma 2.85 -compensate 2.85

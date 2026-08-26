@@ -1,0 +1,6 @@
+u_torso,models/players/gargoyle/stone.tga
+u_wings,models/players/gargoyle/wings-stone.tga
+u_membrane,models/players/gargoyle/wings-stone.tga
+tag_head
+tag_weapon
+tag_torso

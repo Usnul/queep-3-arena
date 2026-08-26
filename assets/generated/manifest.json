@@ -1,0 +1,2587 @@
+{
+  "jobs": [
+    {
+      "image": "/models/players/merman/brac",
+      "source": "assets/extracted/models/players/merman/brac.tga",
+      "stem": "_models_players_merman_brac",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/merman/brac.tga"
+      ]
+    },
+    {
+      "image": "/models/players/merman/skin",
+      "source": "assets/extracted/models/players/merman/skin.tga",
+      "stem": "_models_players_merman_skin",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/merman/skin.tga"
+      ]
+    },
+    {
+      "image": "models/flags/b_flag",
+      "source": "assets/extracted/models/flags/b_flag.tga",
+      "stem": "models_flags_b_flag",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.95,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/flags/b_flag.tga"
+      ]
+    },
+    {
+      "image": "models/flags/n_flag",
+      "source": "assets/extracted/models/flags/n_flag.tga",
+      "stem": "models_flags_n_flag",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.95,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/flags/n_flag.tga"
+      ]
+    },
+    {
+      "image": "models/flags/pole",
+      "source": "assets/extracted/models/flags/pole.tga",
+      "stem": "models_flags_pole",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.35,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/flags/pole.tga"
+      ]
+    },
+    {
+      "image": "models/flags/r_flag",
+      "source": "assets/extracted/models/flags/r_flag.tga",
+      "stem": "models_flags_r_flag",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.95,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/flags/r_flag.tga"
+      ]
+    },
+    {
+      "image": "models/gibs/f_veins",
+      "source": "assets/extracted/models/gibs/f_veins.tga",
+      "stem": "models_gibs_f_veins",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/gibs/f_veins.tga"
+      ]
+    },
+    {
+      "image": "models/gibs/genericgibmeat",
+      "source": "assets/extracted/models/gibs/genericgibmeat.tga",
+      "stem": "models_gibs_genericgibmeat",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "ameatygib"
+      ]
+    },
+    {
+      "image": "models/gibs/heart",
+      "source": "assets/extracted/models/gibs/heart.tga",
+      "stem": "models_gibs_heart",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/gibs/heart.tga"
+      ]
+    },
+    {
+      "image": "models/gibs/skull-4",
+      "source": "assets/extracted/models/gibs/skull-4.tga",
+      "stem": "models_gibs_skull-4",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/gibs/skull-4.tga"
+      ]
+    },
+    {
+      "image": "models/gibs/splurt",
+      "source": "assets/extracted/models/gibs/splurt.tga",
+      "stem": "models_gibs_splurt",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/gibs/splurt.tga"
+      ]
+    },
+    {
+      "image": "models/gibs/veins",
+      "source": "assets/extracted/models/gibs/veins.tga",
+      "stem": "models_gibs_veins",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/gibs/veins.tga"
+      ]
+    },
+    {
+      "image": "models/mapobjects/torch/torch",
+      "source": "assets/extracted/models/mapobjects/torch/torch.jpg",
+      "stem": "models_mapobjects_torch_torch",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/mapobjects/torch/torch"
+      ]
+    },
+    {
+      "image": "models/players/assassin/lower",
+      "source": "assets/extracted/models/players/assassin/lower.tga",
+      "stem": "models_players_assassin_lower",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/assassin/lower.tga"
+      ]
+    },
+    {
+      "image": "models/players/assassin/upper",
+      "source": "assets/extracted/models/players/assassin/upper.tga",
+      "stem": "models_players_assassin_upper",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/assassin/upper.tga"
+      ]
+    },
+    {
+      "image": "models/players/beret/skin1",
+      "source": "assets/extracted/models/players/beret/skin1.tga",
+      "stem": "models_players_beret_skin1",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/beret/skin1.tga"
+      ]
+    },
+    {
+      "image": "models/players/beret/skin2",
+      "source": "assets/extracted/models/players/beret/skin2.tga",
+      "stem": "models_players_beret_skin2",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/beret/skin2.tga"
+      ]
+    },
+    {
+      "image": "models/players/gargoyle/bared",
+      "source": "assets/extracted/models/players/gargoyle/bared.tga",
+      "stem": "models_players_gargoyle_bared",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/gargoyle/bared.tga"
+      ]
+    },
+    {
+      "image": "models/players/grism/enkiskin",
+      "source": "assets/extracted/models/players/grism/enkiskin.tga",
+      "stem": "models_players_grism_enkiskin",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/grism/enkiskin.tga"
+      ]
+    },
+    {
+      "image": "models/players/kyonshi/eyes",
+      "source": "assets/extracted/models/players/kyonshi/eyes.tga",
+      "stem": "models_players_kyonshi_eyes",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/kyonshi/eyes.tga"
+      ]
+    },
+    {
+      "image": "models/players/kyonshi/hair",
+      "source": "assets/extracted/models/players/kyonshi/hair.tga",
+      "stem": "models_players_kyonshi_hair",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/kyonshi/hair.tga"
+      ]
+    },
+    {
+      "image": "models/players/kyonshi/lower",
+      "source": "assets/extracted/models/players/kyonshi/lower.tga",
+      "stem": "models_players_kyonshi_lower",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/kyonshi/lower.tga"
+      ]
+    },
+    {
+      "image": "models/players/kyonshi/skin",
+      "source": "assets/extracted/models/players/kyonshi/skin.tga",
+      "stem": "models_players_kyonshi_skin",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/kyonshi/skin.tga"
+      ]
+    },
+    {
+      "image": "models/players/kyonshi/torso",
+      "source": "assets/extracted/models/players/kyonshi/torso.tga",
+      "stem": "models_players_kyonshi_torso",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/kyonshi/torso.tga"
+      ]
+    },
+    {
+      "image": "models/players/liz/h_head",
+      "source": "assets/extracted/models/players/liz/h_head.tga",
+      "stem": "models_players_liz_h_head",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/liz/h_head.tga"
+      ]
+    },
+    {
+      "image": "models/players/liz/l_legs",
+      "source": "assets/extracted/models/players/liz/l_legs.tga",
+      "stem": "models_players_liz_l_legs",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/liz/l_legs.tga"
+      ]
+    },
+    {
+      "image": "models/players/liz/u_torso",
+      "source": "assets/extracted/models/players/liz/u_torso.tga",
+      "stem": "models_players_liz_u_torso",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/liz/u_torso.tga"
+      ]
+    },
+    {
+      "image": "models/players/major/head",
+      "source": "assets/extracted/models/players/major/head.tga",
+      "stem": "models_players_major_head",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/major/head.tga"
+      ]
+    },
+    {
+      "image": "models/players/major/lower",
+      "source": "assets/extracted/models/players/major/lower.tga",
+      "stem": "models_players_major_lower",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/major/lower.tga"
+      ]
+    },
+    {
+      "image": "models/players/major/torso",
+      "source": "assets/extracted/models/players/major/torso.tga",
+      "stem": "models_players_major_torso",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/major/torso.tga"
+      ]
+    },
+    {
+      "image": "models/players/penguin/skin",
+      "source": "assets/extracted/models/players/penguin/skin.tga",
+      "stem": "models_players_penguin_skin",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/penguin/skin.jpg",
+        "models/players/penguin/skin.tga"
+      ]
+    },
+    {
+      "image": "models/players/sergei/face",
+      "source": "assets/extracted/models/players/sergei/face.tga",
+      "stem": "models_players_sergei_face",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/sergei/face.tga"
+      ]
+    },
+    {
+      "image": "models/players/sergei/hairs",
+      "source": "assets/extracted/models/players/sergei/hairs.tga",
+      "stem": "models_players_sergei_hairs",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/sergei/hairs.tga"
+      ]
+    },
+    {
+      "image": "models/players/sergei/skin",
+      "source": "assets/extracted/models/players/sergei/skin.tga",
+      "stem": "models_players_sergei_skin",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/sergei/skin.tga"
+      ]
+    },
+    {
+      "image": "models/players/skelebot/skin1",
+      "source": "assets/extracted/models/players/skelebot/skin1.tga",
+      "stem": "models_players_skelebot_skin1",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/skelebot/skin1.tga"
+      ]
+    },
+    {
+      "image": "models/players/skelebot/skin2",
+      "source": "assets/extracted/models/players/skelebot/skin2.tga",
+      "stem": "models_players_skelebot_skin2",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/skelebot/skin2.tga"
+      ]
+    },
+    {
+      "image": "models/players/smarine/2h_head",
+      "source": "assets/extracted/models/players/smarine/2h_head.tga",
+      "stem": "models_players_smarine_2h_head",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/smarine/2h_head.tga"
+      ]
+    },
+    {
+      "image": "models/players/smarine/2l_legs",
+      "source": "assets/extracted/models/players/smarine/2l_legs.tga",
+      "stem": "models_players_smarine_2l_legs",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/smarine/2l_legs.tga"
+      ]
+    },
+    {
+      "image": "models/players/smarine/2u_torso",
+      "source": "assets/extracted/models/players/smarine/2u_torso.tga",
+      "stem": "models_players_smarine_2u_torso",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/smarine/2u_torso.tga"
+      ]
+    },
+    {
+      "image": "models/players/sorceress/drowbody",
+      "source": "assets/extracted/models/players/sorceress/drowbody.tga",
+      "stem": "models_players_sorceress_drowbody",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/sorceress/drowbody.tga"
+      ]
+    },
+    {
+      "image": "models/players/sorceress/drowhead",
+      "source": "assets/extracted/models/players/sorceress/drowhead.tga",
+      "stem": "models_players_sorceress_drowhead",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/sorceress/drowhair.tga"
+      ]
+    },
+    {
+      "image": "models/players/sorceress/rings",
+      "source": "assets/extracted/models/players/sorceress/rings.tga",
+      "stem": "models_players_sorceress_rings",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.3,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/sorceress/rings.tga"
+      ]
+    },
+    {
+      "image": "models/players/tony/head",
+      "source": "assets/extracted/models/players/tony/head.tga",
+      "stem": "models_players_tony_head",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/tony/head.tga"
+      ]
+    },
+    {
+      "image": "models/players/tony/suit",
+      "source": "assets/extracted/models/players/tony/suit.tga",
+      "stem": "models_players_tony_suit",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/players/tony/suit.tga"
+      ]
+    },
+    {
+      "image": "models/powerups/ammo/ammobox",
+      "source": "assets/extracted/models/powerups/ammo/ammobox.tga",
+      "stem": "models_powerups_ammo_ammobox",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/powerups/ammo/bfgammo",
+        "models/powerups/ammo/grenammo",
+        "models/powerups/ammo/lighammo",
+        "models/powerups/ammo/machammo",
+        "models/powerups/ammo/nailammo",
+        "models/powerups/ammo/plasammo",
+        "models/powerups/ammo/proxammo",
+        "models/powerups/ammo/railammo",
+        "models/powerups/ammo/rockammo",
+        "models/powerups/ammo/shotammo",
+        "models/powerups/ammo/vulcammo"
+      ]
+    },
+    {
+      "image": "models/powerups/armor/redarmor",
+      "source": "assets/extracted/models/powerups/armor/redarmor.tga",
+      "stem": "models_powerups_armor_redarmor",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.3,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "redArmor"
+      ]
+    },
+    {
+      "image": "models/powerups/armor/shard_env",
+      "source": "assets/extracted/models/powerups/armor/shard_env.jpg",
+      "stem": "models_powerups_armor_shard_env",
+      "framing": "mirror",
+      "metalness": 0,
+      "roughness": 0.25,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/powerups/armor/shard.jpg"
+      ]
+    },
+    {
+      "image": "models/powerups/armor/yellowarmor",
+      "source": "assets/extracted/models/powerups/armor/yellowarmor.tga",
+      "stem": "models_powerups_armor_yellowarmor",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.3,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "yellowArmor"
+      ]
+    },
+    {
+      "image": "models/weapons/nailgun/nailgun",
+      "source": "assets/extracted/models/weapons/nailgun/nailgun.tga",
+      "stem": "models_weapons_nailgun_nailgun",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons/nailgun/nailgun"
+      ]
+    },
+    {
+      "image": "models/weapons/proxmine/prox",
+      "source": "assets/extracted/models/weapons/proxmine/prox.tga",
+      "stem": "models_weapons_proxmine_prox",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons/proxmine/prox"
+      ]
+    },
+    {
+      "image": "models/weapons/vulcan/skin",
+      "source": "assets/extracted/models/weapons/vulcan/skin.tga",
+      "stem": "models_weapons_vulcan_skin",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons/vulcan/skin"
+      ]
+    },
+    {
+      "image": "models/weapons2/bfg/bfgbody",
+      "source": "assets/extracted/models/weapons2/bfg/bfgbody.tga",
+      "stem": "models_weapons2_bfg_bfgbody",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/bfg/bfgbody"
+      ]
+    },
+    {
+      "image": "models/weapons2/gauntlet/gauntlet2",
+      "source": "assets/extracted/models/weapons2/gauntlet/gauntlet2.tga",
+      "stem": "models_weapons2_gauntlet_gauntlet2",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/gauntlet/gauntlet2"
+      ]
+    },
+    {
+      "image": "models/weapons2/grapple/hookgun",
+      "source": "assets/extracted/models/weapons2/grapple/hookgun.tga",
+      "stem": "models_weapons2_grapple_hookgun",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/grapple/hookgun"
+      ]
+    },
+    {
+      "image": "models/weapons2/grenadel/newgren",
+      "source": "assets/extracted/models/weapons2/grenadel/newgren.tga",
+      "stem": "models_weapons2_grenadel_newgren",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/grenadel/newgren.tga"
+      ]
+    },
+    {
+      "image": "models/weapons2/lightning/skinlightning",
+      "source": "assets/extracted/models/weapons2/lightning/skinlightning.tga",
+      "stem": "models_weapons2_lightning_skinlightning",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/lightning/skinlightning"
+      ]
+    },
+    {
+      "image": "models/weapons2/machinegun/mgun",
+      "source": "assets/extracted/models/weapons2/machinegun/mgun.tga",
+      "stem": "models_weapons2_machinegun_mgun",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/machinegun/skin"
+      ]
+    },
+    {
+      "image": "models/weapons2/machinegun/sight",
+      "source": "assets/extracted/models/weapons2/machinegun/sight.tga",
+      "stem": "models_weapons2_machinegun_sight",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/machinegun/sight"
+      ]
+    },
+    {
+      "image": "models/weapons2/plasma/skin",
+      "source": "assets/extracted/models/weapons2/plasma/skin.tga",
+      "stem": "models_weapons2_plasma_skin",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/plasma/skin"
+      ]
+    },
+    {
+      "image": "models/weapons2/railgun/skin",
+      "source": "assets/extracted/models/weapons2/railgun/skin.tga",
+      "stem": "models_weapons2_railgun_skin",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/railgun/skin"
+      ]
+    },
+    {
+      "image": "models/weapons2/rocketl/skin",
+      "source": "assets/extracted/models/weapons2/rocketl/skin.tga",
+      "stem": "models_weapons2_rocketl_skin",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/rocketl/skin"
+      ]
+    },
+    {
+      "image": "models/weapons2/shotgun/shotgun",
+      "source": "assets/extracted/models/weapons2/shotgun/shotgun.tga",
+      "stem": "models_weapons2_shotgun_shotgun",
+      "framing": "mirror",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/weapons2/shotgun/skinoa"
+      ]
+    },
+    {
+      "image": "textures/acc_dm3/concrt",
+      "source": "assets/extracted/textures/acc_dm3/concrt.jpg",
+      "stem": "textures_acc_dm3_concrt",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm3/concrt"
+      ]
+    },
+    {
+      "image": "textures/acc_dm3/concrtcracka",
+      "source": "assets/extracted/textures/acc_dm3/concrtcracka.jpg",
+      "stem": "textures_acc_dm3_concrtcracka",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm3/concrtcracka"
+      ]
+    },
+    {
+      "image": "textures/acc_dm3/concrtmould",
+      "source": "assets/extracted/textures/acc_dm3/concrtmould.jpg",
+      "stem": "textures_acc_dm3_concrtmould",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm3/concrtmould"
+      ]
+    },
+    {
+      "image": "textures/acc_dm3/cop",
+      "source": "assets/extracted/textures/acc_dm3/cop.jpg",
+      "stem": "textures_acc_dm3_cop",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.6,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm3/cop"
+      ]
+    },
+    {
+      "image": "textures/acc_dm3/rivets",
+      "source": "assets/extracted/textures/acc_dm3/rivets.jpg",
+      "stem": "textures_acc_dm3_rivets",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm3/rivets"
+      ]
+    },
+    {
+      "image": "textures/acc_dm3/step",
+      "source": "assets/extracted/textures/acc_dm3/step.jpg",
+      "stem": "textures_acc_dm3_step",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm3/step"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/doorarch",
+      "source": "assets/extracted/textures/acc_dm5/doorarch.jpg",
+      "stem": "textures_acc_dm5_doorarch",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/doorarch"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/mud02",
+      "source": "assets/extracted/textures/acc_dm5/mud02.jpg",
+      "stem": "textures_acc_dm5_mud02",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/mud02",
+        "textures/acc_dm5/mud_trans"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/mud02b",
+      "source": "assets/extracted/textures/acc_dm5/mud02b.jpg",
+      "stem": "textures_acc_dm5_mud02b",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/mud02b"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/roots_moss",
+      "source": "assets/extracted/textures/acc_dm5/roots_moss.jpg",
+      "stem": "textures_acc_dm5_roots_moss",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/roots_moss"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/rust",
+      "source": "assets/extracted/textures/acc_dm5/rust.jpg",
+      "stem": "textures_acc_dm5_rust",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/rust"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/sand",
+      "source": "assets/extracted/textures/acc_dm5/sand.jpg",
+      "stem": "textures_acc_dm5_sand",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/sand"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/stnlarge_dirty",
+      "source": "assets/extracted/textures/acc_dm5/stnlarge_dirty.jpg",
+      "stem": "textures_acc_dm5_stnlarge_dirty",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/stnlarge_dirty"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/stnlarge_dirty2",
+      "source": "assets/extracted/textures/acc_dm5/stnlarge_dirty2.jpg",
+      "stem": "textures_acc_dm5_stnlarge_dirty2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/stnlarge_dirty2"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/stnsqr_dirty",
+      "source": "assets/extracted/textures/acc_dm5/stnsqr_dirty.jpg",
+      "stem": "textures_acc_dm5_stnsqr_dirty",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/stnsqr_dirty"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/stntiles_dirty",
+      "source": "assets/extracted/textures/acc_dm5/stntiles_dirty.jpg",
+      "stem": "textures_acc_dm5_stntiles_dirty",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/stntiles_dirty"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/stntiles_moss2",
+      "source": "assets/extracted/textures/acc_dm5/stntiles_moss2.jpg",
+      "stem": "textures_acc_dm5_stntiles_moss2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/stntiles_moss2"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/stonesteps_dirty",
+      "source": "assets/extracted/textures/acc_dm5/stonesteps_dirty.jpg",
+      "stem": "textures_acc_dm5_stonesteps_dirty",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/stonesteps_dirty"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/tiles_moss",
+      "source": "assets/extracted/textures/acc_dm5/tiles_moss.jpg",
+      "stem": "textures_acc_dm5_tiles_moss",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/tiles_moss"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/wall_dirty",
+      "source": "assets/extracted/textures/acc_dm5/wall_dirty.jpg",
+      "stem": "textures_acc_dm5_wall_dirty",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.92,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/wall_dirty"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/wood01",
+      "source": "assets/extracted/textures/acc_dm5/wood01.jpg",
+      "stem": "textures_acc_dm5_wood01",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.82,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/wood01"
+      ]
+    },
+    {
+      "image": "textures/acc_dm5/woodenbarrier",
+      "source": "assets/extracted/textures/acc_dm5/woodenbarrier.tga",
+      "stem": "textures_acc_dm5_woodenbarrier",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.82,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/acc_dm5/woodenbarrier"
+      ]
+    },
+    {
+      "image": "textures/base_light/ceil1_22a",
+      "source": "assets/extracted/textures/base_light/ceil1_22a.tga",
+      "stem": "textures_base_light_ceil1_22a",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/ceil1_22a"
+      ]
+    },
+    {
+      "image": "textures/base_light/ceil1_38",
+      "source": "assets/extracted/textures/base_light/ceil1_38.tga",
+      "stem": "textures_base_light_ceil1_38",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/ceil1_38"
+      ]
+    },
+    {
+      "image": "textures/base_light/light1",
+      "source": "assets/extracted/textures/base_light/light1.jpg",
+      "stem": "textures_base_light_light1",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/light1_3000"
+      ]
+    },
+    {
+      "image": "textures/base_light/light1blue",
+      "source": "assets/extracted/textures/base_light/light1blue.jpg",
+      "stem": "textures_base_light_light1blue",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/light1blue_2000"
+      ]
+    },
+    {
+      "image": "textures/base_light/light1red",
+      "source": "assets/extracted/textures/base_light/light1red.jpg",
+      "stem": "textures_base_light_light1red",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/light1red_2000"
+      ]
+    },
+    {
+      "image": "textures/base_light/proto_light",
+      "source": "assets/extracted/textures/base_light/proto_light.jpg",
+      "stem": "textures_base_light_proto_light",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/proto_light"
+      ]
+    },
+    {
+      "image": "textures/base_light/xlight5",
+      "source": "assets/extracted/textures/base_light/xlight5.jpg",
+      "stem": "textures_base_light_xlight5",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_light/light5_15k",
+        "textures/base_light/xlight5"
+      ]
+    },
+    {
+      "image": "textures/base_trim/deeprust",
+      "source": "assets/extracted/textures/base_trim/deeprust.jpg",
+      "stem": "textures_base_trim_deeprust",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_trim/deeprust"
+      ]
+    },
+    {
+      "image": "textures/base_trim/dirty_pewter",
+      "source": "assets/extracted/textures/base_trim/dirty_pewter.jpg",
+      "stem": "textures_base_trim_dirty_pewter",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.55,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_trim/dirty_pewter"
+      ]
+    },
+    {
+      "image": "textures/base_trim/pewter",
+      "source": "assets/extracted/textures/base_trim/pewter.jpg",
+      "stem": "textures_base_trim_pewter",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.35,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_trim/pewter"
+      ]
+    },
+    {
+      "image": "textures/base_trim/tinfx",
+      "source": "assets/extracted/textures/base_trim/tinfx.jpg",
+      "stem": "textures_base_trim_tinfx",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.25,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_trim/tinfx"
+      ]
+    },
+    {
+      "image": "textures/base_wall/atech2_c",
+      "source": "assets/extracted/textures/base_wall/atech2_c.jpg",
+      "stem": "textures_base_wall_atech2_c",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_wall/atech2_c"
+      ]
+    },
+    {
+      "image": "textures/base_wall/atech3_a",
+      "source": "assets/extracted/textures/base_wall/atech3_a.jpg",
+      "stem": "textures_base_wall_atech3_a",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_wall/atech3_a"
+      ]
+    },
+    {
+      "image": "textures/base_wall/bluemetal1b_shiny",
+      "source": "assets/extracted/textures/base_wall/bluemetal1b_shiny.tga",
+      "stem": "textures_base_wall_bluemetal1b_shiny",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.15,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/base_wall/bluemetal1b_chrome"
+      ]
+    },
+    {
+      "image": "textures/base_wall/chrome_env",
+      "source": "assets/extracted/textures/base_wall/chrome_env.jpg",
+      "stem": "textures_base_wall_chrome_env",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/powerups/holdable/medkit_base.png",
+        "models/powerups/holdable/teleport_center.png"
+      ]
+    },
+    {
+      "image": "textures/bubctf1/e8_launchpad1",
+      "source": "assets/extracted/textures/bubctf1/e8_launchpad1.tga",
+      "stem": "textures_bubctf1_e8_launchpad1",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/bubctf1/e8_launchpad1"
+      ]
+    },
+    {
+      "image": "textures/bubctf1/e8_launchpad1r",
+      "source": "assets/extracted/textures/bubctf1/e8_launchpad1r.tga",
+      "stem": "textures_bubctf1_e8_launchpad1r",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/bubctf1/e8_launchpad1r"
+      ]
+    },
+    {
+      "image": "textures/clown/light_base",
+      "source": "assets/extracted/textures/clown/light_base.jpg",
+      "stem": "textures_clown_light_base",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.6,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/clown/light_base"
+      ]
+    },
+    {
+      "image": "textures/cosmo_sfx/flag_oa_blue1",
+      "source": "assets/extracted/textures/cosmo_sfx/flag_oa_blue1.tga",
+      "stem": "textures_cosmo_sfx_flag_oa_blue1",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.95,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/cosmo_sfx/flag_oa_blue1"
+      ]
+    },
+    {
+      "image": "textures/cosmo_sfx/flag_oa_red1",
+      "source": "assets/extracted/textures/cosmo_sfx/flag_oa_red1.tga",
+      "stem": "textures_cosmo_sfx_flag_oa_red1",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.95,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/cosmo_sfx/flag_oa_red1"
+      ]
+    },
+    {
+      "image": "textures/e7/e7beam01",
+      "source": "assets/extracted/textures/e7/e7beam01.jpg",
+      "stem": "textures_e7_e7beam01",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7beam01"
+      ]
+    },
+    {
+      "image": "textures/e7/e7beam02",
+      "source": "assets/extracted/textures/e7/e7beam02.jpg",
+      "stem": "textures_e7_e7beam02",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7beam02"
+      ]
+    },
+    {
+      "image": "textures/e7/e7bmtrim",
+      "source": "assets/extracted/textures/e7/e7bmtrim.jpg",
+      "stem": "textures_e7_e7bmtrim",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7bmtrim"
+      ]
+    },
+    {
+      "image": "textures/e7/e7bmtrim2",
+      "source": "assets/extracted/textures/e7/e7bmtrim2.jpg",
+      "stem": "textures_e7_e7bmtrim2",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7bmtrim2"
+      ]
+    },
+    {
+      "image": "textures/e7/e7brickfloor01",
+      "source": "assets/extracted/textures/e7/e7brickfloor01.jpg",
+      "stem": "textures_e7_e7brickfloor01",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7brickfloor01"
+      ]
+    },
+    {
+      "image": "textures/e7/e7bricks01",
+      "source": "assets/extracted/textures/e7/e7bricks01.jpg",
+      "stem": "textures_e7_e7bricks01",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7bricks01"
+      ]
+    },
+    {
+      "image": "textures/e7/e7brnmetal",
+      "source": "assets/extracted/textures/e7/e7brnmetal.jpg",
+      "stem": "textures_e7_e7brnmetal",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.55,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7brnmetal"
+      ]
+    },
+    {
+      "image": "textures/e7/e7panelwood",
+      "source": "assets/extracted/textures/e7/e7panelwood.jpg",
+      "stem": "textures_e7_e7panelwood",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.82,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7panelwood"
+      ]
+    },
+    {
+      "image": "textures/e7/e7panelwood2",
+      "source": "assets/extracted/textures/e7/e7panelwood2.jpg",
+      "stem": "textures_e7_e7panelwood2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.82,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7panelwood2"
+      ]
+    },
+    {
+      "image": "textures/e7/e7sbrickfloor",
+      "source": "assets/extracted/textures/e7/e7sbrickfloor.jpg",
+      "stem": "textures_e7_e7sbrickfloor",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7sbrickfloor"
+      ]
+    },
+    {
+      "image": "textures/e7/e7sbrickfloor_ow",
+      "source": "assets/extracted/textures/e7/e7sbrickfloor_ow.jpg",
+      "stem": "textures_e7_e7sbrickfloor_ow",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7sbrickfloor_ow"
+      ]
+    },
+    {
+      "image": "textures/e7/e7sbrickfloorbig",
+      "source": "assets/extracted/textures/e7/e7sbrickfloorbig.jpg",
+      "stem": "textures_e7_e7sbrickfloorbig",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7sbrickfloorbig"
+      ]
+    },
+    {
+      "image": "textures/e7/e7trim01",
+      "source": "assets/extracted/textures/e7/e7trim01.jpg",
+      "stem": "textures_e7_e7trim01",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7trim01"
+      ]
+    },
+    {
+      "image": "textures/e7/e7walldesign01",
+      "source": "assets/extracted/textures/e7/e7walldesign01.jpg",
+      "stem": "textures_e7_e7walldesign01",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7walldesign01"
+      ]
+    },
+    {
+      "image": "textures/e7/e7walldesign01b",
+      "source": "assets/extracted/textures/e7/e7walldesign01b.jpg",
+      "stem": "textures_e7_e7walldesign01b",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e7/e7walldesign01b"
+      ]
+    },
+    {
+      "image": "textures/e8/e8_base1",
+      "source": "assets/extracted/textures/e8/e8_base1.jpg",
+      "stem": "textures_e8_e8_base1",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e8/e8_base1"
+      ]
+    },
+    {
+      "image": "textures/e8/e8_base1c",
+      "source": "assets/extracted/textures/e8/e8_base1c.jpg",
+      "stem": "textures_e8_e8_base1c",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.88,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e8/e8_base1c"
+      ]
+    },
+    {
+      "image": "textures/e8/e8jumpspawn02b",
+      "source": "assets/extracted/textures/e8/e8jumpspawn02b.jpg",
+      "stem": "textures_e8_e8jumpspawn02b",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/e8/e8jumpspawn02b"
+      ]
+    },
+    {
+      "image": "textures/effects/envmapblue",
+      "source": "assets/extracted/textures/effects/envmapblue.jpg",
+      "stem": "textures_effects_envmapblue",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "BlueDomSkin"
+      ]
+    },
+    {
+      "image": "textures/effects/envmapblue2",
+      "source": "assets/extracted/textures/effects/envmapblue2.jpg",
+      "stem": "textures_effects_envmapblue2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "megaCross"
+      ]
+    },
+    {
+      "image": "textures/effects/envmapdimb",
+      "source": "assets/extracted/textures/effects/envmapdimb.jpg",
+      "stem": "textures_effects_envmapdimb",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "kamikazePowerup"
+      ]
+    },
+    {
+      "image": "textures/effects/envmapgold",
+      "source": "assets/extracted/textures/effects/envmapgold.jpg",
+      "stem": "textures_effects_envmapgold",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.35,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/powerups/instant/ebase.png",
+        "models/powerups/instant/ering.png"
+      ]
+    },
+    {
+      "image": "textures/effects/envmapligh",
+      "source": "assets/extracted/textures/effects/envmapligh.jpg",
+      "stem": "textures_effects_envmapligh",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "mediumCross"
+      ]
+    },
+    {
+      "image": "textures/effects/envmapred",
+      "source": "assets/extracted/textures/effects/envmapred.jpg",
+      "stem": "textures_effects_envmapred",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "RedDomSkin"
+      ]
+    },
+    {
+      "image": "textures/effects/flightenv",
+      "source": "assets/extracted/textures/effects/flightenv.jpg",
+      "stem": "textures_effects_flightenv",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.35,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/powerups/instant/flight_body.png",
+        "models/powerups/instant/flight_ring.png"
+      ]
+    },
+    {
+      "image": "textures/effects/hastenv",
+      "source": "assets/extracted/textures/effects/hastenv.jpg",
+      "stem": "textures_effects_hastenv",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.35,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "models/powerups/instant/h_center.png",
+        "models/powerups/instant/h_ring.png"
+      ]
+    },
+    {
+      "image": "textures/effects/regenmap2",
+      "source": "assets/extracted/textures/effects/regenmap2.jpg",
+      "stem": "textures_effects_regenmap2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "rcad.png",
+        "rring.png"
+      ]
+    },
+    {
+      "image": "textures/effects/tinfx",
+      "source": "assets/extracted/textures/effects/tinfx.tga",
+      "stem": "textures_effects_tinfx",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "WhiteDomSkin"
+      ]
+    },
+    {
+      "image": "textures/effects/tinfx2b",
+      "source": "assets/extracted/textures/effects/tinfx2b.tga",
+      "stem": "textures_effects_tinfx2b",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "RuneAmreg"
+      ]
+    },
+    {
+      "image": "textures/effects/tinfx2c",
+      "source": "assets/extracted/textures/effects/tinfx2c.tga",
+      "stem": "textures_effects_tinfx2c",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "RuneDoubler",
+        "RuneGuard",
+        "RuneScout",
+        "invulitem2"
+      ]
+    },
+    {
+      "image": "textures/evil4_walls/drk_brnbrick",
+      "source": "assets/extracted/textures/evil4_walls/drk_brnbrick.jpg",
+      "stem": "textures_evil4_walls_drk_brnbrick",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil4_walls/drk_brnbrick"
+      ]
+    },
+    {
+      "image": "textures/evil6_floors/e6c_floor",
+      "source": "assets/extracted/textures/evil6_floors/e6c_floor.jpg",
+      "stem": "textures_evil6_floors_e6c_floor",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.55,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil6_floors/e6c_floor"
+      ]
+    },
+    {
+      "image": "textures/evil6_floors/e6c_floordented",
+      "source": "assets/extracted/textures/evil6_floors/e6c_floordented.jpg",
+      "stem": "textures_evil6_floors_e6c_floordented",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.55,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil6_floors/e6c_floordented"
+      ]
+    },
+    {
+      "image": "textures/evil6_floors/e6l_stepedge",
+      "source": "assets/extracted/textures/evil6_floors/e6l_stepedge.jpg",
+      "stem": "textures_evil6_floors_e6l_stepedge",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.45,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil6_floors/e6l_stepedge"
+      ]
+    },
+    {
+      "image": "textures/evil8_lights/e8_rlight",
+      "source": "assets/extracted/textures/evil8_lights/e8_rlight.jpg",
+      "stem": "textures_evil8_lights_e8_rlight",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil8_lights/evil8_rlight"
+      ]
+    },
+    {
+      "image": "textures/evil8_trim/e8basictrim_blue",
+      "source": "assets/extracted/textures/evil8_trim/e8basictrim_blue.jpg",
+      "stem": "textures_evil8_trim_e8basictrim_blue",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil8_trim/e8basictrim_blue"
+      ]
+    },
+    {
+      "image": "textures/evil8_trim/e8basictrim_red",
+      "source": "assets/extracted/textures/evil8_trim/e8basictrim_red.jpg",
+      "stem": "textures_evil8_trim_e8basictrim_red",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/evil8_trim/e8basictrim_red"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks10",
+      "source": "assets/extracted/textures/gothic_block/blocks10.jpg",
+      "stem": "textures_gothic_block_blocks10",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks10"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks17",
+      "source": "assets/extracted/textures/gothic_block/blocks17.jpg",
+      "stem": "textures_gothic_block_blocks17",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks17"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks17g",
+      "source": "assets/extracted/textures/gothic_block/blocks17g.jpg",
+      "stem": "textures_gothic_block_blocks17g",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks17g"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks17slime",
+      "source": "assets/extracted/textures/gothic_block/blocks17slime.jpg",
+      "stem": "textures_gothic_block_blocks17slime",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks17slime"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks18c",
+      "source": "assets/extracted/textures/gothic_block/blocks18c.jpg",
+      "stem": "textures_gothic_block_blocks18c",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks18c"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks18c_3",
+      "source": "assets/extracted/textures/gothic_block/blocks18c_3.jpg",
+      "stem": "textures_gothic_block_blocks18c_3",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks18c_3"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/blocks18cblood",
+      "source": "assets/extracted/textures/gothic_block/blocks18cblood.jpg",
+      "stem": "textures_gothic_block_blocks18cblood",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/blocks18cblood"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/dark_block",
+      "source": "assets/extracted/textures/gothic_block/dark_block.jpg",
+      "stem": "textures_gothic_block_dark_block",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/dark_block"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/pulpywalla",
+      "source": "assets/extracted/textures/gothic_block/pulpywalla.jpg",
+      "stem": "textures_gothic_block_pulpywalla",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.75,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/pulpywalla"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/smblk3b3dim_wall",
+      "source": "assets/extracted/textures/gothic_block/smblk3b3dim_wall.jpg",
+      "stem": "textures_gothic_block_smblk3b3dim_wall",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/smblk3b3dim_wall"
+      ]
+    },
+    {
+      "image": "textures/gothic_block/windowevil2c_block18c",
+      "source": "assets/extracted/textures/gothic_block/windowevil2c_block18c.jpg",
+      "stem": "textures_gothic_block_windowevil2c_block18c",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.7,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_block/mkc_evil_e3window"
+      ]
+    },
+    {
+      "image": "textures/gothic_ceiling/woodceiling1b_dark",
+      "source": "assets/extracted/textures/gothic_ceiling/woodceiling1b_dark.jpg",
+      "stem": "textures_gothic_ceiling_woodceiling1b_dark",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_ceiling/woodceiling1b_dark"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/largeblockfloor4",
+      "source": "assets/extracted/textures/gothic_floor/largeblockfloor4.jpg",
+      "stem": "textures_gothic_floor_largeblockfloor4",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/largeblockfloor4"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/largerblock3b",
+      "source": "assets/extracted/textures/gothic_floor/largerblock3b.jpg",
+      "stem": "textures_gothic_floor_largerblock3b",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/largerblock3b"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/largerblock3b3",
+      "source": "assets/extracted/textures/gothic_floor/largerblock3b3.jpg",
+      "stem": "textures_gothic_floor_largerblock3b3",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/largerblock3b3"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/largerblock3b3dim",
+      "source": "assets/extracted/textures/gothic_floor/largerblock3b3dim.tga",
+      "stem": "textures_gothic_floor_largerblock3b3dim",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/largerblock3b3dim"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/q1metal7_99",
+      "source": "assets/extracted/textures/gothic_floor/q1metal7_99.tga",
+      "stem": "textures_gothic_floor_q1metal7_99",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/q1metal7_99"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/q1metal7_99stair",
+      "source": "assets/extracted/textures/gothic_floor/q1metal7_99stair.jpg",
+      "stem": "textures_gothic_floor_q1metal7_99stair",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/q1metal7_99stair"
+      ]
+    },
+    {
+      "image": "textures/gothic_floor/q1metal7_99stair2",
+      "source": "assets/extracted/textures/gothic_floor/q1metal7_99stair2.jpg",
+      "stem": "textures_gothic_floor_q1metal7_99stair2",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_floor/q1metal7_99stair2"
+      ]
+    },
+    {
+      "image": "textures/gothic_light/ironcrosslt2",
+      "source": "assets/extracted/textures/gothic_light/ironcrosslt2.jpg",
+      "stem": "textures_gothic_light_ironcrosslt2",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_light/ironcrosslt2_20000"
+      ]
+    },
+    {
+      "image": "textures/gothic_light/ironcrosslt2blue_1000",
+      "source": "assets/extracted/textures/gothic_light/ironcrosslt2blue_1000.jpg",
+      "stem": "textures_gothic_light_ironcrosslt2blue_1000",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_light/ironcrossltblue_2000"
+      ]
+    },
+    {
+      "image": "textures/gothic_light/ironcrosslt2red_1000",
+      "source": "assets/extracted/textures/gothic_light/ironcrosslt2red_1000.jpg",
+      "stem": "textures_gothic_light_ironcrosslt2red_1000",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.4,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_light/ironcrossltred_2000"
+      ]
+    },
+    {
+      "image": "textures/gothic_light/skulllight01",
+      "source": "assets/extracted/textures/gothic_light/skulllight01.tga",
+      "stem": "textures_gothic_light_skulllight01",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.35,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_light/skulllight01"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/baseboard09",
+      "source": "assets/extracted/textures/gothic_trim/baseboard09.jpg",
+      "stem": "textures_gothic_trim_baseboard09",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/baseboard09"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/baseboard10_f",
+      "source": "assets/extracted/textures/gothic_trim/baseboard10_f.jpg",
+      "stem": "textures_gothic_trim_baseboard10_f",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/baseboard10_f"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/border7",
+      "source": "assets/extracted/textures/gothic_trim/border7.jpg",
+      "stem": "textures_gothic_trim_border7",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.8,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/border7"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/metalsupport4j",
+      "source": "assets/extracted/textures/gothic_trim/metalsupport4j.jpg",
+      "stem": "textures_gothic_trim_metalsupport4j",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.55,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/metalsupport4j"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/pitted_rust",
+      "source": "assets/extracted/textures/gothic_trim/pitted_rust.jpg",
+      "stem": "textures_gothic_trim_pitted_rust",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/pitted_rust"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/pitted_rust2",
+      "source": "assets/extracted/textures/gothic_trim/pitted_rust2.jpg",
+      "stem": "textures_gothic_trim_pitted_rust2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/pitted_rust2"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/pitted_rust3",
+      "source": "assets/extracted/textures/gothic_trim/pitted_rust3.jpg",
+      "stem": "textures_gothic_trim_pitted_rust3",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/pitted_rust3"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/pitted_rust3_black",
+      "source": "assets/extracted/textures/gothic_trim/pitted_rust3_black.jpg",
+      "stem": "textures_gothic_trim_pitted_rust3_black",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.9,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/pitted_rust3_black"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/q_waste1",
+      "source": "assets/extracted/textures/gothic_trim/q_waste1.jpg",
+      "stem": "textures_gothic_trim_q_waste1",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.88,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/q_waste1"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/wood2",
+      "source": "assets/extracted/textures/gothic_trim/wood2.jpg",
+      "stem": "textures_gothic_trim_wood2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.82,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/wood2"
+      ]
+    },
+    {
+      "image": "textures/gothic_trim/zinc_shiny",
+      "source": "assets/extracted/textures/gothic_trim/zinc_shiny.tga",
+      "stem": "textures_gothic_trim_zinc_shiny",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.3,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_trim/zinc_shiny"
+      ]
+    },
+    {
+      "image": "textures/gothic_wall/proto_brik",
+      "source": "assets/extracted/textures/gothic_wall/proto_brik.tga",
+      "stem": "textures_gothic_wall_proto_brik",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_wall/proto_brik"
+      ]
+    },
+    {
+      "image": "textures/gothic_wall/skull2",
+      "source": "assets/extracted/textures/gothic_wall/skull2.jpg",
+      "stem": "textures_gothic_wall_skull2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_wall/skull2"
+      ]
+    },
+    {
+      "image": "textures/gothic_wall/streetbricks14",
+      "source": "assets/extracted/textures/gothic_wall/streetbricks14.jpg",
+      "stem": "textures_gothic_wall_streetbricks14",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/gothic_wall/streetbricks14"
+      ]
+    },
+    {
+      "image": "textures/oafx/greenchrm",
+      "source": "assets/extracted/textures/oafx/greenchrm.jpg",
+      "stem": "textures_oafx_greenchrm",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "smallCross"
+      ]
+    },
+    {
+      "image": "textures/oafx/orangechrm",
+      "source": "assets/extracted/textures/oafx/orangechrm.jpg",
+      "stem": "textures_oafx_orangechrm",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "largeCross"
+      ]
+    },
+    {
+      "image": "textures/oafx/quadshell",
+      "source": "assets/extracted/textures/oafx/quadshell.tga",
+      "stem": "textures_oafx_quadshell",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "drop",
+      "effect": true,
+      "materials": [
+        "quadDamage"
+      ]
+    },
+    {
+      "image": "textures/savdm6ish/sfloor1_2",
+      "source": "assets/extracted/textures/savdm6ish/sfloor1_2.jpg",
+      "stem": "textures_savdm6ish_sfloor1_2",
+      "framing": "wrap",
+      "metalness": 0,
+      "roughness": 0.85,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/savdm6ish/sfloor1_2"
+      ]
+    },
+    {
+      "image": "textures/sfx/metalfloor_wall_14b",
+      "source": "assets/extracted/textures/sfx/metalfloor_wall_14b.tga",
+      "stem": "textures_sfx_metalfloor_wall_14b",
+      "framing": "wrap",
+      "metalness": 1,
+      "roughness": 0.5,
+      "variation": 0.15,
+      "normal": "keep",
+      "effect": false,
+      "materials": [
+        "textures/sfx/metalfloor_wall_14b"
+      ]
+    }
+  ]
+}

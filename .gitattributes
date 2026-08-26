@@ -1,0 +1,12 @@
+# `assets/` is a byte-faithful mirror of what the pipeline produced, so nothing
+# under it may be line-ending converted.
+#
+# This repository is developed on Windows with `core.autocrlf=true`, and most of
+# the text in `assets/extracted/` -- `.shader`, `.skin`, `.cfg`, the readmes --
+# is id Software and OpenArena material authored on Windows and genuinely CRLF.
+# Without this rule `git add` rewrites it to LF on the way in and checkout
+# rewrites it back on the way out, and neither round trip is the identity:
+# `default.cfg` lost 108 bytes that way. A tree committed so it can be restored
+# has to restore to the bytes `extract-pk3.mjs` wrote, or the shader parser and
+# every hash over it are reading something upstream never shipped.
+assets/** -text
