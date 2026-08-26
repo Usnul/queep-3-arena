@@ -3440,3 +3440,46 @@ kept only as the control that made this a measurement.
 per-texture inversion check on the second. Roughness ships as a hand table, not as an inference --
 it costs the same either way and the table cannot return 0.76 and 0.21 for the same wall. Metalness
 was always going to be step 4's job and now has a measurement saying so rather than a prior.
+
+### D-093: The material table, and the one property that makes it worth having
+
+`tools/material-classification.json` on the `trap-classification.json` pattern: prefix rules applied
+in order over the Q3 texture directories -- which are already named for material families -- plus
+per-material entries that win over them, plus `node tools/material-matrix.ts --check` in
+`npm run check`. **204 materials, all classified**, 64 of them metal, mean roughness 0.623 against
+the 0.85 placeholder it replaces.
+
+**The property that matters is that there is no catch-all.** A default rule would turn every future
+omission into a silent 0.85, which is the exact failure this phase exists to end, so
+`textures/some_new_map/wall01` classifies as *nothing* and the check fails. That is the plan's exit
+criterion stated as a mechanism rather than an intention, and `test/materials.test.ts` asserts it
+against three invented names.
+
+**It was authored by looking at the textures, not at their names.** All 204 were rendered into
+labelled contact sheets and read. That is the difference between this and the heuristic
+`shader-to-pbr.ts:583` argues against, and it caught things a name could not:
+
+- `textures/e8/e8_base1` is a steel hatch and `textures/e8/e8_base1c` is brick. The trailing letter
+  is a variant marker, not a suffix on the same material, and the prefix rule reads as if it covers
+  both. There is a test for this one because the mistake is invisible in the rule list.
+- Sixteen materials are not artwork of a surface at all -- `tcGen environment` fake reflections
+  (`BlueDomSkin`, `tinfx`'s neighbours), powerup shells, glyphs on black. They are in scope by the
+  mechanical rule, because their shaders are opaque and lit, and they carry `normal: "drop"`.
+- **Rust is a dielectric.** Five families are named for corrosion -- `deeprust`, `pitted_rust` and
+  its three variants, `acc_dm5/rust` -- and every one of them is `metalness: 0`. Iron oxide is not a
+  conductor, and a rusted surface shaded as one reads as a mirror exactly where the paint has
+  failed, which is the opposite of what corrosion does. It is the most available mistake in the set
+  and it is pinned by a test.
+
+**Roughness is split into a level and a variation.** The table carries the level; the generated ORM
+carries the shape around it, scaled by `variation` (0.15 by default). That split is what D-092
+measured: the network's roughness is worthless as an absolute -- 0.76 and 0.21 for the same wall
+depending on framing -- while the *relative* structure in it, mortar smoother than block face, is
+right. Taking one and not the other is the only reading of that measurement that uses it.
+
+**Metalness is one bit, and the bit is per material rather than per texel.** For this asset set that
+is not a simplification: two-means clustering over the 182 world and prop candidates put the median
+hue separation between cluster centres at 3.6, and the genuine metal-against-dielectric boundaries
+are in the weapons, pickups and characters, where they are hard paint edges. `redArmor` and
+`yellowArmor` are the deliberate approximations -- both carry grey shoulder spheres on the same
+image as a lacquered metal shell -- and the shell is the dominant area.

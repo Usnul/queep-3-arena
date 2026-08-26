@@ -45,6 +45,7 @@ import {
 } from '../tools/pipeline/shader-to-pbr.ts';
 import { ShaderIndex } from '../tools/pipeline/shader-index.ts';
 import { derivedTextureKey, textureKey } from '../tools/pipeline/texture-out.ts';
+import { classify, inScopeNames, loadSpec } from '../tools/material-matrix.ts';
 
 const ROOT = process.cwd();
 const BUILT = join(ROOT, 'assets', 'built');
@@ -1200,5 +1201,107 @@ textures/common/caulk
         // be a failing test rather than a quiet saving.
         expect(seen.size, 'world materials across the six maps').toBe(128);
         expect(inScope.length, 'of those, owed generated maps').toBe(108);
+    });
+});
+
+/*
+ * The hand table, and the property that makes generating the other channels in
+ * bulk safe: nothing reaches a bundle without somebody having looked at it.
+ *
+ * `node tools/material-matrix.ts --check` is the enforcement and runs in
+ * `npm run check`. These cases are here because the check can only fail on what
+ * has been built, and because the interesting property is not "the current set
+ * passes" but "a material nobody has classified does not quietly get a default".
+ */
+describe('the hand-authored material table', () => {
+    const spec = loadSpec();
+    const index = new ShaderIndex(EXTRACTED).load();
+
+    it('covers every material that is owed generated maps', () => {
+        const unclassified = [...inScopeNames(index).keys()]
+            .filter((name) => classify(name, spec) === null)
+            .sort();
+
+        expect(unclassified, 'materials with no rule and no entry').toEqual([]);
+    });
+
+    /*
+     The whole point. `trap-classification.json` has the same property and it is
+     what makes `--check` mean anything: a catch-all rule would turn every future
+     omission into a silent 0.85, which is the placeholder this phase exists to
+     replace.
+    */
+    it('has no catch-all, so a texture family nobody has seen fails rather than defaults', () => {
+        for (const name of [
+            'textures/some_new_map/wall01',
+            'models/mapobjects/statue/marble',
+            'NewPowerupSkin',
+        ]) {
+            expect(classify(name, spec), `${name} should be unclassified`).toBeNull();
+        }
+    });
+
+    it('states metalness as a bit and roughness inside GGX-stable range', () => {
+        const bad: string[] = [];
+        for (const name of inScopeNames(index).keys()) {
+            const rule = classify(name, spec)!;
+            if (rule.metalness !== 0 && rule.metalness !== 1) bad.push(`${name}: metalness ${rule.metalness}`);
+            if (!(rule.roughness >= 0.03 && rule.roughness <= 1)) bad.push(`${name}: roughness ${rule.roughness}`);
+        }
+        expect(bad).toEqual([]);
+    });
+
+    /*
+     Rust is iron oxide. It is the most common way to get a PBR set wrong,
+     because the name says metal and the physics does not, and a rusted surface
+     shaded as a conductor reads as a mirror exactly where the paint has failed.
+     Pinned by name because these are the four families where the mistake was
+     available.
+    */
+    it('classifies corrosion as a dielectric and the metal under it as metal', () => {
+        for (const rusted of [
+            'textures/base_trim/deeprust',
+            'textures/gothic_trim/pitted_rust',
+            'textures/gothic_trim/pitted_rust3_black',
+            'textures/acc_dm5/rust',
+        ]) {
+            expect(classify(rusted, spec)?.metalness, rusted).toBe(0);
+        }
+
+        for (const metal of [
+            'textures/base_trim/pewter',
+            'textures/base_wall/bluemetal1b_chrome',
+            'textures/gothic_floor/q1metal7_99stair',
+            'textures/acc_dm3/rivets',
+        ]) {
+            expect(classify(metal, spec)?.metalness, metal).toBe(1);
+        }
+    });
+
+    /*
+     A variant letter is not a suffix on the same material. `e8_base1` is a steel
+     hatch and `e8_base1c` is brick, and prefix rules cannot tell them apart --
+     which is what `entries` is for, and is worth a case because the rule reads
+     as if it covers both.
+    */
+    it('lets an entry override a prefix rule that would be wrong', () => {
+        expect(classify('textures/e8/e8_base1', spec)?.metalness).toBe(1);
+        expect(classify('textures/e8/e8_base1c', spec)?.metalness).toBe(0);
+    });
+
+    /*
+     Sixteen materials in the set are not artwork of a surface at all -- Q3
+     `tcGen environment` fake reflections, powerup shells, glyphs on black. They
+     are in scope by the mechanical rule because their shaders are opaque and lit,
+     and a normal map for them would be the network inventing relief in a starburst.
+    */
+    it('refuses a normal map for the effect surfaces', () => {
+        const dropped = [...inScopeNames(index).keys()].filter(
+            (n) => classify(n, spec)?.normal === 'drop'
+        );
+
+        expect(dropped.length, 'materials with the normal map switched off').toBe(16);
+        expect(classify('quadDamage', spec)?.effect).toBe(true);
+        expect(classify('textures/gothic_block/blocks10', spec)?.normal).toBeUndefined();
     });
 });
