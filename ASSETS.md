@@ -115,6 +115,8 @@ the GPLv2/CC inputs above and carries their terms.
 | `assets/built/characters/<name>/` | `convert-characters.ts` | player models as skinned glTF: `<name>.gltf`, `<name>.bin`, textures. The skeleton is *inferred* from MD3's vertex-morph frames (DECISIONS.md D-042) and is not present in the source data |
 | `assets/built/sound/` | `convert-sounds.ts` | the WAVs the port triggers and the OGG music the maps name, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded. Half the list comes from the gamecode and half is read out of the built maps' `target_speaker` and `worldspawn` keys, so this runs *after* `convert-map.ts` |
 | `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals, and `gfx/2d/crosshair[a-j]`. Each is converted for the Q3 blend it was authored against rather than copied, which for an impact mark means discarding the colour and keeping the luminance as coverage (D-079) |
+| `assets/generated/raw/` | `tools/cosmos/inverse_render.py` | the inverse renderer's own output, one image per G-buffer pass. Kept so `build_maps.py` can be re-run without re-inferring, which is 80 minutes of GPU |
+| `assets/generated/materials/` | `tools/cosmos/build_maps.py` | what a bundle actually binds: `<image>.albedo.png` (de-lit and re-tinted), `<image>.normal.png` (only where it survived the checks) and `<image>.orm.png`. The converters pick these up automatically; with the directory empty they write exactly the bundles they wrote before the material phase |
 
 ---
 

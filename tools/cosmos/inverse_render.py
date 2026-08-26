@@ -224,23 +224,67 @@ def frame_texture(original: Image.Image, variant: str):
     return framed, recover
 
 
-def run_texture(pipeline, spec: dict, out_dir: Path, passes, seed: int) -> None:
+def read_manifest(path: Path) -> list[dict]:
+    """Accept either manifest shape.
+
+    `tools/cosmos/pilot.json` is hand-written and names eight textures twice each
+    to compare framings; `assets/generated/manifest.json` is emitted by
+    `tools/material-maps.ts` and names every image once. The second is the shape
+    that matters and the first is kept because it is what D-090 and D-092 were
+    measured with, and a measurement whose input cannot be re-run is an anecdote.
+    """
+    doc = json.loads(path.read_text(encoding="utf-8"))
+
+    if "jobs" in doc:
+        return [
+            {
+                "name": job["image"],
+                "stem": job["stem"],
+                "source": job["source"],
+                "variant": job["framing"],
+                # A surface the table refuses a normal map does not need one
+                # inferred. Twelve of 183, all of them effect artwork.
+                "skip": ["normal"] if job.get("normal") == "drop" else [],
+            }
+            for job in doc["jobs"]
+        ]
+
+    return [
+        {
+            "name": t["name"],
+            "stem": t["name"].replace("/", "_"),
+            "source": t["source"],
+            "variant": t.get("variant", "wrap"),
+            "skip": [],
+        }
+        for t in doc["textures"]
+    ]
+
+
+def run_texture(pipeline, spec: dict, out_dir: Path, passes, seed: int, resume: bool) -> int:
     source = REPO / spec["source"]
-    name = spec["name"].replace("/", "_")
-    variant = spec.get("variant", "wrap")
+    name = spec["stem"]
+    variant = spec["variant"]
+    wanted = [p for p in passes if p not in spec["skip"]]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    todo = [
+        p for p in wanted if not (resume and (out_dir / f"{name}.{variant}.{p}.png").exists())
+    ]
+    if not todo:
+        return 0
 
     original = load_rgb(source)
     framed, recover = frame_texture(original, variant)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
     original.save(out_dir / f"{name}.source.png")
-    framed.save(out_dir / f"{name}.{variant}.frame.png")
 
-    for gbuffer in passes:
+    for gbuffer in todo:
         result = recover(infer(pipeline, framed, gbuffer, seed))
-        path = out_dir / f"{name}.{variant}.{gbuffer}.png"
-        result.save(path)
-        print(f"  {gbuffer:10s} {path.name}", flush=True)
+        result.save(out_dir / f"{name}.{variant}.{gbuffer}.png")
+
+    print(f"  {spec['name']} [{variant}] {' '.join(todo)}", flush=True)
+    return len(todo)
 
 
 def main() -> None:
@@ -255,6 +299,11 @@ def main() -> None:
     parser.add_argument("--only", type=str, default=None, help="Run manifest entries whose name contains this")
     parser.add_argument("--variant", type=str, default=None, help="Run only this framing")
     parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Re-infer passes whose output is already on disk (default is to skip them)",
+    )
+    parser.add_argument(
         "--passes",
         nargs="+",
         default=["basecolor", "normal", "roughness", "metallic"],
@@ -262,11 +311,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    entries = json.loads(args.manifest.read_text(encoding="utf-8"))["textures"]
+    entries = read_manifest(args.manifest)
     if args.only is not None:
         entries = [e for e in entries if args.only in e["name"]]
     if args.variant is not None:
-        entries = [e for e in entries if e.get("variant", "wrap") == args.variant]
+        entries = [e for e in entries if e["variant"] == args.variant]
     if not entries:
         raise SystemExit("no manifest entry matched")
 
@@ -291,10 +340,15 @@ def main() -> None:
         seed=args.seed,
     )
 
-    for spec in entries:
-        print(f"{spec['name']} [{spec.get('variant', 'wrap')}]", flush=True)
-        run_texture(pipeline, spec, args.out, args.passes, args.seed)
+    done = 0
+    for i, spec in enumerate(entries):
+        n = run_texture(pipeline, spec, args.out, args.passes, args.seed, not args.no_resume)
+        done += n
+        if n:
+            print(f"    [{i + 1}/{len(entries)}] {done} passes run", flush=True)
         torch.cuda.empty_cache()
+
+    print(f"{done} passes over {len(entries)} images", flush=True)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,25 @@ convert-sounds` wants running again after a new map is converted, and says so.
 0.8.8 game data (425 MB). Nothing it fetches is committed — see [ASSETS.md](ASSETS.md) for
 provenance and licensing of every input.
 
+### Material maps, optionally
+
+Surfaces render from the Q3 texture alone unless a normal map and an ORM have been generated for
+them. Generating them needs an NVIDIA GPU, a 31 GB model download and about ninety minutes, so it
+is deliberately not part of `npm run setup` — skip it and the port converts exactly the bundles it
+converted before, with roughness 0.85 and no metal anywhere.
+
+```bash
+node tools/fetch-material-model.mjs
+python -m venv assets/ml/venv    # Python 3.11; see tools/cosmos/requirements.txt for why
+assets/ml/venv/Scripts/pip install -r tools/cosmos/requirements.txt
+node tools/material-maps.ts
+assets/ml/venv/Scripts/python tools/cosmos/inverse_render.py --manifest assets/generated/manifest.json --out assets/generated/raw --passes basecolor normal roughness
+assets/ml/venv/Scripts/python tools/cosmos/build_maps.py
+```
+
+Then re-run the converters. What each channel is worth, and why two of the four the network offers
+are thrown away and replaced by a hand table, is D-092 and D-093.
+
 Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
 to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon. Input runs on meep's
 own `engine.devices` rather than DOM listeners — see GAP-017 for why that is not optional.

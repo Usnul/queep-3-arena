@@ -281,7 +281,7 @@ async function convertTexture(
     written: TextureCache,
     blend: ImageBlend
 ): Promise<string | null> {
-    return writeTexture(index, EXTRACTED, virtualPath, outDir, written, blend);
+    return writeTexture(index, EXTRACTED, virtualPath, outDir, written, blend, MATERIAL_MAPS);
 }
 
 async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {

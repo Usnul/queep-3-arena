@@ -69,8 +69,7 @@ async function md5Of(path) {
  * published and the size already matched, since hashing 29 GB takes about a
  * minute and is pure waste on a file that is visibly truncated.
  */
-async function verify(entry, { deep }) {
-    const path = localPath(entry);
+async function verifyFile(path, entry, { deep }) {
     if (!existsSync(path)) return 'missing';
 
     const size = statSync(path).size;
@@ -82,6 +81,10 @@ async function verify(entry, { deep }) {
     }
 
     return null;
+}
+
+async function verify(entry, { deep }) {
+    return verifyFile(localPath(entry), entry, { deep });
 }
 
 async function fetchOne(entry, force) {
@@ -107,16 +110,33 @@ async function fetchOne(entry, force) {
         throw new Error(`${url}: HTTP ${response.status}`);
     }
 
-    // Written to a temporary name and moved, so an interrupted run leaves no file
-    // that the size check would have to catch on the next one.
+    /*
+     Downloaded to a temporary name, checked *there*, and only then swapped in.
+
+     The obvious order -- remove the target, rename the new file over it -- ate a
+     29 GB checkpoint that was already on disk and correct. A run had been
+     interrupted, its `.partial` cleaned up by hand, and the process was still
+     alive: it reached the removal, deleted the good file, and then failed to
+     rename a partial that no longer existed. Net effect, a working download
+     destroyed by a *re-fetch that should not have started* and would have failed
+     anyway.
+
+     So the target is not touched until the replacement has been verified, and
+     the failure mode of every interruption before that point is a stray
+     `.partial` and a file that still works.
+    */
     const partial = `${path}.partial`;
     await pipeline(Readable.fromWeb(response.body), createWriteStream(partial));
-    await rm(path, { force: true });
-    const { rename } = await import('node:fs/promises');
-    await rename(partial, path);
 
-    const problem = await verify(entry, { deep: true });
-    if (problem !== null) throw new Error(`${label}: ${problem}`);
+    const problem = await verifyFile(partial, entry, { deep: true });
+    if (problem !== null) {
+        await rm(partial, { force: true });
+        throw new Error(`${label}: downloaded ${problem}`);
+    }
+
+    const { rename } = await import('node:fs/promises');
+    await rm(path, { force: true });
+    await rename(partial, path);
 
     console.log(`${label}: ok`);
 }

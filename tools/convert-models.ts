@@ -314,7 +314,8 @@ async function convertModels(): Promise<void> {
                         pbr.albedo,
                         textureDir,
                         textureCache,
-                        pbr.albedoBlend
+                        pbr.albedoBlend,
+                        MATERIAL_MAPS
                     );
                     if (textures[albedoKey] === null) albedoKey = null;
                 }

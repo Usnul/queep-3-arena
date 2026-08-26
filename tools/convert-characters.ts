@@ -295,7 +295,8 @@ async function convertCharacter(
                 pbr.albedo,
                 outDir,
                 textures,
-                pbr.albedoBlend
+                pbr.albedoBlend,
+                MATERIAL_MAPS
             );
             if (file !== null) texture = gltf.image(file);
         }

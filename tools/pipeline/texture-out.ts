@@ -131,6 +131,17 @@ export function texturePathOf(key: string): string {
 export type DerivedMap = 'normal' | 'orm';
 
 /**
+ * Where a de-lit albedo for this image would be, if one has been generated.
+ *
+ * Not a {@link DerivedMap}: the other two are new slots, and this one *replaces*
+ * the colour of an image that still has to go through the Q3 blend it was
+ * authored for. See {@link writeTexture}.
+ */
+export function delitAlbedoPath(mapsRoot: string, virtualPath: string): string {
+    return join(mapsRoot, `${virtualPath.replace(/[\/]/g, '_')}.albedo.png`);
+}
+
+/**
  * How a bundle names a generated map.
  *
  * The same `#`-suffixed shape as {@link textureKey} and in the same namespace,
@@ -289,14 +300,56 @@ async function decode(src: string, isTga: boolean): Promise<DecodedImage> {
     };
 }
 
+/**
+ * Swap in the de-lit colour, keeping the original's alpha.
+ *
+ * The generated albedo is a statement about *colour* and about nothing else, so
+ * the alpha channel is untouched: an alpha-tested grate's cutout is the same
+ * cutout, and the {@link ImageBlend} restatement that follows still sees the
+ * coverage the Q3 stage meant. The two images are the same size by construction
+ * -- the generator recovers its output at the source's own resolution -- and a
+ * mismatch is treated as a generator fault and skipped rather than resampled,
+ * because resampling a normal map's sibling silently is how a set drifts.
+ */
+async function applyDelit(
+    decoded: DecodedImage,
+    path: string
+): Promise<'applied' | 'absent' | 'mismatched'> {
+    if (!existsSync(path)) return 'absent';
+
+    const raw = await sharp(path).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    if (raw.info.width !== decoded.width || raw.info.height !== decoded.height) return 'mismatched';
+
+    const rgb = raw.data;
+    for (let i = 0, j = 0; i < decoded.rgba.length; i += 4, j += 3) {
+        decoded.rgba[i] = rgb[j]!;
+        decoded.rgba[i + 1] = rgb[j + 1]!;
+        decoded.rgba[i + 2] = rgb[j + 2]!;
+    }
+
+    return 'applied';
+}
+
 export async function writeTexture(
     index: ShaderIndex,
     assetRoot: string,
     virtualPath: string,
     outDir: string,
     cache: TextureCache,
-    blend: ImageBlend = 'opaque'
+    blend: ImageBlend = 'opaque',
+    /** When set, a generated de-lit albedo here replaces the image's colour. */
+    mapsRoot: string | null = null
 ): Promise<string | null> {
+    const delit = mapsRoot === null ? null : delitAlbedoPath(mapsRoot, virtualPath);
+    const hasDelit = delit !== null && existsSync(delit);
+
+    /*
+     The *key* is unchanged, because a material names its albedo by path and blend
+     and that is still what this is: the same surface, drawn the same way, with
+     the painted shading taken out of its colour. What changes is the file the key
+     resolves to, and the file is named `.delit` so a bundle says on disk which
+     one it holds rather than leaving it to be inferred from a timestamp.
+    */
     const key = textureKey(virtualPath, blend);
 
     const existing = cache.byKey.get(key);
@@ -320,7 +373,8 @@ export async function writeTexture(
     const isJpeg = /\.jpe?g$/i.test(resolved);
 
     try {
-        if (isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
+        // A byte copy cannot carry a colour that is not in the file.
+        if (!hasDelit && isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
             // A JPEG has no alpha, so none of these three change a pixel of it.
             const out = `${flat}${resolved.slice(resolved.lastIndexOf('.'))}`;
             const shared = cache.byFile.get(`${virtualPath}#opaque`);
@@ -334,7 +388,17 @@ export async function writeTexture(
 
         const decoded = await decode(src, isTga);
         const effective = effectiveBlend(blend, decoded.hadAlpha);
-        const fileKey = `${virtualPath}#${effective}`;
+
+        let suffix = '';
+        if (hasDelit) {
+            const applied = await applyDelit(decoded, delit!);
+            if (applied === 'applied') suffix = '.delit';
+            else if (applied === 'mismatched') {
+                console.warn(`  texture ${key}: de-lit albedo is a different size, ignored`);
+            }
+        }
+
+        const fileKey = `${virtualPath}#${effective}${suffix}`;
 
         const shared = cache.byFile.get(fileKey);
         if (shared !== undefined) {
@@ -342,7 +406,7 @@ export async function writeTexture(
             return shared;
         }
 
-        const out = `${flat}${effective === 'opaque' ? '' : `.${effective}`}.png`;
+        const out = `${flat}${effective === 'opaque' ? '' : `.${effective}`}${suffix}.png`;
 
         restate(decoded.rgba, effective);
 
