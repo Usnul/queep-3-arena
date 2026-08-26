@@ -44,7 +44,7 @@ import {
     type PbrMaterial,
 } from '../tools/pipeline/shader-to-pbr.ts';
 import { ShaderIndex } from '../tools/pipeline/shader-index.ts';
-import { derivedTextureKey, textureKey } from '../tools/pipeline/texture-out.ts';
+import { derivedTextureKey, textureKey, texturePathOf } from '../tools/pipeline/texture-out.ts';
 import { classify, inScopeNames, loadSpec } from '../tools/material-matrix.ts';
 
 const ROOT = process.cwd();
@@ -552,6 +552,97 @@ textures/bubctf1/e8_launchpad1
     });
 });
 
+describe('a shader that never asked for the models texture coordinates', () => {
+    /*
+     `RB_CalcEnvironmentTexCoords` builds a stage's UVs per frame from the
+     reflected view vector. An MD3 drawn only through such stages therefore
+     carries whatever UVs its author left in it, and OA's are filler: the four
+     health crosses' are arbitrary and `mega_cross.md3`'s are the same `(0, 1)`
+     on all 52 vertices. Sampling a spherical environment map at those is what
+     the reported bug was -- a pickup covered in torn black and olive patches,
+     and a mega health cross drawn in `envmapblue2`'s bottom-left texel, which
+     is black.
+    */
+    it('is flagged when every drawn pass is `tcGen environment`', () => {
+        const m = project(`
+mediumCross
+{
+    {
+        map textures/effects/envmapligh.tga
+        tcMod rotate -76
+        tcGen environment
+    }
+    {
+        map textures/effects/envmapyel.tga
+        blendfunc add
+        tcMod rotate 54
+        tcGen environment
+    }
+}`);
+
+        expect(m.environmentMapped).toBe(true);
+    });
+
+    /*
+     The ordinary shape, and the reason the flag needs *every* pass: a diffuse
+     skin with a chrome highlight over it does name a surface, and `rankStage`
+     has already preferred the skin for the albedo.
+    */
+    it('is not flagged when a real skin is underneath the chrome', () => {
+        const m = project(`
+models/weapons2/gauntlet/gauntlet
+{
+    {
+        map models/weapons2/gauntlet/gauntlet.tga
+        rgbGen lightingDiffuse
+    }
+    {
+        map textures/effects/tinfx.tga
+        blendfunc add
+        tcGen environment
+    }
+}`);
+
+        expect(m.environmentMapped).toBe(false);
+        expect(m.albedo).toBe('models/weapons2/gauntlet/gauntlet');
+    });
+
+    /* A `$whiteimage` pass is not drawn, so it does not vote. */
+    it('is not decided by a pass that names no image', () => {
+        const m = project(`
+textures/test/chrome
+{
+    {
+        map textures/effects/tinfx2.tga
+        tcGen environment
+    }
+    {
+        map $whiteimage
+        blendfunc filter
+    }
+}`);
+
+        expect(m.environmentMapped).toBe(true);
+    });
+
+    /*
+     Flatness and blend are two independent statements about one image and both
+     have to reach the bundle, because an additive shell is flattened *and* then
+     restated as coverage. One `#` either way, so `texturePathOf` still answers.
+    */
+    it('names a flattened reference distinctly from the same image unflattened', () => {
+        const path = 'textures/effects/mediumhelth';
+
+        expect(textureKey(path, 'opaque')).toBe(path);
+        expect(textureKey(path, 'opaque', true)).toBe(`${path}#flat`);
+        expect(textureKey(path, 'addAlpha', true)).toBe(`${path}#addAlpha.flat`);
+        expect(textureKey(path, 'addAlpha', true)).not.toBe(textureKey(path, 'addAlpha'));
+
+        expect(texturePathOf(textureKey(path, 'addAlpha', true))).toBe(path);
+        expect(derivedTextureKey(path, 'orm', true)).toBe(`${path}#orm.flat`);
+    });
+});
+
 describe('resolving a name to a file, the way R_FindShader does', () => {
     const index = new ShaderIndex(EXTRACTED).load();
 
@@ -730,6 +821,120 @@ describe('a materials transparency and its albedo image agree', () => {
         expect(coverage, 'the albedo is the restated copy').not.toBe(colour);
         expect(existsSync(join(BUILT, 'oa_dm1', 'textures', coverage!))).toBe(true);
         expect(existsSync(join(BUILT, 'oa_dm1', 'textures', colour!))).toBe(true);
+    });
+});
+
+/*
+ * The env-mapped pickups, checked against what the pipeline actually wrote.
+ *
+ * The rule tests above prove the projection recognises them. This proves the
+ * consequence reached disk, which is the half the reported bug lived in: the
+ * material was right about everything except that its albedo was a 64x64 chrome
+ * reflection being sampled at texture coordinates nobody had ever read.
+ */
+describe('an env-mapped materials images are one texel', () => {
+    interface Bundle {
+        readonly materials: readonly {
+            name: string;
+            albedo: string | null;
+            orm: string | null;
+            emissive: string | null;
+        }[];
+        readonly textures: Readonly<Record<string, string | null>>;
+    }
+
+    const index = new ShaderIndex(EXTRACTED).load();
+    const bundle = JSON.parse(
+        readFileSync(join(BUILT, 'models', 'models.json'), 'utf8')
+    ) as Bundle;
+    const textureDir = join(BUILT, 'models', 'textures');
+
+    const envMapped = bundle.materials.filter((m) => index.material(m.name).environmentMapped);
+
+    it('finds them in the bundle at all', () => {
+        // The four health crosses, their four shells, and fourteen others.
+        expect(envMapped.length).toBeGreaterThanOrEqual(8);
+        expect(envMapped.map((m) => m.name)).toEqual(
+            expect.arrayContaining(['smallCross', 'mediumCross', 'largeCross', 'megaCross'])
+        );
+    });
+
+    it.each(['albedo', 'orm', 'emissive'] as const)(
+        'wrote every %s of one as a single texel',
+        async (slot) => {
+            const wrong: string[] = [];
+
+            for (const m of envMapped) {
+                const key = m[slot];
+                if (key === null) continue;
+
+                const file = bundle.textures[key];
+                if (!file) continue;
+
+                const meta = await sharp(join(textureDir, file)).metadata();
+                if (meta.width !== 1 || meta.height !== 1) {
+                    wrong.push(`${m.name} ${slot} -> ${file} is ${meta.width}x${meta.height}`);
+                }
+            }
+
+            expect(wrong).toEqual([]);
+        }
+    );
+
+    /*
+     The mean, and specifically not the corner. `mega_cross.md3` and all four
+     shells put every vertex at `(0, 1)`, so before this they drew exactly one
+     texel of their image: black for the mega cross, and a coverage of 1/255 --
+     nothing at all -- for the shells.
+    */
+    it('took the images mean and not whichever texel the UVs happened to land on', async () => {
+        const mega = envMapped.find((m) => m.name === 'megaCross')!;
+        const file = bundle.textures[mega.albedo!]!;
+
+        const raw = await sharp(join(textureDir, file))
+            .ensureAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+
+        // `envmapblue2.jpg` is a blue chrome map on black; its corner is (0, 0, 0).
+        expect([raw.data[0], raw.data[1], raw.data[2]]).not.toEqual([0, 0, 0]);
+        expect(raw.data[2], 'and it is blue, which is what a mega health is').toBeGreaterThan(
+            raw.data[0]!
+        );
+    });
+
+    /*
+     A generated ORM's mean *is* the classified roughness -- the variation was
+     scattered around it -- so flattening it keeps the number the table names
+     while dropping the part that depended on the UVs. `greenchrm`'s spread runs
+     0.03 to 1.00, a mirror to a matte over one small health cross.
+    */
+    it('kept the classified roughness when it flattened the ORM', async () => {
+        const small = envMapped.find((m) => m.name === 'smallCross')!;
+
+        // The key is owed whether or not the generator has run, and it has to
+        // say `flat` -- an ORM sampled at UVs that mean nothing is the same bug
+        // as an albedo sampled at them.
+        expect(small.orm).toBe('textures/oafx/greenchrm#orm.flat');
+
+        /*
+         The pixels can only be checked when there is a file, which is the whole
+         of what `writeDerivedTexture` promises: `assets/generated/materials` is
+         a separate pipeline stage and a bundle built without it is a valid
+         bundle. Guarded rather than asserted, so a clean tree does not fail a
+         suite over an artefact `material-maps.ts --check` already owns.
+        */
+        const file = bundle.textures[small.orm!];
+        if (!file) return;
+
+        const raw = await sharp(join(textureDir, file))
+            .ensureAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+
+        const rule = classify('smallCross', loadSpec())!;
+        expect(raw.data[1]! / 255).toBeCloseTo(rule.roughness, 1);
+        expect(raw.data[2]! / 255).toBeCloseTo(rule.metalness, 1);
     });
 });
 

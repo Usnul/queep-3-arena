@@ -315,7 +315,7 @@ async function convertModels(): Promise<void> {
                 */
                 let albedoKey: string | null = null;
                 if (pbr.albedo !== null) {
-                    albedoKey = textureKey(pbr.albedo, pbr.albedoBlend);
+                    albedoKey = textureKey(pbr.albedo, pbr.albedoBlend, pbr.environmentMapped);
                     textures[albedoKey] = await writeTexture(
                         index,
                         EXTRACTED,
@@ -323,7 +323,8 @@ async function convertModels(): Promise<void> {
                         textureDir,
                         textureCache,
                         pbr.albedoBlend,
-                        MATERIAL_MAPS
+                        MATERIAL_MAPS,
+                        pbr.environmentMapped
                     );
                     if (textures[albedoKey] === null) albedoKey = null;
                 }
@@ -331,14 +332,16 @@ async function convertModels(): Promise<void> {
 
                 let emissiveKey: string | null = null;
                 if (pbr.emissive !== null && pbr.emissiveLuminance > 0) {
-                    emissiveKey = pbr.emissive;
+                    emissiveKey = textureKey(pbr.emissive, 'opaque', pbr.environmentMapped);
                     textures[emissiveKey] = await writeTexture(
                         index,
                         EXTRACTED,
                         pbr.emissive,
                         textureDir,
                         textureCache,
-                        'opaque'
+                        'opaque',
+                        null,
+                        pbr.environmentMapped
                     );
                     if (textures[emissiveKey] === null) emissiveKey = null;
                 }
@@ -357,16 +360,20 @@ async function convertModels(): Promise<void> {
                  generator has not reached would double the table to carry no
                  information the material's own `null` does not already carry.
                 */
-                const derived = (map: 'normal' | 'orm', from: string | null): string | null => {
+                const derived = async (
+                    map: 'normal' | 'orm',
+                    from: string | null
+                ): Promise<string | null> => {
                     if (from === null) return null;
 
-                    const key = derivedTextureKey(from, map);
-                    const file = writeDerivedTexture(
+                    const key = derivedTextureKey(from, map, pbr.environmentMapped);
+                    const file = await writeDerivedTexture(
                         MATERIAL_MAPS,
                         from,
                         map,
                         textureDir,
-                        textureCache
+                        textureCache,
+                        pbr.environmentMapped
                     );
                     if (file !== null) textures[key] = file;
 
@@ -377,8 +384,8 @@ async function convertModels(): Promise<void> {
                     return key;
                 };
 
-                const normalKey = derived('normal', pbr.normal);
-                const ormKey = derived('orm', pbr.orm);
+                const normalKey = await derived('normal', pbr.normal);
+                const ormKey = await derived('orm', pbr.orm);
 
                 materialIndex = materials.length;
                 materials.push(

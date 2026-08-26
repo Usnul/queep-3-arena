@@ -157,6 +157,15 @@ interface SceneMaterial {
     readonly orm: string | null;
     /** Q3 drew this surface without any lighting; see `UNLIT_LUMINANCE`. */
     readonly unlit: boolean;
+    /**
+     * Every pass was `tcGen environment`, so every image above is written flat.
+     *
+     * Carried on the material like `unlit` is, and for the same reason: the
+     * texture pass below runs over `materials` rather than over the shaders, and
+     * has to write the same images the keys were built from. The runtime reads
+     * neither -- a key already says which file to load.
+     */
+    readonly environmentMapped: boolean;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
     readonly roughness: number;
@@ -279,9 +288,19 @@ async function convertTexture(
     virtualPath: string,
     outDir: string,
     written: TextureCache,
-    blend: ImageBlend
+    blend: ImageBlend,
+    flatten = false
 ): Promise<string | null> {
-    return writeTexture(index, EXTRACTED, virtualPath, outDir, written, blend, MATERIAL_MAPS);
+    return writeTexture(
+        index,
+        EXTRACTED,
+        virtualPath,
+        outDir,
+        written,
+        blend,
+        MATERIAL_MAPS,
+        flatten
+    );
 }
 
 async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
@@ -357,12 +376,25 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 mi = materials.length;
                 materials.push({
                     name: pbr.name,
-                    albedo: pbr.albedo === null ? null : textureKey(pbr.albedo, pbr.albedoBlend),
+                    albedo:
+                        pbr.albedo === null
+                            ? null
+                            : textureKey(pbr.albedo, pbr.albedoBlend, pbr.environmentMapped),
                     albedoBlend: pbr.albedoBlend,
-                    normal: pbr.normal === null ? null : derivedTextureKey(pbr.normal, 'normal'),
-                    orm: pbr.orm === null ? null : derivedTextureKey(pbr.orm, 'orm'),
+                    normal:
+                        pbr.normal === null
+                            ? null
+                            : derivedTextureKey(pbr.normal, 'normal', pbr.environmentMapped),
+                    orm:
+                        pbr.orm === null
+                            ? null
+                            : derivedTextureKey(pbr.orm, 'orm', pbr.environmentMapped),
                     unlit: pbr.unlit,
-                    emissive: pbr.emissive,
+                    environmentMapped: pbr.environmentMapped,
+                    emissive:
+                        pbr.emissive === null
+                            ? null
+                            : textureKey(pbr.emissive, 'opaque', pbr.environmentMapped),
                     emissiveLuminance: pbr.emissiveLuminance,
                     roughness: pbr.roughness,
                     metallic: pbr.metallic,
@@ -913,16 +945,18 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 texturePathOf(m.albedo),
                 textureDir,
                 written,
-                m.albedoBlend
+                m.albedoBlend,
+                m.environmentMapped
             );
         }
         if (m.emissive !== null) {
             textureFor[m.emissive] = await convertTexture(
                 index,
-                m.emissive,
+                texturePathOf(m.emissive),
                 textureDir,
                 written,
-                'opaque'
+                'opaque',
+                m.environmentMapped
             );
         }
 
@@ -936,12 +970,13 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             const key = m[map];
             if (key === null) continue;
 
-            const file = writeDerivedTexture(
+            const file = await writeDerivedTexture(
                 MATERIAL_MAPS,
                 texturePathOf(key),
                 map,
                 textureDir,
-                written
+                written,
+                m.environmentMapped
             );
             if (file !== null) textureFor[key] = file;
         }

@@ -157,6 +157,8 @@ export class ShaderIndex {
                 orm: implicit,
                 emissive: null,
                 emissiveLuminance: 0,
+                // No script, so no `tcGen` either: this samples the model's UVs.
+                environmentMapped: false,
                 roughness: 0.85,
                 metallic: 0,
                 transparency: 'opaque',

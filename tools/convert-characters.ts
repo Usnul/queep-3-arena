@@ -296,7 +296,8 @@ async function convertCharacter(
                 outDir,
                 textures,
                 pbr.albedoBlend,
-                MATERIAL_MAPS
+                MATERIAL_MAPS,
+                pbr.environmentMapped
             );
             if (file !== null) texture = gltf.image(file);
         }
@@ -312,14 +313,21 @@ async function convertCharacter(
          multiplies the sampled channels by them, so `metallic: 0` would cancel
          every metal the classification named.
         */
-        const derived = (map: 'normal' | 'orm', from: string | null): number | null => {
+        const derived = async (map: 'normal' | 'orm', from: string | null): Promise<number | null> => {
             if (from === null) return null;
-            const file = writeDerivedTexture(MATERIAL_MAPS, from, map, outDir, textures);
+            const file = await writeDerivedTexture(
+                MATERIAL_MAPS,
+                from,
+                map,
+                outDir,
+                textures,
+                pbr.environmentMapped
+            );
             return file === null ? null : gltf.image(file);
         };
 
-        const normalTexture = derived('normal', pbr.normal);
-        const metallicRoughnessTexture = derived('orm', pbr.orm);
+        const normalTexture = await derived('normal', pbr.normal);
+        const metallicRoughnessTexture = await derived('orm', pbr.orm);
 
         const material = gltf.material({
             name: shaderName,

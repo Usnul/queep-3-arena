@@ -32,6 +32,9 @@
  * | each stage's `blendFunc`    | what that image's alpha channel means       |
  * | `cull none`/`twosided`      | double-sided                                |
  * | `qer_editorimage`           | last-resort albedo when nothing else names one |
+ * | *every* stage `tcGen environment` | `environmentMapped` -- the images are a |
+ * |                             | fake reflection and not a skin, so they are  |
+ * |                             | flattened rather than sampled at the model's UVs |
  *
  * **Dropped**, because it is a rasteriser trick with no surface meaning:
  * `tcMod` (scroll/scale/rotate/turb/stretch), `deformVertexes`, `rgbGen wave`,
@@ -39,6 +42,29 @@
  * the albedo/emissive split above, `sort`, `polygonOffset` detail passes,
  * `videomap`, and every `q3map_*` directive that only spoke to the light
  * compiler.
+ *
+ * # A `tcGen environment` shader does not name a surface
+ *
+ * `RB_CalcEnvironmentTexCoords` builds a stage's UVs per vertex per frame, from
+ * the reflected view vector, and throws the model's own away. So an MD3 drawn
+ * through such a shader carries whatever texture coordinates its author left in
+ * it -- and for the four health crosses that is filler, and for the four health
+ * shells and `mega_cross.md3` it is literally the same `(0, 1)` on every vertex.
+ * Q3 never read them, so nobody ever noticed.
+ *
+ * Sampling a *spherical environment map* at those coordinates is what a pickup
+ * covered in torn black and olive patches is: `envmapligh.jpg` is a chrome
+ * reflection, and the port was drawing arbitrary slices of it as if it were
+ * paint. The mega health cross came out solid black, that being the colour of
+ * `envmapblue2.jpg`'s bottom-left texel, and all four shells came out invisible
+ * for the same reason.
+ *
+ * There is no static restatement of a view-dependent lookup, so the flag says
+ * what is true -- these images are not artwork of a surface -- and the writers
+ * reduce each of them to its mean colour. That is what an env-mapped object
+ * averages to as it spins, it keeps the one thing the artwork is carrying (a
+ * health cross is green, yellow, orange or blue by size), and it does not depend
+ * on a texture coordinate that means nothing.
  *
  * Every drop that changes how a surface looks is counted and reported, so the
  * conversion's own lossiness is a number rather than a vibe.
@@ -154,6 +180,15 @@ export interface PbrMaterial {
     readonly orm: string | null;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
+    /**
+     * Every drawn stage was `tcGen environment`, so no image here is a skin.
+     *
+     * The shader names textures, but it never asked for them to be sampled at
+     * the model's own texture coordinates -- see {@link ImageBlend}'s neighbour
+     * problem, one level up. A caller that writes these images has to flatten
+     * them; `texture-out.ts` holds the restatement and the argument for it.
+     */
+    readonly environmentMapped: boolean;
     readonly roughness: number;
     readonly metallic: number;
     readonly transparency: TransparencyMode;
@@ -300,8 +335,15 @@ interface StageInfo {
     readonly alphaFunc: string | null;
     /** See {@link isShadedPass}. */
     readonly shaded: boolean;
+    /** `tcGen environment`: the stage's texture coordinates are not the model's. */
+    readonly environment: boolean;
     /** See {@link rankStage}. */
     readonly rank: number;
+}
+
+/** `tcGen environment` -- Q3 generating this stage's UVs from the reflected view. */
+function isEnvironmentStage(stage: ShaderStage): boolean {
+    return (directive(stage.directives, 'tcgen')?.[1]?.toLowerCase() ?? '') === 'environment';
 }
 
 /**
@@ -364,9 +406,8 @@ function isActive(stage: ShaderStage): boolean {
 function isShadedPass(stage: ShaderStage): boolean {
     const rgbGen = directive(stage.directives, 'rgbgen')?.[1]?.toLowerCase() ?? '';
     const alphaGen = directive(stage.directives, 'alphagen')?.[1]?.toLowerCase() ?? '';
-    const tcGen = directive(stage.directives, 'tcgen')?.[1]?.toLowerCase() ?? '';
 
-    return rgbGen.startsWith('lighting') || alphaGen.startsWith('lighting') || tcGen === 'environment';
+    return rgbGen.startsWith('lighting') || alphaGen.startsWith('lighting') || isEnvironmentStage(stage);
 }
 
 /** What the alpha channel of an image drawn through this blend means. */
@@ -450,6 +491,7 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         blend: blendOf(stage),
         alphaFunc: directive(stage.directives, 'alphafunc')?.[1]?.toUpperCase() ?? null,
         shaded: isShadedPass(stage),
+        environment: isEnvironmentStage(stage),
         rank: rankStage(stage),
     }));
 
@@ -494,6 +536,15 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
 
     const drawn = stages.filter((s): s is DrawnStage => s.path !== null);
     const additive = (s: StageInfo): boolean => s.blend === 'add' || s.blend === 'addAlpha';
+
+    /*
+     A shader every one of whose drawn passes is `tcGen environment` names no
+     surface at all. See the note on `environmentMapped` above; the *whole*
+     shader has to be that way before the flag is set, because the ordinary case
+     is a diffuse skin with a chrome highlight added over it, and there the skin
+     is the albedo and `rankStage` has already preferred it.
+    */
+    const environmentMapped = drawn.length > 0 && drawn.every((s) => s.environment);
 
     const best = (candidates: readonly DrawnStage[]): DrawnStage | null => {
         let winner: DrawnStage | null = null;
@@ -664,6 +715,7 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         orm: derivedFrom,
         emissive,
         emissiveLuminance,
+        environmentMapped,
         roughness,
         metallic,
         transparency,

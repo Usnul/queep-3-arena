@@ -40,6 +40,17 @@
  * sprite *is* its colour; a shader's additive pass is bound as the material's
  * emissive as well, so keeping the colour here would shade it a second time.
  *
+ * # And an env-mapped image is written as one texel
+ *
+ * The second axis, and it composes with the first rather than replacing it: an
+ * image referenced by a shader whose every pass is `tcGen environment` is
+ * reduced to its mean colour before the blend above restates it. Q3 sampled such
+ * an image at coordinates it generated per frame from the reflected view and
+ * never at the model's own, so the model's own are filler -- on the health
+ * pickups, literally the same `(0, 1)` on every vertex of five of the nine
+ * models. {@link flattenToMean} says what the mean is and why it is taken in
+ * linear light; `shader-to-pbr.ts` says why there is nothing better to take.
+ *
  * Two references that restate to the same bytes share one file: the caller keys
  * the bundle by {@link textureKey}, which is a pure function of path and blend,
  * while the file on disk is named for what the restatement actually did. A JPEG
@@ -132,9 +143,17 @@ export function textureCounts(cache: TextureCache): { written: number; missing: 
  * materials through two different blends and has to be written twice. `opaque`
  * is unsuffixed because it is what the overwhelming majority of references are,
  * and because it keeps the bundles' texture names readable.
+ *
+ * `flat` is the second axis and rides in the same suffix rather than a second
+ * one, so a key still splits on its last `#` and {@link texturePathOf} still
+ * answers. It is not an {@link ImageBlend} of its own because it is not a Q3
+ * blend: the flattening happens to the image *before* the blend restates it,
+ * and the two compose -- an additive shell is flattened and then turned into
+ * coverage, in that order.
  */
-export function textureKey(virtualPath: string, blend: ImageBlend): string {
-    return blend === 'opaque' ? virtualPath : `${virtualPath}#${blend}`;
+export function textureKey(virtualPath: string, blend: ImageBlend, flat = false): string {
+    const suffix = blend === 'opaque' ? (flat ? 'flat' : '') : flat ? `${blend}.flat` : blend;
+    return suffix === '' ? virtualPath : `${virtualPath}#${suffix}`;
 }
 
 /** The virtual path a {@link textureKey} was made from. */
@@ -172,8 +191,8 @@ export function delitAlbedoPath(mapsRoot: string, virtualPath: string): string {
  * takes a *virtual path* and not a texture key, because a generated map belongs
  * to the artwork rather than to the blend some stage restated it through.
  */
-export function derivedTextureKey(virtualPath: string, map: DerivedMap): string {
-    return `${virtualPath}#${map}`;
+export function derivedTextureKey(virtualPath: string, map: DerivedMap, flat = false): string {
+    return flat ? `${virtualPath}#${map}.flat` : `${virtualPath}#${map}`;
 }
 
 /**
@@ -190,22 +209,42 @@ export function derivedTextureKey(virtualPath: string, map: DerivedMap): string 
  * The bytes are copied rather than re-encoded. The generator already writes PNG
  * at the size and bit depth the bundle wants, and a normal map is the last thing
  * to put through a lossy round trip.
+ *
+ * `flatten` is the env-mapped case and it splits the two maps rather than
+ * treating them alike, because they are owed different things:
+ *
+ * - the **ORM** is flattened, to its mean *as stored*. Roughness and metalness
+ *   are linear data and not a colour, so there is no transfer function to undo,
+ *   and the mean of a generated ORM is by construction the classified level the
+ *   variation was scattered around. Without this, a material whose UVs mean
+ *   nothing draws a roughness picked at random out of the spread -- `greenchrm`
+ *   runs 0.03 to 1.00, a mirror to a matte, over the same small health cross.
+ * - the **normal** is refused outright. A relief map derived from a fake
+ *   reflection is not relief, and the flat (0.5, 0.5, 1) that averaging one
+ *   would approximate is exactly what meep samples when nothing is bound. So
+ *   there is nothing to write; the honest answer is no map.
  */
-export function writeDerivedTexture(
+export async function writeDerivedTexture(
     mapsRoot: string,
     virtualPath: string,
     map: DerivedMap,
     outDir: string,
-    cache: TextureCache
-): string | null {
-    const key = derivedTextureKey(virtualPath, map);
+    cache: TextureCache,
+    flatten = false
+): Promise<string | null> {
+    const key = derivedTextureKey(virtualPath, map, flatten);
 
     const existing = cache.byDerived.get(key);
     if (existing !== undefined) return existing === '' ? null : existing;
 
+    if (flatten && map === 'normal') {
+        cache.byDerived.set(key, '');
+        return null;
+    }
+
     const flat = virtualPath.replace(/[\\/]/g, '_');
-    const out = `${flat}.${map}.png`;
-    const src = join(mapsRoot, out);
+    const src = join(mapsRoot, `${flat}.${map}.png`);
+    const out = flatten ? `${flat}.${map}.flat.png` : `${flat}.${map}.png`;
 
     if (!existsSync(src)) {
         cache.byDerived.set(key, '');
@@ -224,7 +263,24 @@ export function writeDerivedTexture(
     }
 
     try {
-        copyFileSync(src, join(outDir, out));
+        if (flatten) {
+            const raw = await sharp(src).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+            const mean = flattenToMean(
+                {
+                    width: raw.info.width,
+                    height: raw.info.height,
+                    rgba: new Uint8Array(raw.data),
+                    hadAlpha: true,
+                },
+                'stored'
+            );
+
+            await sharp(Buffer.from(mean.rgba), { raw: { width: 1, height: 1, channels: 4 } })
+                .png({ compressionLevel: 9 })
+                .toFile(join(outDir, out));
+        } else {
+            copyFileSync(src, join(outDir, out));
+        }
     } catch (e) {
         console.warn(`  texture ${key}: ${(e as Error).message}`);
         cache.byDerived.set(key, '');
@@ -303,6 +359,66 @@ function restate(rgba: Uint8Array, blend: ImageBlend): void {
     }
 }
 
+const SRGB_TO_LINEAR = new Float64Array(256);
+for (let i = 0; i < 256; i++) {
+    const s = i / 255;
+    SRGB_TO_LINEAR[i] = s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+}
+
+function linearToSrgb8(l: number): number {
+    const s = l <= 0.0031308 ? l * 12.92 : 1.055 * l ** (1 / 2.4) - 0.055;
+    return Math.round(Math.min(255, Math.max(0, s * 255)));
+}
+
+/**
+ * Reduce an image to one texel of its mean.
+ *
+ * For a `tcGen environment` shader, whose images are a fake reflection and never
+ * a skin -- see `shader-to-pbr.ts`. The mean is what such an object averages to
+ * over a turn, it is the only thing the artwork says that survives losing the
+ * lookup, and one texel cannot be sampled wrongly by texture coordinates that
+ * mean nothing.
+ *
+ * `sRGB` averages in *linear light* and re-encodes, because that is the mean of
+ * the light the image stands for rather than the mean of its encoding. The two
+ * are not close on this artwork: these are dark grounds with bright streaks over
+ * them, which is exactly the shape that a mean-of-sRGB under-reads. `greenchrm`
+ * comes out `rgb(47, 63, 31)` linear against `rgb(34, 50, 19)` naive, and the
+ * naive one is a third of a stop dark for the same reason a photograph averaged
+ * in gamma space is.
+ *
+ * `stored` averages the bytes as they are, and is for a map whose channels are
+ * measurements rather than a colour -- an ORM, where undoing a transfer function
+ * nobody applied would bias every roughness in the set upward.
+ *
+ * Alpha is averaged as stored either way. It is a coverage fraction and was
+ * never gamma-encoded.
+ */
+function flattenToMean(image: DecodedImage, encoding: 'sRGB' | 'stored'): DecodedImage {
+    const n = image.width * image.height;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let a = 0;
+
+    const decode = encoding === 'sRGB' ? (v: number) => SRGB_TO_LINEAR[v]! : (v: number) => v;
+    const encode = encoding === 'sRGB' ? linearToSrgb8 : (v: number) => Math.round(v);
+
+    for (let i = 0; i < image.rgba.length; i += 4) {
+        r += decode(image.rgba[i]!);
+        g += decode(image.rgba[i + 1]!);
+        b += decode(image.rgba[i + 2]!);
+        a += image.rgba[i + 3]!;
+    }
+
+    return {
+        width: 1,
+        height: 1,
+        rgba: new Uint8Array([encode(r / n), encode(g / n), encode(b / n), Math.round(a / n)]),
+        hadAlpha: image.hadAlpha,
+    };
+}
+
 async function decode(src: string, isTga: boolean): Promise<DecodedImage> {
     if (isTga) return decodeTga(readFileSync(src));
 
@@ -361,7 +477,9 @@ export async function writeTexture(
     cache: TextureCache,
     blend: ImageBlend = 'opaque',
     /** When set, a generated de-lit albedo here replaces the image's colour. */
-    mapsRoot: string | null = null
+    mapsRoot: string | null = null,
+    /** `PbrMaterial.environmentMapped`: reduce the image to its mean colour. */
+    flatten = false
 ): Promise<string | null> {
     const delit = mapsRoot === null ? null : delitAlbedoPath(mapsRoot, virtualPath);
     const hasDelit = delit !== null && existsSync(delit);
@@ -373,7 +491,7 @@ export async function writeTexture(
      resolves to, and the file is named `.delit` so a bundle says on disk which
      one it holds rather than leaving it to be inferred from a timestamp.
     */
-    const key = textureKey(virtualPath, blend);
+    const key = textureKey(virtualPath, blend, flatten);
 
     const existing = cache.byKey.get(key);
     if (existing !== undefined) return existing === '' ? null : existing;
@@ -396,8 +514,9 @@ export async function writeTexture(
     const isJpeg = /\.jpe?g$/i.test(resolved);
 
     try {
-        // A byte copy cannot carry a colour that is not in the file.
-        if (!hasDelit && isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
+        // A byte copy cannot carry a colour that is not in the file, nor an
+        // image that is not the one on disk.
+        if (!hasDelit && !flatten && isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
             // A JPEG has no alpha, so none of these three change a pixel of it.
             const out = `${flat}${resolved.slice(resolved.lastIndexOf('.'))}`;
             const shared = cache.byFile.get(`${virtualPath}#opaque`);
@@ -409,7 +528,7 @@ export async function writeTexture(
             return out;
         }
 
-        const decoded = await decode(src, isTga);
+        let decoded = await decode(src, isTga);
         const effective = effectiveBlend(blend, decoded.hadAlpha);
 
         let suffix = '';
@@ -419,6 +538,18 @@ export async function writeTexture(
             else if (applied === 'mismatched') {
                 console.warn(`  texture ${key}: de-lit albedo is a different size, ignored`);
             }
+        }
+
+        /*
+         Before the restatement, not after. The blends that read the *colour* --
+         `add`, `addAlpha`, `filter` -- turn it into a coverage per texel, and a
+         mean taken after that is a mean of coverages rather than of the light
+         the image stands for. An additive shell wants the brightness of its
+         average colour, which is the first of those two and not the second.
+        */
+        if (flatten) {
+            decoded = flattenToMean(decoded, 'sRGB');
+            suffix = `.flat${suffix}`;
         }
 
         const fileKey = `${virtualPath}#${effective}${suffix}`;
