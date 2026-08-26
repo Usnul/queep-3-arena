@@ -103,11 +103,33 @@ same maths. `DECISIONS.md` D-091 records the whole of it.
 
 ## Derived artefacts
 
-Everything the pipeline writes lands in `assets/` and is gitignored. It is all derivative of
-the GPLv2/CC inputs above and carries their terms.
+Everything the pipeline writes lands in `assets/`, and most of it is now **committed** —
+`built/`, `extracted/`, `generated/` and `shots/`, about 1.12 GB over 6,450 files. It is all
+derivative of the GPLv2/CC inputs above and carries their terms, which means this repository
+now *redistributes* that material rather than only fetching it; the attribution it has to
+travel with is the provenance table above.
 
-**Gitignored is not disposable.** Nothing under `assets/` can be restored from this repository,
-and most of it is not cheap to make again:
+They are committed because they were once deleted and could not be restored from here (D-104),
+and because regenerating them is not the same as restoring them — the material phase came back
+with different numbers, which is the whole of the note at the top of D-095.
+
+`.gitattributes` sets `assets/** -text`, and that is load-bearing rather than tidy. This
+repository is developed with `core.autocrlf=true`, and most of the text in `extracted/` is id
+Software and OpenArena material authored on Windows and genuinely CRLF. Committed without it,
+`default.cfg` stores as 1,701 bytes against the 1,809 `extract-pk3.mjs` wrote. A tree kept so it
+can be restored has to restore to the bytes the pipeline produced.
+
+**Two trees stay untracked, and neither is a preference.** `assets/ml/` is 36 GB whose checkpoint
+shards are individually past GitHub's 100 MB hard limit, alongside a pip cache and a venv of
+absolute Windows paths. `assets/download/` is the 425 MB upstream archive, which `fetch-assets.mjs`
+re-fetches against a recorded SHA-256 — tracking it would have forced Git LFS on the whole
+repository to keep a second copy of something already verifiable. Note it is not strictly redundant:
+the two pk3s this document declines to mount are in the archive and not in `extracted/`, and
+shadowed copies are dropped. Nothing the build reads is only in the zip.
+
+**Tracked or not, none of it is disposable** — being committed makes a tree restorable, not cheap.
+This is what each costs to make again, which is what you are spared when a restore is possible and
+what you pay when it is not:
 
 | tree | rebuilt by | cost |
 |---|---|---|
