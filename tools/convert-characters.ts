@@ -46,7 +46,12 @@ import {
     drawableSurfaces,
     type Md3Model,
 } from './pipeline/md3.ts';
-import { textureCache, writeTexture, type TextureCache } from './pipeline/texture-out.ts';
+import {
+    textureCache,
+    writeDerivedTexture,
+    writeTexture,
+    type TextureCache,
+} from './pipeline/texture-out.ts';
 import { decomposeSkin, type RigResult } from './pipeline/rig.ts';
 import {
     GltfBuilder,
@@ -60,6 +65,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
 const BUILT = join(ROOT, 'assets', 'built');
 const PLAYERS = join(EXTRACTED, 'models', 'players');
+/** Where `tools/generate-material-maps.ts` leaves the normal and ORM images. */
+const MATERIAL_MAPS = join(ROOT, 'assets', 'generated', 'materials');
 
 /**
  * Joints per animated part.
@@ -294,15 +301,36 @@ async function convertCharacter(
         }
         if (texture === null) untextured += 1;
 
+        /*
+         The generated maps go in as glTF's own `normalTexture` and
+         `metallicRoughnessTexture` rather than as anything bespoke, because
+         meep's glTF loader already binds those two to `texture_normal` and
+         `texture_orm`. Both are absent until the generator has produced them.
+
+         When an ORM is bound the two factors have to become 1: the g-buffer pass
+         multiplies the sampled channels by them, so `metallic: 0` would cancel
+         every metal the classification named.
+        */
+        const derived = (map: 'normal' | 'orm', from: string | null): number | null => {
+            if (from === null) return null;
+            const file = writeDerivedTexture(MATERIAL_MAPS, from, map, outDir, textures);
+            return file === null ? null : gltf.image(file);
+        };
+
+        const normalTexture = derived('normal', pbr.normal);
+        const metallicRoughnessTexture = derived('orm', pbr.orm);
+
         const material = gltf.material({
             name: shaderName,
             baseColorTexture: texture,
+            normalTexture,
+            metallicRoughnessTexture,
             alphaMode:
                 pbr.transparency === 'mask' ? 'MASK' : pbr.transparency === 'blend' ? 'BLEND' : 'OPAQUE',
             alphaCutoff: pbr.alphaCutoff,
             doubleSided: pbr.doubleSided,
-            roughness: pbr.roughness,
-            metallic: pbr.metallic,
+            roughness: metallicRoughnessTexture === null ? pbr.roughness : 1,
+            metallic: metallicRoughnessTexture === null ? pbr.metallic : 1,
         });
 
         materialByShader.set(shaderName, material);

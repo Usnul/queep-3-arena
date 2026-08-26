@@ -79,6 +79,26 @@ are the ones that match the OA asset set.
 | **Licence** | GPL-2.0-only — Copyright (C) 1999-2005 Id Software, Inc.; Copyright (C) ioquake3 contributors |
 | **Used for** | `cm_*` collision reference, and the C translation units the pmove differential-test oracle is compiled from. |
 
+### Cosmos DiffusionRenderer
+
+| | |
+|---|---|
+| **Source** | `https://github.com/nv-tlabs/cosmos-transfer1-diffusion-renderer.git` (formerly `cosmos1-diffusion-renderer`) |
+| **Commit** | `0f3e2dc435032ecbad654c2fc2153df85384b138` |
+| **Licence** | Apache-2.0 — Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES |
+| **Used for** | The inference code for the inverse renderer that produces the material maps. Run as fetched: nothing in it is patched, vendored or committed. |
+
+Apache-2.0 is not GPLv2-compatible, which is why this is *fetched and run* rather
+than copied in. It is a build-time tool that produces images, in the same way
+`sharp` produces images, and none of its code enters this repository or anything
+this repository ships.
+
+`cosmos_predict1` is Linux-first and reaches for `transformer-engine`, which has
+no Windows build. Rather than patch it, `tools/cosmos/te_shim/` supplies the three
+functions its diffusion path actually calls, written from their definitions;
+`tools/cosmos/check_shim.py` checks those against independent restatements of the
+same maths. `DECISIONS.md` D-091 records the whole of it.
+
 ---
 
 ## Derived artefacts
@@ -95,6 +115,49 @@ the GPLv2/CC inputs above and carries their terms.
 | `assets/built/characters/<name>/` | `convert-characters.ts` | player models as skinned glTF: `<name>.gltf`, `<name>.bin`, textures. The skeleton is *inferred* from MD3's vertex-morph frames (DECISIONS.md D-042) and is not present in the source data |
 | `assets/built/sound/` | `convert-sounds.ts` | the WAVs the port triggers and the OGG music the maps name, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded. Half the list comes from the gamecode and half is read out of the built maps' `target_speaker` and `worldspawn` keys, so this runs *after* `convert-map.ts` |
 | `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals, and `gfx/2d/crosshair[a-j]`. Each is converted for the Q3 blend it was authored against rather than copied, which for an impact mark means discarding the colour and keeping the luminance as coverage (D-079) |
+
+---
+
+## Model weights
+
+Not committed, not redistributed, and large enough that they are fetched to
+`assets/ml/checkpoints/` — gitignored with the rest of `assets/` — by
+
+```bash
+node tools/fetch-material-model.mjs
+```
+
+### Diffusion Renderer, inverse (Cosmos 7B)
+
+| | |
+|---|---|
+| **Source** | `https://huggingface.co/nvidia/Diffusion_Renderer_Inverse_Cosmos_7B` |
+| **Revision** | `main` at `model.pt`, MD5 `77eb5beddf131bfc8235a300132f22e4` — the checksum upstream's own `scripts/download_diffusion_renderer_checkpoints.py` publishes for this file |
+| **Size** | 28,940,280,602 bytes |
+| **Retrieved** | 2026-08-26 |
+| **Licence** | [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/) — permits commercial use, and states that NVIDIA claims no ownership of the outputs |
+| **Used for** | Estimating base colour, normal, roughness and metalness from a Q3 texture. |
+
+The licence is the reason this model and not another. RGB↔X is the obvious
+alternative and it is a better fit for the data, but it ships under the Adobe
+Research License, which is non-commercial and cannot travel out of a GPLv2
+repository — so it was used as a benchmark and none of its output is anywhere
+near this pipeline.
+
+### Cosmos Tokenize1 CV8x8x8 720p
+
+| | |
+|---|---|
+| **Source** | `https://huggingface.co/nvidia/Cosmos-Tokenize1-CV8x8x8-720p` |
+| **Revision** | `main`, the `.jit` encoder/decoder plus `mean_std.pt` and `config.json` |
+| **Retrieved** | 2026-08-26 |
+| **Licence** | [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/) |
+| **Used for** | The video autoencoder the diffusion renderer samples in. Required by it; not used on its own. |
+
+The T5 text encoder the Cosmos world models need is **not** fetched. The
+diffusion renderer is configured `has_text_input=False` and its
+`_load_text_encoder_model` is a no-op, so eleven gigabytes of language model
+would sit unused; upstream's own download script has the same line commented out.
 
 ---
 

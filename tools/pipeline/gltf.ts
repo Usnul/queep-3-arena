@@ -85,6 +85,19 @@ export interface GltfMaterial {
     name: string;
     /** Index into `textures`, or null for an untextured material. */
     baseColorTexture: number | null;
+    /**
+     * Index into `textures` for a tangent-space normal map, or null.
+     * meep's glTF loader binds this to `texture_normal` and switches the mip
+     * filter to `LinearNormal` for it.
+     */
+    normalTexture?: number | null;
+    /**
+     * Index into `textures` for an ORM, or null. glTF calls it the
+     * metallic-roughness texture and reads G and B out of it; meep binds the
+     * whole image to `texture_orm`. `roughness` and `metallic` become
+     * multipliers over it, so both should be 1 when this is set.
+     */
+    metallicRoughnessTexture?: number | null;
     alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
     alphaCutoff?: number;
     doubleSided?: boolean;
@@ -311,8 +324,20 @@ export class GltfBuilder {
                         ...(m.baseColorTexture === null
                             ? {}
                             : { baseColorTexture: { index: m.baseColorTexture, texCoord: 0 } }),
+                        ...(m.metallicRoughnessTexture === null
+                        || m.metallicRoughnessTexture === undefined
+                            ? {}
+                            : {
+                                  metallicRoughnessTexture: {
+                                      index: m.metallicRoughnessTexture,
+                                      texCoord: 0,
+                                  },
+                              }),
                     },
                 };
+                if (m.normalTexture !== null && m.normalTexture !== undefined) {
+                    material['normalTexture'] = { index: m.normalTexture, texCoord: 0 };
+                }
                 if (m.alphaMode !== undefined && m.alphaMode !== 'OPAQUE') {
                     material['alphaMode'] = m.alphaMode;
                     if (m.alphaMode === 'MASK') {

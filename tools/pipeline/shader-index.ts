@@ -129,14 +129,32 @@ export class ShaderIndex {
             // number of dead references from Q3). Fall back to the shader name
             // as a texture path, which is what the renderer would have done.
             if (material.albedo !== null && this.resolveTexture(material.albedo) === null) {
-                material = { ...material, albedo: this.resolveTexture(key) === null ? null : key };
+                const albedo = this.resolveTexture(key) === null ? null : key;
+
+                /*
+                 The generated maps are keyed by the image they were derived from,
+                 so they have to follow the albedo through this substitution --
+                 otherwise the material asks for a normal map belonging to a
+                 texture that was not on disk, which resolves to nothing and
+                 quietly costs the surface its normal.
+                */
+                material = {
+                    ...material,
+                    albedo,
+                    normal: material.normal === null ? null : albedo,
+                    orm: material.orm === null ? null : albedo,
+                };
             }
         } else {
             // No script: the name is the texture path.
+            const implicit = this.resolveTexture(key) === null ? null : key;
             material = {
                 name: key,
-                albedo: this.resolveTexture(key) === null ? null : key,
+                albedo: implicit,
                 albedoBlend: 'opaque',
+                // An ordinary lit opaque surface, so it takes both generated maps.
+                normal: implicit,
+                orm: implicit,
                 emissive: null,
                 emissiveLuminance: 0,
                 roughness: 0.85,

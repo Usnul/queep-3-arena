@@ -42,11 +42,13 @@ import {
     type Md3Surface,
 } from './pipeline/md3.ts';
 import {
+    derivedTextureKey,
     textureCache as newTextureCache,
     textureCounts,
     textureKey,
-    writeTexture,
+    writeDerivedTexture,
     type TextureCache,
+    writeTexture,
 } from './pipeline/texture-out.ts';
 import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import type {
@@ -59,6 +61,8 @@ import type {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
 const BUILT = join(ROOT, 'assets', 'built');
+/** Where `tools/generate-material-maps.ts` leaves the normal and ORM images. */
+const MATERIAL_MAPS = join(ROOT, 'assets', 'generated', 'materials');
 
 /** Matches `convert-map.ts`, so the runtime's geometry builder is shared. */
 const OUT_STRIDE = 12; // position(3) normal(3) uv(2) uv1(2) colour(2, unused)
@@ -170,12 +174,16 @@ function toBundleMaterial(
     name: string,
     pbr: PbrMaterial,
     albedo: string | null,
-    emissive: string | null
+    emissive: string | null,
+    normal: string | null,
+    orm: string | null
 ): BundleMaterial {
     return {
         name,
         albedo,
         albedoBlend: pbr.albedoBlend,
+        normal,
+        orm,
         emissive,
         emissiveLuminance: pbr.emissiveLuminance ?? 0,
         roughness: pbr.roughness,
@@ -326,8 +334,47 @@ async function convertModels(): Promise<void> {
                     if (textures[emissiveKey] === null) emissiveKey = null;
                 }
 
+                /*
+                 The generated maps, under their own keys. Nothing is written
+                 until the generator has produced something for that texture, so
+                 a run against an empty `assets/generated/materials` writes the
+                 bundle it always wrote.
+                */
+                /*
+                 Unlike a Q3 reference, a generated map that is not there records
+                 nothing. A `null` in the texture table means "this image was
+                 looked for on disk and is not there", which is worth saying about
+                 an albedo the shader named; saying it about every texture the
+                 generator has not reached would double the table to carry no
+                 information the material's own `null` does not already carry.
+                */
+                const derived = (map: 'normal' | 'orm', from: string | null): string | null => {
+                    if (from === null) return null;
+
+                    const key = derivedTextureKey(from, map);
+                    const file = writeDerivedTexture(
+                        MATERIAL_MAPS,
+                        from,
+                        map,
+                        textureDir,
+                        textureCache
+                    );
+                    if (file !== null) textures[key] = file;
+
+                    // The key survives a missing file. The material is saying what
+                    // it is owed, which is a different question from what has been
+                    // generated so far, and `buildMaterials` reads an unresolved
+                    // key as no texture anyway.
+                    return key;
+                };
+
+                const normalKey = derived('normal', pbr.normal);
+                const ormKey = derived('orm', pbr.orm);
+
                 materialIndex = materials.length;
-                materials.push(toBundleMaterial(shaderName, pbr, albedoKey, emissiveKey));
+                materials.push(
+                    toBundleMaterial(shaderName, pbr, albedoKey, emissiveKey, normalKey, ormKey)
+                );
                 materialByShader.set(shaderName, materialIndex);
             }
 

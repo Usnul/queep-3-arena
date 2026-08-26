@@ -1,0 +1,21 @@
+{
+  "comment": "Step 1 pilot set. Eight textures chosen to span the failure modes rather than to flatter: a tiling stone, a tiling metal, a mixed-material world texture, a dark low-contrast wall, two weapon skins, a pickup and a character skin. Each runs twice -- once in the framing its geometry calls for (wrap for the world textures that repeat, mirror for the props and characters that do not) and once through fit, which resamples one copy across the whole frame. Which of the two is better is decided by roundtrip.py, not here.",
+  "textures": [
+    { "name": "gothic_block/blocks10", "source": "assets/extracted/textures/gothic_block/blocks10.jpg",  "variant": "wrap",   "kind": "world",     "wraps": true,  "note": "tiling stone, 512" },
+    { "name": "gothic_block/blocks10", "source": "assets/extracted/textures/gothic_block/blocks10.jpg",  "variant": "fit",    "kind": "world",     "wraps": true,  "note": "tiling stone, 512" },
+    { "name": "acc_dm3/rivets",        "source": "assets/extracted/textures/acc_dm3/rivets.jpg",         "variant": "wrap",   "kind": "world",     "wraps": true,  "note": "tiling metal, 512" },
+    { "name": "acc_dm3/rivets",        "source": "assets/extracted/textures/acc_dm3/rivets.jpg",         "variant": "fit",    "kind": "world",     "wraps": true,  "note": "tiling metal, 512" },
+    { "name": "acc_dm3/cop",           "source": "assets/extracted/textures/acc_dm3/cop.jpg",            "variant": "wrap",   "kind": "world",     "wraps": true,  "note": "mixed material, 256" },
+    { "name": "acc_dm3/cop",           "source": "assets/extracted/textures/acc_dm3/cop.jpg",            "variant": "fit",    "kind": "world",     "wraps": true,  "note": "mixed material, 256" },
+    { "name": "e7/e7brnmetal",         "source": "assets/extracted/textures/e7/e7brnmetal.jpg",          "variant": "wrap",   "kind": "world",     "wraps": true,  "note": "dark low contrast, 256" },
+    { "name": "e7/e7brnmetal",         "source": "assets/extracted/textures/e7/e7brnmetal.jpg",          "variant": "fit",    "kind": "world",     "wraps": true,  "note": "dark low contrast, 256" },
+    { "name": "weapons2/railgun/skin", "source": "assets/extracted/models/weapons2/railgun/skin.tga",    "variant": "mirror", "kind": "prop",      "wraps": false, "note": "weapon skin, 512" },
+    { "name": "weapons2/railgun/skin", "source": "assets/extracted/models/weapons2/railgun/skin.tga",    "variant": "fit",    "kind": "prop",      "wraps": false, "note": "weapon skin, 512" },
+    { "name": "weapons2/shotgun",      "source": "assets/extracted/models/weapons2/shotgun/shotgun.tga", "variant": "mirror", "kind": "prop",      "wraps": false, "note": "weapon skin, 512" },
+    { "name": "weapons2/shotgun",      "source": "assets/extracted/models/weapons2/shotgun/shotgun.tga", "variant": "fit",    "kind": "prop",      "wraps": false, "note": "weapon skin, 512" },
+    { "name": "powerups/redarmor",     "source": "assets/extracted/models/powerups/armor/redarmor.tga",  "variant": "mirror", "kind": "prop",      "wraps": false, "note": "pickup, 256" },
+    { "name": "powerups/redarmor",     "source": "assets/extracted/models/powerups/armor/redarmor.tga",  "variant": "fit",    "kind": "prop",      "wraps": false, "note": "pickup, 256" },
+    { "name": "players/major/torso",   "source": "assets/extracted/models/players/major/torso.tga",      "variant": "mirror", "kind": "character", "wraps": false, "note": "character skin, 512" },
+    { "name": "players/major/torso",   "source": "assets/extracted/models/players/major/torso.tga",      "variant": "fit",    "kind": "character", "wraps": false, "note": "character skin, 512" }
+  ]
+}

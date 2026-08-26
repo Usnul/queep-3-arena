@@ -139,6 +139,19 @@ export interface PbrMaterial {
     readonly albedo: string | null;
     /** The Q3 blend the albedo image was authored for. See {@link ImageBlend}. */
     readonly albedoBlend: ImageBlend;
+    /**
+     * Virtual path of the image a tangent-space normal map was derived *from*,
+     * or `null` when this surface takes none -- sky, nodraw, unlit, blended, or
+     * no albedo at all. Not a {@link textureKey}: a generated map belongs to the
+     * artwork, not to the Q3 blend a stage restated it through.
+     */
+    readonly normal: string | null;
+    /**
+     * Virtual path of the image an ORM map was derived *from*, or `null`. G is
+     * roughness, B is metalness, R stays 1.0 -- meep runs GTAO off the g-buffer
+     * shading normal, so a baked occlusion channel would only fight it.
+     */
+    readonly orm: string | null;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
     readonly roughness: number;
@@ -589,6 +602,35 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
     const metallic = DEFAULT_METALLIC;
 
     /*
+     Which surfaces are worth a normal map and an ORM, and what they are derived
+     from.
+
+     Both are named by the *source* image's virtual path rather than by
+     {@link textureKey}, because a generated map belongs to the artwork and not
+     to the Q3 blend some stage restated it through: `blocks10` referenced once
+     opaque and once as a filter is one stone wall and wants one normal map.
+
+     Four kinds of surface are left out, and each is left out because the map
+     would be meaningless rather than merely unhelpful:
+
+     - **No albedo.** Nothing to derive from.
+     - **Sky and nodraw.** One is drawn as the environment and the other is not
+       drawn at all.
+     - **Unlit.** Q3 drew it at its own brightness and this port emits it; a
+       normal perturbs a diffuse term it barely has.
+     - **Blended.** An additive or filtered stage's image has been restated as
+       coverage with the colour thrown away (`texture-out.ts`), so there is no
+       surface in it to recover -- and a beam is not a surface anyway.
+
+     That leaves the ordinary opaque and alpha-tested world, prop and character
+     surfaces, which is the set the material phase is about.
+    */
+    const derivedFrom =
+        albedo !== null && !isSky && !isNoDraw && !unlit && transparency !== 'blend'
+            ? albedo
+            : null;
+
+    /*
      One candela per square metre, and that is a placeholder rather than a
      measurement.
 
@@ -618,6 +660,8 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         name: entry.name,
         albedo,
         albedoBlend,
+        normal: derivedFrom,
+        orm: derivedFrom,
         emissive,
         emissiveLuminance,
         roughness,

@@ -44,6 +44,7 @@ import {
     type PbrMaterial,
 } from '../tools/pipeline/shader-to-pbr.ts';
 import { ShaderIndex } from '../tools/pipeline/shader-index.ts';
+import { derivedTextureKey, textureKey } from '../tools/pipeline/texture-out.ts';
 
 const ROOT = process.cwd();
 const BUILT = join(ROOT, 'assets', 'built');
@@ -1022,5 +1023,182 @@ describe('a light fixture is as bright as the light it emits', () => {
             .map((m) => `${m.name} at ${m.emissiveLuminance.toFixed(2)} cd/m2`);
 
         expect(dim, `${map}: declared lights dimmer than an undeclared glow`).toEqual([]);
+    });
+});
+
+/*
+ * Which materials are owed the generated maps, and how a bundle names them.
+ *
+ * The rule lives in `shaderToPbr` and is one line, but it is the line that
+ * decides how much of the material phase there is: 108 of 128 world materials
+ * across the six maps, and a rule that quietly said "none of them" would look
+ * exactly like a pipeline nobody had run the generator for yet.
+ */
+describe('which surfaces are owed a normal map and an ORM', () => {
+    /** Only the field the two bundle-reading cases below actually look at. */
+    interface Bundle {
+        materials: { name: string }[];
+    }
+
+    it('gives an ordinary lit wall both, named for the image and not for the blend', () => {
+        const m = project(`
+textures/gothic_block/blocks10
+{
+    {
+        map $lightmap
+        rgbGen identity
+    }
+    {
+        map textures/gothic_block/blocks10.tga
+        blendFunc GL_DST_COLOR GL_ZERO
+    }
+}`);
+
+        expect(m.albedo).toBe('textures/gothic_block/blocks10');
+        expect(m.normal).toBe(m.albedo);
+        expect(m.orm).toBe(m.albedo);
+
+        expect(derivedTextureKey(m.normal!, 'normal')).toBe(
+            'textures/gothic_block/blocks10#normal'
+        );
+        expect(derivedTextureKey(m.orm!, 'orm')).toBe('textures/gothic_block/blocks10#orm');
+    });
+
+    /*
+     The distinction that costs nothing on an opaque wall and everything here: a
+     Q3 image referenced through two blends is two files and two `textureKey`s,
+     but it is one piece of artwork and therefore one normal map. Keying the
+     generated maps off the texture key instead would generate the same image
+     twice and bind the wrong copy to whichever material was converted second.
+    */
+    it('keys the generated maps by the image, where the albedo is keyed by the blend too', () => {
+        const grate = project(`
+textures/base_support/metalbase09_ow
+{
+    {
+        map textures/base_support/metalbase09_ow.tga
+        alphaFunc GE128
+        depthWrite
+        rgbGen identity
+    }
+    {
+        map $lightmap
+        blendFunc GL_DST_COLOR GL_ZERO
+        depthFunc equal
+    }
+}`);
+
+        expect(grate.transparency, 'alphaFunc on stage 0 is a mask').toBe('mask');
+        expect(grate.normal, 'an alpha-tested surface is still a surface').toBe(grate.albedo);
+
+        // Same image, two names: one carries the blend, one does not.
+        expect(textureKey(grate.albedo!, grate.albedoBlend)).not.toBe(grate.albedo);
+        expect(derivedTextureKey(grate.normal!, 'normal')).toBe(
+            'textures/base_support/metalbase09_ow#normal'
+        );
+    });
+
+    it('refuses an additive beam, whose albedo is coverage with the colour thrown away', () => {
+        const m = project(`
+textures/sfx/beam
+{
+    surfaceparm trans
+    {
+        map textures/sfx/beam.tga
+        blendFunc GL_ONE GL_ONE
+    }
+}`);
+
+        expect(m.transparency, 'an additive stage 0 is transparent').toBe('blend');
+        expect(m.normal).toBeNull();
+        expect(m.orm).toBeNull();
+    });
+
+    it('refuses an unlit surface, which this port emits rather than shades', () => {
+        const m = project(`
+textures/liquids/lava
+{
+    surfaceparm lava
+    {
+        map textures/liquids/lava.tga
+        rgbGen identity
+    }
+}`);
+
+        expect(m.unlit, 'no $lightmap stage anywhere').toBe(true);
+        expect(m.normal).toBeNull();
+    });
+
+    it('refuses a sky, which is drawn as the environment rather than as a surface', () => {
+        const m = project(`
+textures/skies/killsky
+{
+    qer_editorimage textures/skies/killsky.tga
+    surfaceparm sky
+    q3map_sun 1 1 1 100 0 45
+}`);
+
+        expect(m.isSky).toBe(true);
+        expect(m.normal).toBeNull();
+        expect(m.orm).toBeNull();
+    });
+
+    it('refuses a material with no albedo to derive anything from', () => {
+        const m = project(`
+textures/common/caulk
+{
+    surfaceparm nodraw
+    surfaceparm nolightmap
+}`);
+
+        expect(m.albedo).toBeNull();
+        expect(m.normal).toBeNull();
+        expect(m.orm).toBeNull();
+    });
+
+    /*
+     The substitution in `ShaderIndex.material` rewrites the albedo when a script
+     names an image that is not on disk, and the generated maps are keyed by that
+     image. Letting them keep the dead path would ask for a normal map belonging
+     to a texture that never existed, which resolves to nothing -- and looks
+     exactly like a texture the generator has not reached yet.
+    */
+    it('follows the albedo when a dead script reference is substituted', () => {
+        const index = new ShaderIndex(EXTRACTED).load();
+
+        const substituted = [...MAPS]
+            .flatMap((map) => {
+                const path = join(BUILT, map, 'scene.json');
+                if (!existsSync(path)) return [];
+                const bundle = JSON.parse(readFileSync(path, 'utf8')) as Bundle;
+                return bundle.materials.map((m) => m.name);
+            })
+            .map((name) => index.material(name))
+            .filter((m) => m.normal !== null && m.normal !== m.albedo);
+
+        expect(
+            substituted.map((m) => `${m.name}: albedo ${m.albedo}, normal ${m.normal}`),
+            'a generated map pointing at an image the material does not use'
+        ).toEqual([]);
+    });
+
+    it('agrees with the map bundles about how many surfaces are in scope', () => {
+        const index = new ShaderIndex(EXTRACTED).load();
+
+        const seen = new Map<string, PbrMaterial>();
+        for (const map of MAPS) {
+            const path = join(BUILT, map, 'scene.json');
+            if (!existsSync(path)) continue;
+            const bundle = JSON.parse(readFileSync(path, 'utf8')) as Bundle;
+            for (const m of bundle.materials) seen.set(m.name, index.material(m.name));
+        }
+
+        const inScope = [...seen.values()].filter((m) => m.normal !== null);
+
+        // Measured 2026-08-26 over the six built maps. Pinned because the number
+        // is the size of the job, and a change to the rule that halves it should
+        // be a failing test rather than a quiet saving.
+        expect(seen.size, 'world materials across the six maps').toBe(128);
+        expect(inScope.length, 'of those, owed generated maps').toBe(108);
     });
 });

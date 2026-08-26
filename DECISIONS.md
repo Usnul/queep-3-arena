@@ -3183,3 +3183,260 @@ run at all (`CG_RegisterWeapon`'s fallback to `shotgun_hand.md3` catches every r
 allocates garbage rather than leaking, and `acquire`'s own de-duplication of the `unmodelled` list
 shows the path was always known to repeat. It is a separate, smaller thing than the bug that was
 reported.
+
+---
+
+## Phase 8 — surface materials
+
+### D-089: The material slots go through the pipeline before there is anything to put in them
+
+`PbrMaterial` gains `normal` and `orm`, `texture-out.ts` gains `writeDerivedTexture`, the three
+converters emit the references, and `bundle.ts` binds `texture_normal` and `texture_orm`. Nothing
+it produces is different yet: `assets/generated/materials/` is empty, so re-running
+`convert-models.ts` against it gives a byte-identical `models.bin`, an identical texture table, an
+identical model table, and materials that differ only by the two new fields, both `null`.
+
+That is the point. The plumbing and the images are independent problems and the plumbing is the
+one with a definite answer, so it lands first, green, and changes nothing. When step 3 writes the
+first normal map, converting the map picks it up and binds it with nothing further to change.
+
+**A material names what it is owed; the texture table says what exists.** Those are different
+questions and conflating them was the first version of this. A `null` in a bundle's texture table
+has always meant "the shader named this image and it is not on disk" -- worth recording, because it
+is a conversion failure. A generated map that has not been produced yet is not a failure, so it
+gets no entry at all, and the material keeps its `<path>#normal` key regardless. `buildMaterials`
+reads an unresolved key as no texture, so the runtime behaviour is identical either way, and
+`scene.json` gains a record of which surfaces are in scope that step 4's check can read.
+
+**Three things in it were not obvious.**
+
+*A generated map is keyed by the image, not by the texture key.* The bundles have keyed textures by
+path *plus Q3 blend* since D-083, because one image referenced through two blends is two files. A
+normal map is not: `blocks10` referenced once opaque and once through a filter is one stone wall
+and wants one normal map. So `derivedTextureKey` takes a virtual path where `textureKey` takes a
+path and a blend, and a bundle's texture table holds both kinds of key side by side, which is safe
+because no `ImageBlend` is called `normal` or `orm`.
+
+*The factors stop being values and become multipliers.* meep's g-buffer pass computes
+`orm_sample.g * roughness_factor` and `orm_sample.b * metallic_factor`, and with no ORM bound
+`orm_sample` is a white default pixel -- so today's `roughness_factor = 0.85` *is* the roughness
+only because it is being multiplied by one. Bind an ORM without changing them and every metal in
+the map is multiplied back to a dielectric by `metallic_factor = 0`, and every measured roughness
+is scaled by 0.85 for no reason anyone could later reconstruct. So both go to 1 exactly when an
+ORM is present, and `shader-to-pbr.ts`'s numbers stay in charge when it is not.
+
+*The R channel is written at 1.0 and not at an occlusion.* meep runs GTAO, which samples the
+g-buffer *shading* normal -- the one the normal map has already perturbed -- so occlusion follows
+the normal map for free and a baked AO channel would double up with it. 1.0 is also what the
+default pixel holds, so `ambient_factors` sees exactly what it saw before.
+
+**What is in scope, mechanically.** A material is owed both maps when it has an albedo and is not
+sky, not nodraw, not unlit, and not blended. Over the six built maps that is **108 of 128** world
+materials, which is the number the phase was planned against. Props and characters come out at 62
+of 93 and 34 of 41, against 74 and 41 in the planning note -- a difference of 19 materials, not
+reconciled here, because the planning note counted from a different enumeration and the rule is
+the rule either way. `test/materials.test.ts` pins 128 and 108, so a change to the rule that halves
+the job is a failing test rather than a quiet saving.
+
+### D-090: Cosmos DiffusionRenderer only works at 1280x704, and fails silently everywhere else
+
+The model card gives the input resolution as 704x1280 and the DiT accepts anything up to 1920 on a
+side, so the first attempt fed it square textures at whatever size was convenient. Every one of
+them came back wrong, and none came back *obviously* wrong -- no error, no warning, and each
+output a plausible-looking image.
+
+`gothic_block/blocks10`, basecolor and roughness, 15 steps, seed 1000:
+
+| framing | basecolor mean | roughness mean | what it looked like |
+|---|---|---|---|
+| 704x704 | (5, 6, 6) | (0.3, 0.2, 0.3) | black, with faint mortar lines |
+| 1280x1280 | (188, 127, 52) | (115, 66, 33) | orange blur |
+| 1536x1536, 3x3 tiled | (231, 91, 7) | (234, 109, 39) | orange blur |
+| **1280x704** | (79, 78, 73) | (82.5, 83.4, 83.7) | structured stone, grey mortar |
+
+The tell is the **roughness pass going coloured**. Roughness is a scalar; the model emits it as an
+RGB image and every correct output is achromatic to within a unit or two. At 1536 square it came
+back (234, 109, 39), which is not a bad roughness map, it is not a roughness map at all. Anything
+grading these outputs should check that before it checks anything else.
+
+It is the aspect ratio and not the environment: the same checkpoint, in the same shimmed install,
+produces well-behaved G-buffers on the repo's own 1280x704 example photographs.
+
+**So every texture is presented inside one 1280x704 frame**, and the only question left is how.
+`wrap`/`mirror` tiles the texture across the frame at its own pixel scale and keeps one interior
+copy; `fit` resamples one copy to fill the frame. Tiling has no resampling and no distortion in it,
+and it is also the answer to the tiling risk, because every texel of the kept copy has real
+neighbourhood on all four sides. D-092 measures the two against each other.
+
+### D-091: Transformer Engine is reimplemented rather than installed, because it is three functions
+
+Cosmos-Predict1 states it runs on Linux only. Nearly all of that is
+`transformer-engine[pytorch]==1.12.0`, which builds against CUDA with a toolchain that has no
+Windows equivalent, and this port is developed on Windows with an RTX 4090. The alternatives were
+a WSL distribution or a container; both were avoidable, because the dependency turns out to be
+very small.
+
+Across `cosmos_predict1/diffusion` -- the whole inference path the renderer takes -- Transformer
+Engine is reached for three times, all in `module/attention.py`: `DotProductAttention`,
+`apply_rotary_pos_emb`, and `te.pytorch.RMSNorm`. Nothing else in that tree names it.
+`tools/cosmos/te_shim/` supplies those three, written from their definitions rather than copied
+-- Transformer Engine is Apache-2.0, which does not travel into a GPLv2 tree -- plus a handful of
+import-time stubs that raise if anything ever constructs one.
+
+**The Cosmos source is used exactly as fetched.** No patch, no vendoring, nothing to re-apply the
+next time it is cloned. `PYTHONPATH` puts the shim first and the import resolves.
+
+Two details were load-bearing and neither would have failed loudly:
+
+- **The RMSNorm parameter has to be called `weight`.** Cosmos builds these inside `nn.Sequential`s
+  and loads a 7B checkpoint over the result by name. A parameter called anything else does not
+  error -- it arrives as a missing key, keeps its all-ones initialisation, and the model runs with
+  its QK normalisation silently disabled.
+- **The rotary embedding's half-split has to match the frequency layout.** Cosmos builds its
+  frequencies as three axis blocks repeated twice, which is the contiguous-halves convention:
+  channel `i` pairs with channel `i + d/2`. Pairing adjacent channels instead still produces
+  output, and the output still looks like a G-buffer.
+
+There is no real Transformer Engine here to differential-test against, so
+`tools/cosmos/check_shim.py` checks each piece against a property written a different way from the
+implementation: RMSNorm against an elementwise restatement and against scale invariance, the
+rotary embedding against norm preservation, additive composition, identity at zero and an explicit
+2-vector rotation, and the attention against an explicit per-head softmax. Twelve checks, all
+passing. The end-to-end evidence is the control run: the same install produces good G-buffers on
+the upstream example photographs.
+
+`megatron-core` is also on the path and also does not install on Windows, for two unrelated
+reasons -- its sdist contains a directory named `pytorch:24.07`, which NTFS will not create, and
+its `setup.py` shells out to `python3` to build a training-only C++ extension. Both are worked
+around at install time rather than in this repository.
+
+### D-092: The per-channel verdict, and the round trip that had to be rebuilt to give one
+
+Eight textures, both framings, four passes each. The exit criterion for the pilot was a per-channel
+verdict backed by a round-trip error, and the first version of that error measured nothing.
+
+**Why the obvious round trip is useless.** Relight the extracted maps and compare against the
+original -- and the material the port ships today scores an RMSE of exactly **zero**, on every
+texture. It has to. On a flat quad with one fitted light, a material whose albedo *is* the texture
+reproduces the texture: the fit sets the light to nothing and the ambient to one. The placeholder
+is a perfect round trip precisely because it has not decomposed anything, so "does it reproduce
+the original" cannot separate a good decomposition from no decomposition.
+
+What separates them is the *shape* of the error across an ablation. The network's albedo has had
+the painted shading taken out of it, so on its own it cannot reproduce the source, and how badly it
+fails measures how much was removed. Everything added after it has to put that shading back out of
+geometry and surface rather than out of paint. So the number is **recovery** --
+`(rmse[albedo] - rmse[full]) / rmse[albedo]` -- the fraction of the de-lighting the other channels
+explain. It also catches invented detail from the same side: detail with no counterpart in the
+source cannot reduce the residual.
+
+**Per-channel contribution to recovery**, wrap/mirror framing, RMSE in 8-bit units:
+
+| texture | albedo | +normal | +roughness | full | normal | roughness | metal |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `gothic_block/blocks10` | 9.29 | 6.93 | 7.16 | 7.59 | **+25.4%** | -2.5% | -4.6% |
+| `acc_dm3/rivets` | 24.70 | 24.71 | 24.71 | 24.40 | -0.1% | +0.0% | +1.3% |
+| `acc_dm3/cop` | 18.56 | 17.81 | 17.78 | 30.78 | +4.0% | +0.2% | **-70.1%** |
+| `e7/e7brnmetal` | 3.22 | 3.01 | 2.53 | 2.51 | +6.5% | +15.0% | +0.7% |
+| `weapons2/railgun/skin` | 27.26 | 26.27 | 26.37 | 38.93 | +3.6% | -0.4% | **-46.1%** |
+| `weapons2/shotgun` | 20.84 | 20.59 | 20.70 | 25.49 | +1.2% | -0.5% | **-23.0%** |
+| `powerups/redarmor` | 14.61 | 13.15 | 13.16 | 13.16 | +10.0% | -0.0% | -0.0% |
+| `players/major/torso` | 55.04 | 53.70 | 54.11 | 58.26 | +2.4% | -0.7% | -7.5% |
+
+**`albedo` -- keep, with a correction, and the correction is not optional.**
+
+Every de-lit albedo came back brighter and *greyer* than its source. `blocks10` goes from
+(0.23, 0.15, 0.08) to (0.51, 0.49, 0.46) at a chroma of 0.019: a brown stone wall returns as light
+grey stone. The model is trained on photographs, where a brown cast over a stone wall usually *is*
+the light. On a hand-painted Q3 texture the brown is paint, and it is the only statement anyone
+ever made about what the wall is made of.
+
+What the network is nonetheless right about is *where* the shading is, and that is carried entirely
+by the ratio of luminances. So `retint()` keeps the ratio and discards the hue shift: the source's
+colour at every texel, scaled by how much darker or lighter the network says that texel should be.
+
+It improves the round trip on **16 of 16** runs, by 1% to 58%, median 26%:
+
+| texture | albedo+normal | retinted+normal | chroma, raw -> retinted |
+|---|---:|---:|---|
+| `gothic_block/blocks10` | 6.93 | **4.36** | 0.019 -> 0.118 |
+| `acc_dm3/rivets` | 24.71 | 21.26 | 0.040 -> 0.041 |
+| `acc_dm3/cop` | 17.81 | 17.57 | 0.046 -> 0.039 |
+| `e7/e7brnmetal` | 3.01 | **1.96** | 0.031 -> 0.013 |
+| `weapons2/railgun/skin` | 26.27 | 22.23 | 0.015 -> 0.026 |
+| `weapons2/shotgun` | 20.59 | **11.84** | 0.016 -> 0.028 |
+| `powerups/redarmor` | 13.15 | 9.67 | 0.163 -> 0.193 |
+| `players/major/torso` | 53.70 | **22.41** | 0.026 -> 0.020 |
+
+This is not a way of getting a better de-lighting out of the model. It is a way of using the part
+of the answer that survives being out of domain.
+
+**`normal` -- keep, and it is the channel that pays for the phase.**
+
+Positive on 15 of 16 runs and the only channel that consistently is. On the two world textures with
+real relief it is worth +25.4% and +4.0%, and visually it is better than the numbers: `blocks10`
+comes back with per-block bevels, mortar recesses and surface grain, and `acc_dm3/cop` with the
+raised panel geometry cleanly separated from the flat trim.
+
+Two qualifications. `acc_dm3/rivets` came back **inverted** -- a mean tilt of 127.6 degrees, normals
+pointing into the surface, the map visibly green rather than blue -- so this fails on some inputs
+and the per-texture check has to catch it. And on props and characters the network reads *painted*
+shading as geometry: the railgun's normal map contains the barrel's curvature, which the model
+already has. That is double-counting, and it is why the prop numbers are +1% to +4% where the world
+numbers are +25%.
+
+**`roughness` -- keep-with-correction at best, and it is close to worthless.**
+
+Contribution runs -2.5% to +15.0% and is a median of roughly zero. Worse, it is unstable to the
+framing: `blocks10` returns 0.76 under `wrap` and 0.21 under `fit`; `e7brnmetal` returns 0.44 and
+0.76; `major/torso` returns 0.31 and 0.77. The maps *look* right -- mortar smoother than block face
+-- but nothing in the round trip depends on them being right.
+
+**`metalness` -- author by hand. It is not weak, it is anti-informative.**
+
+The worst numbers in the table are all this channel: -231%, -84%, -70%, -46%, -36%, -26%, -23%. And
+the reason is visible in the maps. Given `acc_dm3/cop`, the network returns a hard binary mask of
+the *raised panel's shape* -- white on the cross, black around it -- when the panel and the trim are
+the same rusted metal. It is segmenting by shape, not by material.
+
+Then it flips with the framing. The same artwork, two layouts:
+
+| texture | metal, tiled | metal, fit |
+|---|---:|---:|
+| `gothic_block/blocks10` | 0.11 | **0.96** |
+| `weapons2/shotgun` | 0.83 | **0.00** |
+| `players/major/torso` | 0.99 | **0.00** |
+| `powerups/redarmor` | 0.00 | **0.50** |
+
+A stone wall at 96% metal, a character skin at 99% and then 0%. That is not a weak signal; it is no
+signal, and it is exactly the case D-092's step 4 table exists for. The plan's prior was "metalness
+weakest"; the measurement is worse than the prior.
+
+**Tiling survives, which the plan was not counting on.**
+
+The seam measure is not "how different are the two edges" -- some textures genuinely change across
+a tile -- but how much *more* different they are than neighbouring interior column pairs, which is
+what the eye reads as a line. Negative means the wrap edges are closer than ordinary neighbours.
+8-bit units:
+
+| texture | source | basecolor | normal | roughness | metallic |
+|---|---:|---:|---:|---:|---:|
+| `gothic_block/blocks10` wrap | -0.82 | -1.22 | -0.88 | -2.63 | 0.28 |
+| `gothic_block/blocks10` fit | -0.82 | 2.08 | 1.67 | **21.11** | **28.37** |
+| `acc_dm3/rivets` wrap | -2.12 | 0.62 | 4.75 | 0.65 | -1.72 |
+| `e7/e7brnmetal` wrap | 0.76 | 0.06 | 0.60 | 0.70 | 1.31 |
+| `e7/e7brnmetal` fit | 0.76 | 3.11 | **17.30** | 1.92 | -0.28 |
+
+Tiling the texture across the frame and keeping an interior copy holds the seam to within a unit or
+two of what the source itself has. `acc_dm3/cop` is excluded from that reading because its *source*
+scores 47.35 -- it is a trim texture and does not wrap continuously in the first place, and the
+generated maps come back *less* discontinuous than the artwork.
+
+So the plan's third named risk does not materialise, on the condition that the framing is
+`wrap`/`mirror`. `fit` breaks seams by 17 to 89 units as well as everything else it breaks, and is
+kept only as the control that made this a measurement.
+
+**What this means for steps 3 and 4.** Albedo and normal ship, with the retint on the first and a
+per-texture inversion check on the second. Roughness ships as a hand table, not as an inference --
+it costs the same either way and the table cannot return 0.76 and 0.21 for the same wall. Metalness
+was always going to be step 4's job and now has a measurement saying so rather than a prior.

@@ -43,12 +43,14 @@ import {
 import { parseEntities, entityVector, entityNumber } from '../src/q3/bsp/Entities.ts';
 import { ShaderIndex } from './pipeline/shader-index.ts';
 import {
+    derivedTextureKey,
     textureCache,
     textureCounts,
     textureKey,
     texturePathOf,
-    writeTexture,
+    writeDerivedTexture,
     type TextureCache,
+    writeTexture,
 } from './pipeline/texture-out.ts';
 import { tessellatePatch, type PatchVertex } from './pipeline/patch.ts';
 import { UNLIT_LUMINANCE, type ImageBlend, type PbrMaterial } from './pipeline/shader-to-pbr.ts';
@@ -65,6 +67,8 @@ import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
 const BUILT = join(ROOT, 'assets', 'built');
+/** Where `tools/generate-material-maps.ts` leaves the normal and ORM images. */
+const MATERIAL_MAPS = join(ROOT, 'assets', 'generated', 'materials');
 
 /* ------------------------------------------------------------------ *
  * Coordinate system.
@@ -147,6 +151,10 @@ interface SceneMaterial {
     readonly albedo: string | null;
     /** The Q3 blend the albedo image was written for. */
     readonly albedoBlend: ImageBlend;
+    /** Generated tangent-space normal map, keyed like `albedo`; `null` if none. */
+    readonly normal: string | null;
+    /** Generated ORM -- G roughness, B metalness, R 1.0; `null` if none. */
+    readonly orm: string | null;
     /** Q3 drew this surface without any lighting; see `UNLIT_LUMINANCE`. */
     readonly unlit: boolean;
     readonly emissive: string | null;
@@ -343,6 +351,8 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                     name: pbr.name,
                     albedo: pbr.albedo === null ? null : textureKey(pbr.albedo, pbr.albedoBlend),
                     albedoBlend: pbr.albedoBlend,
+                    normal: pbr.normal === null ? null : derivedTextureKey(pbr.normal, 'normal'),
+                    orm: pbr.orm === null ? null : derivedTextureKey(pbr.orm, 'orm'),
                     unlit: pbr.unlit,
                     emissive: pbr.emissive,
                     emissiveLuminance: pbr.emissiveLuminance,
@@ -847,6 +857,26 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 written,
                 'opaque'
             );
+        }
+
+        /*
+         The generated maps go in the same table under their own keys, and only
+         when there is a file. A `null` in this table means "the shader named this
+         image and it is not on disk"; a texture the generator has not reached is
+         a different statement, and the material's own `normal` already makes it.
+        */
+        for (const map of ['normal', 'orm'] as const) {
+            const key = m[map];
+            if (key === null) continue;
+
+            const file = writeDerivedTexture(
+                MATERIAL_MAPS,
+                texturePathOf(key),
+                map,
+                textureDir,
+                written
+            );
+            if (file !== null) textureFor[key] = file;
         }
     }
 

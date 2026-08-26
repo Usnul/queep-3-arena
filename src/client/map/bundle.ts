@@ -25,6 +25,8 @@ import { TransparencyMode } from '@woosh/meep-engine/src/shade/renderer/material
 import { ShadeDrawSide } from '@woosh/meep-engine/src/shade/renderer/material/ShadeDrawSide.js';
 import { ShadeTexture } from '@woosh/meep-engine/src/shade/renderer/texture/ShadeTexture.js';
 import { ShadeImage } from '@woosh/meep-engine/src/shade/renderer/texture/source/ShadeImage.js';
+import { ColorSpace } from '@woosh/meep-engine/src/shade/renderer/texture/ColorSpace.js';
+import { TextureFilterType } from '@woosh/meep-engine/src/shade/renderer/texture/TextureFilterType.js';
 
 import type { BundleMaterial } from './SceneBundle.ts';
 
@@ -34,7 +36,24 @@ export interface MaterialSource {
     readonly textures: Readonly<Record<string, string | null>>;
 }
 
-export async function loadTexture(url: string): Promise<ShadeTexture> {
+/**
+ * Load one texture, saying whether its pixels are a colour or a measurement.
+ *
+ * `data` is the normal and ORM maps. Two things change for them, and both are
+ * what meep's own glTF loader does for the same two slots:
+ *
+ * - **`ColorSpace.None`.** `ShadeImage` defaults to `LinearSRGB`, which lands on
+ *   the same `rgba8unorm` format -- but `texture_write_to_gpu` premultiplies
+ *   anything that is not `None`. These maps are written with alpha at 255 so the
+ *   multiply is by one either way; saying `None` states the intent rather than
+ *   relying on that.
+ * - **`LinearNormal` mip generation.** Averaging two unit normals gives a
+ *   shorter one, so a colour filter down a mip chain flattens a normal map
+ *   towards no perturbation at exactly the distances most of the surface is
+ *   seen from. The ORM keeps the colour filter: roughness and metalness are
+ *   scalars and average honestly.
+ */
+export async function loadTexture(url: string, kind: 'color' | 'normal' | 'data' = 'color'): Promise<ShadeTexture> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`${url}: HTTP ${response.status}`);
@@ -43,7 +62,14 @@ export async function loadTexture(url: string): Promise<ShadeTexture> {
     const blob = await response.blob();
     const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none' });
 
-    return ShadeTexture.from(ShadeImage.fromImageBitmap(bitmap));
+    const texture = ShadeTexture.from(ShadeImage.fromImageBitmap(bitmap));
+
+    if (kind !== 'color') {
+        texture.image.color_space = ColorSpace.None;
+        if (kind === 'normal') texture.mipmapGenerationFilter = TextureFilterType.LinearNormal;
+    }
+
+    return texture;
 }
 
 function transparencyOf(material: BundleMaterial): number {
@@ -76,15 +102,18 @@ export async function buildMaterials(
      more than one way (D-083). The runtime only ever looks it up, so the
      distinction costs nothing here beyond calling it what it is.
     */
-    const get = (key: string | null): Promise<ShadeTexture | null> => {
-        if (key === null) return Promise.resolve(null);
+    const get = (
+        key: string | null | undefined,
+        kind: 'color' | 'normal' | 'data' = 'color'
+    ): Promise<ShadeTexture | null> => {
+        if (key === null || key === undefined) return Promise.resolve(null);
 
         const file = bundle.textures[key];
         if (file === undefined || file === null || file === '') return Promise.resolve(null);
 
         let p = textureCache.get(file);
         if (p === undefined) {
-            p = loadTexture(`${baseUrl}/textures/${file}`).catch((e: unknown) => {
+            p = loadTexture(`${baseUrl}/textures/${file}`, kind).catch((e: unknown) => {
                 console.warn(`[queep] texture ${file}: ${String(e)}`);
                 return null;
             });
@@ -98,7 +127,12 @@ export async function buildMaterials(
             const material = new StandardShadeMaterial();
             material.name = m.name;
 
-            const [albedo, emissive] = await Promise.all([get(m.albedo), get(m.emissive)]);
+            const [albedo, emissive, normal, orm] = await Promise.all([
+                get(m.albedo),
+                get(m.emissive),
+                get(m.normal, 'normal'),
+                get(m.orm, 'data'),
+            ]);
 
             if (albedo !== null) material.texture_albedo = albedo;
 
@@ -131,8 +165,33 @@ export async function buildMaterials(
                 );
             }
 
-            material.roughness_factor = m.roughness;
-            material.metallic_factor = m.metallic;
+            if (normal !== null) material.texture_normal = normal;
+
+            /*
+             `roughness_factor` and `metallic_factor` are multipliers over the
+             sampled ORM, not alternatives to it -- the g-buffer pass reads
+             `orm_sample.g * roughness_factor` and `orm_sample.b *
+             metallic_factor`, and with no texture bound `orm_sample` is meep's
+             white default pixel. So the material's own numbers *are* the values
+             while there is no ORM, and both have to go to one the moment there
+             is: leaving `metallic` at 0 would multiply every metal in the map
+             back to a dielectric, and leaving `roughness` at 0.85 would scale a
+             measured 0.3 to 0.26 for no reason anyone could later reconstruct.
+
+             The R channel is written at 1.0, which is what the default pixel
+             holds, so `ambient_factors` sees exactly what it saw before. GTAO
+             derives occlusion from the g-buffer shading normal, and that normal
+             now has the normal map in it.
+            */
+            if (orm !== null) {
+                material.texture_orm = orm;
+                material.roughness_factor = 1;
+                material.metallic_factor = 1;
+            } else {
+                material.roughness_factor = m.roughness;
+                material.metallic_factor = m.metallic;
+            }
+
             material.transparency_mode = transparencyOf(m);
 
             /*

@@ -45,9 +45,18 @@
  * while the file on disk is named for what the restatement actually did. A JPEG
  * has no alpha channel, so `opaque`, `alpha` and `premultiplied` all leave it
  * alone and all three land on the same copy.
+ *
+ * # A generated map is not a Q3 image and does not restate
+ *
+ * {@link writeDerivedTexture} carries the normal and ORM maps, and it bypasses
+ * the table above entirely. Nothing in it applies: a blend is a statement about
+ * how Q3 composited a *colour*, and neither of these is one. Running `opaque`
+ * over a normal map would force an alpha the sampler never reads, and running
+ * any of the others would destroy all three channels. So the bytes are copied,
+ * and the only thing shared with the Q3 path is the memo.
  */
 
-import { copyFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 
@@ -109,6 +118,88 @@ export function textureKey(virtualPath: string, blend: ImageBlend): string {
 export function texturePathOf(key: string): string {
     const hash = key.lastIndexOf('#');
     return hash < 0 ? key : key.slice(0, hash);
+}
+
+/**
+ * A generated map that is not a Q3 image at all.
+ *
+ * `normal` is tangent-space; `orm` is G = roughness, B = metalness, R = 1.0.
+ * Neither is a Q3 blend product, so neither goes through {@link restate}: a
+ * normal map has no alpha semantics to preserve and must not be premultiplied,
+ * and forcing an ORM's alpha would say nothing about its three real channels.
+ */
+export type DerivedMap = 'normal' | 'orm';
+
+/**
+ * How a bundle names a generated map.
+ *
+ * The same `#`-suffixed shape as {@link textureKey} and in the same namespace,
+ * which is safe because no {@link ImageBlend} is called `normal` or `orm`. It
+ * takes a *virtual path* and not a texture key, because a generated map belongs
+ * to the artwork rather than to the blend some stage restated it through.
+ */
+export function derivedTextureKey(virtualPath: string, map: DerivedMap): string {
+    return `${virtualPath}#${map}`;
+}
+
+/**
+ * Copy a generated map next to a bundle, if one has been generated.
+ *
+ * Returns `null` when the file is not there, which is the ordinary case for
+ * every texture the generator has not reached and for every texture whose
+ * per-channel verdict was "author by hand". A material with no normal map
+ * samples meep's `PIXEL_TEXTURE_NORMAL` -- a flat (0.5, 0.5, 1) -- and one with
+ * no ORM samples `PIXEL_TEXTURE_ORM`, a white pixel, which is exactly the
+ * behaviour of this pipeline before generated maps existed. So a missing map
+ * costs nothing and needs no fallback of its own.
+ *
+ * The bytes are copied rather than re-encoded. The generator already writes PNG
+ * at the size and bit depth the bundle wants, and a normal map is the last thing
+ * to put through a lossy round trip.
+ */
+export function writeDerivedTexture(
+    mapsRoot: string,
+    virtualPath: string,
+    map: DerivedMap,
+    outDir: string,
+    cache: TextureCache
+): string | null {
+    const key = derivedTextureKey(virtualPath, map);
+
+    const existing = cache.byKey.get(key);
+    if (existing !== undefined) return existing === '' ? null : existing;
+
+    const flat = virtualPath.replace(/[\/]/g, '_');
+    const out = `${flat}.${map}.png`;
+    const src = join(mapsRoot, out);
+
+    if (!existsSync(src)) {
+        cache.byKey.set(key, '');
+        return null;
+    }
+
+    /*
+     One source image is one generated map whatever restates it, so `byFile` is
+     keyed the same way `byKey` is here rather than by an effective blend. Two
+     materials sharing a texture share the copy.
+    */
+    const shared = cache.byFile.get(key);
+    if (shared !== undefined) {
+        cache.byKey.set(key, shared);
+        return shared;
+    }
+
+    try {
+        copyFileSync(src, join(outDir, out));
+    } catch (e) {
+        console.warn(`  texture ${key}: ${(e as Error).message}`);
+        cache.byKey.set(key, '');
+        return null;
+    }
+
+    cache.byFile.set(key, out);
+    cache.byKey.set(key, out);
+    return out;
 }
 
 /**

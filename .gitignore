@@ -13,3 +13,7 @@ coverage/
 assets/shots/
 
 oracle/build/
+
+# Python bytecode from the material pipeline tools
+__pycache__/
+*.pyc

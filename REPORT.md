@@ -1968,6 +1968,32 @@ Observations that are not gaps — the facility exists and works — but cost ti
 
 ---
 
+### Added during phase 8
+
+- **`roughness_factor` and `metallic_factor` are multipliers over the ORM sample, and reading
+  them as values is the natural mistake.** `StandardShadeMaterial` documents both as "a linear
+  multiplier for the sampled values", and `fragment_gbuffer.js` is unambiguous:
+  `orm_sample.g * material_info.roughness_factor`, `orm_sample.b * material_info.metallic_factor`.
+  With no ORM bound the sample is `PIXEL_TEXTURE_ORM`, a white pixel, so the factors *are* the
+  values -- and every material this port has shipped for eight phases set them that way and was
+  right to. The trap is the moment an ORM appears: the numbers that were correct as values become
+  a mask over the texture, and a material left at `metallic_factor = 0` multiplies every metal in
+  its ORM back to a dielectric. Nothing fails; the map renders, and it renders with no metal in it.
+  glTF has the same semantics and meep's own loader gets it right, so this is a papercut for a
+  consumer arriving through `gltf_create_material` and a live trap for one building materials by
+  hand. One line on `texture_orm`'s docblock -- "the factors below multiply this; set them to 1
+  when it is bound" -- would close it.
+
+- **The default ORM pixel is white, which quietly makes the R channel a decision.**
+  `PIXEL_TEXTURE_ORM` is `(1, 1, 1, 1)` and the g-buffer computes
+  `ambient = fma(orm_sample.r, ambient_factors.x, ambient_factors.y)`. So binding an ORM whose R is
+  anything other than 1.0 changes the ambient term of a material that was not asking to change it.
+  That is the right default and the arithmetic is documented where it happens, but the consequence
+  -- that a conventional AO channel in R is not neutral, it is a change to a second term -- is not
+  stated anywhere the person packing an ORM would look. This port writes R at 1.0 and lets GTAO
+  own occlusion, which is what the engine is set up for, but the decision had to be reconstructed
+  from the shader source rather than read.
+
 ## 5. Performance
 
 > **On dating.** Numbers here were taken across five sessions and two engine versions, and the

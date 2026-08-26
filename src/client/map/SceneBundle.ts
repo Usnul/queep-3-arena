@@ -45,6 +45,18 @@ export interface BundleMaterial {
      */
     readonly albedo: string | null;
     readonly albedoBlend: TextureBlendName;
+    /**
+     * Generated tangent-space normal map, keyed as `<path>#normal`. Absent in
+     * bundles written before the material phase; `null` where the generator
+     * produced nothing for this texture.
+     */
+    readonly normal?: string | null;
+    /**
+     * Generated ORM -- G roughness, B metalness, R 1.0. Keyed as `<path>#orm`.
+     * When it is present the material's `roughness` and `metallic` stop being
+     * the value and become a multiplier over it; see `buildMaterials`.
+     */
+    readonly orm?: string | null;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
     readonly roughness: number;
