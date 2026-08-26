@@ -1,0 +1,105 @@
+// hud.scss -- the speedometer, status line and crosshair.
+//
+// Copyright (C) 2026 queep-3-arena contributors
+//
+// This program is free software; you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation; either version 2 of the License, or (at your option) any later
+// version. See LICENSE.
+//
+// ---
+//
+// Lifted out of the template literal `Hud.ts` used to append to `<head>`. That
+// was the right size for three rules and stopped being it the moment a second
+// screen existed: the HUD and the menu have to agree about what "muted text"
+// and "one step of space" mean, and two files cannot agree about a constant that
+// lives inside one of them as a string.
+//
+// The sizes moved onto the type and space scales in the process, which shifts a
+// few of them by a pixel or two -- 12px state text onto 11px `micro`, 6px and
+// 10px margins onto the 4px grid. Deliberate: the alternative is a scale with a
+// hole punched in it for every value the HUD happened to have first.
+//
+// Geometry is unchanged. Every readout is still centred at the bottom, the
+// crosshair is still centred on the screen and sized per frame from
+// `CROSSHAIR_FRACTION`, and nothing here takes pointer events.
+
+@use 'tokens' as *;
+@use 'mixins' as *;
+
+// One root, covering the viewport. The crosshair cannot live inside `.queep-hud`
+// -- that element is anchored to the bottom and is only as tall as its text, so
+// a child centred in it would be centred on the speedometer.
+.queep-hud-root {
+    position: absolute;
+    inset: 0;
+    z-index: $z-hud;
+    pointer-events: none;
+}
+
+// Sized and coloured per frame from `Hud.updateCrosshair`: `width`/`height` in
+// `vh` from `cg_crosshairSize`, `background-color` from `CG_GetColorForHealth`.
+// The image arrives as a CSS mask, so the fill *is* the crosshair's colour and
+// the tint has somewhere to land.
+.queep-hud__crosshair {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #fff;
+}
+
+.queep-hud {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: $hud-inset-bottom;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: space(1);
+
+    pointer-events: none;
+
+    font-family: $font-mono;
+    @include over-world-text;
+}
+
+.queep-hud__speed {
+    font-size: font-size('readout');
+    font-weight: $font-weight-bold;
+    line-height: 1;
+}
+
+.queep-hud__peak {
+    font-size: font-size('small');
+    opacity: 0.75;
+}
+
+// Map, weapon, score, backend. The line that says which build you are looking
+// at, which is why it is the quietest thing on the screen.
+.queep-hud__state {
+    font-size: font-size('micro');
+    opacity: 0.55;
+    margin-top: space(2);
+}
+
+// Q3's status bar: health, armour, ammo, in that order and nothing else.
+.queep-hud__status {
+    font-size: font-size('large');
+    font-weight: $font-weight-bold;
+    letter-spacing: $letter-spacing-status;
+    margin-top: space(2);
+}
+
+// The pickup name, for `PICKUP_SECONDS` after a pickup. It holds its line height
+// while empty so that everything below it does not jump up and back down each
+// time something is collected.
+.queep-hud__pickup {
+    font-size: font-size('body');
+    line-height: $line-height-body;
+    min-height: calc(1em * #{$line-height-body});
+    opacity: 0.85;
+    margin-bottom: space(3);
+}

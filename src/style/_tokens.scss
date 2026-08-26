@@ -1,0 +1,290 @@
+// _tokens.scss -- the defines every piece of UI in this port is built out of.
+//
+// Copyright (C) 2026 queep-3-arena contributors
+//
+// This program is free software; you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation; either version 2 of the License, or (at your option) any later
+// version. See LICENSE.
+//
+// ---
+//
+// Two layers, one source of truth.
+//
+// The Sass variables below are the source. `emit-custom-properties()` writes the
+// same values out as `--queep-*` custom properties, so nothing is ever typed
+// twice and the two layers cannot drift: change a Sass variable and the custom
+// property moves with it.
+//
+// Why both:
+//
+//   - Sass variables are compile-time. They are what a `map.get`, an arithmetic
+//     expression or a media query can read, and they vanish from the output.
+//   - Custom properties are runtime. They are what a class can override for a
+//     subtree, what devtools can be poked at while the game runs, and -- the
+//     reason this half is not optional -- what meep's own `layout.scss` reads.
+//     Every colour and font in it goes through a `--meep-*` property with a
+//     fallback, explicitly so that "a host theme can re-skin the constructs by
+//     defining the tokens on an ancestor". `emit-meep-aliases()` is this port
+//     being that host theme.
+//
+// Nothing in here emits a rule of its own. This file is `@use`d for its values;
+// `main.scss` is the one place the two emitters are called.
+
+@use 'sass:map';
+
+/* ------------------------------------------------------------------ *
+ * Colour
+ * ------------------------------------------------------------------ */
+
+// Quake III's palette is rust, steel and dark stone, and the port's own screens
+// should sit in it rather than beside it. These are picked to read against a
+// rendered arena -- which is dark, low-contrast and busy -- not against paper.
+
+/// Page-black. Behind everything, including the canvas before it draws.
+$color-void: #06070a !default;
+
+/// Panel body. Opaque enough to read a slider label against a lit wall.
+$color-surface: #14171c !default;
+/// One step up from `$color-surface`: rows, wells, inputs.
+$color-surface-raised: #1d2127 !default;
+/// One step down: the scrim a modal lays over the game.
+$color-surface-sunken: #0c0e12 !default;
+
+/// Hairlines between rows, and panel edges.
+$color-border: #2b3038 !default;
+/// The same line where it has to be seen -- a focused control's outline.
+$color-border-strong: #454c57 !default;
+
+/// Body text.
+$color-text: #e8e9ec !default;
+/// Labels, help text, units. Still legible; deliberately not white.
+$color-text-muted: #9aa1ac !default;
+/// Text on a disabled control. Below the readable floor on purpose.
+$color-text-faint: #5c636e !default;
+
+/// Q3's rust-orange, the one colour the game is actually remembered by.
+$color-accent: #ff8c2b !default;
+/// Hover / active accent.
+$color-accent-bright: #ffab5e !default;
+/// Accent at rest behind a filled track or a selected row.
+$color-accent-dim: #7a4212 !default;
+
+/// Low health, and anything else that should stop the eye.
+$color-danger: #e5484d !default;
+
+/// The HUD draws over the world with no panel behind it, so its text carries a
+/// shadow instead of a background. One definition, used by every readout.
+$shadow-text: 0 1px 3px rgba(0, 0, 0, 0.9) !default;
+/// A panel that floats over the world needs to look like it is in front of it.
+$shadow-panel: 0 24px 64px rgba(0, 0, 0, 0.65) !default;
+
+/// The scrim between the menu and the game behind it. Translucent rather than
+/// opaque because a graphics setting is judged against what it changes, and a
+/// menu that hides the arena hides the thing being adjusted.
+$scrim: rgba(6, 7, 10, 0.55) !default;
+
+/* ------------------------------------------------------------------ *
+ * Type
+ * ------------------------------------------------------------------ */
+
+/// Numbers. Every readout that changes per frame is monospaced, so a digit
+/// turning over does not shift the ones beside it.
+$font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace !default;
+/// Prose: menu labels, headings, help text.
+$font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !default;
+
+/// A modular scale, named by role rather than by size so a call site says what
+/// it is showing rather than how big it wants to be.
+$font-sizes: (
+    'micro': 11px,
+    'small': 13px,
+    'body': 15px,
+    'large': 20px,
+    'title': 26px,
+    'readout': 44px,
+) !default;
+
+$font-weight-normal: 400 !default;
+$font-weight-medium: 500 !default;
+$font-weight-bold: 600 !default;
+
+/// Tracking for the small upper-case run-in headings the menu uses.
+$letter-spacing-wide: 0.08em !default;
+/// Tracking for the HUD status line, which is read at a glance mid-fight.
+$letter-spacing-status: 0.04em !default;
+
+$line-height-tight: 1.15 !default;
+$line-height-body: 1.5 !default;
+
+/// One lookup, so a bad size name is a build error rather than a silent `null`.
+@function font-size($name) {
+    @if not map.has-key($font-sizes, $name) {
+        @error 'unknown font size "#{$name}"; have #{map.keys($font-sizes)}';
+    }
+    @return map.get($font-sizes, $name);
+}
+
+/* ------------------------------------------------------------------ *
+ * Space
+ * ------------------------------------------------------------------ */
+
+/// A 4px grid. Every margin, padding and gap in the port comes from here, which
+/// is what stops a screen accumulating 7px and 9px and 13px over time.
+$space-scale: (
+    '0': 0,
+    '1': 4px,
+    '2': 8px,
+    '3': 12px,
+    '4': 16px,
+    '5': 24px,
+    '6': 32px,
+    '7': 48px,
+    '8': 64px,
+) !default;
+
+@function space($step) {
+    $key: '#{$step}';
+    @if not map.has-key($space-scale, $key) {
+        @error 'unknown space step "#{$step}"; have #{map.keys($space-scale)}';
+    }
+    @return map.get($space-scale, $key);
+}
+
+/// How far the HUD sits off the bottom edge.
+$hud-inset-bottom: space(5) !default;
+
+/* ------------------------------------------------------------------ *
+ * Shape and size
+ * ------------------------------------------------------------------ */
+
+$radius-small: 3px !default;
+$radius-medium: 6px !default;
+$radius-large: 10px !default;
+/// A track, a pill, a thumb: anything whose radius is half its height.
+$radius-pill: 999px !default;
+
+$border-width: 1px !default;
+/// The focus ring. Thicker than a border because it has to survive a busy
+/// backdrop, and a colour rather than a shadow so it works at any zoom.
+$focus-ring-width: 2px !default;
+
+/// The menu panel. Width is capped rather than proportional: settings rows are
+/// label-plus-control, and a 2000px-wide row puts the two ends of one setting at
+/// opposite corners of the screen.
+$menu-width: 720px !default;
+$menu-height-max: 78vh !default;
+/// The page list down the left of the menu.
+$menu-nav-width: 168px !default;
+/// Every control in a settings row shares one width, so the column of them is a
+/// column rather than a ragged edge.
+$control-width: 232px !default;
+$control-height: 30px !default;
+$slider-track-height: 4px !default;
+$slider-thumb-size: 14px !default;
+
+/// Below this the menu stacks: the page list goes across the top and each
+/// setting puts its control under its label rather than beside it.
+///
+/// Measured rather than picked. A row needs `$control-width` plus one step of
+/// gap plus something for the label, and the page it sits in is the panel less
+/// `$menu-nav-width` and its padding -- which stops being true at about 510px of
+/// viewport, so the switch is at 560. This is a narrow *window*, not a phone:
+/// the game wants a pointer lock and a keyboard, and a half-width browser at
+/// 1024 is where it actually shows up.
+$breakpoint-compact: 560px !default;
+
+/* ------------------------------------------------------------------ *
+ * Motion
+ * ------------------------------------------------------------------ */
+
+// Short enough not to be in the way of someone dragging a slider and watching
+// the frame rate. `$duration-instant` is for state that must not appear to lag
+// the pointer at all.
+$duration-instant: 80ms !default;
+$duration-fast: 140ms !default;
+$easing-standard: cubic-bezier(0.2, 0, 0, 1) !default;
+
+/* ------------------------------------------------------------------ *
+ * Stacking
+ * ------------------------------------------------------------------ */
+
+// The whole port's z-order, in one place. `stats.js` pins its own panel at
+// 10000 and is not ours to move, so the menu sits above it deliberately: a
+// modal underneath the frame-rate counter looks like a bug.
+$z-hud: 10 !default;
+$z-stats: 10000 !default;
+$z-menu: 10100 !default;
+
+/* ------------------------------------------------------------------ *
+ * Emission
+ * ------------------------------------------------------------------ */
+
+/// Write the tokens out as `--queep-*` custom properties.
+///
+/// Called once, by `main.scss`, inside `:root`. Only the tokens something reads
+/// at runtime are here -- the space scale and the font-size map stay
+/// compile-time, because a call site that wants `space(4)` wants the number in
+/// the rule and not an indirection through the cascade.
+@mixin emit-custom-properties {
+    --queep-color-void: #{$color-void};
+    --queep-color-surface: #{$color-surface};
+    --queep-color-surface-raised: #{$color-surface-raised};
+    --queep-color-surface-sunken: #{$color-surface-sunken};
+    --queep-color-border: #{$color-border};
+    --queep-color-border-strong: #{$color-border-strong};
+    --queep-color-text: #{$color-text};
+    --queep-color-text-muted: #{$color-text-muted};
+    --queep-color-text-faint: #{$color-text-faint};
+    --queep-color-accent: #{$color-accent};
+    --queep-color-accent-bright: #{$color-accent-bright};
+    --queep-color-accent-dim: #{$color-accent-dim};
+    --queep-color-danger: #{$color-danger};
+
+    --queep-font-mono: #{$font-mono};
+    --queep-font-ui: #{$font-ui};
+
+    --queep-shadow-text: #{$shadow-text};
+    --queep-shadow-panel: #{$shadow-panel};
+    --queep-scrim: #{$scrim};
+
+    --queep-radius-small: #{$radius-small};
+    --queep-radius-medium: #{$radius-medium};
+    --queep-radius-large: #{$radius-large};
+    --queep-radius-pill: #{$radius-pill};
+
+    --queep-duration-instant: #{$duration-instant};
+    --queep-duration-fast: #{$duration-fast};
+    --queep-easing-standard: #{$easing-standard};
+}
+
+/// Feed meep's own theme hooks from this port's tokens.
+///
+/// `@woosh/meep-engine/src/view/layout/layout.scss` styles the shipped layout
+/// constructs -- `SplitView`, `TabbedView`, `DrawerView`, `DockLayoutView`, the
+/// popup menu -- and routes every colour and font through a `--meep-*` property
+/// with a dark fallback, so that "a host theme can re-skin the constructs by
+/// defining the tokens on an ancestor". Defining them here means any meep
+/// construct this port later reaches for arrives already in the port's palette
+/// rather than in the engine's editor grey.
+///
+/// The port does not currently mount any of those constructs, so today this
+/// emits eight declarations nothing reads. That is the point of writing it now:
+/// it is eight lines against a documented contract, and the alternative is
+/// discovering the mismatch when a `TabbedView` is first mounted and renders in
+/// somebody else's blue.
+///
+/// The names and shapes are taken from the file rather than guessed --
+/// `--meep-font` in particular is consumed as a `font:` *shorthand*
+/// (`var(--meep-font, 12px sans-serif)`), so a bare family list here would be an
+/// invalid declaration and every construct would silently fall back.
+@mixin emit-meep-aliases {
+    --meep-divider-color: #{$color-border};
+    --meep-accent: #{$color-accent};
+    --meep-accent-wash: #{rgba($color-accent, 0.22)};
+    --meep-panel-bg: #{$color-surface-raised};
+    --meep-header-bg: #{$color-surface};
+    --meep-fg: #{$color-text};
+    --meep-fg-muted: #{$color-text-muted};
+    --meep-font: #{font-size('small')} #{$font-ui};
+}

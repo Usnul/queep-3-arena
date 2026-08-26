@@ -9,6 +9,8 @@
  * version. See LICENSE.
  */
 
+import '../style/main.scss';
+
 import { EngineHarness } from '@woosh/meep-engine/src/engine/EngineHarness.js';
 import { ShadedGeometrySystem3 } from '@woosh/meep-engine/src/engine/graphics3/ShadedGeometrySystem3.js';
 import { LightSystem3 } from '@woosh/meep-engine/src/engine/graphics3/LightSystem3.js';
@@ -886,7 +888,17 @@ function expose(engine: unknown, extra: Record<string, unknown>): void {
 
 main().catch((e: unknown) => {
     console.error('[queep] failed to start', e);
-    document.body.innerHTML =
-        `<pre style="color:#f66;font:14px monospace;padding:2rem;white-space:pre-wrap">` +
-        `queep-3-arena failed to start\n\n${String(e instanceof Error ? e.stack : e)}</pre>`;
+
+    /*
+     Built rather than interpolated. The message carries an exception's text, and
+     an exception's text can carry anything at all -- a URL out of a failed
+     fetch, a shader log, a file name off disk. `textContent` cannot be an
+     injection; a template literal into `innerHTML` can.
+    */
+    const pre = document.createElement('pre');
+    pre.className = 'queep-fatal';
+    pre.textContent =
+        `queep-3-arena failed to start\n\n${String(e instanceof Error ? e.stack : e)}`;
+
+    document.body.replaceChildren(pre);
 });

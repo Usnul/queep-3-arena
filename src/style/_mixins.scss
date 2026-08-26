@@ -1,0 +1,93 @@
+// _mixins.scss -- the patterns that would otherwise be restated in every file.
+//
+// Copyright (C) 2026 queep-3-arena contributors
+//
+// This program is free software; you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation; either version 2 of the License, or (at your option) any later
+// version. See LICENSE.
+//
+// ---
+//
+// Every mixin here is built out of `_tokens.scss` and adds no new constants of
+// its own. If one of these needs a number that is not in the tokens, the number
+// belongs in the tokens.
+
+@use 'tokens' as *;
+
+/// Text that has to be read against the rendered world, with nothing behind it.
+///
+/// The HUD is the whole of this case: it draws over an arena that can be any
+/// colour at all, and the only thing keeping a white number legible against a
+/// white wall is the shadow.
+@mixin over-world-text {
+    color: $color-text;
+    text-shadow: $shadow-text;
+}
+
+/// A floating surface: the menu panel, and anything else that sits in front of
+/// the game rather than in it.
+@mixin panel {
+    background: $color-surface;
+    border: $border-width solid $color-border;
+    border-radius: $radius-large;
+    box-shadow: $shadow-panel;
+}
+
+/// A small upper-case run-in heading -- the thing that separates "Display" from
+/// "Performance" inside one settings page.
+@mixin section-heading {
+    font-family: $font-ui;
+    font-size: font-size('micro');
+    font-weight: $font-weight-bold;
+    letter-spacing: $letter-spacing-wide;
+    text-transform: uppercase;
+    color: $color-text-muted;
+}
+
+/// The focus ring.
+///
+/// `:focus-visible` rather than `:focus`, so a pointer user is not given an
+/// outline they did not ask for and a keyboard user is not left guessing. The
+/// outline is offset rather than inset because most of these controls sit on a
+/// row that is itself highlighted on hover, and a flush ring disappears into it.
+@mixin focus-ring {
+    &:focus {
+        outline: none;
+    }
+
+    &:focus-visible {
+        outline: $focus-ring-width solid $color-accent;
+        outline-offset: 2px;
+    }
+}
+
+/// Anything the player presses. Gives the hover and disabled states once, so a
+/// new control cannot forget to have them.
+@mixin interactive {
+    cursor: pointer;
+    user-select: none;
+    transition: background-color $duration-instant $easing-standard,
+        border-color $duration-instant $easing-standard,
+        color $duration-instant $easing-standard;
+
+    @include focus-ring;
+
+    &[disabled],
+    &.is-disabled {
+        cursor: default;
+        color: $color-text-faint;
+        pointer-events: none;
+    }
+}
+
+/// Respect a system-level request for less motion.
+///
+/// Wrapping the transitions rather than removing them: the menu's fade is the
+/// only motion in the port's UI, and someone who has asked for less of it should
+/// get the end state immediately rather than nothing at all.
+@mixin motion-safe {
+    @media (prefers-reduced-motion: no-preference) {
+        @content;
+    }
+}

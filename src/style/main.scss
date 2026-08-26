@@ -1,0 +1,74 @@
+// main.scss -- the one stylesheet the application imports.
+//
+// Copyright (C) 2026 queep-3-arena contributors
+//
+// This program is free software; you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation; either version 2 of the License, or (at your option) any later
+// version. See LICENSE.
+//
+// ---
+//
+// Imported once, from `src/app/main.ts`. Vite compiles it and injects the result;
+// no view class appends a `<style>` element of its own any more.
+//
+// Order matters and is the usual one: tokens first (they emit the custom
+// properties every later rule can lean on), then the screens, each of which
+// `@use`s the tokens for itself. Sass loads a module once however many files ask
+// for it, so the tokens are not duplicated by being named repeatedly -- and
+// since `_tokens.scss` emits nothing on its own, `@use`ing it costs no output at
+// all.
+
+@use 'tokens' as *;
+
+@use 'hud';
+
+:root {
+    @include emit-custom-properties;
+    @include emit-meep-aliases;
+}
+
+// Border-box, so a size token means the size of the box.
+//
+// Padding and borders sit outside the box by default, so `$menu-width: 720px`
+// describes a 722px panel and `$menu-nav-width: 168px` a 193px column. A token
+// that has to be read with its own padding subtracted is not a token.
+//
+// Scoped to this port's own UI roots rather than declared on `*`, because the
+// document also holds meep's own views -- the view stack, the game view, the
+// `stats.js` panel -- and a global reset is this port silently changing the
+// layout model underneath somebody else's CSS.
+.queep-hud-root,
+.queep-hud-root *,
+.queep-hud-root *::before,
+.queep-hud-root *::after {
+    box-sizing: border-box;
+}
+
+// The page itself. Previously an inline `<style>` block in `index.html`, which
+// was the right place for it while it was the only style in the project and is
+// now the one rule that would be somewhere else.
+//
+// `overflow: hidden` because the canvas is sized to the viewport and a scrollbar
+// would shrink the thing being sized to, one pixel at a time.
+html,
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: $color-void;
+}
+
+// The failure screen `main.ts` writes into `document.body` when startup throws.
+// Styled here so the stack trace is legible rather than 16px serif on white; it
+// is the only thing on the page when it appears.
+.queep-fatal {
+    margin: 0;
+    padding: space(6);
+
+    font-family: $font-mono;
+    font-size: font-size('small');
+    line-height: $line-height-body;
+    color: $color-danger;
+    white-space: pre-wrap;
+}

@@ -25,62 +25,15 @@
  * Built on meep's `View` hierarchy rather than raw DOM, per the brief.
  */
 
-import View from '@woosh/meep-engine/src/view/View.js';
-import EmptyView from '@woosh/meep-engine/src/view/elements/EmptyView.js';
-import LabelView from '@woosh/meep-engine/src/view/common/LabelView.js';
 import ObservedString from '@woosh/meep-engine/src/core/model/ObservedString.js';
 
-import { crosshairColor, crosshairScale, crosshairTexture } from './crosshair.ts';
-
-/**
- * Corrective type for `LabelView`'s options.
- *
- * `LabelView`'s implementation is `constructor(model, { classList = [], ...,
- * size, css } = {})` -- the whole bag defaults to `{}`, so every field is
- * optional at runtime. Its JSDoc marks four of the six with `[brackets]` and
- * forgets `size` and `css`, so the generated `.d.ts` declares those two
- * **required** and rejects `new LabelView(model, { classList })` at compile
- * time even though it is exactly what the code supports.
- *
- * Per the brief, this is corrected with a narrow local type rather than papered
- * over with `any`: the constructor keeps its real signature everywhere else, and
- * the instance is recorded in GAP-001.
- */
-type LabelViewOptions = {
-    classList?: string[];
-    tag?: string;
-    transform?: unknown;
-    format?: unknown;
-    size?: unknown;
-    css?: unknown;
-};
-
-type LabelViewCtor = new (model: unknown, options?: LabelViewOptions) => View;
-
-const Label = LabelView as unknown as LabelViewCtor;
-
-/**
- * The same correction, for `EmptyView`'s constructor.
- *
- * `constructor({ classList, el, tag, tagNamespace, css, attr } = {})` emits as
- * `constructor(_?: string[])` -- the generator took the JSDoc's six `@param`
- * tags for a single destructured argument and typed the bag as the first one's
- * type. `EmptyView.group` two lines below it is typed correctly because its
- * options bag has a `@param` of its own, which is the difference. GAP-001,
- * BUG-5.
- */
-type EmptyViewOptions = {
-    classList?: string[];
-    el?: Element;
-    tag?: string;
-    tagNamespace?: string;
-    css?: Record<string, string>;
-    attr?: Record<string, string>;
-};
-
-type EmptyViewCtor = new (options?: EmptyViewOptions) => View & { el: Element };
-
-const Empty = EmptyView as unknown as EmptyViewCtor;
+import { EmptyView, LabelView, type View, type ViewWithElement } from './ui/meep.ts';
+import {
+    crosshairColor,
+    crosshairScale,
+    crosshairTexture,
+    NUM_CROSSHAIRS,
+} from './crosshair.ts';
 
 export interface HudState {
     readonly mode: 'play' | 'fly' | 'click-to-play';
@@ -141,46 +94,45 @@ export class Hud {
     private readonly statusModel = new ObservedString('');
     private readonly pickupModel = new ObservedString('');
 
-    private statusRoot: View | null = null;
-
     /** The crosshair element, written to directly every frame. */
-    private readonly crosshair: HTMLElement;
+    private readonly crosshair: ViewWithElement<HTMLElement>;
+
+    /** The speed pair, which the menu can turn off. */
+    private readonly speedViews: View[];
+
+    /** `cg_drawCrosshair`, as last set. Kept so a redundant swap is free. */
+    private crosshairIndex: number;
+
+    /** `cg_crosshairHealth`, which Q3 defaults on. */
+    crosshairHealth = true;
 
     private peak = 0;
     private lastUpdate = 0;
 
     constructor(options: HudOptions = {}) {
-        const styles = document.createElement('style');
-        styles.textContent = HUD_CSS;
-        document.head.appendChild(styles);
-
-        /*
-         The image is a *mask*, not a background: Q3's crosshairs are white with
-         an alpha channel and `cg_crosshairHealth` tints them, so the colour has
-         to come from somewhere the tint can reach. Masking a solid fill puts the
-         colour in `background-color`, where a per-frame write costs nothing and
-         no second copy of the image is needed.
-        */
-        const url = crosshairTexture(options.crosshair ?? CROSSHAIR_DEFAULT);
-        const mask = `url("${url}") center / contain no-repeat`;
-
-        const crosshairView = new Empty({
+        const crosshairView = new EmptyView({
             classList: ['queep-hud__crosshair'],
             tag: 'div',
-            css: { mask, webkitMask: mask },
         });
 
-        this.crosshair = crosshairView.el as HTMLElement;
+        this.crosshair = crosshairView;
+        this.crosshairIndex = -1;
+        this.setCrosshair(options.crosshair ?? CROSSHAIR_DEFAULT);
+
+        const speed = new LabelView(this.speedModel, { classList: ['queep-hud__speed'] });
+        const peak = new LabelView(this.peakModel, { classList: ['queep-hud__peak'] });
+
+        this.speedViews = [speed, peak];
 
         const readouts = EmptyView.group(
             [
-                new Label(this.pickupModel, { classList: ['queep-hud__pickup'] }),
-                new Label(this.speedModel, { classList: ['queep-hud__speed'] }),
-                new Label(this.peakModel, { classList: ['queep-hud__peak'] }),
-                new Label(this.statusModel, { classList: ['queep-hud__status'] }),
-                new Label(this.stateModel, { classList: ['queep-hud__state'] }),
+                new LabelView(this.pickupModel, { classList: ['queep-hud__pickup'] }),
+                speed,
+                peak,
+                new LabelView(this.statusModel, { classList: ['queep-hud__status'] }),
+                new LabelView(this.stateModel, { classList: ['queep-hud__state'] }),
             ],
-            { classList: ['queep-hud'], tag: 'div', css: {} }
+            { classList: ['queep-hud'], tag: 'div' }
         );
 
         /*
@@ -192,8 +144,37 @@ export class Hud {
         this.root = EmptyView.group([crosshairView, readouts], {
             classList: ['queep-hud-root'],
             tag: 'div',
-            css: {},
         });
+    }
+
+    /**
+     * `cg_drawCrosshair`: pick one of Q3's ten.
+     *
+     * The image is a *mask*, not a background: Q3's crosshairs are white with an
+     * alpha channel and `cg_crosshairHealth` tints them, so the colour has to
+     * come from somewhere the tint can reach. Masking a solid fill puts the
+     * colour in `background-color`, where a per-frame write costs nothing and no
+     * second copy of the image is needed.
+     */
+    setCrosshair(index: number): void {
+        const wrapped = Math.max(0, Math.trunc(index)) % NUM_CROSSHAIRS;
+        if (wrapped === this.crosshairIndex) return;
+
+        this.crosshairIndex = wrapped;
+
+        const mask = `url("${crosshairTexture(wrapped)}") center / contain no-repeat`;
+        this.crosshair.css({ mask, webkitMask: mask });
+    }
+
+    /**
+     * The speedometer, which is the port's own readout rather than Q3's.
+     *
+     * Worth being able to turn off for exactly the reason it is worth having:
+     * it is a movement diagnostic, and a screenshot of the arena is not a
+     * movement diagnostic.
+     */
+    setSpeedometerVisible(visible: boolean): void {
+        for (const view of this.speedViews) view.visible = visible;
     }
 
     /** Attach to the engine's view stack. */
@@ -241,7 +222,7 @@ export class Hud {
         if (state.mode === 'click-to-play') {
             this.stateModel.set(
                 'click to play  ·  WASD move  ·  space jump  ·  ctrl crouch  ·  ' +
-                'mouse1 fire  ·  1-9 or wheel weapon'
+                'mouse1 fire  ·  1-9 or wheel weapon  ·  esc menu'
             );
         } else if (state.mode === 'fly') {
             this.stateModel.set(`${state.map}  ·  noclip`);
@@ -264,7 +245,7 @@ export class Hud {
      * pointed wherever the camera is.
      */
     private updateCrosshair(state: HudState): void {
-        const style = this.crosshair.style;
+        const style = this.crosshair.el.style;
 
         if (state.mode === 'fly') {
             style.display = 'none';
@@ -277,44 +258,14 @@ export class Hud {
         style.width = `${size}vh`;
         style.height = `${size}vh`;
 
-        const [r, g, b] = crosshairColor(state.health, state.armor);
+        // `cg_crosshairHealth 0` is a plain white reticle. Q3 draws it in
+        // `cg_crosshairColor`'s colour then; the port has no such setting, and
+        // white is what that cvar defaults to.
+        const [r, g, b] = this.crosshairHealth
+            ? crosshairColor(state.health, state.armor)
+            : [1, 1, 1];
+
         style.backgroundColor =
             `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
     }
 }
-
-/*
- Injected rather than imported as a stylesheet: meep declares CSS and SCSS files
- as having side effects, so Vite would own the file's lifecycle -- more machinery
- than three rules deserve. The HUD is replaced wholesale in phase 4.
-*/
-const HUD_CSS = `
-.queep-hud-root {
-    position: absolute;
-    left: 0; right: 0; top: 0; bottom: 0;
-    pointer-events: none;
-}
-.queep-hud__crosshair {
-    position: absolute;
-    left: 50%; top: 50%;
-    transform: translate(-50%, -50%);
-    background-color: #fff;
-}
-.queep-hud {
-    position: absolute;
-    left: 0; right: 0; bottom: 24px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
-    pointer-events: none;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
-    color: #f0f0f0;
-}
-.queep-hud__speed { font-size: 44px; font-weight: 600; line-height: 1; }
-.queep-hud__peak  { font-size: 13px; opacity: 0.75; }
-.queep-hud__state { font-size: 12px; opacity: 0.55; margin-top: 6px; }
-.queep-hud__status { font-size: 20px; font-weight: 600; letter-spacing: 0.04em; margin-top: 8px; }
-.queep-hud__pickup { font-size: 16px; opacity: 0.85; margin-bottom: 10px; min-height: 19px; }
-`;
