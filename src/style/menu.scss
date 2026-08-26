@@ -326,18 +326,35 @@
 
     @include interactive;
 
+    /*
+     No border on the track, and `box-sizing` stated rather than inherited.
+
+     Both are about the thumb below rather than about the track. WebKit offsets
+     `::-webkit-slider-thumb` from the top of the track's **content** box, so
+     centring the thumb needs that height and nothing else -- and a border on the
+     track is outside the content box, because the `border-box` reset in
+     `main.scss` is `.queep-menu *`, and `*` does not match a vendor
+     pseudo-element. Counting the border into the offset is what put the thumb a
+     pixel below the line.
+
+     So the term is removed rather than corrected: at four pixels tall a hairline
+     border was doing nothing a slightly lighter track does not do, and it was
+     the only quantity in the arithmetic that could be off by one.
+    */
     &::-webkit-slider-runnable-track {
+        box-sizing: border-box;
         height: $slider-track-height;
+        border: none;
         border-radius: $radius-pill;
-        background: $color-surface-raised;
-        border: $border-width solid $color-border;
+        background: $color-border;
     }
 
     &::-moz-range-track {
+        box-sizing: border-box;
         height: $slider-track-height;
+        border: none;
         border-radius: $radius-pill;
-        background: $color-surface-raised;
-        border: $border-width solid $color-border;
+        background: $color-border;
     }
 
     &::-webkit-slider-thumb {
@@ -347,9 +364,10 @@
         border-radius: $radius-pill;
         background: $color-accent;
         border: none;
-        // Centre the thumb on the track: half the thumb, less half the track and
-        // its border.
-        margin-top: calc((#{$slider-track-height} + #{$border-width} * 2 - #{$slider-thumb-size}) / 2);
+
+        // Half the track, less half the thumb. Firefox needs no equivalent:
+        // `::-moz-range-thumb` is centred on the track by the engine.
+        margin-top: calc((#{$slider-track-height} - #{$slider-thumb-size}) / 2);
     }
 
     &::-moz-range-thumb {
