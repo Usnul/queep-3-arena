@@ -508,7 +508,11 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         cx /= numVerts; cy /= numVerts; cz /= numVerts;
 
         // Extent of the largest two axes, as a stand-in for surface area: good
-        // enough to tell a ceiling panel from a light strip.
+        // enough to tell a ceiling panel from a light strip, which is what the
+        // cluster's `sourceRadiusOf` needs it for. Exact for the axis-aligned
+        // quad most Q3 light faces are, generous for a tilted one, and generous
+        // again for a patch, where these are the control points and the surface
+        // is inside their hull.
         const dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
         const sorted = [dx, dy, dz].sort((a, b) => b - a);
         const area = Math.max(1, sorted[0]! * sorted[1]!);
@@ -609,6 +613,58 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     const CLUSTER_RADIUS = 96 * WORLD_SCALE; // 96 Q3 units, in scene metres
 
     /**
+     * How big the emitter is, from how much of it there is.
+     *
+     * Shade's lights are spheres, not points: `radius` is the source's own
+     * extent and it drives three separate things -- the near-field cap in
+     * `light_sphere_distance_attenuation`, the solid angle the
+     * representative-point specular lobe is widened by (`sin_src`), and the
+     * soft-horizon wrap that replaces `saturate(N.L)` at the terminator. Left
+     * at its default of zero all three collapse and the light is a delta
+     * source: a hot spot on the ceiling it hangs from, a mirror-sharp highlight
+     * on every glossy surface, and a knife edge where the light stops.
+     *
+     * A fixture is not a delta source and this pipeline knows exactly how big
+     * each one is, because it clustered the emitting surfaces itself. A sphere
+     * of radius `sqrt(A / pi)` has the same projected area from every direction
+     * as a face of area `A` seen head-on, which is the equivalence all three of
+     * those uses rest on.
+     *
+     * It is a sphere standing in for a flat face, and the substitution is exact
+     * only for the far field: the sphere has a depth the panel does not, so a
+     * point a few centimetres from the fixture sits inside it and is softened
+     * slightly more than the panel alone would soften it. That is the direction
+     * the error should go -- it is the hot spot this is here to remove -- but it
+     * is a reason to keep the radius bounded rather than to let it follow the
+     * area indefinitely.
+     *
+     * The bounds are the two ends where that stops describing a fixture:
+     *
+     * - **5 cm floor.** A trim strip a few units across would come out at a
+     *   centimetre or two, which is the renderer's own delta-source fallback
+     *   and buys nothing. Nothing in a Q3 map emits from smaller than a bulb.
+     * - **1 m ceiling.** Past about 3 square metres of face the emitter is a
+     *   lava pool or a sky brush rather than a lamp, and one sphere at its
+     *   centroid is already the wrong model for it. Letting the radius follow
+     *   the area there would flatten every surface within several metres --
+     *   inside the sphere, attenuation is constant and the terminator is gone.
+     *   Clamping keeps it a light; it does not make the pool's light dimmer,
+     *   because attenuation past `r` is inverse-square either way.
+     */
+    const MIN_SOURCE_RADIUS = 0.05;
+    const MAX_SOURCE_RADIUS = 1;
+
+    /** @param faceArea summed emitting area of one cluster, in Q3 units squared */
+    function sourceRadiusOf(faceArea: number): number {
+        const metres2 = faceArea * WORLD_SCALE * WORLD_SCALE;
+
+        return Math.min(
+            MAX_SOURCE_RADIUS,
+            Math.max(MIN_SOURCE_RADIUS, Math.sqrt(metres2 / Math.PI))
+        );
+    }
+
+    /**
      * Luminance, in cd/m2, for each material that emitted light. See the block
      * below the clustering loop.
      */
@@ -626,6 +682,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
             const seed = g.lightSamples[i]!;
             let sx = seed.x, sy = seed.y, sz = seed.z, n = 1;
+            let faceArea = seed.area;
             claimed[i] = true;
 
             for (let j = i + 1; j < g.lightSamples.length; j++) {
@@ -633,6 +690,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 const o = g.lightSamples[j]!;
                 if (Math.hypot(o.x - seed.x, o.y - seed.y, o.z - seed.z) < CLUSTER_RADIUS) {
                     sx += o.x; sy += o.y; sz += o.z; n += 1;
+                    faceArea += o.area;
                     claimed[j] = true;
                 }
             }
@@ -658,6 +716,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 lumens: Math.min(pbr.surfaceLight, 20000),
                 // Cutoff radius, in metres.
                 radius: Math.min(60, 6 + pbr.surfaceLight / 120),
+                sourceRadius: sourceRadiusOf(faceArea),
             });
         }
 

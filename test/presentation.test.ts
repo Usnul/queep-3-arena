@@ -38,6 +38,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { itemByClassname } from '../src/game/Items.ts';
+import { GRID_SOURCE_RADIUS, SOURCE_EXTENT_FLOOR } from '../tools/pipeline/lightgrid.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
 
@@ -61,7 +62,10 @@ interface Light {
     readonly y: number;
     readonly z: number;
     readonly lumens: number;
+    /** Cutoff radius: how far it reaches. */
     readonly radius: number;
+    /** Source radius: how big the emitter is. See D-103. */
+    readonly sourceRadius: number;
     /** Present only on lights fitted to the lightgrid; see D-078. */
     readonly color?: readonly number[];
 }
@@ -90,6 +94,12 @@ function scene(name: string): Scene {
  * contributes nothing beyond its own `distance`. Reproduced here rather than
  * called, because the engine's copy needs a graphics device.
  *
+ * The falloff stops at the emitter's own surface rather than at an epsilon,
+ * which is `light_sphere_distance_attenuation` and is why the lights carry a
+ * `sourceRadius` at all. At the places a player stands it changes nothing --
+ * measured, the median moves by less than a tenth of a lux on all six maps --
+ * because a player is metres from a fixture and this is a near-field bound.
+ *
  * @param originQ3 a point in Q3 units and Q3 axes
  */
 function illuminance(s: Scene, originQ3: ArrayLike<number>): number {
@@ -108,7 +118,9 @@ function illuminance(s: Scene, originQ3: ArrayLike<number>): number {
 
         if (Math.sqrt(d2) > l.radius) continue;
 
-        lux += l.lumens / (4 * Math.PI) / Math.max(d2, 1e-4);
+        const extent = Math.max(l.sourceRadius, SOURCE_EXTENT_FLOOR);
+
+        lux += l.lumens / (4 * Math.PI) / Math.max(d2, extent * extent);
     }
 
     return lux;
@@ -299,6 +311,71 @@ describe('the reconstructed lighting solution', () => {
                 fitted / s.lights.length,
                 `${name}: ${fitted} of ${s.lights.length} lights came from the grid`
             ).toBeLessThan(0.75);
+        }
+    });
+
+    it.each(MAPS)('gives every light a volume rather than leaving it a point [%s]', (name) => {
+        /*
+         Shade shades sphere lights. A light with no radius is a delta source,
+         and the renderer's fallback for one is a *centimetre* -- so the ceiling
+         a fixture hangs from is lit as if all of its output came from a marble
+         a few centimetres across, its highlight is a mirror point, and its
+         terminator is a hard edge. That was the picture, and this is the
+         property that stops it coming back.
+
+         The bound below is against the renderer's own fallback rather than
+         against zero: `sourceRadius: 0.005` would pass a `> 0` check and mean
+         nothing, because `light_sphere_distance_attenuation` would floor it.
+        */
+        const s = scene(name);
+
+        for (const l of s.lights) {
+            expect(Number.isFinite(l.sourceRadius), 'sourceRadius is not a number').toBe(true);
+            expect(
+                l.sourceRadius,
+                `a light at ${l.x.toFixed(1)},${l.y.toFixed(1)},${l.z.toFixed(1)} is still a point`
+            ).toBeGreaterThan(SOURCE_EXTENT_FLOOR);
+
+            /*
+             How big it is against how far it reaches. Not a renderer
+             requirement -- the shader handles `r > cutoff` -- but a source
+             larger than its own influence is a light that has stopped
+             describing anything, and it is the shape a units mix-up takes.
+            */
+            expect(l.sourceRadius, 'a source bigger than its own reach').toBeLessThanOrEqual(
+                l.radius
+            );
+        }
+    });
+
+    it('sizes a fixture from its own geometry rather than from a default', () => {
+        /*
+         The claim worth testing is not that the numbers are there but that they
+         were *measured*: a blanket constant would satisfy every bound above and
+         reintroduce exactly the arbitrariness the surface route exists to avoid.
+         A surface light's radius comes from the emitting area it was clustered
+         out of, so a map with light panels and trim strips has a spread of them.
+
+         `oa_dm5` is excluded because it has no surface lights at all -- every
+         one of its lights is fitted to the grid, and a fitted light has no
+         geometry to be measured from, so those *are* one constant. See D-078.
+        */
+        for (const name of ['oa_dm1', 'oa_dm4', 'oa_dm7', 'aggressor', 'am_thornish']) {
+            const s = scene(name);
+            const surface = s.lights.filter((l) => l.color === undefined);
+            const sizes = new Set(surface.map((l) => l.sourceRadius));
+
+            expect(surface.length, `${name} has no surface lights`).toBeGreaterThan(0);
+            expect(
+                sizes.size,
+                `${name}: ${surface.length} surface lights, ${sizes.size} distinct sizes`
+            ).toBeGreaterThan(1);
+        }
+
+        // ...and the fitted ones are the constant, deliberately.
+        const dm5 = scene('oa_dm5');
+        for (const l of dm5.lights) {
+            expect(l.sourceRadius).toBeCloseTo(GRID_SOURCE_RADIUS, 10);
         }
     });
 

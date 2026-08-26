@@ -81,8 +81,19 @@ export interface BundleLight {
     readonly z: number;
     /** Luminous flux. The runtime converts to candela the way meep documents. */
     readonly lumens: number;
-    /** Cutoff radius, in scene metres. */
+    /** Cutoff radius -- how far the light reaches, in scene metres. */
     readonly radius: number;
+    /**
+     * How big the emitter itself is, in scene metres.
+     *
+     * A separate quantity from `radius` and not a subdivision of it: this one
+     * is the sphere the light *is*, and it decides how hard the light looks
+     * rather than how far it carries. Derived from the emitting surface for a
+     * surface light and fixed for a fitted one; see `sourceRadiusOf` and
+     * `GRID_SOURCE_RADIUS` in the pipeline, and `applyLightVolumes` for why the
+     * runtime cannot simply put it on the `Light` component.
+     */
+    readonly sourceRadius: number;
     /**
      * Linear RGB, brightest channel 1, or absent.
      *

@@ -155,6 +155,12 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         */
         light.intensity.set(l.lumens / (4 * Math.PI));
         light.distance.set(l.radius);
+        /*
+         `l.sourceRadius` -- how big the emitter is, as against how far it
+         reaches -- cannot be set here: the component has no field for it and
+         Shade's own light is private to `LightSystem3` (GAP-030). It is applied
+         to the renderer's lights afterwards, by `applyLightVolumes`.
+        */
         // Shadow-casting point lights are the expensive kind and a Q3 arena has
         // dozens. Static shadowing came from the lightmaps that q3map2 baked;
         // these lights exist to reproduce the *look*, and the sun casts the

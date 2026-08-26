@@ -41,6 +41,8 @@ import {
     fitGridLights,
     luma,
     sitesFromGrid,
+    GRID_SOURCE_RADIUS,
+    SOURCE_EXTENT_FLOOR,
     type GridSite,
     type SceneLight,
 } from '../tools/pipeline/lightgrid.ts';
@@ -183,7 +185,10 @@ function lux(lights: readonly SceneLight[], at: readonly [number, number, number
     for (const l of lights) {
         const d2 = (l.x - at[0]) ** 2 + (l.y - at[1]) ** 2 + (l.z - at[2]) ** 2;
         if (Math.sqrt(d2) > l.radius) continue;
-        v += l.lumens / (4 * Math.PI) / Math.max(d2, 1e-4);
+        // Sphere-aware, like the renderer and like the fit: the falloff stops
+        // at the emitter's own surface rather than at an arbitrary epsilon.
+        const rEff = Math.max(l.sourceRadius, SOURCE_EXTENT_FLOOR);
+        v += l.lumens / (4 * Math.PI) / Math.max(d2, rEff * rEff);
     }
     return v;
 }
@@ -224,7 +229,7 @@ describe('fitting lights to a sampled field', () => {
         const sites = [site([0, 0, 0], 10), site([2, 0, 0], 10), site([4, 0, 0], 10)];
 
         const generous: SceneLight[] = [
-            { x: 2, y: 1, z: 0, lumens: 4000, radius: 30 },
+            { x: 2, y: 1, z: 0, lumens: 4000, radius: 30, sourceRadius: 0.5 },
         ];
 
         expect(lux(generous, [0, 0, 0])).toBeGreaterThan(10);
@@ -290,6 +295,61 @@ describe('fitting lights to a sampled field', () => {
         };
 
         expect(fitGridLights([red], []).lights[0]!.color).toEqual([1, 0.2, 0.1]);
+    });
+
+    it('gives every light it places a size, and never one bigger than its own standoff', () => {
+        /*
+         A fitted light has no emitter to measure, so its size is chosen rather
+         than derived -- and the choice is only defensible while it stays inside
+         the distance the light was *sized* from. The renderer's attenuation is
+         unchanged for `d >= r`, so at that bound the volume costs the fit
+         nothing; past it, every light would be delivering less than the
+         arithmetic that placed it says it does.
+        */
+        // One site per fit, so the light and the distance it was sized from are
+        // the only pair in play. The second is closer to its source than the
+        // radius would like to be, which is the case the bound is for.
+        for (const distance of [4, 1, 0.1]) {
+            const at: [number, number, number] = [0, 0, 0];
+            const fit = fitGridLights([site(at, 30, [0, 1, 0], distance)], []);
+
+            expect(fit.lights.length, `nothing placed at distance ${distance}`).toBe(1);
+
+            const l = fit.lights[0]!;
+            const standoff = Math.max(0.25, Math.hypot(l.x - at[0], l.y - at[1], l.z - at[2]));
+
+            expect(l.sourceRadius, 'left as a point source').toBeGreaterThan(SOURCE_EXTENT_FLOOR);
+            expect(l.sourceRadius).toBeLessThanOrEqual(GRID_SOURCE_RADIUS);
+            expect(l.sourceRadius, `bigger than its ${standoff} m standoff`)
+                .toBeLessThanOrEqual(standoff + 1e-9);
+        }
+    });
+
+    it('credits an existing light with what the renderer will actually deliver', () => {
+        /*
+         The fit only makes up the difference between the target and what the
+         lights already there deliver, so its forward model has to be the
+         renderer's. Inside a source's own radius the renderer caps the falloff
+         at `1 / r^2`; a fit still dividing by `d^2` believes a cell pressed
+         against a light panel is getting hundreds of times what it will get,
+         finds no deficit, and leaves the place dark.
+
+         Same light, same site, one metre apart in size.
+        */
+        const at: [number, number, number] = [0, 0.2, 0];
+        const sites = [{ at, toward: [0, 1, 0] as const, lux: 40, color: [1, 1, 1] as const, distance: 3 }];
+
+        const asPoint: SceneLight[] = [
+            { x: 0, y: 0, z: 0, lumens: 300, radius: 20, sourceRadius: 0.02 },
+        ];
+        const asSphere: SceneLight[] = [
+            { ...asPoint[0]!, sourceRadius: 1 },
+        ];
+
+        expect(fitGridLights(sites, asPoint).lights, 'saw a deficit that is not there')
+            .toEqual([]);
+        expect(fitGridLights(sites, asSphere).lights.length, 'left the site dark')
+            .toBeGreaterThan(0);
     });
 
     it('respects its own ceiling on the number of lights', () => {

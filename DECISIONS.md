@@ -3969,3 +3969,75 @@ trap matrix is under (D-066): a duplicated list is a list that goes stale.
 **The gauntlet draws no bar.** `ammo > -1` is the test `CG_DrawStatusBar` guards its whole ammo
 readout with, and a negative count is the absence of a count rather than a small one. The icon
 stays: what is in your hands is worth showing whether or not it consumes anything.
+
+### D-103: A map's lights are spheres the size of the fixtures they came from
+
+Every light this port imports was a point. Not "approximately a point" — `radius = 0`, which is
+the field Shade's `Light` carries and documents as "how big is the light source, used for area
+lighting calculations", and which the ECS `Light` component has no way to set (GAP-030). So the
+question "is there any volume to these lights, or are they modelled as points" has a one-word
+answer, and the follow-on question is what the right volume is.
+
+**What the zero was costing.** Three separate parts of the shading path read that radius, and all
+three degrade to their sharpest form at zero:
+
+- `light_sphere_distance_attenuation` caps the falloff at `1 / r^2` once the receiver is at or
+  inside the emitter. With no radius the cap is the shader's own `MIN_RADIUS`, one centimetre. A
+  point 5 cm from a ceiling panel was therefore being lit as though the panel's entire output came
+  from a marble — 127 times the irradiance the same flux off a 1 m² face delivers.
+- `re_direct_physical` takes `sin(theta_source)` from it, bends the specular lobe to the
+  representative point on the sphere and widens roughness by the source's solid angle. At zero
+  every fixture in the level makes a mirror-sharp highlight.
+- The same value drives the soft-horizon wrap that stands in for `saturate(N.L)`, so the
+  terminator is a hard edge; and for the sun, the SDF tracer's penumbra, so every shadow the map
+  casts is a hard line.
+
+That is a complete description of "the lights look harsh", and none of it is a mistake in the
+conversion. It is one unset field.
+
+**The sizes are measured, not chosen.** A surface light already knows how big it is: it *is* a
+cluster of emitting faces, and the pipeline summed their areas to place it. A sphere of radius
+`sqrt(A / pi)` has the same projected area from every direction as a face of area `A` seen
+head-on, which is the equivalence all three uses above rest on, so that is the radius. Across the
+six maps it lands between 0.25 m and 1 m with a median of 0.28 to 0.56 m depending on the map —
+a metre-square ceiling panel, which is what a Q3 light texture is.
+
+It is bounded at both ends and both bounds are load-bearing. Below 5 cm the number is smaller
+than the shader's own delta-source fallback and buys nothing. Above 1 m the emitter has stopped
+being a fixture: uncapped, the largest on `oa_dm4` reaches 6.2 m and on `oa_dm1` 3.5 m, and a sphere
+that size at a pool's centroid would flatten every surface within it — inside the sphere the
+attenuation is constant and the terminator is gone. Clamping does not dim the pool; attenuation
+past `r` is inverse-square either way.
+
+**A fitted light gets 0.25 m, and that is the one number here that is a choice.** A light fitted
+to the lightgrid has no emitter to measure — it is an inference from where light arrived (D-078).
+What pins it is the fit's own arithmetic: `d` is floored at a quarter metre, and the comment on
+that floor already calls it "a bare bulb against the surface". Making the radius that same
+quarter metre states the shape the sizing had already assumed, and because the renderer's
+attenuation is unchanged for `d >= r`, **no site the fit measured moves**. The volume is free.
+
+**The fit had to learn the same model.** `fitGridLights` only adds what the existing lights leave
+short, so its forward model has to be the renderer's. Left dividing by `d^2` it would credit a
+cell pressed against a light panel with hundreds of times what the panel will now deliver there,
+find no deficit, and leave the place dark. `perLumen` is the shader's attenuation transcribed,
+and both the greedy pass and the least-squares sweeps go through it.
+
+**Measured effect on the lighting solution: none.** Median illuminance at every place a player
+stands, across all six maps, moves by less than a tenth of a lux, and the light count is
+unchanged everywhere except `oa_dm7`, which gains one fitted light. That is the expected result
+and it is the point — this is a near-field bound and a specular width, and a player is metres
+from a fixture. What changed is what a fixture looks like from arm's length, which is not
+something a lux number at eye height can see.
+
+**The sun gets 0.006475**, which is `make_sunlight`'s own figure for the sun — a `disk_radius` is
+a sine, not a length, so that is 0.37 of a degree against a true quarter degree. The engine's
+number rather than the textbook one, because it is the sun every other meep scene is lit by and
+because the error is on the soft side. It is the only light in a converted map that casts
+shadows, so it is also the only one where the volume buys a penumbra rather than a highlight.
+
+**Where it is applied is a workaround and is written up as one.** The ECS component has no field
+for extent, and the Shade light that does is private to `LightSystem3`, so `applyLightVolumes`
+walks `Scene.lights.elements` after `loadMap` has built the entities and matches each light back
+to its bundle record by position. The alternatives were worse: duplicating `LightSystem3` to get
+at the object it creates, or shipping delta sources. See GAP-030 for the two-line fix that would
+remove the whole file.

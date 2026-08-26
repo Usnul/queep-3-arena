@@ -107,9 +107,41 @@ export interface SceneLight {
     y: number;
     z: number;
     lumens: number;
+    /** Cutoff radius -- how far the light reaches. Scene metres. */
     radius: number;
+    /** How big the emitter itself is. Scene metres. See {@link SOURCE_EXTENT_FLOOR}. */
+    sourceRadius: number;
     color?: [number, number, number];
 }
+
+/**
+ * The renderer's own floor on a light's extent, in scene metres.
+ *
+ * `light_sphere_distance_attenuation` evaluates `1 / max(d, max(r, 1e-2))^2`,
+ * so a source with no radius is still not a mathematical delta -- it is a 1 cm
+ * one. Mirrored here so the fit's arithmetic and the renderer's agree about the
+ * near field; see `perLumen`.
+ */
+export const SOURCE_EXTENT_FLOOR = 0.01;
+
+/**
+ * Radius given to a light fitted to the grid, in scene metres.
+ *
+ * The fit has no emitter to measure -- it is inferring a source from where the
+ * light arrived -- so this is the one light size in the pipeline that is chosen
+ * rather than derived. Two things pin it:
+ *
+ * - The fit already models these as sources standing off a surface by at least
+ *   a quarter metre: `d` is floored there, and the comment on that floor calls
+ *   it "a bare bulb against the surface". A quarter-metre *radius* is that same
+ *   statement made geometrically, so the shape and the arithmetic now say the
+ *   same thing.
+ * - It is never larger than the `d` a light was sized from, and the renderer's
+ *   attenuation is unchanged for `d >= r`. So no fitted site's illuminance
+ *   moves: this buys a bounded near field, a finite specular highlight and a
+ *   soft terminator, and costs nothing the fit measured.
+ */
+export const GRID_SOURCE_RADIUS = 0.25;
 
 export interface GridFitOptions {
     /** Sites short by less than this many lux are left to the existing lights. */
@@ -166,6 +198,28 @@ export const DEFAULT_FIT: GridFitOptions = {
     sweeps: 8,
 };
 
+/**
+ * Illuminance per lumen at squared distance `d2` from a sphere of radius `r`.
+ *
+ * The renderer's `light_sphere_distance_attenuation`, in the units this file
+ * works in: inverse-square in the far field, and capped at `1 / r^2` once the
+ * receiver is at or inside the emitter's surface, because a finite source
+ * delivers a finite irradiance there rather than an infinite one.
+ *
+ * It matters that this matches the shader and not merely that it is bounded.
+ * The fit *measures* what the existing lights already deliver and only makes up
+ * the difference, so a forward model that credits a surface light with more
+ * near-field output than the renderer will produce fills the room short.
+ */
+function perLumen(d2: number, sourceRadius: number): number {
+    const rEff = Math.max(sourceRadius, SOURCE_EXTENT_FLOOR);
+    // Squared throughout: `max(d, r)^2` is `max(d^2, r^2)`, and the caller has
+    // the squared distance already.
+    const d2Eff = Math.max(d2, rEff * rEff);
+
+    return 1 / (4 * Math.PI) / d2Eff;
+}
+
 /** Illuminance at `p` from one isotropic source, lux. Zero beyond its cutoff. */
 function contribution(light: SceneLight, p: readonly [number, number, number]): number {
     const dx = light.x - p[0];
@@ -175,7 +229,7 @@ function contribution(light: SceneLight, p: readonly [number, number, number]): 
 
     if (d2 > light.radius * light.radius) return 0;
 
-    return light.lumens / (4 * Math.PI) / Math.max(d2, 1e-4);
+    return light.lumens * perLumen(d2, light.sourceRadius);
 }
 
 /**
@@ -277,6 +331,9 @@ export function fitGridLights(
                 opt.maxRadius,
                 Math.max(d, Math.sqrt(lumens / (4 * Math.PI) / opt.cutoff))
             ),
+            // Never larger than the `d` above, which is floored at the same
+            // quarter metre. See GRID_SOURCE_RADIUS.
+            sourceRadius: Math.min(GRID_SOURCE_RADIUS, d),
             color: [site.color[0], site.color[1], site.color[2]],
         });
         fittedTo.push({ site, distance: d });
@@ -357,7 +414,7 @@ function relax(
             const dz = light.z - at[2];
             const d2 = dx * dx + dy * dy + dz * dz;
             if (d2 > r2) continue;
-            list.push({ j, c: 1 / (4 * Math.PI) / Math.max(d2, 1e-4) });
+            list.push({ j, c: perLumen(d2, light.sourceRadius) });
         }
 
         return list;

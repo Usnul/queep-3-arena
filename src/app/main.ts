@@ -31,6 +31,7 @@ import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { BspFile } from '../q3/bsp/BspFile.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { loadMap } from '../client/map/loadMap.ts';
+import { applyLightVolumes } from '../client/map/lightVolume.ts';
 import { loadModels } from '../client/map/loadModels.ts';
 import { ItemsView } from '../client/ItemsView.ts';
 import { ItemSystem, newInventory, type DropTrace } from '../game/Items.ts';
@@ -297,6 +298,38 @@ async function main(): Promise<void> {
         loadModels('/assets/built/models'),
         AudioBank.load('/assets/built/sound', ecd, emitters),
     ]);
+
+    /*
+     Lights are spheres in Shade and points in the ECS, and the component has no
+     field for the difference (GAP-030). `loadMap` has just built the entities
+     `LightSystem3` mirrors, so this is the first moment Shade's own lights
+     exist to be sized. See `applyLightVolumes`.
+    */
+    const volumes = applyLightVolumes(scene.lights, loaded.bundle.lights, loaded.bundle.sun);
+
+    console.log(
+        `[queep] light volumes: ${volumes.sized} sized, ${volumes.suns} sun` +
+        (volumes.unmatched > 0 ? `, ${volumes.unmatched} unmatched` : '') +
+        (volumes.unclaimed > 0 ? `, ${volumes.unclaimed} unclaimed` : '')
+    );
+
+    if (volumes.sized === 0 && loaded.bundle.lights.length > 0) {
+        console.warn(
+            '[queep] no light was given a volume: every one of them is still a point source. ' +
+            `${volumes.unmatched} lights in the scene stood at no bundle position and ` +
+            `${volumes.unclaimed} bundle lights had no light standing at them, so either ` +
+            'LightSystem3 has not linked them yet or the two have stopped agreeing about where ' +
+            'they are.'
+        );
+    }
+
+    if (volumes.stale > 0) {
+        console.warn(
+            `[queep] ${volumes.stale} of ${loaded.bundle.lights.length} lights carry no ` +
+            `sourceRadius, so they were given a default one. Re-run ` +
+            `\`node tools/convert-map.ts ${mapName}\` to size them from their own geometry.`
+        );
+    }
 
     /*
      The map's own sound: `target_speaker` ambience and the `worldspawn` music
