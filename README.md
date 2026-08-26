@@ -71,9 +71,9 @@ IndexedDB and applied on the next load.
 | setting | what it writes |
 |---|---|
 | Field of view | `Camera.fov`; `cg_fov`, 60–130, default 90 |
-| Render scale | `graphics.pixelRatio`, 50–200%. Below 100% upscales, above supersamples |
 | Adaptive resolution | meep's `DynamicResolutionScaling`, which trades internal resolution for frame time |
-| Frame-rate target | what it aims to hold. Default 60, against the engine's own 30 |
+| Render scale | `Renderer.internal_resolution_scale`, 50–100%. Alternative to adaptive resolution — each greys the other out (D-101) |
+| Frame-rate target | what adaptive resolution aims to hold. Default 60, against the engine's own 30 |
 | Frame-rate counter | the `stats.js` panel |
 | Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]` |
 | Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
@@ -82,6 +82,8 @@ IndexedDB and applied on the next load.
 There is no anti-aliasing, shadow, ambient-occlusion or reflection setting, because those are all
 properties of a `Renderer` that `GraphicsEngine3` deliberately does not expose to an application.
 That is GAP-024, and the menu says so in its own footer rather than looking thin for no reason.
+There is no supersampling for a second reason: `pixelRatio`, the one property that reaches it,
+throws on any scale that is not a whole number (BUG-11).
 
 A map picker and a match setup screen are the next two pages. The shell takes a list of pages and
 nothing in it names "graphics"; what is missing for maps is a manifest of what the pipeline has

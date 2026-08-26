@@ -1905,10 +1905,11 @@ That is an accurate description of a component that cannot be used for its state
 - **Needed:** a render-scale setting -- write `graphics.pixelRatio` and have the picture change.
 - **meep offers:** `GraphicsEngine3.pixelRatio` is a public `Vector1`, and `updateSize()` reads it (`const pixel_ratio = this.pixelRatio.getValue()`) to size the drawing buffer. A `Vector1` raises `onChanged` on every write.
 - **The gap:** the constructor binds `this.viewport.size.onChanged.add(this.updateSize, this)` and nothing binds `pixelRatio.onChanged`. So writing the ratio changes nothing until the window happens to be resized, which on a full-screen game is never. The first symptom is a setting that appears to do nothing and then works perfectly the moment the window is dragged.
-- **Workaround:** call `graphics.updateSize()` after writing the ratio. One line, and covered by a test so it cannot be dropped by a later tidy-up.
-- **Severity:** papercut
-- **Suggested fix:** one more `bindSignal` beside the one that is already there. Both quantities feed the same computation and only one of them is live.
-- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/graphics3/GraphicsEngine3.js:209,227,691-693`, `src/client/ui/graphics.ts`, `test/settings.test.ts`
+- **Workaround:** call `graphics.updateSize()` after writing the ratio — and then discover BUG-11, which is that `updateSize` throws for any ratio that is not a whole number. **Between the two, `pixelRatio` has no working use.** The port's render scale is `Renderer.internal_resolution_scale` instead, which floors internally, takes any positive number, and is upscaled back by the renderer's own TAA/NSS rather than by the browser stretching a smaller canvas — a better answer on quality grounds as well, and the one the engine's own playground presents as a percentage slider labelled "Scale" (`shade/playground/main.js:2637`).
+- **...which an application cannot reach either.** `GraphicsEngine3` hands out no renderer, and the only reference to that property outside `Renderer` is the pair of closures the facade assigns into the resolution controller (`GraphicsEngine3.js:260-262`). They are public properties on a public object, so calling `graphics.dynamic_resolution.set_scale(v)` is an API call rather than a monkey-patch — but they are the controller's plumbing, and using them as a settings screen's setter is reaching around a facade that deliberately hides what is behind them. It also makes the manual scale and the adaptive controller alternatives, since both write the same number; the menu greys each one out for the other.
+- **Severity:** papercut on its own; major together with BUG-11, because the pair removes the only sanctioned route to a resolution setting.
+- **Suggested fix:** one more `bindSignal` beside the one that is already there — both quantities feed the same computation and only one of them is live. And, separately, a `render_scale` property on the facade, forwarded to `internal_resolution_scale` the way `set_environment_map` is already forwarded. That is the same shape GAP-024 asks for and would settle both.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/graphics3/GraphicsEngine3.js:209,227,260-262,691-693`, `src/shade/renderer/Renderer.js:394-435`, `src/client/ui/graphics.ts`, `test/settings.test.ts`
 
 ### GAP-028: `EngineHarness.addFpsCounter` returns nothing, so the panel it adds cannot be turned off
 
@@ -2971,6 +2972,67 @@ has no `visible` property either, so there is no bit for a renderer to read even
   by default.
 
 ---
+
+### BUG-11: any non-integer `pixelRatio` makes `updateSize` throw, and `pixelRatio` is a float
+
+`GraphicsEngine3.pixelRatio` is a public `Vector1` — a float — and `updateSize()` multiplies it
+into the viewport size and hands the product straight to the renderer:
+
+```js
+// GraphicsEngine3.js:691-701
+updateSize() {
+    const size = this.viewport.size;
+    const pixel_ratio = this.pixelRatio.getValue();
+
+    const css_width = max2(0, size.x * pixel_ratio);
+    const css_height = max2(0, size.y * pixel_ratio);
+
+    if (renderer !== null) renderer.resize(css_width, css_height);
+```
+
+```js
+// Renderer.js:1443-1445
+resize(x, y) {
+    assert.isNonNegativeInteger(x, 'x');
+    assert.isNonNegativeInteger(y, 'y');
+```
+
+**Reproduction**, in any window whose height is not a multiple of ten:
+
+```js
+engine.graphics.pixelRatio.set(0.9);
+engine.graphics.updateSize();
+// Error: y must be an integer, instead was 872.0999999999999
+//   at Renderer.resize (Renderer.js:1445)
+//   at GraphicsEngine3.updateSize (GraphicsEngine3.js:701)
+```
+
+969 is a real browser's inner height; 90% of it is not an integer, and neither is 90% of most
+numbers. The only values that work are the ones where the ratio divides both viewport dimensions
+— in practice, whole numbers.
+
+**Severity: major, and it is worse than a throw.** Once a fractional ratio is stored,
+`viewport.size.onChanged` fires `updateSize` on *every subsequent window resize*, and that call
+throws inside meep's own signal dispatch — which catches, logs `Failed to dispatch handler`, and
+carries on. The renderer is then never resized again for the life of the session, and the only
+evidence is a console line naming a function.
+
+**The fix is one word in each of two places**, and the renderer's own internals already show
+which: `#update_output_resolution` does `Math.ceil(size.x * pixel_ratio)` for the renderer's
+*own* pixel ratio, three hundred lines above the assertion that rejects the same arithmetic done
+one layer up. Either `updateSize` rounds, or `resize` does.
+
+**Found by a user, not by this port's tests, and that is the second finding.** The port's browser
+check ran at 1280 x 720, where every render scale tried — 0.75, 1.5 — happens to multiply to an
+integer on both axes. The fake in `settings.test.ts` was also too permissive: it recorded the
+call and asserted nothing about the value. Both are now 1727 x 969, and the fake carries
+`Renderer.resize`'s assertions verbatim.
+
+**Related, and why the port no longer uses `pixelRatio` at all.** See GAP-027: nothing subscribes
+to its `onChanged`, so even an integer ratio changes nothing until the window happens to move.
+Between the two defects there is no usable route to an output-resolution scale, and the port's
+render scale is now `internal_resolution_scale` instead — reached, for want of anything else,
+through the closures `GraphicsEngine3` assigns into `DynamicResolutionScaling.set_scale`.
 
 ## 7. What worked well
 

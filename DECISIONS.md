@@ -3772,7 +3772,7 @@ What is reachable is reachable properly:
 | setting | route | note |
 |---|---|---|
 | field of view | `Camera.fov` | the port's own component; `cg_fov`, default 90 |
-| render scale | `pixelRatio` + `updateSize()` | the `updateSize()` is GAP-027 |
+| render scale | `dynamic_resolution.set_scale` | see D-101; not `pixelRatio` |
 | adaptive resolution | `dynamic_resolution.enabled` | the engine explicitly invites this |
 | frame-rate target | `dynamic_resolution.target_frame_rate` | default moved from 30 to 60 |
 | frame-rate counter | the view `addFpsCounter` added | GAP-028 |
@@ -3830,3 +3830,77 @@ this was noticed at all. All three now go through `takePointerLock`, which also 
 return type: the method is specified to return a promise and older engines return `undefined`,
 so `.catch` cannot be called on the result directly.
 
+### D-101: The render scale is the renderer's internal scale, because the property that looks like it cannot be set
+
+Shipped on `GraphicsEngine3.pixelRatio`, which is the obvious choice and is unusable. Reported
+from a real window within the hour:
+
+```
+[queep] setting 'render-scale' failed to apply
+  Error: y must be an integer, instead was 872.0999999999999
+    at Renderer.resize (Renderer.js:1445)
+    at GraphicsEngine3.updateSize (GraphicsEngine3.js:701)
+```
+
+`pixelRatio` is a `Vector1` — a float — and `updateSize()` multiplies it into the viewport size
+and hands the product to `Renderer.resize`, which asserts both arguments are integers. The
+reporter's window was 969 tall; 90% of 969 is not an integer, and neither is 90% of most numbers.
+The only ratios that work are the ones dividing both viewport dimensions, which in practice means
+whole numbers. BUG-11.
+
+**It is worse than a throw, which is why the fix is a change of route rather than a guard.** The
+ratio is stored, and `viewport.size.onChanged` calls `updateSize` on every later window resize —
+so once a fractional ratio is set, *every subsequent resize* throws inside meep's signal
+dispatch, which catches and logs and carries on. The renderer is never resized again for the rest
+of the session, and the evidence is one console line naming a function. A setting that can leave
+the renderer permanently detached from the window is not one to keep behind a `try`.
+
+**What a render scale actually wants is `Renderer.internal_resolution_scale`** — *"Fraction of the
+output resolution. If this is set to 0.5 for example, internal resolution will be 50% of the
+output resolution"*. It floors internally, takes any positive number, and what it produces is
+upscaled back by the renderer's own TAA/NSS rather than by the browser stretching a smaller
+canvas. It is a better setting on quality grounds independently of the bug, and the engine's own
+playground presents exactly this value as a percentage slider labelled "Scale".
+
+**An application cannot reach it, and what this port does instead is worth being plain about.**
+`GraphicsEngine3` hands out no renderer. The only reference to the property outside `Renderer` is
+the pair of closures the facade assigns into the resolution controller:
+
+```js
+this.#dynamic_resolution.get_scale = () => this.#renderer.internal_resolution_scale;
+this.#dynamic_resolution.set_scale = v => { this.#renderer.internal_resolution_scale = v; };
+```
+
+Calling `graphics.dynamic_resolution.set_scale(v)` is a public method on a public object, so it is
+an API call and not a monkey-patch, and it does not touch engine source. It is still reaching
+around a facade that hides what is behind it, and it is recorded as that rather than presented as
+the intended path. GAP-027 has the suggested fix, which is a forwarded property in the shape
+`set_environment_map` already has.
+
+**The consequence in the menu is not a compromise.** The manual scale and the adaptive controller
+write the same number, so they are alternatives, and each greys the other's row out — which is how
+every shipped game presents this pair. The three rows are ordered cause before effect: the toggle
+that owns the quantity, then the two rows it governs, one going inert each way. A disabled control
+directly under the switch that disabled it explains itself; the same control in another section
+reads as broken.
+
+**Why the port's own checks missed it, which is the part worth keeping.** Two failures, and
+neither was bad luck:
+
+- The browser check ran at 1280 x 720. Every scale tried — 0.75, 1.5 — multiplies to an integer
+  on both axes at that size. A round viewport is the one place this bug does not exist.
+- The test's fake `GraphicsHost` recorded that `updateSize` had been called and asserted nothing
+  about the value. A fake that accepts everything tests that the port calls something; it cannot
+  test that the port calls it with a value the real thing will take.
+
+Both are fixed in the same shape: the fixture viewport is now 1727 x 969, and the fake carries
+`Renderer.resize`'s and `internal_resolution_scale`'s assertions transcribed from the engine. The
+new test walks every step the slider can produce and fails on the engine's own message. It was
+confirmed to fail by putting the bug back — a regression test that has never been seen to fail is
+a regression test in name only.
+
+One more thing came out of the same fix. `Settings.applyOne` catches so that one bad row cannot
+take the rest of the page down, which means a setting that throws is a log line rather than a
+test failure. The test therefore watches `console.error` inside the loop, so that what a failure
+reads out is `x must be an integer, instead was 863.5` rather than whatever went stale
+downstream of it.
