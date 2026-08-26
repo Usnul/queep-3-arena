@@ -1841,6 +1841,25 @@ is what `KinematicMover` does and what GAP-021 is about.
   `src/client/Effects.ts::mark`, `test/first-person.test.ts`, D-079. Found in phase 7, by being
   asked why there were no bullet holes.
 
+### GAP-024: a component-based application cannot turn on the two renderer features 3.3.0 shipped for it
+
+- **Needed:** `feature_ssr_enabled = true`, and `indirect_lighting_mode = ShadeIndirectLightingMode.Brick4` so a scene reads the volumetric lightmap it has been given. Also `brick4_bake_for_scene({scene, renderer, ...})`, which takes a renderer as an argument.
+- **meep offers:** all three, on `Renderer`. `GraphicsEngine3` constructs one privately (`GraphicsEngine3.js:572`) into a `#renderer` field and, by an explicit and well-argued design decision, never hands it out — its own docblock names the absence and counts the 44 callers a getter would have had. The sanctioned way in is a `RenderExtension`, whose `record(frame)` receives a `FrameContext` carrying `graph`, `view`, `phase` and `resolution` and no renderer; `GPUViewContext` exposes `camera` and `scene` and no renderer either. `EngineHarness.bootstrap({configuration})` configures the engine, not the renderer. No shipped system holds one: every one of them goes through an extension.
+- **Workaround:** none that is not a rewrite. An application can construct its own `Renderer` — the class is exported — and drive the same `Scene` through it, which would make the *bake* reachable. It would not make the *display* reachable, because the frame is drawn by the renderer inside the facade, and replacing that means abandoning `GraphicsEngine3` and with it `ShadedGeometrySystem3`, `LightSystem3`, `MeshSystem3`, `DecalSystem3`, `ParticleEmitterSystem3` and `AnimationSystem3`, all of which take the facade. Not attempted. The phase's lighting half is cut.
+- **Severity:** major
+- **Suggested fix:** two settable properties on `GraphicsEngine3`, forwarded to the renderer the way `set_environment_map` already is. That is the shape the objection is already answered in — the facade's rule is that it hands out no renderer, not that it exposes no renderer *settings*, and `set_environment_map` proves the distinction is workable. The bake needs more thought, but a `graphics.bake_volumetric_lightmap(scene, options)` returning the binary would be the same move.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/shade/renderer/Renderer.js:168-170`, `src/engine/graphics3/GraphicsEngine3.js:64-93`, `src/shade/renderer/extension/FrameContext.js`, `src/app/main.ts:157-233`
+
+**This is the sharpest version of a good decision costing something.** `GraphicsEngine3`'s docblock is one of the best pieces of writing in the package: it names what it refuses to expose, says how many callers the refusal costs, and explains why a facade that hands out its renderer is not a facade. Everything in it is right. And 3.3.0 then shipped `VolumetricLightMap` — a component, in the ECS layer, whose entire purpose is to let an application carry a baked lightmap — while the setting that makes the renderer read it stayed on the other side of that line.
+
+`VolumetricLightMapSystem3`'s own docblock says so, precisely and without embarrassment:
+
+> What this does not do is turn Brick4 on. Which indirect-lighting technique a frame uses is the renderer's setting, and a scene in IBL or LPV mode never reads this buffer no matter what is in it. Uploading a lightmap is necessary for Brick4 lighting and not sufficient for it.
+
+That is an accurate description of a component that cannot be used for its stated purpose by the layer it was added to. Both halves were reasoned about carefully and separately, and the seam between them is where this port stopped.
+
+**A second, smaller finding from the same read.** SSR and Brick4 are alternatives rather than a stack: `Renderer.js:768` runs the SSR pass only when the indirect mode is *not* Brick4, with a comment calling it a known limitation. The plan for this phase had them as successive improvements — enable SSR cheaply, then bake brick4 for the real gain — and that is not the shape they have. Worth knowing before designing around it.
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.

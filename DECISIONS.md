@@ -3483,3 +3483,48 @@ hue separation between cluster centres at 3.6, and the genuine metal-against-die
 are in the weapons, pickups and characters, where they are hard paint edges. `redArmor` and
 `yellowArmor` are the deliberate approximations -- both carry grey shoulder spheres on the same
 image as a lacquered metal shell -- and the shell is the dominant area.
+
+### D-094: The lighting half of the phase is cut, and the reason is one line the facade does not have
+
+`feature_ssr_enabled` and `indirect_lighting_mode` are properties of `Renderer`.
+`GraphicsEngine3` constructs a `Renderer` privately and never hands it out -- deliberately, with a
+docblock that names the absence and counts the 44 callers a getter would have had. There is no
+other route: a `RenderExtension` is given a `FrameContext` carrying a graph, a view, a phase and a
+resolution; `GPUViewContext` exposes a camera and a scene; `EngineHarness.bootstrap` configures the
+engine and not the renderer; and no shipped system holds a renderer either. So this port cannot set
+either flag, and `brick4_bake_for_scene` takes a renderer as an argument and is unreachable for the
+same reason.
+
+GAP-024 has the full argument and the line numbers. What matters here is the decision: **steps 1 to
+4 ship and step 5 does not.** The brief's rule is that something which cannot be done with what is
+there does not get done, and this is that case rather than a case of it being hard.
+
+**What was checked before concluding it, because "the API does not allow it" is the easiest wrong
+answer in a report.** Every `.renderer` reference in the package outside the playground -- 16, none
+of them a route. Every system in `engine/graphics3/` -- all go through extensions. `add_extension`,
+`scene_context`, `set_environment_map` and `dynamic_resolution`, which are the four things the
+facade does forward. `EngineHarness`'s static escape hatches, of which `shadeScene` is the one this
+port already uses. The playground, which turns SSR on in one line -- and does it against a
+`Renderer` it constructed itself, having never gone near `GraphicsEngine3`.
+
+**There is a route to half of it, and it is not worth taking.** `Renderer` is exported, so this port
+could construct a second one, initialise it on an offscreen canvas, hand it the same `Scene` and
+bake. What it could not do is *display* the result, because the frame that reaches the screen is
+drawn by the renderer inside the facade. Making the second renderer the one that draws means
+abandoning `GraphicsEngine3`, and with it every `*System3` this port runs -- shaded geometry,
+lights, meshes, decals, particles, animation, all of which take the facade in their constructors.
+That is a rewrite of the port's entire rendering integration to reach two boolean settings.
+
+**The phase is still worth having without it.** Steps 1 to 4 were never gated on step 5: 108 world
+materials get a normal map and an ORM whose roughness and metalness are real, and those are read by
+the deferred pass under the IBL mode the port already runs. What is lost is the indirect specular
+that would have made metalness *reflect* something rather than only change its highlight, and the
+baked bounce that would have stopped the indoor maps taking their ambient from a procedural sky.
+Q-002 and GAP-006 stay open, and now have a second reason.
+
+**Filed rather than worked around, and this is the phase's headline finding for the maintainer.**
+3.3.0 added `VolumetricLightMap` -- a component, in the ECS layer, whose entire purpose is to let an
+application carry a baked lightmap. Its system's docblock then says, accurately, that uploading one
+is "necessary for Brick4 lighting and not sufficient for it", because the setting that makes the
+renderer read it is on the other side of a boundary the facade holds for good reasons. Both halves
+were designed carefully. The seam between them is where this stopped.

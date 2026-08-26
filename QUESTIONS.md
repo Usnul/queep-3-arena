@@ -10,7 +10,32 @@ Format: **Q-nnn** — the question, the default in use, and what changes if the 
 
 ## Still open
 
-*Nothing open. Q-006 was the last of them and it is answered below.*
+### Q-007 — Is a renderer-settings hole in `GraphicsEngine3` something you can get fixed, or do I design around it permanently?
+
+Raised at the phase 8 boundary and the only thing in this document that is not already decided.
+
+`feature_ssr_enabled` and `indirect_lighting_mode` live on `Renderer`, which `GraphicsEngine3`
+constructs privately and — deliberately, with a docblock that argues the case well — never hands
+out. So this port cannot turn on SSR, cannot switch to Brick4, and cannot call
+`brick4_bake_for_scene`, which takes a renderer as an argument. GAP-024 has the evidence and D-094
+has what was checked before concluding it.
+
+**Default in use:** the lighting half of phase 8 is cut. The materials half shipped without it —
+108 world materials now carry a normal map and an ORM, and the deferred pass reads both under the
+IBL mode the port already runs.
+
+**If different:** two forwarded properties on the facade, in the shape `set_environment_map`
+already has, would unblock SSR and Brick4 display in an afternoon; a
+`graphics.bake_volumetric_lightmap(scene, options)` would unblock the bake. If that is a change you
+would make, say so and I will finish step 5 against it. If it is not, the answer is worth having in
+writing, because it settles Q-002 and GAP-006 permanently rather than leaving them open — meep's
+lightmapper would then be a facility this port structurally cannot reach, rather than one it has
+not got to yet.
+
+The other half of the finding needs no answer and is worth flagging anyway: SSR and Brick4 are
+alternatives rather than a stack. `Renderer.js:768` runs the SSR pass only when the indirect mode is
+not Brick4, with a comment calling it a known limitation.
+
 
 ---
 
