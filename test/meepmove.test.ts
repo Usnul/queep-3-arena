@@ -50,17 +50,38 @@ interface Scene {
     entities: { classname?: string; _originQ3: number[] }[];
 }
 
-function world(mapName: string): { physics: HeadlessPhysics; spawns: number[][] } {
+const worlds = new Map<string, { physics: HeadlessPhysics; spawns: number[][] }>();
+
+/**
+ * Warmed at module scope rather than built on demand: `HeadlessPhysics.create`
+ * is a factory -- the ECS behind it has to be started before any body is built
+ * -- and the `describe` bodies below read a world while vitest is still
+ * collecting, where there is nothing to await in.
+ */
+async function warm(mapName: string): Promise<void> {
+    if (worlds.has(mapName)) return;
+
     const raw = readFileSync(join(BUILT, mapName, 'collision.bsp'));
     const cm = new ClipMap(
         new BspFile(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), mapName)
     );
     const scene = JSON.parse(readFileSync(join(BUILT, mapName, 'scene.json'), 'utf8')) as Scene;
 
-    return {
-        physics: new HeadlessPhysics(cm),
+    worlds.set(mapName, {
+        physics: await HeadlessPhysics.create(cm),
         spawns: spawnPoints(scene.entities).points.map((e) => e._originQ3),
-    };
+    });
+}
+
+await warm('oa_dm1');
+await warm('aggressor');
+
+function world(mapName: string): { physics: HeadlessPhysics; spawns: number[][] } {
+    const built = worlds.get(mapName);
+    if (built === undefined) {
+        throw new Error(`world('${mapName}') before it was warmed -- add it beside the others`);
+    }
+    return built;
 }
 
 function command(over: Partial<MoveCommand> = {}): MoveCommand {

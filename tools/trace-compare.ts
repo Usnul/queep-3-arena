@@ -57,7 +57,7 @@ const raw = readFileSync(join(built, 'collision.bsp'));
 const cm = new ClipMap(
     new BspFile(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), mapName)
 );
-const physics = new HeadlessPhysics(cm);
+const physics = await HeadlessPhysics.create(cm);
 
 const origin = at.split(',').map(Number);
 const yaw = Number(yawArg);

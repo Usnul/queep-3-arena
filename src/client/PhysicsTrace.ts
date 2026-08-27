@@ -55,6 +55,24 @@ export class PhysicsTrace {
     private readonly system: unknown;
     private readonly cm: ClipMap;
 
+    /**
+     * Entities every trace passes straight through.
+     *
+     * This is the level's collision. `pm->trace`, a bot's line of sight and an
+     * item's drop to the floor all come through here, and none of them wants to
+     * find a *character* or a missile -- the first is what `KinematicMover`'s own
+     * sweep is for and the second is not a wall.
+     *
+     * It has to be a filter rather than a layer, because meep's queries consult
+     * the callback and nothing else: `shape_cast` never looks at `layer`, `mask`
+     * or the sensor flag. Leaving it out is not a subtle failure -- giving bots
+     * bodies without it made every bot's line of sight terminate on its own
+     * collider, so no bot ever saw the player again.
+     */
+    readonly ignored = new Set<number>();
+
+    private readonly notIgnored = (entity: number): boolean => !this.ignored.has(entity);
+
     /** Reused query output; `shape_cast` is an output-parameter API. */
     private readonly hit = new PhysicsSurfacePoint();
 
@@ -427,7 +445,7 @@ export class PhysicsTrace {
             tMax: length,
         };
 
-        if (!shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, undefined, false)) {
+        if (!shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, false)) {
             return;
         }
 
@@ -545,7 +563,7 @@ export class PhysicsTrace {
              whatever is genuinely in the way.
             */
             if (
-                !shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, undefined, true) ||
+                !shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, true) ||
                 (this.hit.t <= CONTACT_TOLERANCE && this.alreadyRuledOn(this.hit.entity))
             ) {
                 /*

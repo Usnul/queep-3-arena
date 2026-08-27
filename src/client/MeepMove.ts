@@ -82,6 +82,21 @@ const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 export interface MoverHost {
     readonly system: unknown;
     readonly ecd: unknown;
+    /**
+     * Bodies this character's own sweeps may hit.
+     *
+     * meep's queries honour the callback and nothing else -- not `layer`/`mask`,
+     * which gate the narrowphase, and not the sensor flag. So the moment a
+     * character or a missile has a body of its own, an accept-everything sweep
+     * finds the mover standing inside itself and the player cannot move at all.
+     *
+     * Per character rather than per world, which is why it lives on the host:
+     * the only thing that differs between two characters' filters is which body
+     * is their own, and hanging it here means neither `MeepMove` nor
+     * `PlayerController` nor `Bot` has to learn what an entity is. See
+     * `CharacterBodies`.
+     */
+    readonly moveFilter?: (entity: number, collider: unknown) => boolean;
 }
 
 export interface MoveCommand {
@@ -309,6 +324,9 @@ export class MeepMove {
     private readonly wishvel: Vec3 = vec3();
     private readonly wishdir: Vec3 = vec3();
 
+    /** What this character's sweeps are allowed to hit. See `MoverHost.moveFilter`. */
+    private readonly filter: ((entity: number, collider: unknown) => boolean) | undefined;
+
     /** Base speed, Q3 units/s. `ps.speed`, which is 320 for a live player. */
     speed = 320;
 
@@ -337,6 +355,8 @@ export class MeepMove {
             minWalkNormal: C.MIN_WALK_NORMAL,
             maxSlideIterations: 4,
         });
+
+        this.filter = host.moveFilter;
 
         this.standShape = footedBox(STAND_MINS, STAND_MAXS);
         this.crouchShape = footedBox(STAND_MINS, CROUCH_MAXS);
@@ -497,7 +517,7 @@ export class MeepMove {
             shape as never,
             this.meepVelocity,
             dt,
-            undefined as never
+            (this.filter ?? undefined) as never
         );
 
         this.fromMeep(this.meepPosition, state.origin);
@@ -711,7 +731,7 @@ const SCRATCH_OVERLAP = new Uint32Array(16);
  * by that half-height so the origin lands on the sole. The engine's own
  * `makePostureCapsule` is the same two lines with a capsule.
  */
-function footedBox(mins: Vec3, maxs: Vec3): TransformedShape3D {
+export function footedBox(mins: Vec3, maxs: Vec3): TransformedShape3D {
     const halfHeight = (maxs[2]! - mins[2]!) * 0.5 * WORLD_SCALE;
 
     const box = BoxShape3D.from(

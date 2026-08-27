@@ -39,6 +39,7 @@ import { ClipMap, MASK_PLAYERSOLID } from '../q3/cm/ClipMap.ts';
 import { buildHulls, type BrushHull } from '../q3/cm/brushHull.ts';
 import type { TraceResult } from '../q3/cm/trace.ts';
 import { PhysicsTrace } from './PhysicsTrace.ts';
+import { layerForContents } from './layers.ts';
 
 /** Scene units per Q3 unit. */
 const WORLD_SCALE = 1 / 32;
@@ -117,6 +118,15 @@ export class PhysicsWorld {
     }
 
     /** `pm->trace`, delegated. */
+    /**
+     * Entities the level's traces pass through: characters, and missiles in
+     * flight. See `PhysicsTrace.ignored`.
+     */
+    get traceIgnores(): Set<number> {
+        if (this.queries === null) throw new Error('PhysicsWorld has no queries yet');
+        return this.queries.ignored;
+    }
+
     trace(
         out: TraceResult,
         startQ3: ArrayLike<number>,
@@ -322,6 +332,14 @@ export class PhysicsWorld {
 
         const body = new RigidBody();
         body.kind = kind;
+        /*
+         Which layer a shot is gated against. The bodies are built once with
+         `MASK_PLAYERSOLID`, because that is what a player is stopped by; a
+         missile is gated by `MASK_SHOT`, which does not include
+         `CONTENTS_PLAYERCLIP`. Without this a rocket detonates on the invisible
+         fences that keep players off ledges. See `layers.ts`.
+        */
+        body.layer = layerForContents(hull.contents);
 
         const collider = new Collider() as unknown as ColliderWithShape;
         collider.shape = shape;

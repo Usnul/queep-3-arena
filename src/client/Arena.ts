@@ -30,11 +30,13 @@ import type { ClipMap } from '../q3/cm/ClipMap.ts';
 import {
     WeaponSystem,
     type Damageable,
+    type MissileWorld,
     type Projectile,
     type WeaponEvents,
     type WeaponId,
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
+import { interpolatedBody } from './interpolation.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
 
 const WORLD_SCALE = 1 / 32;
@@ -48,6 +50,8 @@ interface EcsDataset {
     registerComponentType(type: unknown): void;
     removeEntity(entity: number): void;
     entityExists(entity: number): boolean;
+    getComponent(entity: number, type: unknown): unknown;
+    addComponentToEntity(entity: number, component: unknown): void;
 }
 
 /** A shootable box. Q3's `func_train`-with-health, minus the train. */
@@ -68,16 +72,14 @@ export class Arena implements WeaponEvents {
     private readonly targets: Target[] = [];
 
     /**
-     * Rendered rocket entities, keyed by projectile id.
+     * The fly sound riding each missile, keyed by projectile id.
      *
-     * The `Transform` is kept alongside the entity id, not looked up each frame:
-     * moving a projectile is a per-frame write and going through the dataset for
-     * it would be a component query per rocket per frame for no benefit.
+     * There is no entity here any more. A missile *is* an entity -- the one
+     * `Missiles` built for the physics body -- so the rocket's model and its
+     * interpolation are added to that, and nothing on this side copies a
+     * position onto a second transform every step.
      */
-    private readonly projectileEntities = new Map<
-        number,
-        { entity: number; transform: Transform; fly: SoundLoop | null }
-    >();
+    private readonly projectileSounds = new Map<number, SoundLoop | null>();
 
     private readonly targetMaterial = new StandardShadeMaterial();
     private readonly targetHitMaterial = new StandardShadeMaterial();
@@ -93,8 +95,15 @@ export class Arena implements WeaponEvents {
     /** Times the player has been killed. */
     deaths = 0;
 
-    /** Trail puffs are emitted every Nth projectile step, not every frame. */
-    private trailAccumulator = 0;
+    /**
+     * Trail puffs are emitted every Nth fixed step, not every one.
+     *
+     * This used to be frame-rate compensation -- at 240 Hz a per-frame puff was
+     * four times the smoke it was at 60 -- and on a fixed step that reason is
+     * gone. What is left is plain rate control, and the number is kept because
+     * the trail was tuned with it.
+     */
+    private trailStep = 0;
     private readonly trailEvery = 2;
 
     /**
@@ -104,10 +113,10 @@ export class Arena implements WeaponEvents {
      */
     audio: AudioBank | null = null;
 
-    constructor(ecd: EcsDataset, cm: ClipMap) {
+    constructor(ecd: EcsDataset, cm: ClipMap, missiles: MissileWorld | null = null) {
         this.ecd = ecd;
         this.effects = new Effects(ecd);
-        this.weapons = new WeaponSystem(cm, this);
+        this.weapons = new WeaponSystem(cm, this, missiles);
 
         if (!ecd.isComponentTypeRegistered(ShadedGeometry)) {
             ecd.registerComponentType(ShadedGeometry);
@@ -203,6 +212,7 @@ export class Arena implements WeaponEvents {
 
         this.weapons.update(deltaSeconds);
         this.effects.update(deltaSeconds);
+        this.followMissiles();
 
         for (const target of this.targets) {
             if (!target.dead) continue;
@@ -291,18 +301,29 @@ export class Arena implements WeaponEvents {
         if (this.ecd.entityExists(box.entity)) this.ecd.removeEntity(box.entity);
     }
 
-    projectileSpawned(projectile: Projectile): void {
-        const transform = new Transform();
-        const [x, y, z] = toMeep(projectile.origin);
-        transform.position.set(x, y, z);
-        // Rockets are ~8 units across in Q3.
-        transform.scale.set(8 * WORLD_SCALE, 8 * WORLD_SCALE, 8 * WORLD_SCALE);
+    projectileSpawned(projectile: Projectile, entity: number): void {
+        /*
+         The body the engine is already flying, dressed rather than duplicated.
+         `PhysicsSystem` reads only `position` and `rotation` off a transform, so
+         scaling it to the model's size cannot disturb the collider.
+        */
+        if (entity >= 0) {
+            const transform = this.ecd.getComponent(entity, Transform) as Transform | undefined;
+            // Rockets are ~8 units across in Q3.
+            transform?.scale.set(8 * WORLD_SCALE, 8 * WORLD_SCALE, 8 * WORLD_SCALE);
 
-        const builder = new Entity();
-        builder
-            .add(transform)
-            .add(ShadedGeometry.from(this.rocketGeometry, this.rocketMaterial))
-            .build(this.ecd);
+            this.ecd.addComponentToEntity(
+                entity,
+                ShadedGeometry.from(this.rocketGeometry, this.rocketMaterial)
+            );
+            /*
+             Blended by `InterpolationSystem` on the physics timeline, for which
+             `PhysicsSystem` is already the producer. A missile crosses a room in
+             a handful of fixed steps, so this is the difference between a rocket
+             and a dotted line of rockets.
+            */
+            this.ecd.addComponentToEntity(entity, interpolatedBody());
+        }
 
         /*
          `CG_Missile`: a missile whose weapon has a `missileSound` carries it as
@@ -310,43 +331,44 @@ export class Arena implements WeaponEvents {
          one -- a grenade arcs silently -- so a null handle here is a weapon Q3
          gives no fly sound to, and not a failure.
         */
-        const fly = this.audio?.loop(`missile/${projectile.weapon}`, projectile.origin) ?? null;
-
-        this.projectileEntities.set(projectile.id, { entity: builder.id, transform, fly });
-    }
-
-    projectileMoved(projectile: Projectile): void {
-        const record = this.projectileEntities.get(projectile.id);
-
-        if (record !== undefined) {
-            const [x, y, z] = toMeep(projectile.origin);
-            record.transform.position.set(x, y, z);
-            // `S_UpdateEntityPosition`: the fly sound rides the rocket.
-            record.fly?.move(projectile.origin);
-        }
-
-        // Smoke trail, thinned to a fixed rate rather than one puff per frame:
-        // at 240 Hz a per-frame puff is four times the smoke it is at 60 Hz, and
-        // the trail would look different on different hardware.
-        this.trailAccumulator += 1;
-        if (this.trailAccumulator >= this.trailEvery) {
-            this.trailAccumulator = 0;
-            this.effects.trailPuff(projectile.origin);
-        }
+        this.projectileSounds.set(
+            projectile.id,
+            this.audio?.loop(`missile/${projectile.weapon}`, projectile.origin) ?? null
+        );
     }
 
     projectileGone(projectile: Projectile): void {
-        const record = this.projectileEntities.get(projectile.id);
-        this.projectileEntities.delete(projectile.id);
+        const fly = this.projectileSounds.get(projectile.id);
+        this.projectileSounds.delete(projectile.id);
 
-        if (record === undefined) return;
+        /*
+         `S_StopLoopingSound`. The missile's own entity is retired by `Missiles`
+         -- it owns the body, and the model and the interpolation went on to that
+         same entity, so they leave with it.
+        */
+        fly?.stop();
+    }
 
-        // `S_StopLoopingSound`. Before the entity goes, because the explosion
-        // that follows should not be competing with a rocket still in flight.
-        record.fly?.stop();
+    /**
+     * The smoke trail and the fly sounds, from wherever the engine has flown
+     * each missile to.
+     *
+     * `WeaponSystem` no longer reports a projectile moving, because nothing on
+     * this side moves one: the poses are read back off the bodies once a step by
+     * `MissileWorld.sync`, and this walks the result.
+     */
+    private followMissiles(): void {
+        const live = this.weapons.liveProjectiles;
+        if (live.length === 0) return;
 
-        if (this.ecd.entityExists(record.entity)) {
-            this.ecd.removeEntity(record.entity);
+        this.trailStep += 1;
+        const puff = this.trailStep >= this.trailEvery;
+        if (puff) this.trailStep = 0;
+
+        for (const projectile of live) {
+            // `S_UpdateEntityPosition`: the fly sound rides the rocket.
+            this.projectileSounds.get(projectile.id)?.move(projectile.origin);
+            if (puff) this.effects.trailPuff(projectile.origin);
         }
     }
 }

@@ -108,9 +108,9 @@ function load(mapName: string): { cm: ClipMap; graph: ReturnType<typeof buildWay
     return { cm, graph: buildWaypoints(scene.submodels[0]!, trace) };
 }
 
-function scan(mapName: string): Scan {
+async function scan(mapName: string): Promise<Scan> {
     const { cm, graph } = load(mapName);
-    const physics = new HeadlessPhysics(cm);
+    const physics = await HeadlessPhysics.create(cm);
 
     const clip = createTrace();
     const phys = createTrace();
@@ -174,8 +174,8 @@ function scan(mapName: string): Scan {
 describe.each(['oa_dm1', 'aggressor'])('physics wedges [%s]', (name) => {
     const built = existsSync(join(process.cwd(), 'assets', 'built', name, 'collision.bsp'));
 
-    it.skipIf(!built)('leaves no spot the player cannot walk out of', () => {
-        const result = scan(name);
+    it.skipIf(!built)('leaves no spot the player cannot walk out of', async () => {
+        const result = await scan(name);
 
         expect(result.sampled).toBeGreaterThan(200);
 
@@ -294,9 +294,9 @@ function walk(
 describe.each(['oa_dm1', 'aggressor'])('walking [%s]', (name) => {
     const built = existsSync(join(process.cwd(), 'assets', 'built', name, 'collision.bsp'));
 
-    it.skipIf(!built)('gets as far on meep physics as it does on the clipmap', () => {
+    it.skipIf(!built)('gets as far on meep physics as it does on the clipmap', async () => {
         const map = load(name);
-        const physics = new HeadlessPhysics(map.cm);
+        const physics = await HeadlessPhysics.create(map.cm);
 
         const clipTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
             boxTrace(r, map.cm, s, e, mn, mx, mask);
@@ -396,9 +396,9 @@ function settle(
 describe.each(['oa_dm1', 'aggressor'])('standing [%s]', (name) => {
     const built = existsSync(join(process.cwd(), 'assets', 'built', name, 'collision.bsp'));
 
-    it.skipIf(!built)('lands, and knows it has landed', () => {
+    it.skipIf(!built)('lands, and knows it has landed', async () => {
         const map = load(name);
-        const physics = new HeadlessPhysics(map.cm);
+        const physics = await HeadlessPhysics.create(map.cm);
 
         const clipTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
             boxTrace(r, map.cm, s, e, mn, mx, mask);
@@ -448,9 +448,9 @@ describe.each(['oa_dm1', 'aggressor'])('standing [%s]', (name) => {
      drawn `mins[2]` below the origin, so a resting height that is off by a unit
      is a character sunk or floating by a unit.
     */
-    it.skipIf(!built)('rests where Q3 rests', () => {
+    it.skipIf(!built)('rests where Q3 rests', async () => {
         const map = load(name);
-        const physics = new HeadlessPhysics(map.cm);
+        const physics = await HeadlessPhysics.create(map.cm);
 
         const clipTrace: Pmove['trace'] = (r, s, mn, mx, e, _p, mask) =>
             boxTrace(r, map.cm, s, e, mn, mx, mask);

@@ -41,13 +41,14 @@ import type { Damageable } from '../game/Weapons.ts';
 import { vec3 as q3vec3 } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS } from '../client/Characters.ts';
-import { AudioBank, Footsteps, LOOP_BUDGET } from '../client/Audio.ts';
+import { AudioBank, LOOP_BUDGET } from '../client/Audio.ts';
 import { MapSound } from '../client/MapSound.ts';
 import { Bot } from '../game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../client/Bots.ts';
 import { buildWaypoints, linkMapPortals } from '../game/Waypoints.ts';
 import { spawnPoints } from '../game/Spawns.ts';
 import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
+import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
 import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
@@ -57,11 +58,26 @@ import { NUM_CROSSHAIRS } from '../client/crosshair.ts';
 import { ViewWeapon } from '../client/ViewWeapon.ts';
 import { Arena } from '../client/Arena.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
+import { Missiles } from '../client/Missiles.ts';
 import { takePointerLock } from '../client/pointerLock.ts';
 import { Menu } from '../client/ui/Menu.ts';
 import { Settings, type SettingsStorage } from '../client/ui/Settings.ts';
 import { graphicsPage } from '../client/ui/graphics.ts';
 import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
+import { buildRoster } from './roster.ts';
+import { CharacterBodies } from '../client/CharacterBody.ts';
+import {
+    BotSystem,
+    CharacterBodySystem,
+    CombatSystem,
+    FlySystem,
+    PickupSystem,
+    PlayerSystem,
+    PoseRecorderSystem,
+    PresentationSystem,
+    WorldEffectSystem,
+    interpolatedPose,
+} from './systems.ts';
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
@@ -133,48 +149,6 @@ function usePortedPmove(): boolean {
     return move === 'q3' || useClipmapTrace();
 }
 
-/**
- * Run one phase of the frame, and do not let it take the rest of the frame with it.
- *
- * meep's `Signal.dispatch` wraps every handler in `try { ... } catch (e) {
- * console.error("Failed to dispatch handler", _f, e) }`. That is a reasonable
- * thing for a signal to do -- one bad listener should not stop the others -- but
- * this application is *one* listener holding the whole frame, so a throw anywhere
- * in it silently deletes everything below the throw, every frame, for the rest of
- * the session. The player still walks, because `player.update` is the first line;
- * the pickups stop spinning and stop being pickable, because they are the sixth;
- * and the only trace is one `console.error` that says which *function* failed and
- * nothing about which part of it.
- *
- * So the frame is a list of named phases. A phase that throws is reported once by
- * name, with a repeat count so a per-frame failure does not bury the console, and
- * the phases after it still run. Half a frame is worth more than none of one, and
- * a named half is worth more than either.
- */
-function frameStages(): (name: string, body: () => void) => void {
-    const failures = new Map<string, number>();
-
-    return (name: string, body: () => void): void => {
-        try {
-            body();
-        } catch (e) {
-            const count = (failures.get(name) ?? 0) + 1;
-            failures.set(name, count);
-
-            if (count === 1) {
-                console.error(
-                    `[queep] frame phase '${name}' threw; the phases after it still ran`,
-                    e
-                );
-            } else if (count === 100) {
-                console.error(
-                    `[queep] frame phase '${name}' has now thrown 100 times; no longer reporting it`
-                );
-            }
-        }
-    };
-}
-
 async function main(): Promise<void> {
     const engine = await EngineHarness.bootstrap();
 
@@ -228,6 +202,23 @@ async function main(): Promise<void> {
     );
     await em.addSystem(meshes);
     await em.addSystem(new AnimationSystem3(graphics, meshes));
+
+    /*
+     Render-rate blending of a fixed-step simulation, which is the other half of
+     phase 9: the game advances 60 times a second and the display does not, so
+     without this every moving thing holds a pose for several frames and then
+     jumps. `EngineHarness` does not register this -- nothing in it mentions the
+     class -- but `PhysicsSystem` is already a complete producer for it, so
+     wiring one log is all a physics body needs to render smoothly.
+
+     It cannot help the *camera*. `CameraSystem3` references two components to
+     this system's one, scores higher in `updateExecutionOrder`, and therefore
+     copies the camera entity onto Shade's camera before this has blended
+     anything. Measured rather than assumed -- see `test/fixed-step.test.ts` --
+     and the camera stays on the fixed step because of it.
+    */
+    const interpolation = new InterpolationSystem();
+    await em.addSystem(interpolation);
 
     /*
      Sound. Every sound in the port is an `AudioEmitter` component, so this
@@ -486,25 +477,32 @@ async function main(): Promise<void> {
 
         const fly = new FlyCamera(transform, input, engine.devices);
         fly.attach();
-        engine.ticker.onTick.add((dt: number) => {
-            fly.update(dt);
-            audio.update();
-            hud.update({
-                mode: 'fly', onGround: false, map: mapName,
-                weapon: '', damage: 0, kills: 0, deaths: 0, backend: 'noclip',
-                health: 0, armor: 0, ammo: -1, pickup: '', pickupAgeSeconds: 99,
-            });
-        });
+
+        await em.addSystem(new FlySystem({ fly, audio, hud, map: mapName }));
 
         expose(engine, { loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera });
     } else {
         const clipmapOnly = useClipmapTrace();
 
-        const physicsWorld = clipmapOnly
-            ? null
-            : await PhysicsWorld.create(em, ecd, clipMap);
+        /*
+         Built even when `?trace=clipmap` selects the ported collision, because
+         that parameter picks a *movement* backend and missiles are the engine's
+         now either way. Taking the rockets away with the movement would make one
+         A/B mean two things, and the cost of the bodies nobody sweeps against is
+         about 18 ms at load.
+        */
+        const physicsWorld = await PhysicsWorld.create(em, ecd, clipMap);
 
-        if (physicsWorld !== null) {
+        {
+            /*
+             The engine's own producer. With this set, `PhysicsSystem` restores
+             every `Interpolated` body's authoritative pose at the top of each
+             step and records the post-step pose after it, so nothing an
+             application writes is needed to make a body render smoothly -- see
+             `PoseRecorderSystem` for the poses physics does not own.
+            */
+            physicsWorld.system.interpolationLog = interpolation.log;
+
             console.log(
                 `[queep] physics: ${physicsWorld.stats.brushes} brushes -> ` +
                 `${physicsWorld.stats.bodies} static bodies ` +
@@ -514,9 +512,21 @@ async function main(): Promise<void> {
         }
 
         const moverHost =
-            usePortedPmove() || physicsWorld === null || physicsWorld.ecd === null
+            usePortedPmove() || physicsWorld.ecd === null
                 ? null
                 : { system: physicsWorld.system, ecd: physicsWorld.ecd };
+
+        /*
+         Players and bots as bodies the broadphase can see, which is what makes a
+         rocket able to hit one and two of them able to stand in each other's way.
+         Null on the ported/clipmap backends, which have no meep physics at all.
+        */
+        const bodies =
+            moverHost === null
+                ? null
+                : new CharacterBodies(moverHost, ecd, physicsWorld.traceIgnores);
+        // Client id 0, matching the `Damageable` the roster builds for the player.
+        const playerBody = bodies?.create(0) ?? null;
 
         const player = new PlayerController(
             clipMap,
@@ -524,15 +534,27 @@ async function main(): Promise<void> {
             engine.devices,
             spawn?._originQ3 ?? [0, 0, 0],
             physicsWorld,
-            moverHost
+            playerBody?.host ?? moverHost
         );
+
+        // After the controller, because the body's filter had to name itself
+        // before the controller that owns it existed. See `CharacterSlot`.
+        playerBody?.track(() => player.ps.origin);
 
         console.log(
             `[queep] movement: ${moverHost === null ? 'ported bg_pmove' : "Q3's motor on meep KinematicMover"}`
         );
         player.attach();
 
-        const arena = new Arena(ecd, clipMap);
+        /*
+         Missiles are bodies. `CharacterBodies` is how a contact against a player
+         becomes a Q3 client id, and it is null on the ported movement backend --
+         a rocket still flies and still detonates on the world, it just cannot
+         report a direct hit, because there is nothing in the broadphase to hit.
+        */
+        const missiles = new Missiles(physicsWorld.system, ecd, bodies);
+
+        const arena = new Arena(ecd, clipMap, missiles);
         arena.audio = audio;
 
         /*
@@ -634,6 +656,18 @@ async function main(): Promise<void> {
         const moversView = new MoversView(movers, loaded.submodelTransforms, physicsWorld);
         moversView.update();
 
+        /*
+         A door's geometry is written from the simulation on the fixed step, and
+         physics does not own it -- the collision half is a separate set of
+         kinematic bodies. So it goes on the application's own interpolation
+         timeline, which is what `PoseRecorderSystem` is for.
+        */
+        for (const mover of movers.movers) {
+            for (const entity of loaded.submodelEntities.get(mover.model) ?? []) {
+                ecd.addComponentToEntity(entity, interpolatedPose());
+            }
+        }
+
         let staticBodies = 0;
         for (const model of movers.statics) {
             staticBodies += physicsWorld?.addStaticModel(model) ?? 0;
@@ -671,139 +705,17 @@ async function main(): Promise<void> {
 
         /* ---- bots ---- */
 
-        const botSpawns = entrances.points.map((e) => e._originQ3);
-
-        const botWorld: BotWorld = {
-            graph,
-            items: items.items,
-            trace: (start, mins, maxs, end, mask) => {
-                const out = createTrace();
-                if (physicsWorld !== null) {
-                    physicsWorld.trace(out, start, end, mins, maxs, mask);
-                } else {
-                    boxTrace(out, clipMap, start, end, mins, maxs, mask);
-                }
-                return out;
-            },
-            playerOrigin: () => player.ps.origin,
-            playerAlive: () => player.inventory.health > 0,
-            spawns: botSpawns.map((spawn) => {
-                const node = graph.nearestInMainBody(spawn);
-                return node < 0
-                    ? spawn
-                    : [
-                          graph.nodes[node]!.origin[0],
-                          graph.nodes[node]!.origin[1],
-                          graph.nodes[node]!.origin[2] - 9,
-                      ];
-            }),
-            fire: (bot, eye, angles, weapon) => {
-                /*
-                 The bot's own id as `ownerId`, so `hitscanShot` skips it. The
-                 muzzle is 14 units in front of the eye and a bot's own box is
-                 15 wide, so a bot firing with `ownerId: 0` shoots itself the
-                 instant it pulls the trigger.
-                */
-                arena.weapons.fire(weapon, eye, angles, bot.id, (Math.random() * 0xffff) | 0);
-            },
-        };
+        const { botRuntime, characters, botSpawns } = buildRoster({
+            ecd, clipMap, physicsWorld, moverHost, graph, items, movers, arena, audio, player,
+            entrances, bodies,
+        });
 
         /*
-         The player, as something bots can shoot.
-         
-         Bots were firing at it for a hundred rounds apiece and doing nothing,
-         because `weapons.targets` held only the boxes and the bots. `origin`
-         is a live reference to `ps.origin` rather than a copy, so it tracks
-         without anything having to remember to update it; `health` and `armor`
-         are accessors over the same inventory the HUD reads, so there is one
-         number rather than two that can disagree.
+         Once, before the first step. Every body is at the world origin until its
+         pose is written, and a player whose first sweep starts inside six bots
+         piled at (0, 0, 0) does not move at all.
         */
-        const playerTarget: Damageable = {
-            id: 0,
-            origin: player.ps.origin,
-            mins: q3vec3(-15, -15, -24),
-            maxs: q3vec3(15, 15, 32),
-            get health(): number {
-                return player.inventory.health;
-            },
-            set health(value: number) {
-                player.inventory.health = value;
-            },
-            get armor(): number {
-                return player.inventory.armor;
-            },
-            set armor(value: number) {
-                player.inventory.armor = value;
-            },
-            get dead(): boolean {
-                return player.inventory.health <= 0;
-            },
-            set dead(_value: boolean) {
-                // Death is derived from health; nothing sets it directly.
-            },
-        };
-        arena.weapons.targets.push(playerTarget);
-
-        const botRuntime = new BotRuntime(botWorld, audio);
-        const characters: Character[] = [];
-
-        /*
-         One bot per spawn point beyond the player's, up to the roster size. Q3
-         fills a server from `bot_minplayers`; there is no server here, so the
-         map's own spawn count stands in -- a map built for eight players gets
-         seven opponents.
-        */
-        for (let i = 1; i < botSpawns.length && i <= CHARACTERS.length; i++) {
-            const name = CHARACTERS[(i - 1) % CHARACTERS.length]!;
-
-            /*
-             Snapped to the navigation graph's main body. A spawn point the
-             graph cannot route out of produces a bot that stands still for the
-             whole match -- see `nearestInMainBody`.
-            */
-            const snapped = graph.nearestInMainBody(botSpawns[i]!);
-            const spawnQ3 =
-                snapped < 0
-                    ? botSpawns[i]!
-                    : [
-                          graph.nodes[snapped]!.origin[0],
-                          graph.nodes[snapped]!.origin[1],
-                          // Node origins are standing positions and the host
-                          // adds Q3's own 9-unit spawn lift, so take it back off.
-                          graph.nodes[snapped]!.origin[2] - 9,
-                      ];
-
-            const bot = new Bot({
-                id: 2000 + i,
-                name,
-                character: name,
-                cm: clipMap,
-                spawnQ3,
-                physics: physicsWorld,
-                movers: () => ({ movers: movers.clipEntities }),
-                // The same solver the player runs, which is the whole point of
-                // a bot filling a `usercmd_t` rather than steering itself.
-                moverHost,
-            });
-
-            const character = new Character(ecd, name);
-            characters.push(character);
-
-            botRuntime.spawn(bot, character);
-            arena.weapons.targets.push(bot);
-        }
-
-        console.log(`[queep] bots: ${botRuntime.bots.length}, ${characters.length} characters`);
-
-        let pickupName = '';
-        let pickupAge = 99;
-        let secondAccumulator = 0;
-
-        const footsteps = new Footsteps();
-        let lastWeapon = player.weapon;
-
-        /** Seconds until the player respawns; negative means alive. */
-        let respawnIn = -1;
+        bodies?.sync();
 
         /*
          The red boxes at spawn points are gone: bots stand there now, they are
@@ -824,163 +736,56 @@ async function main(): Promise<void> {
             arena.weapons.fire(player.weapon, eye, angles, 0, (Math.random() * 0xffff) | 0);
         };
 
-        const phase = frameStages();
+        /*
+         The frame, as systems -- see `app/systems.ts`.
 
-        // `onTick` is documented as `Signal<number>` but is emitted as `any`, so
-        // the callback parameter has no inferred type -- see GAP-001.
-        engine.ticker.onTick.add((deltaSeconds: number) => {
-            phase('player', () => player.update(deltaSeconds, transform));
-            /*
-             `graphics.camera.camera.transform`, and **not** `transform`.
+         Simulation on `fixedUpdate`, in this registration order, because these
+         declare no components and therefore tie at zero in the engine's
+         execution-order scoring, where a stable sort keeps the order they were
+         added in. Presentation on `update`, after every engine system that
+         references a component -- which is what puts `CameraSystem3` ahead of
+         the pass that reads the camera it just wrote.
+        */
+        const pickups = new PickupSystem({ items, itemsView, player, audio });
 
-             They hold different poses, always. `CameraSystem3` copies the camera
-             entity onto Shade's camera during `entityManager.update`, which the
-             `Engine` constructor subscribed to this same ticker ahead of
-             everything here -- so by the time this line runs, the frame's camera
-             is the pose `player.update` wrote *last* tick, and `transform` is the
-             pose it wrote a moment ago. A gun placed from the second is a whole
-             tick of mouse movement away from the view it is welded to, and swings
-             across the screen by however far you just turned (D-081).
-            */
-            phase('view weapon', () =>
-                viewWeapon.update(graphics.camera.camera.transform, deltaSeconds, {
-                    weapon: player.weapon,
-                    speed: player.speed,
-                    // The same counter the footstep sounds read, three lines of
-                    // frame apart: Q3 has one gait, not two.
-                    bobCycle: player.ps.bobCycle,
-                    // No gun for a corpse. Q3 switches to a death camera instead,
-                    // which this port has no equivalent of.
-                    visible: !player.dead,
-                })
-            );
+        await em.addSystem(
+            new PlayerSystem({
+                player,
+                cameraTransform: transform,
+                arena,
+                audio,
+                spawns: botSpawns,
+            })
+        );
+        await em.addSystem(new CombatSystem(arena));
+        await em.addSystem(pickups);
+        await em.addSystem(new BotSystem(botRuntime, items));
+        if (bodies !== null) await em.addSystem(new CharacterBodySystem(bodies));
+        await em.addSystem(new WorldEffectSystem({ effects, player, movers, moversView }));
 
-            phase('arena', () => arena.update(deltaSeconds));
+        // Last of the simulation systems, because it snapshots what they wrote.
+        const poses = new PoseRecorderSystem();
+        poses.attachTo(interpolation);
+        await em.addSystem(poses);
 
-            // Retire the emitter entities whose one-shot finished last frame.
-            phase('audio', () => audio.update());
+        await em.addSystem(
+            new PresentationSystem({
+                viewWeapon,
+                renderCamera: () => graphics.camera.camera.transform,
+                player,
+                audio,
+                hud,
+                pickups,
+                arena,
+                describe: () => ({
+                    map: mapName,
+                    backend: usePortedPmove()
+                        ? (clipmapOnly ? 'q3/clipmap' : 'q3/physics')
+                        : 'meep',
+                }),
+            })
+        );
 
-            phase('items', () => {
-                for (const event of items.update(
-                    deltaSeconds,
-                    player.ps.origin,
-                    player.inventory,
-                    true
-                )) {
-                    pickupName = event.label;
-                    pickupAge = 0;
-                    // `Touch_Item` plays the pickup sound to the picker only, dry.
-                    audio.playLocal(`item/${event.item.def.classname}`);
-                    if (event.selectWeapon !== null) {
-                        player.selectWeapon(event.selectWeapon as typeof player.weapon);
-                    }
-                }
-
-                itemsView.update(items.now);
-                pickupAge += deltaSeconds;
-            });
-
-            /* ---- bots ---- */
-
-            phase('bots', () =>
-                botRuntime.update(deltaSeconds, deltaSeconds * 1000, items.items)
-            );
-
-            /* ---- the player's own mortality ---- */
-
-            phase('mortality', () => {
-                if (player.inventory.health <= 0 && respawnIn < 0) {
-                    respawnIn = 2;
-                    arena.explosion(player.ps.origin, 90);
-                    audio.play('impact/flesh', player.ps.origin);
-                }
-
-                if (respawnIn >= 0) {
-                    respawnIn -= deltaSeconds;
-                    if (respawnIn < 0) {
-                        /*
-                         `ClientSpawn`, minus the spawn-point selection Q3 does with
-                         `SelectSpawnPoint` -- which scores every point by distance
-                         from the nearest enemy so you do not materialise in front
-                         of one. A random point is the honest simplification.
-                        */
-                        const spawnPoint =
-                            botSpawns[(Math.random() * botSpawns.length) | 0] ?? [0, 0, 0];
-
-                        player.ps.origin[0] = spawnPoint[0]!;
-                        player.ps.origin[1] = spawnPoint[1]!;
-                        player.ps.origin[2] = spawnPoint[2]! + 9;
-                        player.ps.velocity[0] = 0;
-                        player.ps.velocity[1] = 0;
-                        player.ps.velocity[2] = 0;
-
-                        const fresh = newInventory();
-                        player.inventory.health = fresh.health;
-                        player.inventory.armor = 0;
-                        player.inventory.weapons.clear();
-                        for (const w of fresh.weapons) player.inventory.weapons.add(w);
-                        for (const key of Object.keys(player.inventory.ammo)) {
-                            delete player.inventory.ammo[key];
-                        }
-                        Object.assign(player.inventory.ammo, fresh.ammo);
-                        player.selectWeapon('WP_MACHINEGUN');
-                    }
-                }
-            });
-
-            /* ---- player audio ---- */
-
-            phase('player audio', () => {
-                const step = footsteps.update(
-                    player.ps.bobCycle,
-                    player.onGround,
-                    player.ducked
-                );
-                if (step === 'step') audio.play('player/footstep', player.ps.origin);
-                else if (step === 'land') audio.play('player/land', player.ps.origin);
-
-                if (player.weapon !== lastWeapon) {
-                    lastWeapon = player.weapon;
-                    audio.playLocal('weapon/change');
-                }
-            });
-
-            /* ---- movers, and everything they do to the player ---- */
-
-            phase('movers', () => {
-                const world = effects.apply(player, movers, deltaSeconds);
-                moversView.update();
-
-                if (world.damage > 0) player.inventory.health -= world.damage;
-            });
-
-            /*
-             `ClientTimerActions` runs on a 1000 ms cadence, not per frame. Health
-             above max bleeds off one point a second; doing it per frame would
-             drain a 200-health player in three seconds at 60 fps.
-            */
-            secondAccumulator += deltaSeconds;
-            while (secondAccumulator >= 1) {
-                secondAccumulator -= 1;
-                ItemSystem.tickSecond(player.inventory);
-            }
-
-            hud.update({
-                mode: player.active ? 'play' : 'click-to-play',
-                onGround: player.onGround,
-                map: mapName,
-                weapon: player.weapon,
-                damage: arena.totalDamage,
-                kills: arena.kills,
-                deaths: arena.deaths,
-                backend: usePortedPmove() ? (clipmapOnly ? 'q3/clipmap' : 'q3/physics') : 'meep',
-                health: player.inventory.health,
-                armor: player.inventory.armor,
-                ammo: player.inventory.ammo[player.weapon] ?? 0,
-                pickup: pickupName,
-                pickupAgeSeconds: pickupAge,
-            });
-        });
 
         expose(engine, {
             loaded, clipMap, player, arena, physicsWorld, items, models,

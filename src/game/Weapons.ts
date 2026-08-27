@@ -85,10 +85,46 @@ export interface WeaponEvents {
         normalQ3?: ArrayLike<number>
     ): void;
     hit(target: Damageable, damage: number): void;
-    /** A projectile was created; the presentation layer attaches a trail. */
-    projectileSpawned(projectile: Projectile): void;
-    projectileMoved(projectile: Projectile): void;
+    /**
+     * A projectile was created, as the entity the physics engine is flying.
+     *
+     * The entity comes with it so the presentation can hang its model, its
+     * interpolation and its fly sound on the body rather than building a second
+     * entity and copying a position onto it every step. `-1` when there is no
+     * missile world -- see `WeaponSystem`'s constructor.
+     */
+    projectileSpawned(projectile: Projectile, entity: number): void;
     projectileGone(projectile: Projectile): void;
+}
+
+/** Where a missile stopped, and what stopped it. */
+export interface MissileImpact {
+    readonly projectile: Projectile;
+    readonly atQ3: Vec3;
+    /**
+     * The surface struck, for the scorch mark, or null when the thing struck
+     * was a player -- Q3 draws no mark on a direct hit either.
+     */
+    readonly normalQ3: Vec3 | null;
+    /** The Q3 client id struck directly, or -1 for the world. */
+    readonly clientId: number;
+}
+
+/**
+ * Missiles in flight, which is the engine's job rather than this file's.
+ *
+ * `src/client/Missiles.ts` is the implementation and the only one; this
+ * interface exists so the damage rules stay ECS-free and can be driven from a
+ * test with a counter, which is what `match.test.ts` relies on.
+ */
+export interface MissileWorld {
+    launch(projectile: Projectile): void;
+    retire(projectile: Projectile): void;
+    /** Copy live poses back into the `Projectile` records. Once per fixed step. */
+    sync(): void;
+    /** The entity a projectile is flying as, or -1. */
+    entityOf(projectileId: number): number;
+    onImpact: ((impact: MissileImpact) => void) | null;
 }
 
 export interface Projectile {
@@ -127,13 +163,40 @@ export class WeaponSystem {
     private readonly events: WeaponEvents;
     private readonly projectiles: Projectile[] = [];
     private nextProjectileId = 1;
+    private readonly missiles: MissileWorld | null;
 
     /** Everything a shot can hurt, including the player. */
     readonly targets: Damageable[] = [];
 
-    constructor(cm: ClipMap, events: WeaponEvents) {
+    /**
+     * Missiles in the air.
+     *
+     * Read by the presentation for the smoke trail and the fly sound. Their
+     * positions are the engine's -- `MissileWorld.sync` copies them back once a
+     * step -- so this is a view of physics state rather than of anything this
+     * file integrates.
+     */
+    get liveProjectiles(): readonly Projectile[] {
+        return this.projectiles;
+    }
+
+    /**
+     * @param missiles where projectiles fly. Null leaves projectile weapons
+     *   flashing and firing nothing, which is only ever a misconfiguration --
+     *   `main.ts` builds a `PhysicsWorld` for missiles even on the clipmap
+     *   movement backend, because `?trace=clipmap` selects a *movement* backend
+     *   and taking the rockets away with it would make the A/B mean two things.
+     */
+    constructor(cm: ClipMap, events: WeaponEvents, missiles: MissileWorld | null = null) {
         this.cm = cm;
         this.events = events;
+        this.missiles = missiles;
+
+        if (missiles !== null) {
+            missiles.onImpact = (impact): void => {
+                this.onImpact(impact);
+            };
+        }
     }
 
     /**
@@ -209,7 +272,8 @@ export class WeaponSystem {
         };
 
         this.projectiles.push(projectile);
-        this.events.projectileSpawned(projectile);
+        this.missiles?.launch(projectile);
+        this.events.projectileSpawned(projectile, this.missiles?.entityOf(projectile.id) ?? -1);
     }
 
     /** One hitscan ray: trace the world, then look for a closer target. */
@@ -247,61 +311,68 @@ export class WeaponSystem {
         }
     }
 
-    /** Advance projectiles. `deltaSeconds` is real time. */
+    /**
+     * Age the projectiles, and read back where the engine has flown them.
+     *
+     * What used to be here was an integrator: a step of Euler per projectile, a
+     * segment trace through the ported clipmap, and a slab-method ray/AABB test
+     * against every `Damageable` in the level. All three are the engine's now --
+     * `BodyKind.Dynamic` integrates, `RigidBodyFlags.CCD` sweeps, and
+     * `PhysicsEvents.ContactBegin` says what was hit (see `client/Missiles.ts`).
+     * What is left is Q3's ten-second `G_FreeEntity` timer, which is a rule
+     * rather than a motion.
+     */
     update(deltaSeconds: number): void {
         for (let i = this.projectiles.length - 1; i >= 0; i--) {
             const p = this.projectiles[i]!;
 
             p.life -= deltaSeconds;
-            if (p.life <= 0) {
-                this.projectiles.splice(i, 1);
-                this.events.projectileGone(p);
-                continue;
-            }
+            if (p.life > 0) continue;
 
-            vectorMA(t_end, p.origin, deltaSeconds, p.velocity);
+            this.projectiles.splice(i, 1);
+            this.missiles?.retire(p);
+            this.events.projectileGone(p);
+        }
 
-            boxTrace(trace, this.cm, p.origin, t_end, ZERO, ZERO, MASK_SHOT);
+        // After the retirements, so a missile that has just left the world does
+        // not have a pose copied out of an entity that no longer exists.
+        this.missiles?.sync();
+    }
 
-            // Check targets along the same segment.
-            let hitTarget: Damageable | null = null;
-            let hitFraction = trace.fraction;
+    /**
+     * `G_MissileImpact`, arriving as a contact instead of as a trace result.
+     *
+     * The impact names a Q3 client id rather than an entity, which is what lets
+     * this file keep knowing nothing about the ECS: the translation from a
+     * contact's two entities to a client happens in `Missiles`, against the
+     * table `CharacterBodies` already keeps.
+     */
+    private onImpact(impact: MissileImpact): void {
+        const at = impact.projectile.id;
 
+        const index = this.projectiles.findIndex((p) => p.id === at);
+        if (index < 0) return;
+
+        const projectile = this.projectiles[index]!;
+        this.projectiles.splice(index, 1);
+        this.missiles?.retire(projectile);
+
+        let directHit: Damageable | null = null;
+        if (impact.clientId >= 0) {
             for (const target of this.targets) {
-                if (target.id === p.ownerId || target.dead) continue;
-                const f = rayBoxFraction(p.origin, t_end, target);
-                if (f !== null && f < hitFraction) {
-                    hitFraction = f;
-                    hitTarget = target;
+                if (target.id === impact.clientId && !target.dead) {
+                    directHit = target;
+                    break;
                 }
             }
-
-            if (hitTarget !== null || trace.fraction < 1) {
-                const impact = vec3(
-                    p.origin[0]! + (t_end[0]! - p.origin[0]!) * hitFraction,
-                    p.origin[1]! + (t_end[1]! - p.origin[1]!) * hitFraction,
-                    p.origin[2]! + (t_end[2]! - p.origin[2]!) * hitFraction
-                );
-
-                /*
-                 The wall's own normal, and only when the wall is what stopped
-                 the missile: a rocket that caught a player in the open struck
-                 no surface, and `trace.planeNormal` there is whatever the last
-                 unblocked trace left behind.
-                */
-                this.detonate(
-                    p,
-                    impact,
-                    hitTarget,
-                    hitTarget === null ? trace.planeNormal : undefined
-                );
-                this.projectiles.splice(i, 1);
-                continue;
-            }
-
-            copy(p.origin, t_end);
-            this.events.projectileMoved(p);
         }
+
+        this.detonate(
+            projectile,
+            impact.atQ3,
+            directHit,
+            impact.normalQ3 ?? undefined
+        );
     }
 
     private detonate(
@@ -412,10 +483,6 @@ export class WeaponSystem {
         }
 
         this.events.hit(target, applied);
-    }
-
-    get liveProjectiles(): readonly Projectile[] {
-        return this.projectiles;
     }
 }
 

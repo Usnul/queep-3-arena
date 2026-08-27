@@ -196,7 +196,7 @@ async function measure(map: string): Promise<void> {
     );
     const cm = new ClipMap(bsp);
 
-    const physics = new HeadlessPhysics(cm);
+    const physics = await HeadlessPhysics.create(cm);
 
     const spawns = parseEntities(bsp.entityString)
         .filter(

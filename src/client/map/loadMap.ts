@@ -33,6 +33,15 @@ export interface LoadedMap {
     readonly meshEntities: readonly number[];
     /** BSP model index -> the transforms of its drawn meshes. Model 0 is absent. */
     readonly submodelTransforms: ReadonlyMap<number, readonly Transform[]>;
+    /**
+     * The entities those transforms belong to, in the same order.
+     *
+     * A mover's geometry is written from the simulation on the fixed step, so
+     * anything that wants it blended at render rate needs the entity to hang an
+     * `Interpolated` on -- and this loop is the only place that knows which
+     * entity a moving transform came from.
+     */
+    readonly submodelEntities: ReadonlyMap<number, readonly number[]>;
     readonly lightEntities: readonly number[];
     readonly timings: Readonly<Record<string, number>>;
 }
@@ -89,6 +98,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
     }
 
     const submodelTransforms = new Map<number, Transform[]>();
+    const submodelEntities = new Map<number, number[]>();
 
     for (let i = 0; i < bundle.meshes.length; i++) {
         const mesh = bundle.meshes[i]!;
@@ -127,6 +137,12 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
 
         const builder = new Entity();
         builder.add(transform).add(shaded).build(ecd);
+
+        if (model !== undefined) {
+            const owners = submodelEntities.get(model) ?? [];
+            owners.push(builder.id);
+            submodelEntities.set(model, owners);
+        }
 
         meshEntities.push(builder.id);
     }
@@ -203,6 +219,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         bundle,
         meshEntities,
         submodelTransforms,
+        submodelEntities,
         lightEntities,
         timings: {
             fetch: tFetched - t0,

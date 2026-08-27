@@ -222,7 +222,7 @@ describe.each(MAPS)('physics trace tracks the clipmap [%s]', (MAP) => {
     let physics: HeadlessPhysics;
     let spawns: number[][];
 
-    beforeAll(() => {
+    beforeAll(async () => {
         const path = join(ROOT, 'assets', 'extracted', 'maps', `${MAP}.bsp`);
         if (!existsSync(path)) throw new Error(`missing ${path}
 run: npm run setup`);
@@ -233,7 +233,7 @@ run: npm run setup`);
             MAP
         );
         cm = new ClipMap(bsp);
-        physics = new HeadlessPhysics(cm);
+        physics = await HeadlessPhysics.create(cm);
 
         spawns = parseEntities(bsp.entityString)
             .filter(

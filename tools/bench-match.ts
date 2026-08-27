@@ -81,7 +81,7 @@ interface Row {
     readonly pickups: number;
 }
 
-function run(mapName: string, usePhysics: boolean): Row {
+async function run(mapName: string, usePhysics: boolean): Promise<Row> {
     const built = join(ROOT, 'assets', 'built', mapName);
     const raw = readFileSync(join(built, 'collision.bsp'));
     const cm = new ClipMap(
@@ -93,7 +93,7 @@ function run(mapName: string, usePhysics: boolean): Row {
     };
 
     const t0 = performance.now();
-    const backend = usePhysics ? new HeadlessPhysics(cm) : null;
+    const backend = usePhysics ? await HeadlessPhysics.create(cm) : null;
     const buildMs = performance.now() - t0;
 
     /**
@@ -291,7 +291,7 @@ async function decompose(mapName: string): Promise<void> {
     const scene = JSON.parse(readFileSync(join(built, 'scene.json'), 'utf8')) as {
         entities: { classname?: string; _originQ3: number[] }[];
     };
-    const physics = new HeadlessPhysics(cm);
+    const physics = await HeadlessPhysics.create(cm);
 
     const points = spawnPoints(scene.entities).points.map((e) => [
         e._originQ3[0]!, e._originQ3[1]!, e._originQ3[2]! + 30,
@@ -396,7 +396,7 @@ async function main(): Promise<void> {
         console.log(mapName);
 
         for (const usePhysics of [true, false]) {
-            const r = run(mapName, usePhysics);
+            const r = await run(mapName, usePhysics);
             const perFrame = r.traces / (SECONDS / TICK);
             console.log(
                 `  ${r.backend.padEnd(15)}` +

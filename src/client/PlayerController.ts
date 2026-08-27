@@ -68,7 +68,12 @@ const WORLD_SCALE = 1 / 32;
 const BOBMOVE_RUN = 0.4;
 const BOBMOVE_DUCKED = 0.5;
 
-interface TransformLike {
+/**
+ * The part of a meep `Transform` this writes. Exported because the systems in
+ * `app/systems.ts` hold one to hand back in, and a second hand-written copy of
+ * the shape would be a second thing that can stop matching.
+ */
+export interface TransformLike {
     position: { set(x: number, y: number, z: number): void };
     rotation: RotationLike;
 }
@@ -218,6 +223,10 @@ export class PlayerController {
     private pitch = 0;
 
     private time = 0;
+
+    /** Sub-millisecond remainder of the step, carried rather than rounded off. */
+    private msecCarry = 0;
+
     private attached = false;
 
     /** Set true while the pointer is locked; movement input is ignored otherwise. */
@@ -460,9 +469,31 @@ export class PlayerController {
      * transform.
      */
     update(deltaSeconds: number, cameraTransform: TransformLike): void {
-        // Q3 works in integer milliseconds. Clamping matches `PmoveSingle`'s own
-        // 200 ms ceiling, so a backgrounded tab resumes without a teleport.
-        const msec = Math.min(200, Math.max(1, Math.round(deltaSeconds * 1000)));
+        /*
+         Q3 works in integer milliseconds, so the fractional part of a step is
+         carried rather than rounded away. `MoverSystem` has always done this;
+         this used to round instead, and on the engine's 60 Hz fixed step
+         rounding gives 17 ms for a 16.667 ms step -- every step, for ever, so
+         the player's clock runs two percent fast against the world's. Carrying
+         gives 17, 16, 17, 17, 16 ... which sums exactly and is identical from
+         one run to the next, which is the property that matters.
+
+         Clamping matches `PmoveSingle`'s own 200 ms ceiling, so a backgrounded
+         tab resumes without a teleport. Clamped time is time thrown away, and
+         the accumulator is dropped with it -- resuming is a discontinuity by
+         definition and carrying a second of arrears into it would be worse.
+        */
+        this.msecCarry += deltaSeconds * 1000;
+        let msec = Math.floor(this.msecCarry);
+        this.msecCarry -= msec;
+
+        if (msec > 200) {
+            msec = 200;
+            this.msecCarry = 0;
+        } else if (msec < 1) {
+            msec = 1;
+        }
+
         this.time += msec;
 
         /*

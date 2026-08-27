@@ -199,9 +199,16 @@ const dom = (() => {
 
 const maps = new Map<string, { physics: HeadlessPhysics; spawns: number[][] }>();
 
-function world(mapName: string): { physics: HeadlessPhysics; spawns: number[][] } {
-    const cached = maps.get(mapName);
-    if (cached !== undefined) return cached;
+/**
+ * Load one map's collision and spawns into the cache.
+ *
+ * Separate from `world` because `HeadlessPhysics.create` is a factory now -- the
+ * ECS behind it has to be started before any body is built -- and `Rig`'s
+ * constructor cannot await. Every map a case names is warmed at module scope
+ * below, which keeps all 24 `new Rig(...)` sites synchronous.
+ */
+async function warm(mapName: string): Promise<void> {
+    if (maps.has(mapName)) return;
 
     const raw = readFileSync(join(BUILT, mapName, 'collision.bsp'));
     const cm = new ClipMap(
@@ -209,14 +216,21 @@ function world(mapName: string): { physics: HeadlessPhysics; spawns: number[][] 
     );
     const scene = JSON.parse(readFileSync(join(BUILT, mapName, 'scene.json'), 'utf8')) as Scene;
 
-    const built = {
-        physics: new HeadlessPhysics(cm),
+    maps.set(mapName, {
+        physics: await HeadlessPhysics.create(cm),
         spawns: spawnPoints(scene.entities).points.map((e) => e._originQ3),
-    };
-
-    maps.set(mapName, built);
-    return built;
+    });
 }
+
+function world(mapName: string): { physics: HeadlessPhysics; spawns: number[][] } {
+    const cached = maps.get(mapName);
+    if (cached === undefined) {
+        throw new Error(`world('${mapName}') before it was warmed -- add it beside the others`);
+    }
+    return cached;
+}
+
+await warm('oa_dm1');
 
 type Solver = 'meep' | 'q3';
 

@@ -32,8 +32,6 @@ interface Bound {
     readonly mover: Mover;
     readonly transforms: readonly Transform[];
     readonly bodies: MoverBodies | null;
-    /** Last written offset, so a resting mover costs one comparison a frame. */
-    readonly written: [number, number, number];
 }
 
 export class MoversView {
@@ -55,24 +53,30 @@ export class MoversView {
                 mover,
                 transforms,
                 bodies: physics === null ? null : physics.addMover(mover.model),
-                // Deliberately not the mover's start offset: the first `update`
-                // must write once, so that a `start_open` door -- whose `pos1`
-                // is not zero -- lands in its open position on frame one.
-                written: [NaN, NaN, NaN],
             });
         }
     }
 
+    /**
+     * Write every mover's pose, including the ones that have not moved.
+     *
+     * This used to skip a mover whose origin matched the last one written, and
+     * that has to go now that the drawn transform is also written by
+     * `InterpolationSystem` between fixed steps. The blend leaves a pose in the
+     * transform that this did not write; skipping the correction because *this*
+     * did not change it lets the difference stand, and a resting door slides a
+     * little further off every frame. Measured before the early-out came out:
+     * four steps of a stopped mover and the drawn position had walked a quarter
+     * of a unit away from the simulation's.
+     *
+     * It costs nothing to drop. `Vector3.set` compares before it assigns and
+     * only dispatches `onChanged` when a component actually differs, so the
+     * skip was the engine's own check written a second time -- with the added
+     * effect of hiding a correction the engine would have made.
+     */
     update(): void {
         for (const bound of this.bound) {
             const [x, y, z] = bound.mover.origin;
-            const written = bound.written;
-
-            if (x === written[0] && y === written[1] && z === written[2]) continue;
-
-            written[0] = x;
-            written[1] = y;
-            written[2] = z;
 
             // Q3 (x, y, z) -> meep (x, z, -y), scaled to scene metres.
             const mx = x * WORLD_SCALE;

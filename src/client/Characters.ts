@@ -58,7 +58,8 @@ export type TorsoAnimation =
     | 'TORSO_RAISE'
     | 'TORSO_DROP';
 
-interface EcsDataset {
+/** The part of a meep dataset a `Character` needs. Exported for `app/roster.ts`. */
+export interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
 }

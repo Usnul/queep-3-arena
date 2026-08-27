@@ -41,6 +41,8 @@ import { buildWaypoints, linkMapPortals, type WaypointGraph } from '../src/game/
 import { spawnPoints } from '../src/game/Spawns.ts';
 import { Bot } from '../src/game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../src/client/Bots.ts';
+import { CharacterBodies, type CharacterSlot } from '../src/client/CharacterBody.ts';
+import { Missiles } from '../src/client/Missiles.ts';
 import {
     WeaponSystem, type Damageable, type WeaponEvents, type WeaponId,
 } from '../src/game/Weapons.ts';
@@ -73,7 +75,20 @@ interface Scene {
  * uses it, because a difference between the two is the only way to tell a
  * gameplay bug from a collision bug.
  */
-function arena(mapName: string, usePhysics: boolean) {
+const loaded = new Map<string, { cm: ClipMap; scene: Scene; physics: HeadlessPhysics }>();
+
+/**
+ * One map's collision, scene and physics backend, warmed at module scope.
+ *
+ * `HeadlessPhysics.create` is a factory now -- the ECS behind it has to be
+ * started before any body is built -- and `play` is called while vitest is still
+ * collecting this file, where there is nothing to await in. Warming here keeps
+ * `arena` and every case below synchronous, and means the clipmap the physics
+ * backend holds is the same instance the clipmap control reads.
+ */
+async function warm(mapName: string): Promise<void> {
+    if (loaded.has(mapName)) return;
+
     const raw = readFileSync(join(BUILT, mapName, 'collision.bsp'));
     const cm = new ClipMap(
         new BspFile(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), mapName)
@@ -82,7 +97,20 @@ function arena(mapName: string, usePhysics: boolean) {
         readFileSync(join(BUILT, mapName, 'scene.json'), 'utf8')
     ) as Scene;
 
-    const physics = usePhysics ? new HeadlessPhysics(cm) : null;
+    loaded.set(mapName, { cm, scene, physics: await HeadlessPhysics.create(cm) });
+}
+
+await warm('oa_dm1');
+await warm('aggressor');
+
+function arena(mapName: string, usePhysics: boolean) {
+    const built = loaded.get(mapName);
+    if (built === undefined) {
+        throw new Error(`arena('${mapName}') before it was warmed -- add it beside the others`);
+    }
+
+    const { cm, scene } = built;
+    const physics = usePhysics ? built.physics : null;
 
     const trace: DropTrace = (start, mins, maxs, end, mask) => {
         const out = createTrace();
@@ -135,7 +163,6 @@ class Scoreboard implements WeaponEvents {
     projectileSpawned(): void {
         this.projectiles += 1;
     }
-    projectileMoved(): void {}
     projectileGone(): void {}
 }
 
@@ -173,7 +200,27 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     const { cm, scene, physics, trace, items, graph } = arena(mapName, usePhysics);
 
     const board = new Scoreboard();
-    const weapons = new WeaponSystem(cm, board);
+
+    /*
+     Missiles are bodies now, so the headless match needs the same three pieces
+     the browser wires: a set of character bodies (which is how a contact becomes
+     a Q3 client id), a missile world, and the weapon system that fires into it.
+     Without them a rocket is spawned and never moves -- which is precisely the
+     class of "the harness cannot see the shipping arrangement" failure D-036 and
+     D-061 already cost this project twice.
+    */
+    const bodies =
+        physics === null
+            ? null
+            : new CharacterBodies(
+                  { system: physics.system, ecd: physics.ecd },
+                  physics.ecd,
+                  physics.traceIgnores
+              );
+    const missiles =
+        physics === null ? null : new Missiles(physics.system, physics.ecd, bodies);
+
+    const weapons = new WeaponSystem(cm, board, missiles);
 
     const entrances = spawnPoints(scene.entities);
     const spawns = entrances.points.map((e) => e._originQ3);
@@ -208,6 +255,9 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
 
     weapons.targets.push(player);
 
+    const playerSlot = bodies?.create(0) ?? null;
+    playerSlot?.track(() => playerOrigin);
+
     const world: BotWorld = {
         graph,
         items: items.items,
@@ -227,6 +277,11 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
 
     const runtime = new BotRuntime(world, null);
 
+    // A slot per bot, made before the bot, because the host it hands back
+    // carries the filter that names the bot's own body. See `CharacterSlot`.
+    const botSlots: (CharacterSlot | null)[] = [];
+    for (let i = 0; i <= botCount; i++) botSlots.push(i === 0 ? null : (bodies?.create(2000 + i) ?? null));
+
     // From spawn 1 upward, exactly as `main.ts` does: spawn 0 is the player's,
     // and a bot standing inside it would spend the match shooting from a stop.
     for (let i = 1; i <= botCount && i < spawns.length; i++) {
@@ -241,12 +296,17 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
             // Null on the clipmap backend: there is no physics world for the
             // kinematic solver to run against, so that configuration exercises
             // the ported `bg_pmove` end to end.
-            moverHost: physics === null ? null : { system: physics.system, ecd: physics.ecd },
+            moverHost: botSlots[i]?.host ?? (physics === null ? null : { system: physics.system, ecd: physics.ecd }),
         });
 
         runtime.spawn(bot, null);
         weapons.targets.push(bot);
+        botSlots[i]?.track(() => bot.origin);
     }
+
+    // Every body at its spawn before the first step, or a missile fired on
+    // frame one meets six characters stacked at the world origin.
+    bodies?.sync();
 
     const travelled = runtime.bots.map(() => 0);
     const visited = runtime.bots.map(() => new Set<number>());
@@ -261,6 +321,15 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
         const before = player.health;
 
         runtime.update(TICK, TICK * 1000, items.items);
+
+        /*
+         The engine's step, then the game's -- the order `EntityManager` runs
+         them in, because every system that references a component is scheduled
+         ahead of the ones this application registers. `CharacterBodySystem`'s
+         job is the `bodies.sync()`.
+        */
+        bodies?.sync();
+        physics?.step(TICK);
         weapons.update(TICK);
         items.update(TICK, vec3(0, 0, -1e6), NOBODY, false);
 
