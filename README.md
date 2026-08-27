@@ -78,7 +78,6 @@ IndexedDB and applied on the next load.
 | Frame-rate counter | the `stats.js` panel |
 | Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]` |
 | Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
-| Speedometer | the port's own readout, off for screenshots |
 
 There is no anti-aliasing, ambient-occlusion or reflection setting, and no shadow *resolution*,
 because those are all properties of a `Renderer` that `GraphicsEngine3` was built not to expose to
