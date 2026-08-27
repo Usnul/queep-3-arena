@@ -255,22 +255,24 @@ describe('a sphere and a slab', () => {
  * ------------------------------------------------------------------ */
 
 /**
- * A body CCD stops against a hull's **corner** raises no contact event.
+ * A body CCD stops against a hull reports it, whichever part of the hull it is.
  *
- * The counterpart to everything above, and still live on 3.7.0. Drive a sphere
- * at a `ConvexHullShape3D`'s face and the continuous-collision pass clamps it at
- * the surface and `ContactBegin` fires. Drive the same sphere at the same hull's
- * corner and it is clamped in exactly the same way, on exactly the same step, at
- * exactly the geometric corner distance -- and no event is ever dispatched, for
- * as long as you care to keep stepping.
+ * Through 3.7.0 only the face did. Drive a sphere at a `ConvexHullShape3D`'s
+ * face and the continuous-collision pass clamped it at the surface and
+ * `ContactBegin` fired; drive the same sphere at the same hull's corner and it
+ * was clamped in exactly the same way, on exactly the same step, at exactly the
+ * geometric corner distance -- and no event was ever dispatched, for as long as
+ * you cared to keep stepping. A game that reacts to impacts never learned about
+ * one while the body sat there blocked: ten of twenty-eight rockets in the
+ * 64-direction test ground against a player's shoulder for their full ten
+ * seconds, doing nothing.
  *
- * A game that reacts to impacts therefore never learns about one, while the body
- * sits there blocked. In this port that was ten of twenty-eight rockets in the
- * 64-direction test grinding against a player's shoulder for their full ten
- * seconds, doing nothing. `Missiles.checkStopped` is the workaround -- a
- * `TR_LINEAR` missile that covered less than its own speed in a step has hit
- * something, whatever the engine did or did not say -- and this is what says why
- * that code has to exist.
+ * `Missiles` inferred the impact instead -- a `TR_LINEAR` missile that covered
+ * less than its own speed in a step has hit something -- and this pair of cases
+ * asserted the absence, so that the day the engine started raising it the test
+ * would fail and the inference could go. **3.8.0, and it did.** Both halves now
+ * assert the contact rather than its absence, and `Missiles` is that much
+ * smaller.
  */
 describe('a missile driven into a convex hull', () => {
     /** Q3's player box, 30 x 30 x 56 units, as a hull at the origin. */
@@ -360,7 +362,7 @@ describe('a missile driven into a convex hull', () => {
         expect(head.reported, 'a face impact raised no ContactBegin').toBe(true);
     });
 
-    it('is stopped by the corner in exactly the same way, and nothing is reported', async () => {
+    it('is stopped by the corner in exactly the same way, and that is reported too', async () => {
         const corner = await fireAt(-Math.SQRT1_2, -Math.SQRT1_2);
 
         // The box's own diagonal half-extent, 15 * sqrt(2), plus the sphere.
@@ -368,13 +370,27 @@ describe('a missile driven into a convex hull', () => {
         expect(corner.stoppedAtStep, 'the corner did not stop it at all').toBeGreaterThanOrEqual(0);
 
         /*
-         Asserted as `false` rather than skipped. When the engine starts raising
-         this, the assertion fails, and the failure is the signal to delete
-         `Missiles.checkStopped` -- which is a workaround and should not outlive
-         what it works around.
+         The half that used to be false. A body clamped by CCD is *touching* and
+         touching is not overlapping, so this is a contact at zero depth against
+         a feature with no face to clip against -- which is exactly the case that
+         went unreported, and exactly the case a missile hits when it catches
+         someone on the shoulder rather than square on.
         */
-        expect(corner.reported, 'the corner now reports a contact; see Missiles.checkStopped').toBe(
-            false
-        );
+        expect(corner.reported, 'a corner impact raised no ContactBegin').toBe(true);
+    });
+
+    it('stops at the same step whichever part it hits, which is what CCD is for', async () => {
+        /*
+         The property that made the old bug legible: the sweep was never at
+         fault. Both approaches were clamped on the same step at their own
+         geometric distances even while only one of them said so, so the defect
+         was in the reporting rather than in the collision -- and that is what
+         made "infer it from the missile having stopped" a sound workaround
+         rather than a guess.
+        */
+        const head = await fireAt(-1, 0);
+        const corner = await fireAt(-Math.SQRT1_2, -Math.SQRT1_2);
+
+        expect(corner.stoppedAtStep).toBe(head.stoppedAtStep);
     });
 });

@@ -306,18 +306,20 @@ built from, which would have poisoned both halves.
   failure. Attributed by A/B against a scratch copy of the previous version
   rather than by reinstalling, because `node_modules` is shared with other live
   sessions.
-- **One engine finding is still open**, and it is why `Missiles.checkStopped`
-  exists: **a body that CCD stops against a hull's *corner* raises no contact
-  event.** Face-on, `ContactBegin` fires; at 45 degrees the same sphere is
-  clamped on the same step at the same geometric distance and nothing is ever
-  dispatched. Ten of twenty-eight rockets in the 64-direction test ground to a
-  halt against a player's shoulder and sat there for ten seconds. The workaround
-  is Q3's own model rather than a guess -- a `TR_LINEAR` missile that covered
-  less than its own speed in a step has hit something -- and what it stopped on
-  is resolved with `PhysicsSystem.overlap`, one unit wider than the missile,
-  because a body CCD has clamped is *touching* and touching is not overlapping.
-  `test/convex-contact.test.ts` asserts the absence, so the day it starts being
-  reported that test fails and the workaround can go.
+- **The last finding is fixed too, in 3.8.0.** A body that CCD stopped against a
+  hull's *corner* raised no contact event: face-on it did, at 45 degrees the same
+  sphere was clamped on the same step at the same geometric distance and nothing
+  was dispatched. Ten of twenty-eight rockets in the 64-direction test ground to
+  a halt against a player's shoulder and sat there for ten seconds. `Missiles`
+  inferred the impact instead -- a `TR_LINEAR` missile that covered less than its
+  own speed in a step has hit something -- and that inference is gone with the
+  fix. `test/convex-contact.test.ts` asserted the *absence*, so the upgrade
+  failed exactly one test and the failure was the instruction.
+
+**Three engine bugs, found by this port and fixed in four releases**, and both
+workarounds are out again: `Missiles.ts` peaked at 522 lines and is back to 421,
+with no inference and no confirming sweep in it. What is left is the contact
+listener the design called for in the first place.
 
 The confirming sweep this port carried against the false contacts is **gone** on 3.7.0, and its
 removal is worth recording: it could not be left in as insurance. A missile that *grazes* a body is
@@ -338,9 +340,12 @@ the old loop beside it.
 
 ## What is left
 
-- **A GAP entry for the corner contact that is never raised**, with
-  `test/convex-contact.test.ts` as its evidence. The two fixed engine bugs want writing up too:
-  they were found by this port and turned around in two releases.
+- **A DECISIONS entry for the three engine bugs**, all now fixed: the phantom sphere-versus-hull
+  contact (3.6.0), the `KinematicMover` pinning that came with it (3.7.0), and the corner contact
+  that was never raised (3.8.0). `test/convex-contact.test.ts` carries the evidence for all three
+  and is the regression test for each fix. Worth writing up as much for the *method* -- assert the
+  bug, let the upgrade break the test, delete the workaround the failure points at -- as for the
+  bugs.
 - **Step 7**, which the above unblocks.
 - **A DECISIONS entry for the priority inversion**, which is the first risk below and is now real
   rather than prospective.

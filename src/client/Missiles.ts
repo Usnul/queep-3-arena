@@ -47,7 +47,7 @@
  * sweep came out again in 3.7.0. `test/convex-contact.test.ts` is what watches
  * the fix.
  *
- * It is worth knowing why the workaround could not simply be left in as
+ * It is worth knowing why that workaround could not simply be left in as
  * insurance, because "harmless extra check" was exactly what it looked like. A
  * missile that *grazes* a body is touching it at depth zero while moving
  * **along** its surface: CCD clamps the blocked axis and the rest of the
@@ -56,6 +56,15 @@
  * rockets in the 64-direction test were rejected that way and slid down the side
  * of the player they had hit. A guard that answers "did it arrive" cannot
  * recognise a hit that has already arrived.
+ *
+ * A second workaround lived here just as briefly. Through 3.7.0 a body that CCD
+ * stopped against a hull's *corner* raised no contact at all -- face-on it did,
+ * at 45 degrees it did not -- so this file inferred the impact instead: a
+ * `TR_LINEAR` missile that covered less than its own speed in a step had hit
+ * something, and `PhysicsSystem.overlap` a unit wider than the missile said
+ * what. 3.8.0 raises the corner contact and that inference is gone too. Both
+ * removals were signalled by `test/convex-contact.test.ts` failing, which is
+ * what it is for.
  *
  * **Grenades do not arc, and that is the balance table's doing rather than
  * this file's.** Q3's `fire_grenade` sets `TR_GRAVITY` and a bounce; the
@@ -112,23 +121,12 @@ interface MissilePhysics {
     setContactFilter(
         fn: (entityA: number, entityB: number, colliderA: unknown, colliderB: unknown) => boolean
     ): void;
-    overlap(
-        shape: unknown,
-        position: { x: number; y: number; z: number },
-        rotation: { x: number; y: number; z: number; w: number },
-        output: Uint32Array,
-        offset: number,
-        filter?: (entity: number, collider: unknown) => boolean
-    ): number;
-    entityOf(packedBodyId: number): number;
 }
 
 interface Flight {
     readonly projectile: Projectile;
     readonly entity: number;
     readonly transform: Transform;
-    /** Where it was at the end of the previous step, to see whether it moved. */
-    readonly previous: { x: number; y: number; z: number };
     /** Set the moment a contact is reported, so a pair cannot detonate twice. */
     spent: boolean;
 }
@@ -137,24 +135,9 @@ interface Flight {
 const ACCEPT = true;
 
 
-/** Reused by the blocked-missile query; only the count and first id are read. */
-const OVERLAP_SCRATCH = new Uint32Array(8);
-
-/** A sphere has no orientation. */
-const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
-
 export class Missiles implements MissileWorld {
     private readonly physics: MissilePhysics;
 
-    /**
-     * The probe for what a stopped missile is resting against.
-     *
-     * A unit wider than the missile, deliberately. A body that CCD has clamped
-     * against a surface is *touching* it, and touching is not overlapping: at a
-     * corner an exactly-sized sphere finds nothing, and at 0.75 units it finds
-     * the body. See the note on `blocked`.
-     */
-    private readonly restProbe = SphereShape3D.from((MISSILE_RADIUS + 1) * WORLD_SCALE);
     private readonly ecd: MissileDataset;
 
     private readonly bodies: CharacterBodies | null;
@@ -284,7 +267,6 @@ export class Missiles implements MissileWorld {
             projectile,
             entity: builder.id,
             transform,
-            previous: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
             spent: false,
         };
         this.flights.set(projectile.id, flight);
@@ -338,97 +320,14 @@ export class Missiles implements MissileWorld {
      * this side to the engine's is *where it is*. Once per fixed step, after the
      * step that integrated it.
      */
-    sync(deltaSeconds: number): void {
-        for (const flight of Array.from(this.flights.values())) {
+    sync(): void {
+        for (const flight of this.flights.values()) {
             const p = flight.transform.position;
 
             flight.projectile.origin[0] = p.x / WORLD_SCALE;
             flight.projectile.origin[1] = -p.z / WORLD_SCALE;
             flight.projectile.origin[2] = p.y / WORLD_SCALE;
-
-            if (!flight.spent) this.checkStopped(flight, deltaSeconds);
-
-            flight.previous.x = p.x;
-            flight.previous.y = p.y;
-            flight.previous.z = p.z;
         }
-    }
-
-    /**
-     * A missile that did not travel its own speed this step has hit something.
-     *
-     * Q3's missiles are `TR_LINEAR` -- constant velocity until something stops
-     * them -- so "it went slower than it should have" is not a heuristic here,
-     * it is the model. What stops one is the CCD sweep clamping it at a blocker,
-     * and that is the whole of it.
-     *
-     * It has to be asked separately from the contact event because **a body CCD
-     * has clamped against a hull's corner never raises one**: drive a sphere at
-     * a `ConvexHullShape3D`'s face and `ContactBegin` fires; drive the same
-     * sphere at the same hull's corner and it stops in exactly the same way, at
-     * the same step, and no event is ever dispatched. `test/convex-contact.test.ts`
-     * has the two side by side. Without this, ten of the twenty-eight rockets in
-     * the 64-direction test ground to a halt against a player's shoulder and sat
-     * there for their full ten seconds.
-     */
-    private checkStopped(flight: Flight, deltaSeconds: number): void {
-        const speed = Math.hypot(
-            flight.projectile.velocity[0]!,
-            flight.projectile.velocity[1]!,
-            flight.projectile.velocity[2]!
-        ) * WORLD_SCALE;
-
-        const expected = speed * deltaSeconds;
-        if (expected <= 0) return;
-
-        const p = flight.transform.position;
-        const travelled = Math.hypot(
-            p.x - flight.previous.x,
-            p.y - flight.previous.y,
-            p.z - flight.previous.z
-        );
-
-        if (travelled >= expected * 0.5) return;
-
-        this.blocked(flight);
-    }
-
-    /**
-     * Detonate a missile that has stopped, against whatever it stopped on.
-     *
-     * The probe is a unit wider than the missile, and that is the point:
-     * `overlap` answers "do these two intersect", and a body clamped by CCD is
-     * touching rather than intersecting. Measured against a hull corner, an
-     * exactly-sized sphere reports nothing and 0.75 units reports the body.
-     *
-     * Nothing found means it stopped on the world, which is the common case and
-     * needs no entity to detonate.
-     */
-    private blocked(flight: Flight): void {
-        flight.spent = true;
-
-        const owner = this.owners.get(flight.entity) ?? -1;
-        const p = flight.transform.position;
-
-        const count = this.physics.overlap(
-            this.restProbe as never,
-            p,
-            NO_ROTATION,
-            OVERLAP_SCRATCH,
-            0,
-            (entity: number): boolean =>
-                entity !== flight.entity &&
-                !this.owners.has(entity) &&
-                (this.bodies?.clientOf(entity) ?? -1) !== owner
-        );
-
-        let clientId = -1;
-        for (let i = 0; i < count && clientId < 0; i++) {
-            const entity = this.physics.entityOf(OVERLAP_SCRATCH[i]!);
-            clientId = this.bodies?.clientOf(entity) ?? -1;
-        }
-
-        this.report(flight, clientId, null);
     }
 
     /**
