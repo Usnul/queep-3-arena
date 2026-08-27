@@ -272,39 +272,53 @@ of sight and an item's drop, and with character bodies in the world every bot's 
 terminated on its own collider, so no bot ever saw the player again. `PhysicsTrace.ignored` is the
 fix, and missiles are in it too.
 
-### Step 7 — splash and line of sight through physics — **not done, and should not be until the hulls are understood**
+### Step 7 — splash and line of sight through physics — **unblocked, not yet done**
 
 The plan was `PhysicsSystem.overlap` for splash candidates and `PhysicsTrace`'s `shapeCast` for
 `CanDamage`'s line of sight, flipping D-067's `trap_EntitiesInBox` row from `workaround` to
-`mapped`. Step 6 undermined the premise and it is not implemented. Three reasons, in order of
-weight:
+`mapped`. It was deferred on the belief that meep's convex hulls did not match the brushes they were
+built from, which would have poisoned both halves.
 
-- **Both halves would inherit the hull divergence step 6 found.** `CanDamage` decides whether splash
-  reaches someone through a wall, and hitscan decides where a bullet lands. Routing either through
-  meep's convex hulls means phantom geometry blocks splash and stops bullets in mid-air -- the same
-  defect that stopped a rocket in an open corridor, except on the weapon every player fires
-  constantly. `PhysicsTrace` is currently the thing *protecting* the port from this, by re-deriving
-  the blocking test from the clipmap's own brush planes.
-- **The splash half is not less code.** `G_RadiusDamage` needs the distance from each target's box
-  for the falloff, so `overlap` replaces the candidate scan and nothing else -- and the port's
-  non-character targets (`Arena.addTarget`, which `?targets=1` uses) have no bodies, so the old loop
-  has to stay beside the query. That is a query *plus* a loop where there was a loop.
-- **`rayBoxFraction` is only deletable with hitscan**, which is the first bullet again.
+**That belief was wrong, and the investigation that disproved it is the useful part.**
 
-**What should happen instead, and it is the most valuable single thing on this list: find out why
-some hulls do not match their brushes.** A rocket fired down a clear corridor on `oa_dm1` detonates
-in mid-air against entity 162's hull at a point where `pointContents` is zero and a 16-unit box
-sweep through the ported `cm_trace` is clear. `buildHulls` claims the brush-to-hull conversion is
-lossless and `physics-divergence.test.ts` asserts it is volume-exact, so one of those is wrong on
-this map. Everything in step 7 is worth doing *after* that, and worth nothing before it.
+- **The hulls are faithful.** Every hull vertex on all six shipped maps was checked against its own
+  brush's planes: the worst escape is **0.089 units**, on `am_thornish`, and no hull anywhere has a
+  vertex more than half a unit outside. `buildHulls` is doing its job.
+- **Sweeps are trustworthy.** `shape_cast` is what `PhysicsTrace`, `KinematicMover` and now the
+  missile confirmation all run on, and the 64-direction rocket test passes using a sweep as its
+  arbiter. Nothing in the sweep path is implicated.
+- **The defect is a contact-only bug in the engine**, recorded with a minimal repro in
+  `test/convex-contact.test.ts`: meep dispatches `ContactBegin` between a sphere and a
+  `ConvexHullShape3D` separated by up to **0.01 m** of clear air, and gives the event a *positive*
+  `depth` equal to the gap -- where `ManifoldStore`'s own layout comment says a gap is negative. The
+  identical box as a `BoxShape3D` reports nothing, because `sphere_box_contact` is a closed form that
+  can say "separated"; a convex hull falls through to GJK + EPA. It is the shape class, not the map
+  data -- an exact eight-vertex box reproduces it -- and it moves with where the sphere sits over the
+  face, which is what a simplex-quality problem looks like. The engine's own
+  `convex_convex_manifold` header already records EPA as unreliable for polytopes and routes
+  hull-vs-hull around it with SAT; sphere-vs-hull has no such route. **This wants a GAP entry.**
+
+So the port-side fix is local to contacts and is in: `Missiles` confirms every `ContactBegin` with a
+sweep of the segment the missile just flew before it detonates anything, and the missile's collider
+carries `ColliderFlags.IsSensor` so the same phantom contact cannot shove it off course either. A
+missile that has stopped -- CCD clamped it against something -- is taken as a real impact without a
+sweep, because a body resting on a surface sweeps nowhere and the first version of the guard left
+live rockets parked against people's chests for ten seconds.
+
+**Step 7 itself is therefore unblocked and still worth doing**, with one correction to its
+justification: `CanDamage` and hitscan go through *sweeps*, which are sound, so the objection that
+sank it does not apply. What remains true is the second reason it was deferred -- `G_RadiusDamage`
+needs each target's box distance for the falloff, so `overlap` replaces the candidate scan and
+nothing else, and the port's body-less targets (`Arena.addTarget`, behind `?targets=1`) still need
+the old loop beside it.
 
 ---
 
 ## What is left
 
-- **The hull divergence.** Named under step 7 and the reason it is deferred. It wants its own
-  measurement pass -- how many brushes on how many maps, and whether it is the winding, the
-  centroid rebase or `ConvexHullShape3D` itself -- and a DECISIONS entry.
+- **A GAP entry for the sphere-vs-convex-hull contact bug**, with `test/convex-contact.test.ts` as
+  its evidence. The port routes around it; the engine should not need routing around.
+- **Step 7**, which the above unblocks.
 - **A DECISIONS entry for the priority inversion**, which is the first risk below and is now real
   rather than prospective.
 - **The fly sound could ride the missile's own entity.** `AudioBank.loop` builds its own entity with
@@ -349,4 +363,4 @@ step and is deliberately left for after this lands.
 | 4 — headless ECS | **done** |
 | 5 — character bodies | **done** |
 | 6 — projectiles as bodies | **done** |
-| 7 — splash and LOS | **deferred** — see the step |
+| 7 — splash and LOS | **unblocked**, not done — see the step |

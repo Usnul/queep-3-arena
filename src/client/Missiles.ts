@@ -39,6 +39,26 @@
  * CCD sweep passes straight through a sensor, so a "correct" sensor body would
  * have been a body plasma flew through.
  *
+ * **Every contact is confirmed with a sweep before it detonates anything, and
+ * that is not defensive coding.** meep reports a `ContactBegin` for a pair that
+ * is merely *close*: a sphere against a `ConvexHullShape3D` produces a contact
+ * at up to 0.01 m (0.32 Q3 units) of clear air, with `depth` carrying the
+ * positive separation where the documented convention says a gap is negative.
+ * The same sphere against a `BoxShape3D` of identical dimensions reports
+ * nothing, which is the tell: `sphere_box_contact` is a closed form that returns
+ * "separated", while a convex hull falls through to GJK + EPA, and EPA on a
+ * simplex that does not enclose the origin returns a plausible-looking axis and
+ * the separation as a depth. Minimal repro and the measured threshold are in
+ * `test/missiles.test.ts`; the consequence without the guard is a rocket that
+ * detonates in mid-air whenever it passes within a third of a unit of a wall,
+ * which on a Q3 map is constantly.
+ *
+ * The sweep is the missile's own step, re-run as a query: if the segment it just
+ * flew does not actually touch the body the contact named, there was no impact.
+ * It costs one `shape_cast` per contact event -- not per step -- and it pays for
+ * itself twice, because the time of impact is also a better detonation point
+ * than either the manifold's point or the post-step pose.
+ *
  * **Grenades do not arc, and that is the balance table's doing rather than
  * this file's.** Q3's `fire_grenade` sets `TR_GRAVITY` and a bounce; the
  * extracted table (`balance.generated.json`, guarded by
@@ -53,10 +73,13 @@ import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
 import { RigidBodyFlags } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBodyFlags.js';
+import { ColliderFlags } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderFlags.js';
 import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
 import { PhysicsEvents } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsEvents.js';
 import { SphereShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/SphereShape3D.js';
+import { shape_cast } from '@woosh/meep-engine/src/engine/physics/queries/shape_cast.js';
+import { PhysicsSurfacePoint } from '@woosh/meep-engine/src/engine/physics/queries/PhysicsSurfacePoint.js';
 
 import type { CharacterBodies } from './CharacterBody.ts';
 import { LAYER_MISSILE, MISSILE_MASK } from './layers.ts';
@@ -99,15 +122,30 @@ interface Flight {
     readonly projectile: Projectile;
     readonly entity: number;
     readonly transform: Transform;
-    /** Set the moment a contact is reported, so a pair cannot detonate twice. */
+    /** Where the body was at the top of the step, for the confirming sweep. */
+    readonly previous: { x: number; y: number; z: number };
+    /** Set once a contact is confirmed, so a pair cannot detonate twice. */
     spent: boolean;
 }
 
 /** No pair is refused unless a missile is one half of it. */
 const ACCEPT = true;
 
+/** A sphere has no orientation; every sweep here uses this. */
+const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
+
 export class Missiles implements MissileWorld {
+    private readonly physics: MissilePhysics;
     private readonly ecd: MissileDataset;
+
+    /** Reused: `shape_cast` is an output-parameter API. */
+    private readonly hit = new PhysicsSurfacePoint();
+
+    /** One sphere, reused by every confirming sweep. */
+    private readonly probe = SphereShape3D.from(MISSILE_RADIUS * WORLD_SCALE);
+
+    /** The fixed step, learned from `sync`, for the "did it stop" test. */
+    private stepSeconds = 0;
     private readonly bodies: CharacterBodies | null;
     private readonly flights = new Map<number, Flight>();
 
@@ -127,6 +165,7 @@ export class Missiles implements MissileWorld {
         ecd: MissileDataset,
         bodies: CharacterBodies | null
     ) {
+        this.physics = physics;
         this.ecd = ecd;
         this.bodies = bodies;
 
@@ -196,11 +235,32 @@ export class Missiles implements MissileWorld {
             shape: unknown;
             friction: number;
             restitution: number;
+            flags: number;
         };
         collider.shape = SphereShape3D.from(MISSILE_RADIUS * WORLD_SCALE);
         collider.friction = 0;
         // Q3's grenade bounces and this port's does not; see the header.
         collider.restitution = 0;
+        /*
+         Contacts, but no impulse -- which is both Q3's missile and the only way
+         to be sure a *phantom* contact cannot move one.
+
+         A Q3 missile is `TR_LINEAR`: it flies in a straight line at a constant
+         speed until something stops it, and nothing ever pushes it off course.
+         Here that is not just fidelity: the false contacts described in the
+         header are reported with a positive depth, so the solver dutifully
+         pushes the missile apart from a wall it never touched. The detonation is
+         caught by the confirming sweep; the shove was not, and it deflected
+         rockets far enough over a 120-unit flight to miss a player.
+
+         The body stays `Dynamic` because CCD is Dynamic-only
+         (`ccd/linear_sweep.js` skips every other kind), and without the sweep a
+         plasma bolt goes through people. The sensor flag is on the *collider*
+         rather than the body for exactly that reason: `RigidBodyFlags.IsSensor`
+         would make the body itself a non-blocker, while this leaves the sweep
+         and the events intact and only takes the solver out.
+        */
+        collider.flags = ColliderFlags.IsSensor;
 
         const builder = new Entity();
         builder
@@ -213,6 +273,7 @@ export class Missiles implements MissileWorld {
             projectile,
             entity: builder.id,
             transform,
+            previous: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
             spent: false,
         };
         this.flights.set(projectile.id, flight);
@@ -266,13 +327,101 @@ export class Missiles implements MissileWorld {
      * this side to the engine's is *where it is*. Once per fixed step, after the
      * step that integrated it.
      */
-    sync(): void {
+    sync(deltaSeconds: number): void {
+        this.stepSeconds = deltaSeconds;
+
         for (const flight of this.flights.values()) {
             const p = flight.transform.position;
             flight.projectile.origin[0] = p.x / WORLD_SCALE;
             flight.projectile.origin[1] = -p.z / WORLD_SCALE;
             flight.projectile.origin[2] = p.y / WORLD_SCALE;
+
+            // The step just ended, so this pose is the next step's start -- and
+            // the start of the segment a contact reported during it has to be
+            // confirmed against.
+            flight.previous.x = p.x;
+            flight.previous.y = p.y;
+            flight.previous.z = p.z;
         }
+    }
+
+    /**
+     * Did this missile actually reach `other` during the step just run?
+     *
+     * The segment it flew, swept as its own sphere, against that one body. A
+     * real impact returns the point it stopped at -- which is `trace.endpos` in
+     * `G_MissileImpact`'s terms, and a better detonation point than either the
+     * manifold's contact point or the post-step pose. A contact reported for a
+     * pair that never touched returns null, and the missile flies on.
+     *
+     * See the header for why that second case exists and how far it reaches.
+     */
+    private confirm(
+        flight: Flight,
+        other: number
+    ): { x: number; y: number; z: number } | null {
+        const from = flight.previous;
+        const to = flight.transform.position;
+
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const dz = to.z - from.z;
+        const length = Math.hypot(dx, dy, dz);
+
+        /*
+         Did it stop?
+
+         A Q3 missile flies at a constant speed, so a step in which it covered
+         much less than that is a step in which something stopped it -- and the
+         only thing that stops one here is the CCD sweep clamping it at a
+         blocker. That case has to be caught separately, because a missile
+         already resting against a surface sweeps *nowhere*: the confirming
+         sweep below has no segment to work with and would reject the contact
+         every step, leaving a live rocket parked against someone's chest for
+         the rest of its ten seconds. Which is exactly what it did.
+
+         `stepSeconds` is zero until the first `sync`, so a missile that reports
+         a contact on the step it was created -- fired point-blank into a wall --
+         takes the same branch, which is the right answer for it too.
+        */
+        const speed = Math.hypot(
+            flight.projectile.velocity[0]!,
+            flight.projectile.velocity[1]!,
+            flight.projectile.velocity[2]!
+        ) * WORLD_SCALE;
+
+        const expected = speed * this.stepSeconds;
+        if (expected <= 0 || length < expected * 0.5) return to;
+
+        const ray = {
+            origin_x: from.x, origin_y: from.y, origin_z: from.z,
+            direction_x: dx / length, direction_y: dy / length, direction_z: dz / length,
+            tMax: length,
+        };
+
+        const onlyOther = (entity: number): boolean => entity === other;
+
+        if (
+            !shape_cast(
+                this.physics as never,
+                ray as never,
+                this.probe as never,
+                NO_ROTATION as never,
+                this.hit as never,
+                onlyOther as never,
+                false
+            )
+        ) {
+            return null;
+        }
+
+        const t = (this.hit as unknown as { t: number }).t;
+
+        return {
+            x: from.x + (dx / length) * t,
+            y: from.y + (dy / length) * t,
+            z: from.z + (dz / length) * t,
+        };
     }
 
     /**
@@ -303,9 +452,14 @@ export class Missiles implements MissileWorld {
          once.
         */
         if (flight.spent) return;
-        flight.spent = true;
 
         const other = payload.entityA === flight.entity ? payload.entityB : payload.entityA;
+
+        const at = this.confirm(flight, other);
+        if (at === null) return;
+
+        flight.spent = true;
+
         const clientId = this.bodies?.clientOf(other) ?? -1;
 
         /*
@@ -324,8 +478,6 @@ export class Missiles implements MissileWorld {
          engine documents it as valid only for the dispatch, and reuses one
          scratch object for every contact in the step.
         */
-        const at = flight.transform.position;
-
         const impact: MissileImpact = {
             projectile: flight.projectile,
             atQ3: vec3(at.x / WORLD_SCALE, -at.z / WORLD_SCALE, at.y / WORLD_SCALE),

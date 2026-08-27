@@ -120,8 +120,13 @@ export interface MissileImpact {
 export interface MissileWorld {
     launch(projectile: Projectile): void;
     retire(projectile: Projectile): void;
-    /** Copy live poses back into the `Projectile` records. Once per fixed step. */
-    sync(): void;
+    /**
+     * Copy live poses back into the `Projectile` records, once per fixed step.
+     *
+     * @param deltaSeconds the step just run, which is also how far a missile
+     *   should have travelled in it -- a shorter one means something stopped it.
+     */
+    sync(deltaSeconds: number): void;
     /** The entity a projectile is flying as, or -1. */
     entityOf(projectileId: number): number;
     onImpact: ((impact: MissileImpact) => void) | null;
@@ -336,7 +341,7 @@ export class WeaponSystem {
 
         // After the retirements, so a missile that has just left the world does
         // not have a pose copied out of an entity that no longer exists.
-        this.missiles?.sync();
+        this.missiles?.sync(deltaSeconds);
     }
 
     /**
