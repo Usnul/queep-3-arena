@@ -32,6 +32,7 @@ import { BspFile } from '../q3/bsp/BspFile.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { loadMap } from '../client/map/loadMap.ts';
 import { applyLightVolumes } from '../client/map/lightVolume.ts';
+import { Shadows } from '../client/Shadows.ts';
 import { loadModels } from '../client/map/loadModels.ts';
 import { ItemsView } from '../client/ItemsView.ts';
 import { ItemSystem, newInventory, type DropTrace } from '../game/Items.ts';
@@ -321,6 +322,14 @@ async function main(): Promise<void> {
     const frameRateCounter = addFrameRateCounter(engine);
 
     /*
+     Which lights cast, built here because the map's lights are handed to it as
+     soon as they exist and the menu is built later than that. It starts at its
+     own default and the graphics page pushes the stored value at it on
+     `applyAll`, which is the same order every other setting arrives in.
+    */
+    const shadows = new Shadows(graphics);
+
+    /*
      The element that owns input.
 
      Not the canvas. meep's `PointerDevice` and `KeyboardDevice` are constructed
@@ -393,6 +402,18 @@ async function main(): Promise<void> {
         `[queep] light volumes: ${volumes.sized} sized, ${volumes.suns} sun` +
         (volumes.unmatched > 0 ? `, ${volumes.unmatched} unmatched` : '') +
         (volumes.unclaimed > 0 ? `, ${volumes.unclaimed} unclaimed` : '')
+    );
+
+    /*
+     ...and whether they cast, which unlike the size is written on the component
+     rather than on Shade's light -- `LightSystem3` follows `castShadow` and
+     would overwrite anything written the other way. See `Shadows`.
+    */
+    shadows.followAll(loaded.lights, 'world');
+    if (loaded.sun !== null) shadows.follow(loaded.sun, 'sun');
+
+    console.log(
+        `[queep] shadows: ${shadows.mode}, ${shadows.followedCount} lights following`
     );
 
     /*
@@ -543,7 +564,7 @@ async function main(): Promise<void> {
      rather than reads a pose it has already copied.
     */
     const settings = new Settings([
-        graphicsPage({ graphics, camera, hud, frameRateCounter }),
+        graphicsPage({ graphics, camera, hud, frameRateCounter, shadows }),
     ]);
 
     settings.applyAll();
@@ -705,7 +726,7 @@ async function main(): Promise<void> {
         */
         const missiles = new Missiles(physicsWorld.system, ecd, bodies);
 
-        const arena = new Arena(ecd, clipMap, missiles);
+        const arena = new Arena(ecd, clipMap, missiles, shadows);
         arena.audio = audio;
 
         /*

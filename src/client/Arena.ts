@@ -36,6 +36,7 @@ import {
     type WeaponId,
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
+import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
 import { interpolatedBody } from './interpolation.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
 
@@ -113,9 +114,19 @@ export class Arena implements WeaponEvents {
      */
     audio: AudioBank | null = null;
 
-    constructor(ecd: EcsDataset, cm: ClipMap, missiles: MissileWorld | null = null) {
+    /**
+     * @param shadows what the effects' own lights ask before they cast. Defaults
+     *     to the answer they gave before there was a setting, so a test or a
+     *     tool that builds an arena for the collision half of it is unaffected.
+     */
+    constructor(
+        ecd: EcsDataset,
+        cm: ClipMap,
+        missiles: MissileWorld | null = null,
+        shadows: ShadowPolicy = NO_SHADOWS
+    ) {
         this.ecd = ecd;
-        this.effects = new Effects(ecd);
+        this.effects = new Effects(ecd, shadows);
         this.weapons = new WeaponSystem(cm, this, missiles);
 
         if (!ecd.isComponentTypeRegistered(ShadedGeometry)) {

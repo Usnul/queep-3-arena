@@ -11,22 +11,32 @@
  * ---
  *
  * Every row here writes something the engine already exposes and the port
- * already owns. That is the whole list, and it is short for a reason worth
- * stating in the file rather than only in the report:
+ * already owns. That is the whole list, and it was shorter than a graphics menu
+ * usually is for a reason worth stating in the file rather than only in the
+ * report:
  *
  * `GraphicsEngine3` is a deliberately narrow facade. Its own docblock names what
  * it will not hand out -- `renderer` above all, at a cost it counts in callers --
  * so shadow resolution, anti-aliasing, ambient occlusion, screen-space
- * reflections and the indirect-lighting mode are all properties of a `Renderer`
- * this application cannot reach. That is GAP-024, filed when the same wall
+ * reflections and the indirect-lighting mode were all properties of a `Renderer`
+ * this application could not reach. That is GAP-024, filed when the same wall
  * stopped the lighting half of phase 8, and it is why a graphics menu for a
- * WebGPU engine has a field of view and a resolution scale on it rather than a
+ * WebGPU engine had a field of view and a resolution scale on it rather than a
  * quality preset.
+ *
+ * **3.6.0 opened it**, by the narrowest door and with a warning on it: a
+ * `renderer` getter whose docblock is "Danger zone. Be careful with what you do,
+ * with great Renderer comes great responsibility." That is what makes the
+ * shadow row below possible, and it is the same property `main.ts` already uses
+ * to put a scene into Brick4 (D-107). What the page still does not have is a
+ * shadow *resolution*, which is `DEFAULT_SHADOWMAP_LOCAL_RESOLUTION` and a
+ * module-private constant -- so GAP-024 is smaller rather than closed.
  *
  * What is reachable, and is here:
  *
  *   `dynamic_resolution`   adaptive resolution, its target, and the render scale
  *   `Camera.fov`           field of view -- the port's own component
+ *   `Shadows`              which lights cast, over the renderer's master switch
  *   `Hud`                  the port's own 2D
  *
  * `dynamic_resolution` is the one the engine explicitly invites: "exposed so
@@ -76,6 +86,7 @@
 
 import { CROSSHAIR_DEFAULT, type Hud } from '../Hud.ts';
 import { NUM_CROSSHAIRS } from '../crosshair.ts';
+import { SHADOW_MODE_DEFAULT, type ShadowMode } from '../Shadows.ts';
 import type { Setting, SettingsPage } from './Settings.ts';
 import type { View } from './meep.ts';
 
@@ -102,12 +113,19 @@ export interface CameraHost {
     readonly fov: { set(x: number): unknown; getValue(): number };
 }
 
+/** The part of `Shadows` this page writes. See `Shadows.ts` for what it does. */
+export interface ShadowHost {
+    readonly mode: ShadowMode;
+    setMode(raw: unknown): boolean;
+}
+
 export interface GraphicsPageHosts {
     readonly graphics: GraphicsHost;
     readonly camera: CameraHost;
     readonly hud: Hud;
     /** The `stats.js` panel, if one was built -- see `frameRateCounter.ts`. */
     readonly frameRateCounter: View | null;
+    readonly shadows: ShadowHost;
 }
 
 /**
@@ -153,7 +171,7 @@ const RENDER_SCALE_MAX = 1;
  * are another function of this shape and no change to the shell.
  */
 export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
-    const { graphics, camera, hud, frameRateCounter } = hosts;
+    const { graphics, camera, hud, frameRateCounter, shadows } = hosts;
 
     /*
      Mirrored in closures rather than read back off the engine, so that a row
@@ -188,6 +206,34 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
             step: 1,
             format: (v) => `${v}°`,
             apply: (v) => camera.fov.set(v),
+        },
+        /*
+         Which lights cast, rather than a shadow *quality*, because which lights
+         cast is what an application can set and quality is not: the local
+         shadowmap resolution is a module-private constant in the renderer's
+         shadow context, and the atlas size is another beside it.
+
+         The three values are cheapest first and the labels say which lights
+         rather than "low / medium / high", because the axis really is which
+         lights -- a player choosing between them is choosing whether the room's
+         own lamps throw anything, which is a picture they can imagine, and not
+         a number of texels they cannot.
+        */
+        {
+            kind: 'choice',
+            id: 'shadows',
+            section: 'Lighting',
+            label: 'Shadows',
+            note: 'Every light on a Q3 arena is a fixture; all of them casting is the expensive one.',
+            initial: SHADOW_MODE_DEFAULT,
+            options: [
+                { value: 'off', label: 'Off' },
+                { value: 'sun', label: 'Sunlight only' },
+                { value: 'all', label: 'All lights' },
+            ],
+            apply: (v) => {
+                shadows.setMode(v);
+            },
         },
         /*
          The controller and the manual scale write the same number, so the three
@@ -301,9 +347,10 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
         title: 'Graphics',
         settings,
         note:
-            'Shadow, anti-aliasing, ambient-occlusion and reflection settings are properties ' +
-            'of the renderer, which meep does not expose to an application (GAP-024). ' +
-            'Supersampling is missing for a second reason: the one property that reaches it ' +
-            'throws on any scale that is not a whole number (BUG-11).',
+            'Shadow resolution, anti-aliasing, ambient-occlusion and reflection settings are ' +
+            'properties of the renderer, and are either private to it or reachable only ' +
+            'through the getter 3.6.0 put a warning on (GAP-024). Supersampling is missing ' +
+            'for a second reason: the one property that reaches it throws on any scale that ' +
+            'is not a whole number (BUG-11).',
     };
 }

@@ -29,6 +29,8 @@ import { Decal } from '@woosh/meep-engine/src/engine/graphics/ecs/decal/v2/Decal
 import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
 import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js';
 
+import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
+
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
 
@@ -151,8 +153,18 @@ export class Effects {
      */
     private readonly maxDecals = 2048;
 
-    constructor(ecd: EcsDataset) {
+    /**
+     * Whether the flashes cast, asked once per light at the moment it is made.
+     *
+     * Asked rather than followed because none of these lights lives long enough
+     * for the answer to change under it -- 90 ms for an explosion, 50 for a
+     * muzzle flash. See `Shadows`.
+     */
+    private readonly shadows: ShadowPolicy;
+
+    constructor(ecd: EcsDataset, shadows: ShadowPolicy = NO_SHADOWS) {
         this.ecd = ecd;
+        this.shadows = shadows;
 
         if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
         if (!ecd.isComponentTypeRegistered(Light)) ecd.registerComponentType(Light);
@@ -223,7 +235,12 @@ export class Effects {
         */
         light.intensity.set(12000 / (4 * Math.PI));
         light.distance.set(radius * 5);
-        light.castShadow.set(false);
+        /*
+         The one effect light worth the atlas slot: it is bright, it is large,
+         and a rocket going off behind a pillar throwing the pillar across the
+         room is the whole reason to want shadows on local lights at all.
+        */
+        light.castShadow.set(this.shadows.casts('effect'));
 
         const lightTransform = new Transform();
         lightTransform.position.set(x, y, z);
@@ -496,7 +513,15 @@ export class Effects {
      * Muzzle flash
      * ------------------------------------------------------------------ */
 
-    /** A brief point light at the muzzle. Cheap, and clustered lighting eats it. */
+    /**
+     * A brief point light at the muzzle. Cheap, and clustered lighting eats it.
+     *
+     * Cheap stops being the whole story under `Shadows`' `all`: a machinegun is
+     * ten of these a second, and each one that casts binds an atlas rect and its
+     * face views for the fifty milliseconds it exists. It is still the honest
+     * reading of "every light casts", and it is the mode's cost rather than this
+     * effect's -- the two cheaper modes are one row of the menu away.
+     */
     muzzleFlash(originQ3: ArrayLike<number>): void {
         const [x, y, z] = toMeep(originQ3);
 
@@ -505,7 +530,7 @@ export class Effects {
         light.color.setRGB(1, 0.9, 0.65);
         light.intensity.set(2500 / (4 * Math.PI));
         light.distance.set(6);
-        light.castShadow.set(false);
+        light.castShadow.set(this.shadows.casts('effect'));
 
         const transform = new Transform();
         transform.position.set(x, y, z);

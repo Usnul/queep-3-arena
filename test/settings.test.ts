@@ -51,6 +51,7 @@ import {
     type GraphicsHost,
 } from '../src/client/ui/graphics.ts';
 import type { Hud } from '../src/client/Hud.ts';
+import { SHADOW_MODE_DEFAULT, Shadows } from '../src/client/Shadows.ts';
 
 /* ------------------------------------------------------------------ *
  * Fixtures
@@ -510,6 +511,14 @@ function hosts(): {
     };
     camera: CameraHost & { value: number };
     hud: HudStub;
+    /**
+     * The real policy rather than a stub, because it is the half of this row
+     * that has anything in it -- the page's own job is to hand `setMode` a
+     * string, and `shadows.test.ts` covers what happens to the string next.
+     */
+    shadows: Shadows;
+    /** What the master switch was left at. See `ShadowRendererHost`. */
+    shade: { renderer: { feature_shadows_enabled: boolean } };
 } {
     const renderer = fakeRenderer();
 
@@ -563,7 +572,15 @@ function hosts(): {
         },
     };
 
-    return { graphics, camera, hud };
+    /*
+     Its own object rather than `graphics`, because the two reach different
+     things: the page writes `dynamic_resolution` on the facade, and the shadow
+     policy writes one property on the renderer behind it. `fakeRenderer` above
+     is the resize half and stays that.
+    */
+    const shade = { renderer: { feature_shadows_enabled: true } };
+
+    return { graphics, camera, hud, shadows: new Shadows(shade), shade };
 }
 
 /** The page, built against the stand-ins. */
@@ -573,6 +590,7 @@ function pageFor(h: ReturnType<typeof hosts>): SettingsPage {
         camera: h.camera,
         hud: h.hud as unknown as Hud,
         frameRateCounter: null,
+        shadows: h.shadows,
     });
 }
 
@@ -587,6 +605,7 @@ describe('the graphics page', () => {
         expect(h.graphics.dynamic_resolution.target_frame_rate).toBe(FRAME_RATE_TARGET_DEFAULT);
         expect(h.hud.crosshair).toBe(4);
         expect(h.hud.crosshairHealth).toBe(true);
+        expect(h.shadows.mode).toBe(SHADOW_MODE_DEFAULT);
     });
 
     it('never hands the renderer a scale it refuses, at any step of the slider', () => {
@@ -735,5 +754,43 @@ describe('the graphics page', () => {
 
         expect(counter.enabled?.()).toBe(false);
         expect(settings.get('frame-rate-counter')).toBe(false);
+    });
+
+    it('offers the three shadow modes, cheapest first', () => {
+        const h = hosts();
+        const settings = new Settings([pageFor(h)]);
+
+        const shadows = settings.definition('shadows');
+        expect(shadows.kind).toBe('choice');
+
+        if (shadows.kind !== 'choice') return;
+
+        expect(shadows.options.map((o) => o.value)).toEqual(['off', 'sun', 'all']);
+    });
+
+    /*
+     The row is a `<select>`, so what reaches `apply` is a string and never the
+     `ShadowMode` the policy is typed for. That is the seam worth an assertion:
+     it is the one place a rename of the mode strings would compile cleanly and
+     stop working.
+    */
+    it('carries a choice through to the policy and to the renderer', () => {
+        const h = hosts();
+        const settings = new Settings([pageFor(h)]);
+
+        settings.applyAll();
+        expect(h.shade.renderer.feature_shadows_enabled).toBe(true);
+
+        expect(settings.set('shadows', 'sun')).toBe(true);
+        expect(h.shadows.mode).toBe('sun');
+        expect(h.shadows.casts('world')).toBe(false);
+
+        expect(settings.set('shadows', 'off')).toBe(true);
+        expect(h.shade.renderer.feature_shadows_enabled).toBe(false);
+
+        // ...and a value from a build that spelled them differently is refused
+        // by `coerce` before the policy is ever asked.
+        expect(settings.set('shadows', 'ultra')).toBe(false);
+        expect(h.shadows.mode).toBe('off');
     });
 });

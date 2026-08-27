@@ -4444,3 +4444,99 @@ file back. The cell size is meep's own default and was not tuned. And nothing he
 at in a lit window by a person: the preview browser runs this application in a hidden tab where
 `requestAnimationFrame` never fires, so every claim above is about bytes, probe counts and component
 state rather than about how the arenas look.
+### D-108: Every light casts, and which ones do is a row in the menu
+
+Before this, four places in the port each decided the question for themselves and permanently: the
+map's point lights said no, the map's sun said yes, the explosion flash said no, and the muzzle
+flash said no. Three of those four were the same decision written three times, with the same
+reasoning in the comment each time -- q3map2 already baked the static shadowing into the lightmaps,
+so the sun was the only light that had to cast for an arena to read as lit.
+
+That reasoning is still true and is no longer the only defensible answer, because the lights in
+question are not decoration. They are reconstructed fixtures standing where the level's own lamps
+are, sized to the fixture (D-103) and coloured from the lightgrid (D-105). Having them throw
+shadows is the difference between a room lit by a renderer and a room lit by its light fittings.
+
+So the flag moved out of the four comments and into `src/client/Shadows.ts`, and the menu got a row.
+
+| mode | sun | map lights | effect flashes | `feature_shadows_enabled` |
+|---|---|---|---|---|
+| Off | no | no | no | false |
+| Sunlight only | yes | no | no | true |
+| All lights | yes | yes | yes | true |
+
+Three values rather than a toggle, because the three costs are genuinely different and the middle
+one is what every build before this shipped -- a toggle would have made "what it used to do" and
+"nothing at all" the same position. `All lights` is the default, which is the expensive one on
+purpose; the two cheaper rows are for hardware that cannot hold the frame rate, which is what a
+graphics menu is for. Off is the renderer's own master switch and not merely a scene with nothing
+casting: with `feature_shadows_enabled` false the shadow context treats every map as evictable and
+the pass stops running.
+
+**The flag is written on the ECS component, not on Shade's light**, and that is the one thing here
+worth getting wrong once and not twice. Shade's `Light` has a `casts_shadow` and it is right there
+on `scene.lights.elements`, which is where `applyLightVolumes` has to write `radius` because the
+component has no field for extent (GAP-030). It is the wrong door for this one: `LightSystem3`
+binds a `refresh` to `component.castShadow.onChanged` and copies the component's value over Shade's
+on every colour, intensity, angle, penumbra or distance change, so a flag written on Shade's light
+survives until the next unrelated property write. `castShadow` is a supported, observed, followed
+property, and using it is the whole of the runtime cost of this feature.
+
+The engine takes it from there without being told twice. `GPUSceneShadowmapContext.process_lights`
+runs every frame and detects `casts_shadow` flips itself -- its own docblock says the light
+collection's version does not move for them -- so a light that starts casting is allocated an atlas
+rect and its face views on the next frame, and one that stops has them reclaimed.
+
+**What `all` costs, stated rather than waved at.** A point light is a cube, six views, or four on
+the tetrahedral path; the per-frame refresh budget is 32 views. So `am_thornish`'s 325 lights cannot
+all refresh in a frame and are not meant to: `compute_shadowmap_update_score` scores a local light
+by `projected_area_px * (1 + staleness)`, which is zero for a light that is off-screen, very large
+for one that has just appeared, and in between by how much of the screen it covers. The atlas is
+8192 square against a 128-pixel local map, which is room for far more lights than any of these maps
+has. The cost is the handful of lights the player can currently see, over a static shadow for
+everything else that holds until something moves.
+
+**The effect flashes are asked, and the map's lights are followed.** Two shapes for one question,
+because a flash is 50 to 90 milliseconds and a match makes thousands of them: a registry that held
+those would be a list of dead components growing all match, and a setting changed while one is on
+screen cannot matter to a light with six frames left. So `Effects` asks `casts('effect')` once per
+light at the moment it makes one, and the map's lights -- built once, at load, and alive as long as
+the level -- are handed to `follow` and rewritten whenever the mode moves. Nothing unregisters,
+because nothing unloads a map: `?map=` is read at startup and changing it means a reload.
+
+The honest note about the flashes is that a machinegun is ten of them a second and each one that
+casts binds an atlas rect and its face views for the fifty milliseconds it exists. That is the
+mode's cost rather than the effect's, and it is one row of the menu away from not being paid -- but
+"every light casts" is what `all` says, so every light casts.
+
+**This is GAP-024 getting smaller.** The graphics page's footer has said since it was written that
+shadow, AA, ambient-occlusion and reflection settings are properties of a `Renderer` that
+`GraphicsEngine3` hands to nobody, and that is why a graphics menu for a WebGPU engine had a field
+of view on it and no quality preset. 3.6.0 added a `renderer` getter -- "Danger zone. Be careful
+with what you do, with great Renderer comes great responsibility" -- which is the same door D-107
+went through to put a scene into Brick4. It is one property this row needs and it is now reachable.
+What is still not reachable is the shadow *resolution*: `DEFAULT_SHADOWMAP_LOCAL_RESOLUTION` is a
+module-private constant in the shadow context, as is the atlas size, so a quality slider remains
+what GAP-024 says it is. The footer was rewritten to say the smaller thing rather than the old one.
+
+**What is verified.** The policy itself, in Node, against meep's real `Light` component -- including
+that the write raises the `onChanged` the engine binds to, which is the failure this feature would
+have had if the flag had gone on the wrong object. And end to end in the running application, on
+two maps, by reading Shade's own light collection back:
+
+| | `oa_dm1` (28 lights, no sun) | `oa_dm4` (53 lights, sun) |
+|---|---|---|
+| All lights | 28 points casting | 53 points + 1 directional |
+| Sunlight only | 0 | 0 points + 1 directional |
+| Off | 0, `feature_shadows_enabled` false | 0, `feature_shadows_enabled` false |
+
+The `<select>` drives it, the stored mode comes back over a reload, a mode from a build that spelled
+them differently is refused by `coerce` before the policy is asked, and the two effect flashes reach
+Shade's collection with `casts_shadow` true.
+
+**What is not.** Anything about the picture, and anything about the frame cost. The preview browser
+runs this application in a hidden tab where `requestAnimationFrame` does not fire -- confirmed here
+rather than assumed, and the log's `RENDER: 0.00ms` is the same fact -- so no frame has been drawn,
+no shadow map has been rasterized, and nobody has looked at a lit room. Every claim above is about
+component state and the contents of a light collection. The same limitation D-107 recorded, and for
+now it bounds the whole of this port's rendering work.

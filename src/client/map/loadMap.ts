@@ -43,6 +43,17 @@ export interface LoadedMap {
      */
     readonly submodelEntities: ReadonlyMap<number, readonly number[]>;
     readonly lightEntities: readonly number[];
+    /**
+     * The point lights this map put in the world, in `bundle.lights` order.
+     *
+     * Handed back rather than left inside, because whether they cast shadows is
+     * a setting rather than a property of the map -- and the alternative to
+     * returning the components is looking them back up off the entities. See
+     * `Shadows`, which is what `main.ts` hands them to.
+     */
+    readonly lights: readonly Light[];
+    /** The map's directional light, or null for a map with no `q3map_sun`. */
+    readonly sun: Light | null;
     readonly timings: Readonly<Record<string, number>>;
 }
 
@@ -150,6 +161,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
     const tGeometry = performance.now();
 
     const lightEntities: number[] = [];
+    const lights: Light[] = [];
 
     for (const l of bundle.lights) {
         const light = new Light();
@@ -177,10 +189,14 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
          Shade's own light is private to `LightSystem3` (GAP-030). It is applied
          to the renderer's lights afterwards, by `applyLightVolumes`.
         */
-        // Shadow-casting point lights are the expensive kind and a Q3 arena has
-        // dozens. Static shadowing came from the lightmaps that q3map2 baked;
-        // these lights exist to reproduce the *look*, and the sun casts the
-        // shadows that read.
+        /*
+         Shadow-casting point lights are the expensive kind and a Q3 arena has
+         dozens; the static shadowing q3map2 baked is already in the lightmaps.
+         So `false` is what a light is *born* with, and whether it stays that way
+         is the graphics menu's business rather than the loader's -- see
+         `Shadows`, which is handed `lights` below and writes the flag its mode
+         calls for.
+        */
         light.castShadow.set(false);
 
         const transform = new Transform();
@@ -190,10 +206,13 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         builder.add(transform).add(light).build(ecd);
 
         lightEntities.push(builder.id);
+        lights.push(light);
     }
 
+    let sun: Light | null = null;
+
     if (bundle.sun !== null) {
-        const sun = new Light();
+        sun = new Light();
         sun.type.set(LightType.DIRECTION);
         sun.color.setRGB(
             bundle.sun.color[0] ?? 1,
@@ -201,6 +220,11 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
             bundle.sun.color[2] ?? 1
         );
         sun.intensity.set(bundle.sun.intensity);
+        /*
+         The one light that cast before there was a setting, and the reason an
+         arena reads as lit at all. `Shadows` may still switch it off, which is
+         what the menu's `off` means.
+        */
         sun.castShadow.set(true);
 
         const transform = new Transform();
@@ -221,6 +245,8 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         submodelTransforms,
         submodelEntities,
         lightEntities,
+        lights,
+        sun,
         timings: {
             fetch: tFetched - t0,
             materials: tMaterials - tFetched,
