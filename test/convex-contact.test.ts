@@ -10,32 +10,32 @@
  *
  * ---
  *
- * meep 3.4.0 and 3.5.0 dispatched `PhysicsEvents.ContactBegin` between a sphere
- * and a `ConvexHullShape3D` separated by up to 0.01 m of clear air, and gave the
- * event a *positive* `depth` equal to the gap -- where `ManifoldStore`'s own
- * layout comment says a gap is negative and a positive number is penetration. So
- * neither the event nor its payload distinguished a hit from a near miss.
+ * Two findings about contacts against a `ConvexHullShape3D`, which is what all of
+ * this port's level collision and every character's box is made of. One is fixed
+ * and guarded here; one is open and worked around.
  *
- * It mattered because every brush in every level is a `ConvexHullShape3D` and a
- * missile is a sphere, so the false band was a centimetre of phantom collision
- * around every surface in the game: rockets detonated in mid-air in open
- * corridors. `Missiles` still confirms every contact with a sweep, which is
- * cheap, gives a better impact point than the manifold does, and is what caught
- * this.
+ * **Fixed in 3.6.0: a contact reported across clear air.** 3.4.0 and 3.5.0
+ * dispatched `PhysicsEvents.ContactBegin` between a sphere and a hull separated
+ * by up to 0.01 m, and gave the event a *positive* `depth` equal to the gap --
+ * where `ManifoldStore`'s own layout comment says a gap is negative and a
+ * positive number is penetration, so neither the event nor its payload
+ * distinguished a hit from a near miss. A missile is a sphere, so that was a
+ * centimetre of phantom collision around every surface in the game: rockets
+ * detonated in mid-air in open corridors.
  *
- * **Fixed in 3.6.0.** This file stays as the regression test for the fix, and it
- * asserts both halves deliberately:
+ * The first three cases below are the regression test for that fix, and they
+ * assert both halves on purpose -- no contact while the shapes are apart, *and* a
+ * contact at the right depth when they really do overlap. The second is not
+ * padding: a fix that removed every contact from the convex path would satisfy
+ * the first on its own and be far worse than the bug. The third pins the property
+ * that identified the cause, that the old behaviour moved with where the sphere
+ * sat over the face -- GJK picks its support vertices by direction, so two
+ * placements hand EPA different simplices out of the same pair of shapes.
  *
- *  - no contact while the shapes are apart -- the bug itself; and
- *  - a contact, at the right depth, when they really do overlap.
- *
- * The second is not padding. A fix that removed every contact from the convex
- * path would satisfy the first on its own and would be far worse than the bug,
- * and a `ConvexHullShape3D` is what all of this port's level collision is made
- * of. The third case pins the property that identified the cause: the old
- * behaviour moved with where the sphere sat over the face, because GJK picks its
- * support vertices by direction and two placements hand EPA different simplices
- * out of the same pair of shapes. It no longer does.
+ * **Still open: a contact that is never reported at all.** See the second
+ * `describe`. `Missiles.checkStopped` is the workaround, and the port's
+ * confirming sweep -- which is what caught the first bug -- came out in 3.7.0
+ * once it was no longer needed.
  */
 
 import { describe, expect, it } from 'vitest';
