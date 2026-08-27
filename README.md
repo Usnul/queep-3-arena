@@ -72,6 +72,11 @@ IndexedDB and applied on the next load.
 |---|---|
 | Field of view | `Camera.fov`; `cg_fov`, 60–130, default 90 |
 | Shadows | which lights cast: off, the sun only, or all of them. Defaults to all (D-108) |
+| Ambient occlusion | `feature_ssao_enabled`, which is GTAO. On, and the one of the three the arenas need: the lightmaps shade the level and nothing moving through it (D-109) |
+| Screen-space reflections | `feature_ssr_enabled`. Off, and greyed out on any map with a baked light volume — SSR and Brick4 are alternatives in the renderer, and setting the flag there costs the fused indirect path for nothing (D-109) |
+| Bloom | `feature_bloom_enabled`. On. Off saves the composite and not the bright pass, which automatic exposure needs either way (D-109) |
+| Motion blur | `feature_motion_blur_enabled`, Jimenez 2014 reconstruction. Off, and that one is an argument about the game rather than about cost (D-109) |
+| Blur strength | `renderer.motion_blur.strength`, 0.5–3.0x. 1.0 is the real per-frame movement; the ceiling is where the engine stops vouching for the reconstruction (D-109) |
 | Adaptive resolution | meep's `DynamicResolutionScaling`, which trades internal resolution for frame time |
 | Render scale | `Renderer.internal_resolution_scale`, 50–100%. Alternative to adaptive resolution — each greys the other out (D-101) |
 | Frame-rate target | what adaptive resolution aims to hold. Default 60, against the engine's own 30 |
@@ -79,14 +84,23 @@ IndexedDB and applied on the next load.
 | Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]` |
 | Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
 
-There is no anti-aliasing, ambient-occlusion or reflection setting, and no shadow *resolution*,
-because those are all properties of a `Renderer` that `GraphicsEngine3` was built not to expose to
-an application. That is GAP-024, and the menu says so in its own footer rather than looking thin
-for no reason. **Which lights cast is a setting because 3.6.0 opened the smallest possible door**
-— a `renderer` getter with "Danger zone" written on it — and because the flag itself is on the ECS
-`Light` component, one layer up (D-108). There is no supersampling for a second reason:
-`pixelRatio`, the one property that reaches it, throws on any scale that is not a whole number
-(BUG-11).
+Six of those rows exist because **3.6.0 opened the smallest possible door** — a `renderer` getter
+with "Danger zone" written on it — and the shape of what came through it is worth stating: with one
+exception they are switches, and there is not a quality setting among them. The `GTAO` and `SSR`
+objects are a private field of `Renderer` with no getter, so they are out of reach with the renderer
+already in hand; the quality knobs that exist are call arguments `Renderer` hardcodes —
+`SSR.graph_pass`'s `mip`, `graph_postprocess_bloom`'s `intensity` and `mips` — and the shadow
+*resolution* is a module-private constant, as is the atlas size beside it. So there is no
+anti-aliasing row and no Low / Medium / High, and that is still GAP-024 — smaller than it was, and
+the menu says so in its own footer rather than looking thin for no reason (D-108, D-109). There is
+no supersampling for a second reason: `pixelRatio`, the one property that reaches it, throws on any
+scale that is not a whole number (BUG-11).
+
+**Blur strength is the exception, and it points at the fix.** `MotionBlur` is newer than GTAO and
+SSR and was built the other way round: the renderer owns one and hands it out, `get motion_blur()`,
+with the getter's docblock reading "Configure it via `renderer.motion_blur.*`". `dof` is the same.
+The flag and the tuning are deliberately separated and both are public — which is exactly the shape
+GAP-024 asks for, already in the package, for whatever the engine added most recently.
 
 A map picker and a match setup screen are the next two pages. The shell takes a list of pages and
 nothing in it names "graphics"; what is missing for maps is a manifest of what the pipeline has
@@ -196,8 +210,10 @@ what that difference is, and includes a claim I got wrong twice before getting i
   saved to IndexedDB. Escape opens it, the game keeps running behind it, and it is a shell over a
   list of pages rather than a screen — a map picker and a match setup screen go in beside
   Graphics without the shell changing (D-097). What is on the graphics page is bounded by what
-  the engine hands an application: most of what is behind `Renderer` is still out of reach, which
-  is GAP-024 for the second time, and the shadow row is the one part 3.6.0 gave back (D-108).
+  the engine hands an application: most quality knobs behind `Renderer` are still out of reach,
+  which is GAP-024 for the second time, and the five rows over the renderer's own feature flags —
+  shadows, ambient occlusion, reflections, bloom and motion blur — are what 3.6.0 gave back, along
+  with the one tuning number of the five that has a getter (D-108, D-109).
 - **A stylesheet with defines.** `src/style/_tokens.scss` is the single source for colour, type,
   space, shape, motion and stacking; it emits the same values as `--queep-*` custom properties
   for runtime overrides, and feeds meep's own `--meep-*` theme hooks from the same variables

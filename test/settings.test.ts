@@ -34,6 +34,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { ShadeIndirectLightingMode } from '@woosh/meep-engine/src/shade/renderer/ShadeIndirectLightingMode.js';
+
 import {
     coerce,
     Settings,
@@ -46,6 +48,7 @@ import {
 import {
     FOV_DEFAULT,
     FRAME_RATE_TARGET_DEFAULT,
+    MOTION_BLUR_STRENGTH_DEFAULT,
     graphicsPage,
     type CameraHost,
     type GraphicsHost,
@@ -452,6 +455,12 @@ const VIEWPORT: { readonly width: number; readonly height: number } = { width: 1
  * assertions tests that the port calls it with a value it will take. These are
  * `Renderer.resize`, `Renderer.internal_resolution_scale` and
  * `GraphicsEngine3.updateSize` transcribed, and nothing else.
+ *
+ * The feature flags below have no assertions to carry -- they are plain public
+ * booleans -- and are here because they are on the same object in the engine.
+ * They start where `Renderer` starts them, so a test that asserts a default has
+ * to be told the port's answer rather than agreeing with the engine's by
+ * accident.
  */
 function fakeRenderer() {
     const renderer = {
@@ -460,6 +469,25 @@ function fakeRenderer() {
         height: VIEWPORT.height,
         internalScale: 1,
         resizes: 0,
+
+        /** `Renderer`'s own initialisers, in its own order. */
+        feature_ssr_enabled: false,
+        feature_ssao_enabled: true,
+        feature_bloom_enabled: true,
+        feature_motion_blur_enabled: false,
+
+        /**
+         * `MotionBlur`, which the renderer builds in `init` and hands out
+         * through a getter. Its own initialiser, and the only settable number
+         * anywhere behind these five switches.
+         */
+        motion_blur: { strength: 1 },
+
+        /**
+         * IBL, which is what a map with no bake leaves it at. Written by the
+         * tests that need the other one; never by the page.
+         */
+        indirect_lighting_mode: ShadeIndirectLightingMode.IBL,
 
         /** `Renderer.resize`, whose first two lines are the assertions. */
         resize(x: number, y: number): void {
@@ -573,10 +601,11 @@ function hosts(): {
     };
 
     /*
-     Its own object rather than `graphics`, because the two reach different
-     things: the page writes `dynamic_resolution` on the facade, and the shadow
-     policy writes one property on the renderer behind it. `fakeRenderer` above
-     is the resize half and stays that.
+     Its own object rather than `graphics.renderer`, although in the engine it is
+     the same one. `Shadows` takes its host separately -- it is built before the
+     menu, from `main.ts`, so that the map's lights can be handed to it as they
+     are made -- and giving the fixture the same seam keeps the shadow rows
+     honest about which door they go through.
     */
     const shade = { renderer: { feature_shadows_enabled: true } };
 
@@ -792,5 +821,135 @@ describe('the graphics page', () => {
         // by `coerce` before the policy is ever asked.
         expect(settings.set('shadows', 'ultra')).toBe(false);
         expect(h.shadows.mode).toBe('off');
+    });
+
+    /*
+     The three `feature_*` rows. Worth their own assertions and not folded into
+     the defaults test above, because two of the three are the engine's own
+     initial value -- an `applyAll` that wrote nothing at all would pass a test
+     that only compared them afterwards. So each one is moved off its default
+     and back.
+    */
+    it('pushes the feature switches at the renderer', () => {
+        const h = hosts();
+        const settings = new Settings([pageFor(h)]);
+
+        settings.applyAll();
+
+        expect(h.graphics.renderer.feature_ssao_enabled).toBe(true);
+        expect(h.graphics.renderer.feature_bloom_enabled).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
+        expect(h.graphics.renderer.feature_motion_blur_enabled).toBe(false);
+
+        expect(settings.set('ambient-occlusion', false)).toBe(true);
+        expect(h.graphics.renderer.feature_ssao_enabled).toBe(false);
+
+        expect(settings.set('bloom', false)).toBe(true);
+        expect(h.graphics.renderer.feature_bloom_enabled).toBe(false);
+
+        // On an IBL map, which is what the fixture starts as, reflections are
+        // reachable and the flag is written.
+        expect(settings.set('reflections', true)).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(true);
+
+        expect(settings.set('ambient-occlusion', true)).toBe(true);
+        expect(h.graphics.renderer.feature_ssao_enabled).toBe(true);
+    });
+
+    /*
+     The trap, and the reason the reflections row guards its own `apply` instead
+     of trusting `enabled` to have greyed the control out. `enabled` is a
+     question the *screen* asks; a value arriving out of storage does not go past
+     a control at all, and `applyAll` runs before anything is drawn.
+
+     What the stale flag would cost is not nothing, which is why it is refused
+     rather than merely useless: `use_fused_indirect` is
+     `fused_indirect && mode === Brick4 && !feature_ssr_enabled`, so a true here
+     buys the split indirect path and draws no reflection with it.
+    */
+    it('refuses to enable reflections in Brick4, from the screen or from storage', () => {
+        const h = hosts();
+        h.graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
+
+        const settings = new Settings([pageFor(h)]);
+
+        expect(settings.definition('reflections').enabled?.()).toBe(false);
+
+        /*
+         `set` still returns true -- the value moved, is held and will be saved,
+         which is what a greyed-out row does everywhere else on this page. What
+         must not move is the renderer.
+        */
+        expect(settings.set('reflections', true)).toBe(true);
+        expect(settings.get('reflections')).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
+
+        // And the same value arriving the other way, which is the case the
+        // control cannot cover: a session on an IBL map saved `true`.
+        settings.applyAll();
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
+    });
+
+    /*
+     The one slider on this page that is a quality setting rather than a
+     resolution, and the one row whose default is an argument about the game: a
+     Quake player wants the frame they turn onto to be readable, so it is off.
+    */
+    it('carries the blur strength, and greys it out while the effect is off', () => {
+        const h = hosts();
+        const settings = new Settings([pageFor(h)]);
+
+        settings.applyAll();
+
+        expect(settings.get('motion-blur')).toBe(false);
+        expect(settings.get('motion-blur-strength')).toBe(MOTION_BLUR_STRENGTH_DEFAULT);
+        expect(settings.definition('motion-blur-strength').enabled?.()).toBe(false);
+
+        /*
+         Written while the effect is off, unlike the render scale: nothing else
+         owns this number, so the value is already right on the frame the toggle
+         moves. That is the assertion -- a row that only wrote when it was
+         enabled would leave the renderer at 1.0 for one frame of a blur the
+         player asked to be 2.5.
+        */
+        expect(settings.set('motion-blur-strength', 2.5)).toBe(true);
+        expect(h.graphics.renderer.motion_blur.strength).toBe(2.5);
+
+        expect(settings.set('motion-blur', true)).toBe(true);
+        expect(h.graphics.renderer.feature_motion_blur_enabled).toBe(true);
+        expect(settings.definition('motion-blur-strength').enabled?.()).toBe(true);
+
+        // The range is the engine's: past ~3 the reconstruction samples reach
+        // beyond what the NeighborMax dilation vouches for.
+        expect(settings.set('motion-blur-strength', 99)).toBe(true);
+        expect(h.graphics.renderer.motion_blur.strength).toBe(3);
+
+        expect(settings.set('motion-blur-strength', 0)).toBe(true);
+        expect(h.graphics.renderer.motion_blur.strength).toBe(0.5);
+    });
+
+    /*
+     `GraphicsEngine3.renderer` is null before `start()` and after `stop()`, and
+     its `.d.ts` says otherwise -- so this is the case TypeScript will not catch
+     and the browser will. `applyAll` at startup is exactly where it would land.
+    */
+    it('applies without a renderer', () => {
+        const h = hosts();
+        const settings = new Settings([
+            graphicsPage({
+                graphics: { ...h.graphics, renderer: null },
+                camera: h.camera,
+                hud: h.hud as unknown as Hud,
+                frameRateCounter: null,
+                shadows: h.shadows,
+            }),
+        ]);
+
+        expect(() => settings.applyAll()).not.toThrow();
+        expect(settings.definition('reflections').enabled?.()).toBe(false);
+
+        // The rows that do not need one still work.
+        expect(settings.set('fov', 110)).toBe(true);
+        expect(h.camera.value).toBe(110);
     });
 });

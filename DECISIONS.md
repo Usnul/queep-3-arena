@@ -4540,3 +4540,144 @@ rather than assumed, and the log's `RENDER: 0.00ms` is the same fact -- so no fr
 no shadow map has been rasterized, and nobody has looked at a lit room. Every claim above is about
 component state and the contents of a light collection. The same limitation D-107 recorded, and for
 now it bounds the whole of this port's rendering work.
+
+### D-109: The renderer's feature switches are rows, and reflections is a row that refuses
+
+The graphics page's footer said for most of this port's life that ambient occlusion and reflections
+were properties of a `Renderer` an application could not reach. 3.6.0's `renderer` getter made that
+false, D-108 spent it on shadows, and this spends it on the rest of them.
+
+| row | writes | default | why that default |
+|---|---|---|---|
+| Ambient occlusion | `feature_ssao_enabled` | on | the engine's own, and the one of these the maps need |
+| Screen-space reflections | `feature_ssr_enabled` | off | the engine's own, and it cannot be written at all on most of these maps |
+| Bloom | `feature_bloom_enabled` | on | the engine's own |
+| Motion blur | `feature_motion_blur_enabled` | off | the engine's own, and the one default here that is an argument about the game |
+| Blur strength | `renderer.motion_blur.strength` | 1.0 | `MotionBlur`'s own, which is physical |
+
+**`feature_ssao_enabled` is GTAO**, and the name is the engine's history rather than a mistake in
+it: `PostProcess.ssao` is constructed `new GTAO(graphics)`, and what runs is the horizon search and
+bent-normal integration in `postprocess/gtao/`. It is first in the list because it is the one a Q3
+arena actually needs. A converted map's static shading is in its lightmaps, at luxel resolution,
+and — the part that matters more than the resolution — it is a property of the *level*. A player, a
+weapon model, an item turning on its pedestal and a rocket in flight are all outside the bake
+entirely. GTAO is the only thing in this renderer that shades where those meet the floor. Turning
+it off also moves more than the creases: the pass produces the bent normals the indirect term is
+sampled along, and without it the renderer falls back to the shading normals.
+
+**Bloom's row is honest about what it saves, which is less than it looks.** `Renderer` runs the
+bloom chain under `feature_bloom_enabled || feature_automatic_exposure_enabled`, and automatic
+exposure is on: it meters off `bloom.downsampled`. So the downsample chain runs either way and the
+row is the composite. The note under the label says so.
+
+**Reflections is the interesting one, and it is a row that refuses to be written.** SSR and Brick4
+are alternatives in this renderer rather than a stack — REPORT.md recorded that under GAP-024 when
+the two were planned as successive improvements and turned out not to be — and this port is in
+Brick4 on every map that has a baked light volume (D-107), which is the common case and not the
+corner. Two lines in `Renderer` decide it:
+
+```js
+if (this.feature_ssr_enabled && mode !== ShadeIndirectLightingMode.Brick4) { /* the SSR pass */ }
+
+const use_fused_indirect = this.fused_indirect
+    && this.indirect_lighting_mode === ShadeIndirectLightingMode.Brick4
+    && !this.feature_ssr_enabled;
+```
+
+Read together they say that the flag is **worse than inert** in Brick4: the first skips the
+reflections, and the second charges for them anyway — the fused Brick4 path is given up for the
+split one, which is an extra pair of rgba16float targets and a separate resolve. A setting that
+does nothing is a disappointment; a setting that does nothing and costs a millisecond is a bug
+report about the port's frame rate.
+
+So the row greys out **and** the write is guarded, and the second is not redundant on the first.
+`enabled` is a question the screen asks: it dims the row and disables the control, and the control
+is not the only way in. `applyAll` runs at startup before anything is drawn, and a value out of
+IndexedDB — saved by a `?gi=ibl` session on the same map — arrives there without passing a control
+at all. `apply` writes `v && reflectionsReachable()`, which is the same shape as the render scale's
+`pinRenderScale` one section up: the menu holds the value, saves it, shows it, and declines to push
+it at an engine that would be worse for having it.
+
+**The one place the mode moves after startup is the bake, and it clears the flag itself.**
+`runLightMapBake` is deliberately not awaited — it is minutes of compute-shader work on a level
+that is already playable — and it ends by attaching the volume and putting the renderer into
+Brick4. That is the only thing in this application that changes the answer `reflectionsReachable`
+gave at `applyAll`, so the flip sets `feature_ssr_enabled = false` on the line below, and the menu
+row greys itself out on the next `open()`, which calls `syncAll`. A dev-flag path, and the only
+alternative was plumbing the settings object into a function called ninety lines before it exists.
+
+**Motion blur is off, and that is the one default on this page decided by the game rather than by
+what it costs.** Q3 is a twitch shooter played by people who come round a corner at 800 units a
+second and expect the room to be legible on the frame it appears in. Reconstruction blur is very
+good at making a fast turn look like a camera and slightly worse at making it readable, and "turn
+off motion blur" is the first line of every competitive config for every shooter since. So it is
+here, because someone will want it and it is one flag away, and it is off, because this is Quake.
+The engine's default is false as well, so nothing about the shipped picture rests on that argument —
+but the argument is why this row does not follow the shadow row's "default to the good-looking one".
+
+**Blur strength is the first quality slider this page has ever had, and the reason it exists is the
+most hopeful thing in GAP-024.** `MotionBlur` is a newer subsystem than GTAO and SSR and was built
+the other way round. The renderer owns one and hands it out — `get motion_blur()` — and the getter's
+docblock is an instruction rather than a warning:
+
+> The motion-blur subsystem. Configure it via `renderer.motion_blur.*` (currently `strength`);
+> toggle the effect with `feature_motion_blur_enabled`.
+
+`dof` has the same shape. The flag and the tuning are deliberately separated, both are public, and a
+settings screen is plainly among the callers that was meant. That is exactly the shape GAP-024 asks
+for, already in the package, for whatever the engine added most recently — so the gap is less "the
+facade refuses" than "the older effects predate the pattern the newer ones use".
+
+The range is the engine's numbers rather than taste. `1.0` is documented as physical, matching the
+real per-frame pixel displacement, which at a shooter's frame rates is "deliberately subtle";
+`2.0`–`3.0` is "a longer shutter", cinematic 180° on 24 fps source. The ceiling is 3 because that is
+where the engine stops vouching for it: `strength` scales velocities inside the reconstruction pass
+and does *not* rescale the TileMax/NeighborMax pyramid underneath, so past about 3 "samples beyond
+the dilation reach can pick up unrelated velocities at silhouettes". A slider whose top third smears
+the wrong pixels onto a moving player is not a quality setting.
+
+The slider writes even while the effect is off, which is the opposite of what the render scale does
+one section down, and the difference is who else owns the number. Nothing else writes `strength` —
+there is no controller to take it back — so the greyed-out row is simply the one nothing is
+currently reading, and the value is already right on the frame the toggle above it moves.
+
+**What did not come through the door.** The quality behind the other three switches, and it is out of
+reach twice over. The `GTAO` and `SSR` objects live in `Renderer.#postprocess`, a private field
+with no getter — unlike `motion_blur` and `dof`, which have one each — so they cannot be reached
+even with the renderer in hand. And their quality is a call argument rather than a property in any
+case: `SSR.graph_pass` takes a `mip` ("higher mip = lower resolution trace") and
+`graph_postprocess_bloom` takes an `intensity` and a `mips`, and `Renderer` calls all three of them
+without. `DEFAULT_SHADOWMAP_LOCAL_RESOLUTION` is the third shape of the same thing: module-private,
+as is the atlas size beside it.
+
+So those rows are toggles rather than a Low / Medium / High, because a Low / Medium / High here
+would be three labels over one boolean each, which is a worse control than the boolean. GAP-024 is
+now specifically about presets for the older effects rather than about effects at all, and the page
+footer was rewritten to say that smaller thing.
+
+**What is verified.** In Node, against a fake renderer carrying `Renderer`'s own initialisers: that
+`applyAll` pushes all of them rather than agreeing with the engine's defaults by accident, that
+each toggles both ways, and that in Brick4 the reflections value is held, returned by `get`, and
+still not written to the renderer — from `set` and from `applyAll` both. That the blur strength is
+written while the effect is off, greys out with it, and clamps to 0.5–3.0 at both ends. And that the
+page applies without a renderer at all, which is the null the `.d.ts` denies and the browser
+produces.
+
+End to end in the running application, reading the renderer's flags back on both lighting modes:
+
+| | default map (Brick4) | `?gi=ibl` (IBL) |
+|---|---|---|
+| Ambient occlusion | writes `feature_ssao_enabled`, both ways | same |
+| Bloom | writes `feature_bloom_enabled`, both ways | same |
+| Motion blur | writes `feature_motion_blur_enabled`; strength reaches `renderer.motion_blur` | same |
+| Reflections | row inert, control disabled, flag stays false | row live, flag follows the toggle |
+
+The real checkboxes drive it, not just `Settings.set`; `ao=false, bloom=false` came back over a
+reload out of IndexedDB and reached the renderer; and `reset()` puts all three back.
+
+**What is not.** The picture. The preview browser runs this application in a hidden tab where
+`requestAnimationFrame` never fires, so no frame has been drawn and nobody has looked at a room with
+the occlusion off — or, for that matter, at a blur, which is the one of these that cannot be judged
+from a still frame anyway. Every claim above is about the value of four booleans and a float on a
+`Renderer`. The same limitation D-107 and D-108 recorded, and it still bounds this port's rendering
+work.
