@@ -97,6 +97,42 @@ export interface WeaponEvents {
     projectileGone(projectile: Projectile): void;
 }
 
+/** What a hitscan shot passed through, and how far along the segment. */
+export interface HitscanHit {
+    /** The Q3 client id struck. */
+    readonly clientId: number;
+    /** Position along the shot, 0 at the muzzle and 1 at its range. */
+    readonly fraction: number;
+}
+
+/**
+ * The spatial questions damage asks, answered by whatever collision ships.
+ *
+ * `src/client/DamageQueries.ts` is the implementation, and it is the broadphase.
+ * This interface exists so the damage *rules* stay ECS-free and headless -- which
+ * is what lets `match.test.ts` drive a whole deathmatch with a counter in place
+ * of the presentation layer.
+ *
+ * Null is a legal answer for the whole of it: the configurations with no meep
+ * physics behind them (the clipmap-only benchmark column) fall back to scanning
+ * `WeaponSystem.targets`, which is what the port did everywhere before phase 9.
+ */
+export interface DamageQuery {
+    /**
+     * `trap_EntitiesInBox`: the Q3 client ids inside a blast, written into `out`.
+     * @returns how many were written.
+     */
+    clientsInRadius(atQ3: ArrayLike<number>, radiusQ3: number, out: number[]): number;
+    /** `CanDamage`: an unobstructed path, world geometry only. */
+    visible(fromQ3: ArrayLike<number>, toQ3: ArrayLike<number>): boolean;
+    /** The nearest client a shot passes through, ignoring the one who fired it. */
+    hitscan(
+        fromQ3: ArrayLike<number>,
+        toQ3: ArrayLike<number>,
+        ownerId: number
+    ): HitscanHit | null;
+}
+
 /** Where a missile stopped, and what stopped it. */
 export interface MissileImpact {
     readonly projectile: Projectile;
@@ -164,6 +200,10 @@ export class WeaponSystem {
     private readonly projectiles: Projectile[] = [];
     private nextProjectileId = 1;
     private readonly missiles: MissileWorld | null;
+    private readonly queries: DamageQuery | null;
+
+    /** Reused by the splash query; `G_RadiusDamage` never has many candidates. */
+    private readonly inRadius: number[] = [];
 
     /** Everything a shot can hurt, including the player. */
     readonly targets: Damageable[] = [];
@@ -187,10 +227,16 @@ export class WeaponSystem {
      *   movement backend, because `?trace=clipmap` selects a *movement* backend
      *   and taking the rockets away with it would make the A/B mean two things.
      */
-    constructor(cm: ClipMap, events: WeaponEvents, missiles: MissileWorld | null = null) {
+    constructor(
+        cm: ClipMap,
+        events: WeaponEvents,
+        missiles: MissileWorld | null = null,
+        queries: DamageQuery | null = null
+    ) {
         this.cm = cm;
         this.events = events;
         this.missiles = missiles;
+        this.queries = queries;
 
         if (missiles !== null) {
             missiles.onImpact = (impact): void => {
@@ -283,18 +329,35 @@ export class WeaponSystem {
         damage: number,
         ownerId: number
     ): void {
+        /*
+         The world through the ported `cm_trace`, which is bit-exact and is the
+         only thing that carries Q3's surface flags -- `SURF_NOIMPACT` is what
+         decides whether a bullet leaves a mark, and the broadphase has no
+         opinion about it. The clients come from the collision the game actually
+         runs on; the nearer answer wins.
+        */
         boxTrace(trace, this.cm, start, end, ZERO, ZERO, MASK_SHOT);
 
         let bestFraction = trace.fraction;
         let bestTarget: Damageable | null = null;
 
-        for (const target of this.targets) {
-            if (target.id === ownerId || target.dead) continue;
+        if (this.queries !== null) {
+            const struck = this.queries.hitscan(start, end, ownerId);
 
-            const f = rayBoxFraction(start, end, target);
-            if (f !== null && f < bestFraction) {
-                bestFraction = f;
-                bestTarget = target;
+            if (struck !== null && struck.fraction < bestFraction) {
+                bestFraction = struck.fraction;
+                bestTarget = this.clientOf(struck.clientId);
+            }
+        } else {
+            // No broadphase behind us: the array is the spatial structure.
+            for (const target of this.targets) {
+                if (target.id === ownerId || target.dead) continue;
+
+                const f = rayBoxFraction(start, end, target);
+                if (f !== null && f < bestFraction) {
+                    bestFraction = f;
+                    bestTarget = target;
+                }
             }
         }
 
@@ -400,7 +463,7 @@ export class WeaponSystem {
          Using the centre would make large targets take less splash than they
          should, which is a balance change.
         */
-        for (const target of this.targets) {
+        for (const target of this.splashCandidates(atQ3, radius)) {
             if (target.dead) continue;
             if (target === directHit) continue;
 
@@ -434,8 +497,45 @@ export class WeaponSystem {
         }
     }
 
+    /**
+     * Everything the blast could reach -- `trap_EntitiesInBox`, and Q3 asks the
+     * server's entity grid rather than walking every client for a reason.
+     *
+     * The broadphase answers it when there is one. Without it the array *is* the
+     * spatial structure, which is what this port did everywhere before phase 9
+     * and is still the honest answer for a configuration with no meep physics
+     * behind it.
+     *
+     * The falloff still needs each candidate's box, so this narrows the set and
+     * nothing more: `overlap` says who is close, `G_RadiusDamage` still says how
+     * much.
+     */
+    private splashCandidates(atQ3: ArrayLike<number>, radiusQ3: number): readonly Damageable[] {
+        if (this.queries === null) return this.targets;
+
+        const count = this.queries.clientsInRadius(atQ3, radiusQ3, this.inRadius);
+
+        const found: Damageable[] = [];
+        for (let i = 0; i < count; i++) {
+            const target = this.clientOf(this.inRadius[i]!);
+            if (target !== null) found.push(target);
+        }
+
+        return found;
+    }
+
+    /** The `Damageable` wearing a Q3 client id, or null. */
+    private clientOf(clientId: number): Damageable | null {
+        for (const target of this.targets) {
+            if (target.id === clientId) return target;
+        }
+        return null;
+    }
+
     /** `CanDamage`: is there an unobstructed path from the blast to the target? */
     private canDamage(fromQ3: ArrayLike<number>, target: Damageable): boolean {
+        if (this.queries !== null) return this.queries.visible(fromQ3, target.origin);
+
         boxTrace(trace, this.cm, fromQ3, target.origin, ZERO, ZERO, MASK_SOLID);
         return trace.fraction === 1.0;
     }

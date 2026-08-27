@@ -43,6 +43,7 @@ import { Bot } from '../src/game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../src/client/Bots.ts';
 import { CharacterBodies, type CharacterSlot } from '../src/client/CharacterBody.ts';
 import { Missiles } from '../src/client/Missiles.ts';
+import { DamageQueries } from '../src/client/DamageQueries.ts';
 import {
     WeaponSystem, type Damageable, type WeaponEvents, type WeaponId,
 } from '../src/game/Weapons.ts';
@@ -220,7 +221,9 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     const missiles =
         physics === null ? null : new Missiles(physics.system, physics.ecd, bodies);
 
-    const weapons = new WeaponSystem(cm, board, missiles);
+    const damageQueries = bodies === null ? null : new DamageQueries(physics!.system, bodies);
+
+    const weapons = new WeaponSystem(cm, board, missiles, damageQueries);
 
     const entrances = spawnPoints(scene.entities);
     const spawns = entrances.points.map((e) => e._originQ3);

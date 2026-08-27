@@ -462,9 +462,9 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 |---|---:|---|
 | `mapped`, exercised | 31 | a meep facility does the job, and this port calls it |
 | `mapped`, not exercised | 18 | the facility exists and would do the job; this port never needed it |
-| `hybrid` | 4 | a meep facility does part of the job and ported Q3 code does the rest |
+| `hybrid` | 5 | a meep facility does part of the job and ported Q3 code does the rest |
 | `ported` | 7 | reimplemented faithfully in TypeScript; deliberately *not* mapped onto meep |
-| `workaround` | 22 | meep has no direct facility; solved outside the engine |
+| `workaround` | 21 | meep has no direct facility; solved outside the engine |
 | `GAP` | 0 | no reasonable answer; see gap register |
 | `not needed` | 227 | the whole subsystem is out of scope (netcode, botlib, CD keys, cinematics) |
 
@@ -644,7 +644,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_EA_Talk` | 4 | game | not needed | bot writes usercmd_t directly | -- | Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t. _(classified by prefix `trap_EA_`)_ |
 | `trap_EA_Use` | 14 | game | not needed | bot writes usercmd_t directly | -- | Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t. _(classified by prefix `trap_EA_`)_ |
 | `trap_EA_View` | 4 | game | not needed | bot writes usercmd_t directly | -- | Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t. _(classified by prefix `trap_EA_`)_ |
-| `trap_EntitiesInBox` | 9 | game | workaround | own AABB list; no broadphase | `src/game/Movers.ts`<br>`src/game/Items.ts` | Q3's areagrid, used for trigger and item touch tests. The port keeps its own arrays of triggers, movers and items and tests AABBs directly: at the entity counts a deathmatch map has -- 31 items and 6 brush entities on `oa_dm1` -- a broadphase costs more than it saves. Recorded as a facility that exists and was correctly not used. |
+| `trap_EntitiesInBox` | 9 | game | hybrid | PhysicsSystem.overlap for damage; own AABB list for triggers and items | `src/client/DamageQueries.ts`<br>`src/game/Movers.ts`<br>`src/game/Items.ts` | Q3's areagrid, and the port now answers it two ways because its callers are two different problems. `G_RadiusDamage` asks which *clients* are in a blast, and clients have had bodies since phase 9, so that goes through `PhysicsSystem.overlap` with a sphere -- the row was `workaround` until there was anything damageable in the broadphase to find. Trigger and item touch still test AABBs directly: those entities have no bodies, giving each of the 31 items on `oa_dm1` one to be found by would cost more than the loop it replaced. `test/damage-queries.test.ts` runs both paths over the same blasts and requires the same people to be hurt. |
 | `trap_EntityContact` | 3 | game | workaround | own AABB test | `src/game/Movers.ts` | Q3 tests a bounding box against an entity's *brushes*. The port tests the trigger's AABB, which is exact for the axis-aligned trigger brushes OA ships and would be wrong for a rotated or non-convex one. |
 | `trap_EntityContactCapsule` | 1 | game | not needed | - | -- | OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018. |
 | `trap_Error` | 24 | cgame, game, q3_ui, ui | mapped | throw + a failure screen | `src/app/main.ts` | Q3's fatal error drops to the console with a message. Here it throws, and the top-level catch replaces the document with the stack -- because a WebGPU application that fails during boot otherwise shows a black canvas and nothing else. |

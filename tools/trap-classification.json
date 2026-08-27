@@ -170,10 +170,11 @@
       ]
     },
     "trap_EntitiesInBox": {
-      "status": "workaround",
-      "meep": "own AABB list; no broadphase",
-      "note": "Q3's areagrid, used for trigger and item touch tests. The port keeps its own arrays of triggers, movers and items and tests AABBs directly: at the entity counts a deathmatch map has -- 31 items and 6 brush entities on `oa_dm1` -- a broadphase costs more than it saves. Recorded as a facility that exists and was correctly not used.",
+      "status": "hybrid",
+      "meep": "PhysicsSystem.overlap for damage; own AABB list for triggers and items",
+      "note": "Q3's areagrid, and the port now answers it two ways because its callers are two different problems. `G_RadiusDamage` asks which *clients* are in a blast, and clients have had bodies since phase 9, so that goes through `PhysicsSystem.overlap` with a sphere -- the row was `workaround` until there was anything damageable in the broadphase to find. Trigger and item touch still test AABBs directly: those entities have no bodies, giving each of the 31 items on `oa_dm1` one to be found by would cost more than the loop it replaced. `test/damage-queries.test.ts` runs both paths over the same blasts and requires the same people to be hurt.",
       "evidence": [
+        "src/client/DamageQueries.ts::clientsInRadius",
         "src/game/Movers.ts::function boxesOverlap",
         "src/game/Items.ts::update"
       ]

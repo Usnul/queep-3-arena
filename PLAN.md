@@ -272,69 +272,46 @@ of sight and an item's drop, and with character bodies in the world every bot's 
 terminated on its own collider, so no bot ever saw the player again. `PhysicsTrace.ignored` is the
 fix, and missiles are in it too.
 
-### Step 7 — splash and line of sight through physics — **unblocked, not yet done**
+### Step 7 — splash and line of sight through physics — **done**
 
-The plan was `PhysicsSystem.overlap` for splash candidates and `PhysicsTrace`'s `shapeCast` for
-`CanDamage`'s line of sight, flipping D-067's `trap_EntitiesInBox` row from `workaround` to
-`mapped`. It was deferred on the belief that meep's convex hulls did not match the brushes they were
-built from, which would have poisoned both halves.
+`src/client/DamageQueries.ts`. Three questions moved off a loop over every `Damageable` and onto the
+broadphase: who is inside a blast (`trap_EntitiesInBox`, now `PhysicsSystem.overlap` with a sphere),
+what a bullet passed through (`Bullet_Fire` against the client list, now `PhysicsSystem.raycast`),
+and whether splash can reach someone (`CanDamage`, now a ray with characters filtered out, because
+Q3 traces that with `MASK_SOLID` and a player does not shield another).
 
-**That belief was wrong, and the investigation that disproved it is the useful part.**
+**A ray, not a sweep, and `PhysicsSystem.raycast`'s own docblock argues against that.** It says the
+result is "the distance to the leaf's inflated AABB", exact only for AABB colliders -- which would
+have made every level brush a phantom wall. That docblock is stale: `queries/raycast.js` refines
+every hit against the true shape, "the convex primitives, the convex hull, the concave mesh /
+heightmap, and the wrappers". Measured before trusting it: **224 rays** fired from every spawn on
+`oa_dm1` against real brushes disagree with the ported, bit-exact `cm_trace` by at most **0.64
+units**, and never miss a wall it finds. Two docblocks disagreeing, and the one on the public method
+is the wrong one -- worth an ergonomics note.
 
-- **The hulls are faithful.** Every hull vertex on all six shipped maps was checked against its own
-  brush's planes: the worst escape is **0.089 units**, on `am_thornish`, and no hull anywhere has a
-  vertex more than half a unit outside. `buildHulls` is doing its job.
-- **Sweeps are trustworthy.** `shape_cast` is what `PhysicsTrace`, `KinematicMover` and now the
-  missile confirmation all run on, and the 64-direction rocket test passes using a sweep as its
-  arbiter. Nothing in the sweep path is implicated.
-- **The defect was a contact-only bug in the engine, and is fixed.** meep 3.4.0 and
-  3.5.0 dispatched `ContactBegin` between a sphere and a `ConvexHullShape3D`
-  separated by up to **0.01 m** of clear air, with a *positive* `depth` equal to
-  the gap -- where `ManifoldStore`'s own layout comment says a gap is negative.
-  The identical box as a `BoxShape3D` reported nothing, because
-  `sphere_box_contact` is a closed form that can say "separated" while a convex
-  hull falls through to GJK + EPA. **3.6.0 fixed it**, and
-  `test/convex-contact.test.ts` is now the regression test for the fix, asserting
-  both that separated shapes report nothing *and* that overlapping ones still
-  report at the right depth -- a fix that removed every contact from the convex
-  path would have satisfied the first alone and been far worse than the bug.
-- **3.6.0 also regressed `KinematicMover` and 3.7.0 fixed that.** For one version
-  a body pressed against geometry was pinned with all velocity zeroed while
-  reporting `grounded === false`, permanently: strafe-jumping fell from 386 to
-  140 units per second and a player could hang in mid-air indefinitely. Caught by
-  `meepmove` and, independently, by the wedge test that exists for exactly that
-  failure. Attributed by A/B against a scratch copy of the previous version
-  rather than by reinstalling, because `node_modules` is shared with other live
-  sessions.
-- **The last finding is fixed too, in 3.8.0.** A body that CCD stopped against a
-  hull's *corner* raised no contact event: face-on it did, at 45 degrees the same
-  sphere was clamped on the same step at the same geometric distance and nothing
-  was dispatched. Ten of twenty-eight rockets in the 64-direction test ground to
-  a halt against a player's shoulder and sat there for ten seconds. `Missiles`
-  inferred the impact instead -- a `TR_LINEAR` missile that covered less than its
-  own speed in a step has hit something -- and that inference is gone with the
-  fix. `test/convex-contact.test.ts` asserted the *absence*, so the upgrade
-  failed exactly one test and the failure was the instruction.
+Rays also skip sensors, which the port gets for free exactly where it wants: a missile carries
+`ColliderFlags.IsSensor`, so a rocket crossing a corridor blocks nobody's line of sight and stops no
+bullets. Asserted rather than assumed.
 
-**Three engine bugs, found by this port and fixed in four releases**, and both
-workarounds are out again: `Missiles.ts` peaked at 522 lines and is back to 421,
-with no inference and no confirming sweep in it. What is left is the contact
-listener the design called for in the first place.
+**The D-067 row moved to `hybrid`, not `mapped`, and the plan was wrong about which row it was.**
+`trap_EntitiesInBox` is cited in the matrix against *trigger and item touch* -- `Movers.ts` and
+`Items.ts` -- not against damage. Those entities still have no bodies and still test AABBs directly,
+because giving each of `oa_dm1`'s 31 items one to be found by would cost more than the loop it
+replaced. Only the damage half moved, so the row says both things.
 
-The confirming sweep this port carried against the false contacts is **gone** on 3.7.0, and its
-removal is worth recording: it could not be left in as insurance. A missile that *grazes* a body is
-touching it at depth zero while moving along its surface, so the segment swept between two steps
-never enters the thing it is already resting against -- the guard rejected ten of twenty-three real
-hits. A check that answers "did it arrive" cannot recognise a hit that has already arrived. The
-missile's collider keeps `ColliderFlags.IsSensor`, which is Q3's `TR_LINEAR` and not a workaround:
-nothing ever pushes a missile off course.
+**The array scan stays as the fallback**, and that is the cost this step was always going to carry:
+the configurations with no meep physics behind them -- the clipmap column of the benchmark -- have
+no character bodies to query, so `WeaponSystem` keeps the scan for them. `rayBoxFraction` therefore
+survives. Step 7 adds about 210 lines and deletes none; what it buys is the shipping path running on
+the broadphase and a matrix row that is now true.
 
-**Step 7 itself is therefore unblocked and still worth doing**, with one correction to its
-justification: `CanDamage` and hitscan go through *sweeps*, which are sound, so the objection that
-sank it does not apply. What remains true is the second reason it was deferred -- `G_RadiusDamage`
-needs each target's box distance for the falloff, so `overlap` replaces the candidate scan and
-nothing else, and the port's body-less targets (`Arena.addTarget`, behind `?targets=1`) still need
-the old loop beside it.
+*Exit criterion, met:* `node tools/extract-balance.mjs --check` passes, so the falloff is untouched,
+and the trap matrix regenerates with `--check` clean. `test/damage-queries.test.ts` (5 cases) runs
+**every scenario twice** -- once with the queries wired, once with `WeaponSystem` falling back to the
+array -- and requires the two to agree exactly on who was hurt and for how much. A suite that only
+asserted "damage happened" would have passed just as well with a broadphase that was never
+consulted, which is not a hypothetical: the `Arena` wiring silently did not apply on the first
+attempt, the optional parameter defaulted to null, and every other test still passed.
 
 ---
 
@@ -346,7 +323,6 @@ the old loop beside it.
   and is the regression test for each fix. Worth writing up as much for the *method* -- assert the
   bug, let the upgrade break the test, delete the workaround the failure points at -- as for the
   bugs.
-- **Step 7**, which the above unblocks.
 - **A DECISIONS entry for the priority inversion**, which is the first risk below and is now real
   rather than prospective.
 - **The fly sound could ride the missile's own entity.** `AudioBank.loop` builds its own entity with
@@ -391,4 +367,4 @@ step and is deliberately left for after this lands.
 | 4 — headless ECS | **done** |
 | 5 — character bodies | **done** |
 | 6 — projectiles as bodies | **done** |
-| 7 — splash and LOS | **unblocked**, not done — see the step |
+| 7 — splash and LOS | **done** |

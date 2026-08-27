@@ -30,6 +30,7 @@ import type { ClipMap } from '../q3/cm/ClipMap.ts';
 import {
     WeaponSystem,
     type Damageable,
+    type DamageQuery,
     type MissileWorld,
     type Projectile,
     type WeaponEvents,
@@ -123,11 +124,12 @@ export class Arena implements WeaponEvents {
         ecd: EcsDataset,
         cm: ClipMap,
         missiles: MissileWorld | null = null,
-        shadows: ShadowPolicy = NO_SHADOWS
+        shadows: ShadowPolicy = NO_SHADOWS,
+        queries: DamageQuery | null = null
     ) {
         this.ecd = ecd;
         this.effects = new Effects(ecd, shadows);
-        this.weapons = new WeaponSystem(cm, this, missiles);
+        this.weapons = new WeaponSystem(cm, this, missiles, queries);
 
         if (!ecd.isComponentTypeRegistered(ShadedGeometry)) {
             ecd.registerComponentType(ShadedGeometry);

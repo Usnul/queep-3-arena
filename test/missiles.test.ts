@@ -39,6 +39,7 @@ import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
 import { spawnPoints } from '../src/game/Spawns.ts';
 import { CharacterBodies } from '../src/client/CharacterBody.ts';
 import { Missiles } from '../src/client/Missiles.ts';
+import { DamageQueries } from '../src/client/DamageQueries.ts';
 import {
     MASK_SHOT,
     WeaponSystem,
@@ -133,7 +134,7 @@ async function rig(): Promise<Rig> {
     );
     const missiles = new Missiles(physics.system, physics.ecd, bodies);
     const board = new Board();
-    const weapons = new WeaponSystem(cm, board, missiles);
+    const weapons = new WeaponSystem(cm, board, missiles, new DamageQueries(physics.system, bodies));
 
     const size = physics.entityManager.fixedUpdateStepSize;
 

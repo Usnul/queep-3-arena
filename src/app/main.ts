@@ -78,6 +78,7 @@ import { ViewWeapon } from '../client/ViewWeapon.ts';
 import { Arena } from '../client/Arena.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
 import { Missiles } from '../client/Missiles.ts';
+import { DamageQueries } from '../client/DamageQueries.ts';
 import { takePointerLock } from '../client/pointerLock.ts';
 import { Menu } from '../client/ui/Menu.ts';
 import { Settings, type SettingsStorage } from '../client/ui/Settings.ts';
@@ -726,7 +727,16 @@ async function main(): Promise<void> {
         */
         const missiles = new Missiles(physicsWorld.system, ecd, bodies);
 
-        const arena = new Arena(ecd, clipMap, missiles, shadows);
+        /*
+         Splash and hitscan answered by the broadphase rather than by a loop over
+         every `Damageable`. Null on the ported movement backend, where there are
+         no character bodies to find and `WeaponSystem` falls back to the array
+         scan the port used everywhere before phase 9.
+        */
+        const damageQueries =
+            bodies === null ? null : new DamageQueries(physicsWorld.system, bodies);
+
+        const arena = new Arena(ecd, clipMap, missiles, shadows, damageQueries);
         arena.audio = audio;
 
         /*
@@ -897,7 +907,19 @@ async function main(): Promise<void> {
          the AI in the way.
         */
         if (new URLSearchParams(window.location.search).get('targets') === '1') {
-            for (const s of entrances.points.slice(1, 5)) arena.addTarget(s._originQ3);
+            for (const s of entrances.points.slice(1, 5)) {
+                const box = arena.addTarget(s._originQ3);
+
+                /*
+                 A body too, or the broadphase cannot see it and `?targets=1`
+                 becomes four boxes nothing can shoot. They do not move, so the
+                 pose is written once.
+                */
+                const slot = bodies?.create(box.id);
+                slot?.track(() => box.origin);
+            }
+
+            bodies?.sync();
         }
 
         player.onDryFire = () => {
