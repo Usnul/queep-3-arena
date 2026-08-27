@@ -1,5 +1,5 @@
 /*
- * convex-contact.test.ts -- meep reports a contact between shapes that are not touching.
+ * convex-contact.test.ts -- what a contact against a convex hull does and does not say.
  *
  * Copyright (C) 2026 queep-3-arena contributors
  *
@@ -11,8 +11,9 @@
  * ---
  *
  * Two findings about contacts against a `ConvexHullShape3D`, which is what all of
- * this port's level collision and every character's box is made of. One is fixed
- * and guarded here; one is open and worked around.
+ * this port's level collision and every character's box is made of. Both were
+ * found here, both are fixed, and this file is the regression test for each --
+ * which is also why it is worth reading before touching either.
  *
  * **Fixed in 3.6.0: a contact reported across clear air.** 3.4.0 and 3.5.0
  * dispatched `PhysicsEvents.ContactBegin` between a sphere and a hull separated
@@ -23,8 +24,8 @@
  * centimetre of phantom collision around every surface in the game: rockets
  * detonated in mid-air in open corridors.
  *
- * The first three cases below are the regression test for that fix, and they
- * assert both halves on purpose -- no contact while the shapes are apart, *and* a
+ * The first three cases are the regression test for that fix, and they assert
+ * both halves on purpose -- no contact while the shapes are apart, *and* a
  * contact at the right depth when they really do overlap. The second is not
  * padding: a fix that removed every contact from the convex path would satisfy
  * the first on its own and be far worse than the bug. The third pins the property
@@ -32,10 +33,17 @@
  * sat over the face -- GJK picks its support vertices by direction, so two
  * placements hand EPA different simplices out of the same pair of shapes.
  *
- * **Still open: a contact that is never reported at all.** See the second
- * `describe`. `Missiles.checkStopped` is the workaround, and the port's
- * confirming sweep -- which is what caught the first bug -- came out in 3.7.0
- * once it was no longer needed.
+ * **Fixed in 3.8.0: a contact never reported at all.** See the second `describe`.
+ * A body that CCD stopped against a hull's *corner* raised nothing, where the
+ * same sphere against the same hull's face raised a contact on the same step at
+ * the same geometric distance.
+ *
+ * **Both of this port's workarounds are gone with them**, and each was removed
+ * because a case here started failing rather than because anyone remembered to
+ * look: the confirming sweep in `Missiles` came out in 3.7.0, and the
+ * stopped-missile inference that replaced it came out in 3.8.0. Asserting a
+ * bug's presence rather than skipping the case is what makes an engine upgrade
+ * break exactly one test and name the code to delete.
  */
 
 import { describe, expect, it } from 'vitest';
