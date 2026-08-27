@@ -35,6 +35,7 @@
     "convert-models": "node tools/convert-models.ts",
     "convert-characters": "node tools/convert-characters.ts",
     "convert-sounds": "node tools/convert-sounds.ts",
+    "bake-audio": "node tools/bake-audio.ts",
     "assets": "node tools/convert-models.ts && node tools/convert-characters.ts && node tools/convert-sounds.ts",
     "navmesh-probe": "node tools/navmesh-probe.ts",
     "bench-match": "node tools/bench-match.ts",

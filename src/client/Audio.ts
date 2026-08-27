@@ -96,6 +96,25 @@ export const LOOP_BUDGET = 24;
 const ONE_SHOT_MAX_INSTANCES = 16;
 const LOOP_MAX_INSTANCES = LOOP_BUDGET + 8;
 
+/**
+ * How big a sound is, in scene metres, for the acoustic occlusion test.
+ *
+ * Not cosmetic, and zero is not the neutral choice. `OcclusionSolver` shoots
+ * its rays at points spread over a sphere this size and calls the blocked
+ * fraction the occlusion, so a radius of zero sends every ray to the same point
+ * and occlusion becomes **boolean** -- measured, not assumed: a source in the
+ * open reads exactly 0 and one behind a wall exactly 1, with nothing in
+ * between. A player walking past a doorway would hear the sound switch rather
+ * than pass behind an edge.
+ *
+ * A third of a metre is about a Q3 player's shoulder, and it is the smallest
+ * radius that still spreads the ray set enough to ramp: an edge crosses it in
+ * roughly 70 ms at Q3's run speed, which the solver's own temporal EMA then
+ * smooths further. Larger would ramp longer and start leaking sound around
+ * corners it should not reach.
+ */
+const SOURCE_RADIUS = 1 / 3;
+
 /** sopra's default bus tree: master, and effects / music / ambient under it. */
 const BUS_EFFECTS = 'effects';
 const BUS_MUSIC = 'music';
@@ -499,6 +518,24 @@ export class AudioBank {
     buildEmitter(description: EventDescription, transform: Transform): number {
         const emitter = new AudioEmitter();
         emitter.event = description;
+
+        /*
+         Everything with a position in the world is simulated: occluded by the
+         level's geometry and given the room's reverberation. Positional is the
+         whole test -- a 2D sound is `S_StartLocalSound` or the background
+         track, neither of which is happening anywhere for a wall to stand in
+         front of, and `AudioEmitter.acoustic` is documented as meaningful only
+         for 3D events.
+
+         The flag is what gates the cost. It inserts a three-band crossover into
+         the instance's chain and enrols it in the per-frame `AcousticSimulator`
+         pass; an emitter without it renders exactly as it did before any of
+         this existed, which is also what every emitter does when the acoustic
+         systems are not registered at all. See `Acoustics.ts` and
+         `configureAcoustics`.
+        */
+        emitter.acoustic = description.is3D;
+        emitter.sourceRadius = SOURCE_RADIUS;
 
         const entity = new Entity().add(transform).add(emitter);
         entity.build(this.ecd);

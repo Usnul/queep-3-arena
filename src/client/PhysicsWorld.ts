@@ -33,11 +33,12 @@ import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js'
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
 import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderObserverSystem.js';
-import { ConvexHullShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/ConvexHullShape3D.js';
 
 import { ClipMap, MASK_PLAYERSOLID } from '../q3/cm/ClipMap.ts';
 import { buildHulls, type BrushHull } from '../q3/cm/brushHull.ts';
 import type { TraceResult } from '../q3/cm/trace.ts';
+import { addAcousticBody } from './Acoustics.ts';
+import { hullShape } from './hullShape.ts';
 import { PhysicsTrace } from './PhysicsTrace.ts';
 import { layerForContents } from './layers.ts';
 
@@ -48,6 +49,7 @@ const INV_WORLD_SCALE = 32;
 interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
+    addComponentToEntity(entity: number, component: unknown): void;
 }
 
 /** Identity rotation; every level body is axis-aligned in world space. */
@@ -71,6 +73,14 @@ type ColliderWithShape = { shape: unknown; friction: number; restitution: number
 export interface PhysicsWorldStats {
     readonly brushes: number;
     readonly bodies: number;
+    /**
+     * How many of those bodies also block sound.
+     *
+     * Zero when nothing registered meep's acoustic systems, which is the only
+     * externally visible difference between "the simulation is off" and "the
+     * simulation is on and hearing nothing" -- see `addAcousticBody`.
+     */
+    readonly occluders: number;
     readonly skipped: number;
     readonly hullMilliseconds: number;
     readonly bodyMilliseconds: number;
@@ -91,6 +101,7 @@ export class PhysicsWorld {
     stats: PhysicsWorldStats = {
         brushes: 0,
         bodies: 0,
+        occluders: 0,
         skipped: 0,
         hullMilliseconds: 0,
         bodyMilliseconds: 0,
@@ -103,6 +114,9 @@ export class PhysicsWorld {
      * the shipping build cannot drift apart. See `PhysicsTrace`.
      */
     private queries: PhysicsTrace | null = null;
+
+    /** Running count behind `stats.occluders`; `addStaticHull` is the only writer. */
+    private occluders = 0;
 
     /** Kept so `addMover` can build submodel bodies after the initial load. */
     private cm: ClipMap | null = null;
@@ -221,6 +235,7 @@ export class PhysicsWorld {
         this.stats = {
             brushes: cm.numBrushes,
             bodies,
+            occluders: this.occluders,
             skipped: set.skipped,
             hullMilliseconds: set.milliseconds,
             bodyMilliseconds: performance.now() - t0,
@@ -291,44 +306,24 @@ export class PhysicsWorld {
     /**
      * One brush -> one static body.
      *
-     * The hull is built around its own centroid and the body is placed there,
-     * rather than leaving the vertices in world space with the body at the
-     * origin. A convex shape's support function and its AABB are both computed
-     * in the body's local frame, so a hull whose vertices sit 2,000 units from
-     * its own origin gets a bounding volume 2,000 units across and the
-     * broadphase stops discriminating.
+     * The hull is built around its own centroid and the body is placed there
+     * rather than left in world space with the body at the origin, for the
+     * reason `hullShape` gives. That conversion is a shared module because the
+     * divergence harness and the acoustic bake need the identical solids -- a
+     * reverberation measured against geometry the runtime does not occlude with
+     * is wrong in a way nothing reports.
      */
     private addStaticHull(
         ecd: EcsDataset,
         hull: BrushHull,
         kind: number = BodyKind.Static
     ): Transform | null {
-        const cx = (hull.bounds[0]! + hull.bounds[3]!) * 0.5;
-        const cy = (hull.bounds[1]! + hull.bounds[4]!) * 0.5;
-        const cz = (hull.bounds[2]! + hull.bounds[5]!) * 0.5;
+        const placed = hullShape(hull);
 
-        const n = hull.vertices.length / 3;
-        const local = new Float32Array(hull.vertices.length);
+        // Degenerate hulls exist in shipped maps; one should not abort a load.
+        if (placed === null) return null;
 
-        for (let i = 0; i < n; i++) {
-            // Q3 (x, y, z) -> meep (x, z, -y), scaled, relative to the centroid.
-            local[i * 3] = (hull.vertices[i * 3]! - cx) * WORLD_SCALE;
-            local[i * 3 + 1] = (hull.vertices[i * 3 + 2]! - cz) * WORLD_SCALE;
-            local[i * 3 + 2] = -(hull.vertices[i * 3 + 1]! - cy) * WORLD_SCALE;
-        }
-
-        /*
-         The axis swap has determinant +1, so winding is preserved and the
-         indices stay as `brushHull` produced them -- outward CCW, which is what
-         `ConvexHullShape3D.from` requires.
-        */
-        let shape: ConvexHullShape3D;
-        try {
-            shape = ConvexHullShape3D.from(local, hull.indices);
-        } catch {
-            // Degenerate hulls exist in shipped maps; one should not abort a load.
-            return null;
-        }
+        const shape = placed.shape;
 
         const body = new RigidBody();
         body.kind = kind;
@@ -350,10 +345,21 @@ export class PhysicsWorld {
         collider.restitution = 0;
 
         const transform = new Transform();
-        transform.position.set(cx * WORLD_SCALE, cz * WORLD_SCALE, -cy * WORLD_SCALE);
+        transform.position.set(placed.x, placed.y, placed.z);
 
         const builder = new Entity();
         builder.add(transform).add(body).add(collider as unknown as Collider).build(ecd);
+
+        /*
+         And the same body is what sound is occluded by, if it is the kind of
+         brush that blocks any. `AcousticSimulationSystem` links the triple
+         `AcousticBody + Collider + Transform`, so this is not a second copy of
+         the level -- it is one more component on the body that already exists,
+         and it costs nothing at all when the acoustic systems are not
+         registered. A mover gets one too: the system follows a transform, so a
+         door that closes closes acoustically. See `Acoustics.ts`.
+        */
+        if (addAcousticBody(ecd, builder.id, hull.contents)) this.occluders += 1;
 
         /*
          Remember which brush this body came from, so the contact-plane rule can

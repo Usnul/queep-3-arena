@@ -50,6 +50,12 @@ import { spawnPoints } from '../game/Spawns.ts';
 import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
 import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
 import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener.js';
+import type { EngineConfiguration } from '@woosh/meep-engine/src/engine/EngineConfiguration.js';
+import type SoundEngine from '@woosh/meep-engine/src/engine/sound/SoundEngine.js';
+import { SopraDefaultBus } from '@woosh/meep-engine/src/engine/sound/sopra/SopraEngine.js';
+import { configureAcousticSimulation } from '@woosh/meep-engine/src/engine/sound/simulation/configureAcousticSimulation.js';
+import { ProbeReverbRenderer } from '@woosh/meep-engine/src/engine/sound/simulation/render/ProbeReverbRenderer.js';
+import { attachProbeField, loadProbeField } from '../client/Acoustics.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
@@ -78,6 +84,17 @@ import {
     WorldEffectSystem,
     interpolatedPose,
 } from './systems.ts';
+
+/**
+ * How loud the room is, as a linear gain on the reverb send.
+ *
+ * Roughly -9 dB. Q3's own sound was dry -- it had no reverberation of any kind
+ * -- so there is no original to match and this is set to be heard rather than
+ * noticed: enough that a hall reads as a hall and a corridor does not, not
+ * enough to put the arena underwater. It multiplies whatever the probe field
+ * measured, so it scales the whole map at once.
+ */
+const REVERB_SEND = 0.35;
 
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
@@ -232,10 +249,14 @@ async function main(): Promise<void> {
     */
     const sound = engine.sound;
     let emitters: AudioEmitterSystem | null = null;
+    let reverb: ProbeReverbRenderer | null = null;
 
     if (sound !== null) {
         emitters = new AudioEmitterSystem(engine.assetManager, sound, { budget: LOOP_BUDGET });
         await em.addSystem(emitters);
+
+        // And what the level does to those sounds. See `configureAcoustics`.
+        reverb = await configureAcoustics(em, sound, emitters);
     }
 
     /*
@@ -283,12 +304,34 @@ async function main(): Promise<void> {
     const mapName = requestedMap();
     const baseUrl = `/assets/built/${mapName}`;
 
-    const [loaded, clipMap, models, audio] = await Promise.all([
+    const [loaded, clipMap, models, audio, probes] = await Promise.all([
         loadMap(ecd, baseUrl),
         loadClipMap(baseUrl, mapName),
         loadModels('/assets/built/models'),
         AudioBank.load('/assets/built/sound', ecd, emitters),
+        // Null on a checkout that has not run `node tools/bake-audio.ts`.
+        reverb === null ? Promise.resolve(null) : loadProbeField(baseUrl),
     ]);
+
+    /*
+     The map's reverberation, as measured offline. Two consumers, because the
+     one component answers two questions: `AcousticProbeFieldSystem` picks it up
+     off the entity and hands it to the simulator, and the renderer is given it
+     directly because nothing in the engine wires those two together -- the
+     simulator would use the field for corner-leak pathing, which is off, while
+     the reverb is the part this port actually baked for.
+    */
+    if (probes !== null && reverb !== null) {
+        attachProbeField(ecd, probes);
+        reverb.setProbeField(probes);
+
+        console.log(`[queep] acoustics: ${probes.size} baked probes`);
+    } else if (reverb !== null) {
+        console.log(
+            `[queep] acoustics: occlusion only -- ${mapName} has no baked probe field. ` +
+            `Run \`node tools/bake-audio.ts ${mapName}\` for reverberation.`
+        );
+    }
 
     /*
      Lights are spheres in Shade and points in the ECS, and the component has no
@@ -507,7 +550,13 @@ async function main(): Promise<void> {
                 `[queep] physics: ${physicsWorld.stats.brushes} brushes -> ` +
                 `${physicsWorld.stats.bodies} static bodies ` +
                 `(${physicsWorld.stats.hullMilliseconds.toFixed(0)} ms hulls, ` +
-                `${physicsWorld.stats.bodyMilliseconds.toFixed(0)} ms bodies)`
+                `${physicsWorld.stats.bodyMilliseconds.toFixed(0)} ms bodies)` +
+                /*
+                 Zero means no acoustic system asked for them, which is the only
+                 way to tell "the simulation is off" from "it is on and every
+                 sound is unobstructed" from outside. See `addAcousticBody`.
+                */
+                `\n  ${physicsWorld.stats.occluders} of those occlude sound`
             );
         }
 
@@ -816,6 +865,103 @@ function firstGesture(element: HTMLElement, action: () => void): void {
         action();
     };
     element.addEventListener('pointerdown', once);
+}
+
+/**
+ * Turn on the acoustic simulation: what the level does to a sound between where
+ * it is made and where it is heard.
+ *
+ * Three things arrive with this, and the third is the one the bake exists for.
+ *
+ * **Occlusion.** `AcousticSimulationSystem` reads every `AcousticBody +
+ * Collider + Transform` into a BVH and raycasts it per live voice, so a wall
+ * between a rocket and the player muffles it. The bodies are the brush bodies
+ * `PhysicsWorld` already builds -- see `Acoustics.ts` -- so this costs one
+ * component each rather than a second copy of the level, and a door that closes
+ * closes acoustically because the system follows a transform.
+ *
+ * **Medium.** `AcousticVolumeSystem` is registered too and does nothing until
+ * something authors an `AcousticVolume`; the simulator's default air still
+ * tilts a distant source's top end off, which is the half of it that matters
+ * here.
+ *
+ * **Reverberation.** `ProbeReverbRenderer` reads the nearest baked probe's
+ * per-band RT60 at the listener and crossfades a convolver pair as the player
+ * moves between rooms. The probes come from `tools/bake-audio.ts`; without them
+ * this is the one part that stays silent, which is why the field is loaded and
+ * logged separately rather than folded in here.
+ *
+ * **Corner-leak pathing is deliberately off.** It is `AcousticSimulator.pathing`,
+ * it is off by default, and turning it on needs the probe *visibility graph*,
+ * which meep does not serialize -- it is a function of the geometry rather than
+ * of the probes, so re-deriving it at load costs what the whole bake costs. The
+ * thing it buys, a sound still reaching you round a corner, is bought here by
+ * `Q3_SURFACE`'s non-zero transmission instead: a wall muffles rather
+ * than silences. Q3 itself modelled no occlusion at all, and hearing an enemy
+ * through a wall is a channel this port should not quietly close.
+ *
+ * @returns the reverb renderer, which is what a loaded probe field is given to.
+ */
+async function configureAcoustics(
+    em: { addSystem(system: unknown): Promise<unknown> },
+    sound: SoundEngine,
+    emitters: AudioEmitterSystem
+): Promise<ProbeReverbRenderer> {
+    const reverb = new ProbeReverbRenderer(sound.context, sound.destination);
+
+    /*
+     How much of the room is heard. The renderer crossfades its own wet gain
+     between silent and *unity* as the listener moves between probes, so without
+     a send level in front of it a reverberant hall arrives at full wet and
+     drowns the dry signal it is supposed to sit behind. One gain node is the
+     whole of the control, and this is the number to turn.
+    */
+    const send = sound.context.createGain();
+    send.gain.value = REVERB_SEND;
+    send.connect(reverb.input);
+
+    /*
+     What gets a send. `getOutput` taps a *copy* of a bus post-fader, so the dry
+     path to the destination is untouched.
+
+     Effects and ambient, not master. Those are the two buses the world's sounds
+     go to -- `AudioBank` routes one-shots to the first and looping speakers to
+     the second -- and master would also fold in the background track, which is
+     a recording rather than something happening in the room. `S_StartLocalSound`
+     rides the effects bus as well and is 2D, so pickups take a little of the
+     room with them; that is the cost of not giving them a fourth bus, and it is
+     small next to a reverberant music track.
+    */
+    const buses = emitters.sopra.busGraph;
+    buses.getOutput(SopraDefaultBus.Effects).connect(send);
+    buses.getOutput(SopraDefaultBus.Ambient).connect(send);
+
+    /*
+     `configureAcousticSimulation` is the engine's own seam and is used rather
+     than the three systems it registers, so that a fourth arriving in a later
+     release arrives without this file being edited. It wants an
+     `EngineConfiguration`, which this application does not have -- systems are
+     registered on the `EntityManager` directly -- so it is handed a collector
+     with the one method it calls.
+    */
+    const collected: unknown[] = [];
+    const collector = {
+        addManySystems(...systems: unknown[]): void {
+            collected.push(...systems);
+        },
+    } as unknown as EngineConfiguration;
+
+    configureAcousticSimulation(collector, emitters, undefined, reverb);
+
+    /*
+     Before any body exists, which is load-bearing for the same reason
+     `PhysicsWorld.create` is a factory: both of these observe the dataset, and
+     an entity built before its system is registered is never seen. The map's
+     brushes are built much later, in the play branch. See GAP-014.
+    */
+    for (const system of collected) await em.addSystem(system);
+
+    return reverb;
 }
 
 async function loadClipMap(baseUrl: string, name: string): Promise<ClipMap> {

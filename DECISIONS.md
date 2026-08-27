@@ -4275,3 +4275,96 @@ rewritten — circular, and it does not matter while the renderer's exposure is 
 the next thing to be suspicious of if that ever changes. And the bake is itself clipped: 16.5% of
 `oa_dm1`'s lit cells and 30.3% of `oa_dm4`'s have a saturated byte, so the reference is flat-topped
 at 102 lux exactly where the bright fixtures are, and a fit against it is pulled down there.
+### D-106: The level is what a sound has to get through, and the room it rings in was measured once
+
+Quake III models no acoustics at all. `S_StartSound` pans a sample by distance and direction and
+stops there: no occlusion, no reverberation, no medium. meep 3.5 ships all three. This is what
+wiring them cost, what was chosen where Q3 had nothing to port, and the two things that were
+measured rather than assumed.
+
+**The occluders are the physics bodies.** `AcousticSimulationSystem` links the triple `AcousticBody
++ Collider + Transform` and raycasts the collider's shape directly, so a Q3 brush is already an
+acoustic occluder in everything but one component; `PhysicsWorld.addStaticHull` adds it as each body
+is built. There is no second copy of the level and no second conversion, and a `func_door` occludes
+as it moves because the system tracks the transform it already has.
+
+Which brushes get one is not "all of them". The bodies are built for `MASK_PLAYERSOLID`, which takes
+`CONTENTS_PLAYERCLIP` — the invisible fences that keep players off ledges — and a fence a rocket
+flies through -- `layers.ts` gates a missile on `MASK_SHOT`, which excludes it -- is not a wall its
+sound should stop at. `occludesSound` is `CONTENTS_SOLID` and nothing else: 516 of `oa_dm1`'s 529
+static bodies.
+
+**The reverberation is baked, and the bake shares the runtime's geometry by construction.**
+`tools/bake-audio.ts` covers each map's air with probes and measures a per-band RT60 at each by
+casting rays into the solids. It builds those solids with `hullShape` — the same function
+`PhysicsWorld` and `HeadlessPhysics` build their colliders with, extracted here because it had been
+written out three times. A reverberation measured in a room the runtime does not have is wrong in a
+way nothing reports, which is D-036's lesson in a third place. That it held is checkable rather than
+asserted: the bake counts 516 occluders for `oa_dm1` and the browser counts 516; both count 862 for
+`oa_dm5`.
+
+| map | occluders | probes | file | bake | mid-band RT60 (mean) | longest band | probes at the 3 s ceiling |
+|---|---:|---:|---:|---:|---|---:|---:|
+| `oa_dm1` | 516 | 364 | 21.3 KB | 84 s | 0.07–2.58 (0.93) | 4.11 s | 92 |
+| `oa_dm4` | 728 | 351 | 20.6 KB | 233 s | 0.00–2.41 (0.65) | 3.72 s | 60 |
+| `oa_dm5` | 862 | 373 | 21.9 KB | 141 s | 0.09–2.97 (0.98) | 3.86 s | 87 |
+| `oa_dm7` | 359 | 652 | 38.2 KB | 103 s | 0.08–3.00 (1.71) | 6.33 s | 342 |
+| `aggressor` | 820 | 339 | 19.9 KB | 204 s | 0.00–2.89 (0.93) | 4.60 s | 83 |
+| `am_thornish` | 751 | 2,206 | 129.3 KB | 66 s | 0.04–3.00 (1.40) | 8.06 s | 758 |
+
+**Corner-leak pathing is off, and the file format is why.** meep's serializer carries probe
+positions, per-band RT60 and per-band arrival direction, and deliberately carries neither the probe
+visibility graph nor the reflector lobes: both are functions of the geometry rather than of the
+probes, so re-deriving them at load costs what the bake costs. `AcousticSimulator.apply` gates
+pathing on `probeField.hasVisibility`, so a field without one is a supported state rather than a
+broken one, and `acoustics.test.ts` asserts it loads that way — if a later meep serializes the
+graph, that test failing is the notice that pathing became affordable.
+
+**Transmission is deliberately not zero, and that is a gameplay decision rather than an acoustic
+one.** `EventInstance.setAcoustic` uses transmission as the per-band floor a fully occluded source
+keeps — `(1 - occlusion) + occlusion * transmission` — so `Q3_SURFACE`'s `[0.5, 0.25, 0.08]` makes a
+sound behind a wall *muffled* rather than gone: the lows carry, the top end does not. Hearing an
+enemy through a wall is not a defect in Quake III. With no occlusion modelled at all it is the
+game's positional-audio channel, and a port that adds occlusion silently closes it. Pathing would be
+the other way to keep it open, and is not available for the reason above.
+
+**A point source occludes boolean, and that was measured, not reasoned about.** `OcclusionSolver`
+shoots its rays at points spread over a sphere of the source's radius and calls the blocked fraction
+the occlusion — so `AudioEmitter.sourceRadius = 0` sends every ray to the same place. Sweeping a
+source across a brush edge in the running game:
+
+| source radius | 0.5 m | 0.75 | 1.0 | 1.25 | 1.5 | 1.75 | 2.0 m |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 (point) | 0 | 0 | 0 | **1** | 1 | 1 | 1 |
+| 1/3 m | 0 | 0 | 0.13 | 0.53 | 0.89 | 1 | 1 |
+
+A step, against a ramp. A player walking past a doorway would have heard the sound switch on.
+Sources get a third of a metre — about a Q3 player's shoulder, and the smallest radius that still
+spreads the ray set enough to ramp; an edge crosses it in roughly 70 ms at Q3 run speed, which the
+solver's own temporal EMA smooths further.
+
+**The RT60 ceiling is a design decision and the bake is not wrong.** `am_thornish` genuinely measures
+8.06 s in its largest volume, which is what Sabine gives for a hall that size behind surfaces as live
+as `Q3_SURFACE`. It is clamped to 3 s anyway, for two reasons. `reverbImpulseResponse` sizes its
+buffer from the RT60 with no cap, so 8 s is a 387,000-sample stereo buffer plus three `Float64Array`
+scratch bands the same length — about 11 MB, synthesised on the main thread every time the listener
+crosses a probe cell that differs enough to re-bake, which is a stutter caused by walking. And a
+seven-second tail smears exactly what Quake III uses sound for. The clamp is applied by the bake
+rather than at load, so the shipped file holds what is played, and it is *reported* — the table's
+last column is a map saying how much of it is being reshaped. `am_thornish` is 34% of its probes,
+which is the number to look at first if that map ever sounds flat.
+
+**Cost, measured.** The full 24-source `LOOP_BUDGET` at meep's default 16 rays per source, against
+`oa_dm5`'s 862 occluders, is **0.433 ms per frame** — 2.6% of a 60 Hz frame. The load cost is one
+component and one BVH insert per solid brush, inside the same tens of milliseconds the bodies
+already take.
+
+**What this does not claim.** The reverb send level (0.35, about -9 dB) and `Q3_SURFACE`'s
+coefficients are judgements, not measurements: Q3 shipped bone dry, so there is no original to match
+and nothing here was tuned by ear against one. The absorption numbers are what put the RT60s in the
+table, so they and the ceiling are two knobs pointed at the same quantity — if the maps ever want
+retuning, absorption is the one that changes the *shape* and the ceiling is the one that changes
+where it stops. `ProbeReverbRenderer` also picks its probe by plain nearest-neighbour rather than
+nearest-*visible*, so a listener close to a wall can read the room on the other side of it; meep has
+`nearestVisibleIndex` and the reverb renderer does not use it. GAP-031 through GAP-033 record the
+engine-side halves of all of this.

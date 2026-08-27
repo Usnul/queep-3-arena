@@ -1947,6 +1947,37 @@ That is an accurate description of a component that cannot be used for its state
 - **Evidence:** `node_modules/@woosh/meep-engine/src/shade/renderer/light/model/Light.js:30-37`, `src/engine/graphics/ecs/light/Light.js:16-58`, `src/engine/graphics3/LightSystem3.js:118-137,199-210`, `src/shade/renderer/shader/chunk/light/io/chunk_light_sphere_distance_attenuation.js`, `src/shade/renderer/shader/chunk/material/chunk_re_direct_physical.js:44-70`, `src/shade/renderer/light/make_sunlight.js:15-20`, `src/client/map/lightVolume.ts`, `src/client/map/loadMap.ts`
 
 
+### GAP-031: the baked probe field reaches the simulator and not the renderer that exists to play it
+
+- **Needed:** load a baked `AcousticProbeField` and hear the room it measured.
+- **meep offers:** every part. `AcousticProbeField` is a serializable component, `AcousticProbeFieldSystem` links it, `configureAcousticSimulation` registers that system, and `ProbeReverbRenderer` renders per-band RT60 into a crossfaded convolver pair driven from the listener each frame by `AudioEmitterSystem.update`.
+- **The gap:** the two halves are never introduced. `AcousticProbeFieldSystem.link` calls `simulator.setProbeField(field)` and stops; `ProbeReverbRenderer` has its own `setProbeField` and nothing calls it. So the documented route -- attach the component, pass a `probeReverb` to `configureAcousticSimulation` -- wires the field into the half that only uses it for corner-leak pathing, and leaves the half that plays the reverberation with `#probeField === null`, whose `update` returns immediately. Attaching a field and getting silence is the default outcome, and there is no warning: the renderer is running, connected and correct, over no data.
+- **Workaround:** call `probeReverb.setProbeField(field)` by hand next to `attachProbeField` (`src/app/main.ts`). One line, once found.
+- **Severity:** minor mechanically, worse in effect -- the failure is silence in a subsystem whose correct output is also quiet, so there is nothing to notice.
+- **Suggested fix:** have `AcousticProbeFieldSystem` hold the optional renderer and forward to it on link/unlink, the way `configureAcousticSimulation` already forwards the simulator into `AudioEmitterSystem`. It is the same one-object injection, at the one place that already knows a field arrived.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/sound/simulation/ecs/AcousticProbeFieldSystem.js:40-60`, `src/engine/sound/simulation/render/ProbeReverbRenderer.js:157-173`, `src/engine/sound/simulation/configureAcousticSimulation.js:34-48`, `src/app/main.ts`
+
+### GAP-032: the probe reverb has no send level and no impulse-response ceiling, so the honest wiring is full-wet and can allocate 11 MB mid-match
+
+- **Needed:** mix a baked room reverberation in behind the dry signal, at a level.
+- **meep offers:** `ProbeReverbRenderer`, documented to be fed by "sources / a sopra bus" sending "a post-fader copy" into its `input`. `SopraEngine.masterBusOutput` exists precisely to be that tap.
+- **The gap, part one:** there is no send level anywhere in the path. The renderer's internal wet gains crossfade between silence and **unity**, so connecting a bus output to `input` as documented puts the whole mix through the convolver at full wet. Every tunable it does expose (`decayPower`, `crossfadeSeconds`, `changeThreshold`, `minDecay`) shapes the IR or the transition; none is "how much".
+- **The gap, part two:** `reverbImpulseResponse` sizes its buffer from the RT60 with no cap -- `reverb_band_length` is `floor(decay * sampleRate)`. A probe measuring 8.06 s (`am_thornish`, and it is not a bug: that is Sabine for a hall that size behind hard surfaces) yields a 387,000-sample stereo `AudioBuffer` plus three `Float64Array` scratch bands the same length, about 11 MB, synthesised **on the main thread** every time the listener crosses into a probe cell whose decay differs by more than `changeThreshold`. That is a mid-match hitch triggered by walking.
+- **Workaround:** one `GainNode` in front of `input` for the send level, and clamp the per-band RT60 in the bake tool rather than at load, so the shipped file holds what is played (`PROBE_MAX_RT60 = 3`; `src/client/Acoustics.ts`, `tools/bake-audio.ts`). At 3 s the clamp caught 758 of `am_thornish`'s 2,206 probes and 92 of `oa_dm1`'s 364.
+- **Severity:** minor for the send level, moderate for the IR -- an application that ships a large reverberant map and never profiles a room transition will not find the second one, and the symptom is a stutter far from its cause.
+- **Suggested fix:** a `sendLevel` on the renderer (or simply document that the caller supplies the gain), and a `maxDecaySeconds` the IR bake clamps to, defaulting to something a `ConvolverNode` is happy to run. A `Float32Array` scratch would also halve the transient allocation for free; the bands do not need double precision to be summed into a float32 channel.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/sound/simulation/render/ProbeReverbRenderer.js:110-135,215-227`, `src/engine/sound/simulation/render/reverbImpulseResponse.js:25-45`, `src/engine/sound/simulation/render/reverb_band_tails.js:19-21`, `src/app/main.ts`, `tools/bake-audio.ts`
+
+### GAP-033: `configureAcousticSimulation` takes an `EngineConfiguration`, which an application driving the `EntityManager` does not have
+
+- **Needed:** register the three acoustic systems and inject the simulator into `AudioEmitterSystem`.
+- **meep offers:** exactly that, in one call, and it is the right seam to want -- a fourth system in a later release should arrive without the application editing anything.
+- **The gap:** its first parameter is an `EngineConfiguration`, whose `systems` array is `@private` and which this port does not use; every other system here is registered with `await em.addSystem(...)` on the `EntityManager`, which is also what `EngineConfiguration.apply` eventually does. The one method the helper calls is `addManySystems`.
+- **Workaround:** hand it a collector object with that single method and drain it into `em.addSystem` (`configureAcoustics`, `src/app/main.ts`). It needs one `as unknown as EngineConfiguration` cast, which is the same shape as GAP-013's.
+- **Severity:** papercut.
+- **Suggested fix:** type the parameter structurally -- `{addManySystems(...systems: System[]): void}` -- or return the systems and let the caller register them. The second is smaller and composes with both registration routes.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/sound/simulation/configureAcousticSimulation.js:34-48`, `src/engine/EngineConfiguration.js:88-111,160-181`, `src/app/main.ts`
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.

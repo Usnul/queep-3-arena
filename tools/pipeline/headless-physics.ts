@@ -47,17 +47,15 @@ import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js'
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
 import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderObserverSystem.js';
-import { ConvexHullShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/ConvexHullShape3D.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 
 import { ClipMap, MASK_PLAYERSOLID } from '../../src/q3/cm/ClipMap.ts';
+import { hullShape } from '../../src/client/hullShape.ts';
 import { PhysicsTrace } from '../../src/client/PhysicsTrace.ts';
 import { layerForContents } from '../../src/client/layers.ts';
 import { buildHulls, type BrushHull } from '../../src/q3/cm/brushHull.ts';
 import { pointContents } from '../../src/q3/cm/trace.ts';
 import type { TraceResult } from '../../src/q3/cm/trace.ts';
-
-const WORLD_SCALE = 1 / 32;
 
 /**
  * `EntityManager.addSystem`, corrected.
@@ -100,8 +98,9 @@ export class HeadlessPhysics {
     /**
      * The query half, shared with `PhysicsWorld`.
      *
-     * Body construction still differs, because the browser builds from a scene
-     * bundle and this builds from the clipmap; the query does not.
+     * So is the body half now: both build their colliders through `hullShape`.
+     * What still differs is which brushes each is handed, and that is a property
+     * of the caller rather than of the conversion.
      */
     private readonly queries: PhysicsTrace;
 
@@ -188,36 +187,21 @@ export class HeadlessPhysics {
      * One brush -> one static body, as an entity.
      *
      * The hull is built around its own centroid and the body is placed there,
-     * rather than leaving the vertices in world space with the body at the
-     * origin: a convex shape's support function and its AABB are both computed
-     * in the body's local frame, so a hull whose vertices sit 2,000 units from
-     * its own origin gets a bounding volume 2,000 units across and the
-     * broadphase stops discriminating.
+     * rather than left in world space with the body at the origin, for the
+     * reason `hullShape` gives. That conversion is shared rather than copied,
+     * on the same reasoning as the trace maths below it: a harness that builds
+     * its bodies slightly differently from the browser is a harness that
+     * reports healthy numbers for code the browser is not running.
      */
     private static addHull(
         ecd: EntityComponentDataset,
         queries: PhysicsTrace,
         hull: BrushHull
     ): boolean {
-        const cx = (hull.bounds[0]! + hull.bounds[3]!) * 0.5;
-        const cy = (hull.bounds[1]! + hull.bounds[4]!) * 0.5;
-        const cz = (hull.bounds[2]! + hull.bounds[5]!) * 0.5;
+        const placed = hullShape(hull);
+        if (placed === null) return false;
 
-        const n = hull.vertices.length / 3;
-        const local = new Float32Array(hull.vertices.length);
-
-        for (let i = 0; i < n; i++) {
-            local[i * 3] = (hull.vertices[i * 3]! - cx) * WORLD_SCALE;
-            local[i * 3 + 1] = (hull.vertices[i * 3 + 2]! - cz) * WORLD_SCALE;
-            local[i * 3 + 2] = -(hull.vertices[i * 3 + 1]! - cy) * WORLD_SCALE;
-        }
-
-        let shape: ConvexHullShape3D;
-        try {
-            shape = ConvexHullShape3D.from(local, hull.indices);
-        } catch {
-            return false;
-        }
+        const shape = placed.shape;
 
         const body = new RigidBody();
         body.kind = BodyKind.Static;
@@ -240,7 +224,7 @@ export class HeadlessPhysics {
         collider.restitution = 0;
 
         const transform = new Transform();
-        transform.position.set(cx * WORLD_SCALE, cz * WORLD_SCALE, -cy * WORLD_SCALE);
+        transform.position.set(placed.x, placed.y, placed.z);
 
         const builder = new Entity();
         builder
