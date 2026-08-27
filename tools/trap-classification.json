@@ -164,7 +164,7 @@
     "trap_SnapVector": {
       "status": "ported",
       "meep": "-",
-      "note": "Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation -- removing it changes strafe-jump speed.",
+      "note": "Q3 rounds velocity to 1/8 unit per frame, and the ported `PmoveSingle` still does. Where that runs is the thing to read carefully: since D-071 the shipping motor is `MeepMove` on `KinematicMover`, which does not snap, and `pmove.ts` is the reference path behind `?trace=clipmap` and the divergence harness. So this preserves the arithmetic the oracle needs to stay bit-exact against the C -- not the shipping game's strafe-jump speed, which since D-110 runs on the engine's 60 Hz step rather than Q3's 125 Hz `sv_fps` anyway.",
       "evidence": [
         "src/q3/pmove/pmove.ts::snapVector"
       ]

@@ -118,8 +118,9 @@ the strongest argument in this report for the maintainer's instinct over mine.
    *the engine is very good at loud, specific failures* (section 7) *and has no story at all for
    silent ones.*
 
-4. **A real engine bug, found by adopting the engine's own solver rather than reimplementing
-   around it -- reported, fixed in 3.2.0, and confirmed.** `raycast` reported an immediate hit for
+4. **Four real engine bugs, found by adopting the engine's own solvers rather than
+   reimplementing around them -- one in phase 7 and three in phase 9, every one fixed upstream and
+   confirmed here.** The first: `raycast` reported an immediate hit for
    a ray starting inside a convex hull's bounding box but outside the hull, where `overlap` at the
    same point correctly returned nothing. Twenty lines to reproduce, no map data, in BUG-7.
 
@@ -150,6 +151,25 @@ the strongest argument in this report for the maintainer's instinct over mine.
    slide-move wants the plane it entered last (GAP-012) -- is still factual and is still in the
    register, but this port no longer depends on it (D-071) and `KinematicMover` approaches the
    corner case from the other end.
+
+   **Phase 9 ran the same experiment larger, and it produced three more.** Moving the game onto the
+   engine's fixed step made missiles CCD bodies that detonate on `PhysicsEvents.ContactBegin`
+   (D-110), which is the first time this port had been on the contact path at all. Inside four
+   releases it turned up a sphere-versus-`ConvexHullShape3D` contact dispatched across a centimetre
+   of clear air, with the gap handed over as a positive penetration depth (BUG-14, fixed in 3.6.0);
+   a `KinematicMover` regression that pinned a body against geometry with its velocity zeroed and
+   `grounded === false`, costing 246 units per second off a strafe jump (BUG-15, fixed in 3.7.0);
+   and a CCD stop against a hull's *corner* that raised no contact event at all where the same stop
+   against a *face* raised one (BUG-16, fixed in 3.8.0). All three are minimal repros against a bare
+   `EntityManager` with two bodies in it and no map data.
+
+   The methodological point compounds rather than repeats. Each bug lived in a code path this port
+   had spent five phases carefully not using, and each was found within days of starting to use it.
+   The corollary for a maintainer is a ranking: the paths your consumers *adopt* are the ones that
+   get tested, so an evaluation port that reimplements is worth much less to you than one that
+   integrates, and the gap between those two numbers is the size of this item. D-111 records the
+   other half -- how the workarounds were written so that the upgrades could take them back out
+   again.
 
 
 5. **Photometric lighting is the right design and has no guidance, and world scale is silently
@@ -766,7 +786,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_SetPbClStatus` | 4 | q3_ui, ui | not needed | - | -- | PunkBuster. |
 | `trap_SetUserCmdValue` | 3 | cgame | mapped | own usercmd_t builder | `src/client/PlayerController.ts` | Weapon selection, which in Q3 rides on the usercmd rather than being a command of its own. |
 | `trap_SetUserinfo` | 9 | game | not needed | - | -- | Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields. |
-| `trap_SnapVector` | 6 | cgame, game | ported | - | `src/q3/pmove/pmove.ts` | Q3 rounds velocity to 1/8 unit per frame. Part of movement fidelity, not an optimisation -- removing it changes strafe-jump speed. |
+| `trap_SnapVector` | 6 | cgame, game | ported | - | `src/q3/pmove/pmove.ts` | Q3 rounds velocity to 1/8 unit per frame, and the ported `PmoveSingle` still does. Where that runs is the thing to read carefully: since D-071 the shipping motor is `MeepMove` on `KinematicMover`, which does not snap, and `pmove.ts` is the reference path behind `?trace=clipmap` and the divergence harness. So this preserves the arithmetic the oracle needs to stay bit-exact against the C -- not the shipping game's strafe-jump speed, which since D-110 runs on the engine's 60 Hz step rather than Q3's 125 Hz `sv_fps` anyway. |
 | `trap_StringContains` | 2 | game | not needed | String.includes | -- | botlib string helper. |
 | `trap_Trace` | 29 | game | hybrid | PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush | `src/client/PhysicsTrace.ts`<br>`src/q3/cm/trace.ts`<br>`src/game/PmoveHost.ts` | The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019). The standoff is not an engine gap -- meep's own KinematicMover carries one as a `skin` option, which GAP-020 asserted otherwise and is withdrawn for; see GAP-021. `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against. |
 | `trap_TraceCapsule` | 1 | game | not needed | - | -- | OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018. |
@@ -2531,6 +2551,13 @@ rebuilding the transparency route (D-083), and BUG-10 by a maintainer asking why
 pickups were still lying on the floor (D-086) and then, the same day, why the weapon just switched
 away from was still hanging in mid-air (D-088).
 
+**Status after 3.8.0:** BUG-11 to BUG-16 were added after the paragraph above was written, and the
+three physics defects among them were found and fixed inside four releases -- BUG-14 in 3.6.0,
+BUG-15 in 3.7.0 (a regression that 3.6.0's own fix introduced), BUG-16 in 3.8.0. All three are kept
+in full even though none of them reproduces any more: a reader's copy of the package may be older
+than 3.8.0, and in each case the shape is the transferable part. BUG-12 is fixed as of 3.6.0; the
+rest carry their own status lines.
+
 These are separated from the gap register on purpose. A gap is "the engine does not do this"; a
 bug is "the engine says it does this and does something else". The second kind is more expensive
 per line of documentation, because the reader who checks first is the one who gets caught.
@@ -3159,6 +3186,116 @@ partial match. With it, all six maps bake: 0.92 to 2.90 MB, two to six minutes e
 **Evidence:** `shade/renderer/global_illumination/brick4/gpu/bake/brick4_bake_basic.js:145,179,189`,
 `shade/renderer/shader/graph/compute/graph_compute_pass.js:15-17,61`, `vite.config.ts`,
 `src/client/VolumetricLight.ts`
+
+### BUG-14 (fixed in 3.6.0): `ContactBegin` was dispatched between a sphere and a `ConvexHullShape3D` separated by clear air, with the gap reported as penetration depth
+
+3.4.0 and 3.5.0 dispatched `PhysicsEvents.ContactBegin` for a sphere and a convex hull up to
+**0.01 m** apart, and gave the payload a *positive* `depth` equal to the separation -- against
+`ManifoldStore`'s own layout comment, `depth (positive = penetration, negative = speculative gap)`.
+Neither the event nor its payload distinguished a hit from a near miss.
+
+**Reproduction.** Two bodies in a bare `EntityManager` with `PhysicsSystem` and
+`ColliderObserverSystem` registered, gravity zeroed, no map data. The slab is an exact eight-vertex
+box with twelve outward-wound triangles; the sphere is held clear of its +z face and never moves.
+
+```js
+// scene metres per Q3 unit; the port's world scale
+const S = 1 / 32;
+
+place(BodyKind.Static,  ConvexHullShape3D.from(boxVertices, boxIndices), 0, 0, 0);
+place(BodyKind.Dynamic, SphereShape3D.from(0.5 * S), -198 * S, 64 * S, halfZ + 0.5 * S + gap * S);
+
+ecd.addEntityEventListener(sphere, PhysicsEvents.ContactBegin, (c) => report(c.depth));
+em.update(em.fixedUpdateStepSize);
+
+// gap = 0.1 Q3 units (3.1 mm of clear air):
+//   ConvexHullShape3D  3.5.0 -> depth  0.003125   <- positive, and exactly the gap
+//                      3.6.0 -> nothing
+//   BoxShape3D, same extents, both versions -> nothing
+```
+
+**Why the shape class mattered**, which is the whole diagnosis: `sphere_box_contact` is a closed
+form that can answer "separated", while a hull falls through to GJK + EPA, and EPA run on a simplex
+that does not enclose the origin returns a plausible axis and the separation as a depth. The
+behaviour moved with *where over the face* the sphere sat -- GJK picks support vertices by
+direction, so two placements hand EPA different simplices out of the same pair of shapes -- which is
+what a simplex-quality problem looks like and is not what a wrong collider looks like. The package's
+own `convex_convex_manifold` header already records EPA as unreliable for polytopes and routes
+hull-versus-hull around it with SAT; sphere-versus-hull had no such route.
+
+**What it cost, and why a consumer would not suspect the engine.** Every brush of every level in
+this port is a `ConvexHullShape3D` and every missile is a sphere, so this was a centimetre of
+phantom collision around every surface in the game: rockets detonating in mid-air in open corridors.
+Four theories were tested against this repository's own pipeline before the engine was suspected,
+and the negative results are worth having as a set -- the brush-to-hull conversion is faithful to
+0.089 units at worst across all six shipped maps, hull winding is outward on all 43,330 triangles,
+`MAX_MAP_BOUNDS` at 1,048,576 produces no escaped winding points, and speculative contacts are
+otherwise not dispatched as `ContactBegin` at any gap or any speed.
+
+**Evidence:** `test/convex-contact.test.ts` (the repro, now the regression test for the fix),
+`src/client/Missiles.ts`, D-111.
+
+### BUG-15 (fixed in 3.7.0): `KinematicMover` pinned a body against geometry with its velocity zeroed and `grounded === false`
+
+3.6.0's fix for BUG-14 regressed the character solver. For one release, a body pressed against
+geometry was pinned -- all velocity zeroed, position unchanged -- while `grounded` reported
+`false`, and it never recovered: a player walking into a wall stopped dead, and one that reached
+that state in the air hung there indefinitely.
+
+**Reproduction:** walk a `KinematicMover` into level collision and keep issuing move commands. This
+port's own tests are the smallest statement of it that exists here, and they caught it from two
+directions on the upgrade -- `test/meepmove.test.ts` on the movement property (a strafe-jump chain
+peaked at **140 units per second, against 386** on 3.5.0 and again on 3.7.0, where the solver's own
+`ps.speed` base is 320) and `test/physics-wedge.test.ts` on the wedge property (a player pushed
+into geometry from many directions must still be able to leave).
+
+**Severity: major while it lasted, and the reason it is recorded after the fix** is that it is the
+second-order kind: a correctness fix in one subsystem changed a behaviour another subsystem was
+relying on, in the same release, with nothing in either changelog connecting them. A consumer
+upgrading for BUG-14 would have taken this in exchange without knowing to look.
+
+**Attribution method, since it is reusable.** The version was A/B-ed against a scratch copy of the
+previous release rather than by reinstalling the package, because `node_modules` is shared with
+other work in this tree; reinstalling to bisect a dependency is a change to somebody else's running
+session.
+
+**Evidence:** `test/meepmove.test.ts`, `test/physics-wedge.test.ts`, D-111.
+
+### BUG-16 (fixed in 3.8.0): a body CCD stopped against a hull's *corner* raised no contact event, where the same stop against a *face* did
+
+Through 3.7.0 the continuous-collision pass clamped a body correctly against any part of a
+`ConvexHullShape3D` and reported it only for a face. A game reacting to impacts therefore never
+learned about one while the body sat there blocked, for as long as it kept stepping.
+
+**Reproduction.** A Q3 player box (30 x 30 x 56 units) as a hull at the origin, and a `Dynamic`
+sphere with `RigidBodyFlags.CCD` fired at it from 120 units out at a rocket's 900 units per second.
+Only the approach angle changes:
+
+```js
+fireAt(-1, 0);                        // square onto a face
+fireAt(-Math.SQRT1_2, -Math.SQRT1_2); // onto the corner, same speed, same step
+
+// 3.7.0  face:   stopped at 15.5 units (15 + 0.5), ContactBegin dispatched
+//        corner: stopped on the same step, at 21.71 units (15 * sqrt(2) + 0.5),
+//                and nothing was ever dispatched
+// 3.8.0  corner: stopped on the same step, at 21.71 units, ContactBegin dispatched
+```
+
+**The sweep was never wrong**, which is what makes this a reporting defect rather than a collision
+one: both approaches were clamped on the same step, each at its own correct geometric distance,
+whether or not either said so. What a corner impact is, in manifold terms, is a contact at zero
+depth against a feature with no face to clip against.
+
+**What it cost:** ten of twenty-eight rockets in this port's 64-direction test caught a player on
+the shoulder rather than square on, and ground there for their full ten-second lifetime doing
+nothing. The workaround was an inference from Q3's own motion model (`TR_LINEAR` means constant
+speed until something stops it, so a step that covered less than the missile's speed is a step in
+which something did) plus `PhysicsSystem.overlap` a unit wider than the missile to find what --
+because a body CCD has clamped is *touching*, and touching is not overlapping, so an exactly-sized
+probe finds nothing at a corner and 0.75 units finds the body.
+
+**Evidence:** `test/convex-contact.test.ts` (three cases: face, corner, and that both stop on the
+same step), `src/client/Missiles.ts`, D-111.
 
 ## 7. What worked well
 

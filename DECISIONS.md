@@ -4681,3 +4681,229 @@ the occlusion off — or, for that matter, at a blur, which is the one of these 
 from a still frame anyway. Every claim above is about the value of four booleans and a float on a
 `Renderer`. The same limitation D-107 and D-108 recorded, and it still bounds this port's rendering
 work.
+
+---
+
+## Phase 9 — one clock, and the game as meep systems
+
+Phase 9 ran as two tracks against one worktree. The menu is the section above; this one is
+`PLAN.md`'s, and the two share nothing but a number.
+
+### D-110: The priority order inverted — exercise meep first, port Quake III second
+
+Through phase 8 this port was "Quake III, faithfully, on meep". Where the two disagreed Q3 won, and
+the engine evaluation came out of whatever that exercise happened to touch. From phase 9 it is
+**exercise meep well first, produce a faithful port second**.
+
+The maintainer decided this explicitly. It is recorded here rather than inferred from the diff
+because every argument below is downstream of it and none of them can be re-derived from the code:
+each one reads as an ordinary engineering choice until you know which way the tie-breaker points.
+
+It was already half true when it was said. D-071 put Q3's motor on `KinematicMover` and retired
+`PM_SlideMove`, `PM_StepSlideMove` and `PM_GroundTrace`, so movement departed the C in phase 5. Tick
+rate was defending a boundary that had already moved.
+
+**The frame is the engine's now.** The whole game ran on one `engine.ticker.onTick` listener: a
+153-line closure holding nine named phases, its own per-phase exception guard, and four hand-rolled
+time accumulators. `EntityManager` has every one of those mechanisms — a fixed step with a tick id,
+an alpha, a catch-up cap, and per-system error isolation that reports by name — so running outside
+it meant running outside the engine's ordering, its error isolation and its step. Simulation is now
+six `System` subclasses on `fixedUpdate` (player, combat, pickups, bots, character bodies, movers)
+and presentation is one on `update`; `main()` fell from 1045 lines to 573 in the commit that did it,
+with no `try`/`catch` left in the frame path, and the match roster moved out to `app/roster.ts`.
+
+Two of the four accumulators stayed, and the plan was wrong to list them for deletion.
+`MoverSystem.accumulator` is not frame-rate compensation — it is the whole-millisecond carry that
+keeps `level.time` an integer, which a 16.667 ms step needs exactly as much as a variable one did.
+`Arena.trailAccumulator` thins the smoke trail; a fixed step removes its docblock's *reason* without
+removing the rate control it provides.
+
+**60 Hz, and 125 Hz was the fidelity answer.** `em.fixedUpdateStepSize` keeps the engine's default.
+125 Hz was a real candidate: it is Q3's `sv_fps`, it is what `test/match.test.ts` and the phase-6
+bench already use, and it would have collapsed the browser, the headless match and the C oracle into
+one simulation. It was rejected because chasing `sv_fps` parity is precisely the argument this phase
+stands down from, and because the engine's own default is the configuration the rest of the engine's
+tuning assumes — which is the property being evaluated. The headless bench keeps its own rate, and
+that the two differ is now a property of the bench rather than a divergence anybody has to explain.
+
+**`pmove_fixed` was examined and deliberately NOT set**, which is the clearest case of the new order
+deciding something the old one would have decided the other way. Q3's `pmove_fixed 1` with
+`pmove_msec 8` chops a command into whole 8 ms sub-steps; at a 16.667 ms step that splits a 17 ms
+step into 8 + 8 + 1, and that 1 ms tail is a real sub-step with its own friction and acceleration
+pass — raggeder than the single uniform step that leaving it alone produces. It exists in Q3 so that
+a client and a server agree on a prediction, and there is no server here. What replaced it is
+smaller and better: `PlayerController` carries the sub-millisecond remainder rather than rounding it
+away — the arithmetic `MoverSystem` has always used — so a step spends 16 or 17 whole milliseconds
+and the sequence sums exactly. The rounding it replaced handed pmove 17 ms for every 16.667 ms step,
+so the player's clock ran two percent fast against the movers, permanently, and nothing said so.
+`test/fixed-step.test.ts` pins it: the same wall-clock time reaches the same origin and velocity to
+the last bit whether it arrives in 45 frames or 180, every step spends 16 or 17 ms and nothing else,
+and the mean lands on the engine's step size.
+
+**REPORT.md was checked against this, and one row was stale.** The `trap_SnapVector` row said "part
+of movement fidelity, not an optimisation — removing it changes strafe-jump speed", which describes
+a thing the shipping game has not done since D-071: `snapVector` is called from
+`src/q3/pmove/pmove.ts` and nowhere else, and `pmove.ts` is now the reference path behind
+`?trace=clipmap` and the divergence harness. `MeepMove` never snaps. The row was describing the
+oracle and calling it fidelity, and phase 9 makes it worse rather than better, because per-frame
+rounding at 60 Hz is not the rounding Q3 does at 125. The note now says where `snapVector` lives and
+what it is for; the disposition stays `ported`, because it is.
+
+The rest of the document had already absorbed most of the change: the executive summary records the
+maintainer reversing the brief's central constraint, and GAP-019 says outright that it is "no longer
+load-bearing for this port at all". What phase 9 adds to that is the clock.
+
+**What did not change.** The ported `bg_pmove` and `cm_trace` stay in the tree, bit-exact against the
+WASM oracle, and `npm run divergence` still measures the shipping path against them. Fidelity is
+still *measured* — it stopped being the thing that decides design questions. The distinction matters
+for reading the rest of this file: an entry that says "Q3 does X and so does this" is a measurement,
+and an entry that says "Q3 does X therefore this must" is now suspect.
+
+**What it costs, named rather than discovered later.** Strafe-jump feel at 60 Hz is not Q3's at 125,
+and `test/meepmove.test.ts` accordingly asserts a property — sustained speed meaningfully above the
+320 `ps.speed` base, which can only come from `PM_Accelerate`'s projection — rather than a number
+Q3 would produce. Anyone restoring `sv_fps` parity later changes one field, and should read the
+paragraph on `pmove_fixed` before assuming the rest follows.
+
+### D-111: Three meep physics bugs, found by this port, fixed in four releases — and the test shape that got the workarounds back out
+
+The strongest engine-evaluation material this project has produced, and it exists because phase 9
+stopped reimplementing around the engine and started driving it. Missiles became CCD bodies that
+detonate on `PhysicsEvents.ContactBegin` (D-110's frame is what made that possible), which put this
+port on the contact path for the first time. Three defects fell out of it inside four releases.
+
+**1. A contact reported across a centimetre of clear air. Fixed in 3.6.0.**
+
+3.4.0 and 3.5.0 dispatched `ContactBegin` between a sphere and a `ConvexHullShape3D` separated by up
+to **0.01 m**, and handed the event a *positive* `depth` equal to the gap — where `ManifoldStore`'s
+own layout comment says `depth (positive = penetration, negative = speculative gap)`. So neither the
+event nor its payload distinguished a hit from a near miss, and in this game every brush of every
+level is a `ConvexHullShape3D` while every missile is a sphere: a centimetre of phantom collision
+around every surface in the world. It presented as a rocket detonating in mid-air 18 units in front
+of the muzzle, down an open corridor on `oa_dm1`.
+
+The tell was that the identical box built as a `BoxShape3D` reported nothing. `sphere_box_contact`
+is a closed form that can answer "separated"; a convex hull falls through to GJK + EPA, and EPA run
+on a simplex that does not enclose the origin returns a plausible axis and the separation as a
+depth. It moved with where the sphere sat over the face, which is what a simplex-quality problem
+looks like and is not what a wrong collider looks like — an exact eight-vertex box reproduces it.
+The engine's own `convex_convex_manifold` header already records EPA as unreliable for polytopes and
+routes hull-versus-hull around it with SAT; sphere-versus-hull had no such route.
+
+The search cost more than the finding, and the negative results are the part worth keeping, because
+each one was a plausible accusation against this port's own pipeline: the brush-to-hull conversion
+is faithful (every hull vertex of all six shipped maps against its own brush's planes — worst escape
+0.089 units, on `am_thornish`); `MAX_MAP_BOUNDS` being 1,048,576 where `cm_polylib.c` uses 65,536
+produces no escaped winding points; hull triangle winding is outward on all 43,330 triangles and the
+Q3-to-meep axis swap preserves orientation; and speculative contacts are not dispatched as
+`ContactBegin` at all — a stationary sphere reports nothing at any positive gap, and one flying
+*parallel* to a wall at 2,000 units a second reports nothing either, so the margin does not scale
+with speed. Four wrong theories, every one of them about this repository, before the shape class
+turned out to be the variable.
+
+**2. `KinematicMover` pinned against geometry, and not grounded either. Fixed in 3.7.0.**
+
+3.6.0's fix regressed the character solver: for one release a body pressed against geometry was
+pinned with all velocity zeroed while reporting `grounded === false`, permanently. A strafe-jump
+chain peaked at **140 units per second where it had peaked at 386**, and a player could hang in
+mid-air indefinitely. Caught by `test/meepmove.test.ts` and, independently, by
+`test/physics-wedge.test.ts`, which exists for exactly that failure — two tests written against two
+different descriptions of "the player must keep moving", which is why the diagnosis took minutes.
+
+Attributed by A/B against a scratch copy of the previous version rather than by reinstalling,
+because `node_modules` is shared with other live sessions in this worktree. Worth remembering as
+technique: in a shared tree, bisecting a dependency by installing it is a change to somebody else's
+session.
+
+**3. A contact against a corner that was never raised at all. Fixed in 3.8.0.**
+
+Through 3.7.0, a body that CCD stopped against a hull's *corner* raised no contact event. Face-on it
+did: the sphere is clamped at 15.5 units — the box's 15-unit half-width plus its own 0.5 — and
+`ContactBegin` fires. At 45 degrees the same sphere is clamped on the same step at 21.71 units, the
+box's own diagonal half-extent plus the sphere, and nothing is ever dispatched, for as long as you
+keep stepping. A game that reacts to impacts never learns about one while the body sits there
+blocked: ten of twenty-eight rockets in the 64-direction ring test ground against a player's
+shoulder for their full ten seconds, doing nothing.
+
+**The method is worth as much as the bugs.** `test/convex-contact.test.ts` asserts each defect's
+*presence* rather than skipping it, and each assertion carries a message naming the code to delete
+when it fails. An engine upgrade then breaks exactly one test, and the failure is the instruction.
+Both of `src/client/Missiles.ts`'s workarounds came out that way — the file peaked at 522 lines and
+is back to 421, with neither the confirming sweep nor the stopped-missile inference in it, and what
+is left is the contact listener the design called for in the first place. A workaround should not
+outlive what it works around, and the usual reason one does is that nothing is watching.
+
+Two further properties of that file, both deliberate:
+
+- **The regression test asserts both halves.** Separated shapes report nothing *and* overlapping
+  ones still report at the right depth, in the same rig, at the same depths. A fix that removed
+  every contact from the convex path would have satisfied the first alone and been far worse than
+  the bug it replaced. A third case pins the property that identified the cause — that the old
+  behaviour moved with where the sphere sat over the face — so the *diagnosis* is regression-tested
+  and not only the symptom.
+- **The corner case pins why its workaround was sound.** Both approaches were clamped on the same
+  step, at their own correct geometric distances, whether or not either said so. The sweep was never
+  at fault; the defect was in the reporting. That is what made "a `TR_LINEAR` missile that covered
+  less than its own speed in a step has hit something" an inference from the engine's own behaviour
+  rather than a guess.
+
+**Neither workaround could have been left in as insurance**, and that is not obvious.
+
+The confirming sweep — re-run the segment the missile just flew, detonate only if it really reached
+what the contact named — asks the wrong question of a *grazing* hit. A missile touching a body at
+depth zero while moving along its surface has CCD clamp the blocked axis while the rest of the
+velocity carries on, so the swept segment never enters the thing it is already resting against. It
+rejected **ten of twenty-three real hits**. A check that asks "did it arrive" cannot recognise a hit
+that has already arrived. Keeping it as insurance would have traded a bug the engine had fixed for
+one only this repository could produce.
+
+The `ColliderFlags.IsSensor` on the missile's collider stays, and is not a workaround: `TR_LINEAR`
+means nothing ever pushes a missile off course. That it also made a phantom contact harmless to the
+solver was a side effect, and is not why it is there.
+
+**What this says about the evaluation.** REPORT.md's executive summary already argued, from the
+`raycast` bug fixed in 3.2.0, that a consumer who reimplements rather than adopts stops being able
+to find your bugs — three sessions of building character movement on `shape_cast` found no engine
+defect, and half an hour of running the engine's own solver found one. Phase 9 is the same
+experiment at a larger size, with the same result: adopting the contact and CCD paths, in a game
+that fires several projectiles a second, found three defects inside a single day of using them —
+the four commits from "missiles are bodies" to "3.8.0 raises the corner contact" span nine hours. The
+repros are BUG-14, BUG-15 and BUG-16, each a bare `EntityManager` with two bodies and no map data.
+None of them needed *this port* to find; all of them needed somebody to use the path.
+
+### D-112: Two bugs of this port's own, found by the tests the new facilities needed
+
+Both are the same shape, and it is worth naming: code that was correct under the old arrangement and
+silently wrong under the new one, where "silently" means the game still ran and nothing was logged.
+
+**`MoversView` skipped writing a mover whose origin had not changed.** An obvious saving, and it
+cannot survive interpolation. Between fixed steps the drawn transform holds a *blended* pose written
+by `InterpolationSystem`; skipping the write because *this* code did not change the origin leaves the
+blend standing, the pose recorder snapshots the blend as the next truth, and a stopped door walks
+away from itself — a quarter of a unit in four steps, measured before the early-out came out. The
+saving was never real either: `Vector3.set` compares before it assigns and only dispatches
+`onChanged` on a genuine difference, so the skip was the engine's own check written a second time,
+with the added effect of hiding a correction the engine would otherwise have made. Found by
+`test/interpolation.test.ts` asserting that a resting producer does not drift.
+
+**`PhysicsTrace` passed `undefined` as its query filter.** meep's queries consult the filter callback
+and nothing else — `shape_cast` never looks at `layer`, `mask`, or the sensor flag — so `undefined`
+means "everything in the broadphase blocks". Harmless for as long as the only bodies in the world
+were the level's. The moment characters had colliders it became severe: `PhysicsTrace` answers
+`pm->trace`, a bot's line of sight and an item's drop to the floor, and every bot's line of sight now
+terminated on the bot's own collider, so no bot ever saw the player again. `PhysicsTrace.ignored` is
+the fix, and missiles are in it too.
+
+**The instructive part is that the second one was predicted and shipped anyway.** `PLAN.md` named
+both `undefined` filter sites before any of the work started — "the moment a character or a missile
+has a body, those two `undefined`s are bugs. This is a prerequisite, not a detail." Step 5 fixed the
+`MeepMove` site, by hanging the filter on `MoverHost` so that the game classes never learn what an
+entity is. The `PhysicsTrace` site was missed, and stayed missed until `test/match.test.ts` was wired
+to run the whole arrangement — character bodies, missiles, and the engine's step inside the match
+loop — at which point no bot could see past its own collider. Reading the engine identified the
+defect; only running the thing found it, and the cheap protection is the one now in place: the
+headless match runs what the browser runs.
+
+Neither would have been found by looking at the running game, which is the same lesson as REPORT.md's
+item 16 arriving from a third direction. A quarter of a unit of drift on a resting door is invisible,
+and bots that cannot see are bots that look busy.
