@@ -3081,6 +3081,85 @@ Between the two defects there is no usable route to an output-resolution scale, 
 render scale is now `internal_resolution_scale` instead — reached, for want of anything else,
 through the closures `GraphicsEngine3` assigns into `DynamicResolutionScaling.set_scale`.
 
+### BUG-12: `StaticSceneBVH.raycast_nearest` and `.raycast` pass their arguments in the wrong order, and throw on every scene with geometry in it
+
+`bvh_query_user_data_ray` is `(result, result_offset, bvh, root, origin…, direction…)`, which is
+what both of its callers in `core/` pass. Both of its callers in `StaticSceneBVH` pass
+`(bvh, bvh.root, scratch_instance_hits, 0, …)` — the first two pairs swapped. `scratch_instance_hits`
+is a plain `[]`, so `bvh.__data_float32` is `undefined` and the first AABB test reads `undefined[0]`:
+
+```
+TypeError: Cannot read properties of undefined (reading '0')
+    at bvh_query_user_data_ray (core/bvh2/bvh3/query/bvh_query_user_data_ray.js:67)
+    at StaticSceneBVH.raycast_nearest (shade/renderer/scene/bvh/StaticSceneBVH.js:392)
+    at brick4_optimize_probe_placement (…/brick4/cpu/brick4_optimize_probe_placement.js:277)
+    at brick4_bake_basic (…/brick4/gpu/bake/brick4_bake_basic.js:65)
+```
+
+The `root === NULL_NODE` early return does not save it: in the swapped call `root` is the literal
+`0`, so an empty BVH takes the same path as a full one.
+
+**What it costs:** the whole volumetric-lightmap bake. `brick4_bake_for_scene` — the engine's own
+documented entry point for producing one — cannot complete on any scene, because probe placement is
+not optional inside `brick4_bake_basic`.
+
+**Status: fixed in 3.6.0**, which landed while this was being written up. Recorded anyway, because
+the shape is worth having: two callers of a six-argument positional function disagreed about its
+signature, and the one that was wrong is the one no test covered.
+
+**Evidence:** `core/bvh2/bvh3/query/bvh_query_user_data_ray.js:21-50`,
+`shade/renderer/scene/bvh/StaticSceneBVH.js:392,503` (3.5.0),
+`core/geom/3d/tetrahedra/tetrahedral_mesh_carve_outside_surface.js:33` and
+`core/geom/3d/topology/struct/binary/query/bt_mesh_sample_interior_grid_points.js:43` for the
+correct order.
+
+### BUG-13: `brick4_bake_basic` records a frame graph its own validator rejects, so the volumetric lightmap still cannot be baked
+
+Two compute passes over one buffer: `Brick4 / Bake probes` writes `gr_cycle_trace_data`, and
+`Brick4 / Resolve probes` reads it. The second pass is handed `gr_cycle_trace_data` — the handle as
+imported, before the write — rather than the output the first pass returned. `FrameGraph.compile`
+catches exactly this and refuses:
+
+```
+Pass 1 'Brick4 / Resolve probes' reads version 0 of 'encoded probe data', which pass 0
+'Brick4 / Bake probes' has already superseded with version 1. Both versions name one resource,
+so the read returns the newer contents.
+Error: FrameGraph 'Brick4 Bake Probes': the recorded graph is invalid
+```
+
+The message is worth reading closely: the *data* was never wrong — both handles name the same
+buffer — so this is an undeclared dependency edge rather than a wrong result. `graph_compute_pass`
+returns its outputs named after the shader's resources, and threading the first pass's `output` into
+the second pass's `input` is the whole fix:
+
+```js
+const bake_pass_outputs = graph_compute_pass({ /* … shader_brick4_bake_probes … */ });
+
+graph_compute_pass({
+    /* … */
+    input: bake_pass_outputs.output,
+});
+```
+
+**Status: live on 3.5.0 and 3.6.0.** With BUG-12 fixed upstream this is now the only thing standing
+between the engine and a baked lightmap, and it is two lines.
+
+**What it says about the path:** these two bugs are independent, sit on the only route that produces
+a `VolumetricLightMap`, and the second is caught by the engine's *own* validator the first time the
+graph is compiled. Nothing has run this code. That is worth more than either bug: the runtime half —
+the component, `VolumetricLightMapSystem3`, the serialization adapter, the Brick4 render path — is
+well built and worked first time against a real 1.12 MB bake, so what is missing is a single
+end-to-end test that bakes a two-box scene and asserts a non-empty structure comes out.
+
+**Workaround:** `meepBakePathFixes()` in `vite.config.ts` rewrites both on the way to the browser —
+a dev-server transform, not an edit to `node_modules`. Each patch skips silently when its text is
+absent, which is how the BUG-12 entry became a no-op when 3.6.0 arrived mid-session, and throws on a
+partial match. With it, all six maps bake: 0.92 to 2.90 MB, two to six minutes each on a 4090.
+
+**Evidence:** `shade/renderer/global_illumination/brick4/gpu/bake/brick4_bake_basic.js:145,179,189`,
+`shade/renderer/shader/graph/compute/graph_compute_pass.js:15-17,61`, `vite.config.ts`,
+`src/client/VolumetricLight.ts`
+
 ## 7. What worked well
 
 Specific things that would be a loss to regress.

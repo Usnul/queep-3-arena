@@ -43,6 +43,7 @@ import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { CONTENTS, type ClipMap } from '../q3/cm/ClipMap.ts';
 import { buildHulls } from '../q3/cm/brushHull.ts';
 import { hullShape } from './hullShape.ts';
+import { fetchOptionalBinary } from './optionalAsset.ts';
 
 /** What `tools/bake-audio.ts` writes next to `scene.json`. */
 export const PROBE_FILE = 'audio-probes.bin';
@@ -261,15 +262,16 @@ export function decodeProbeField(bytes: ArrayBuffer): AcousticProbeField {
  * A missing file is not an error. The bake is a separate tool over an asset
  * tree that is not itself in the repository, so a checkout that has not run it
  * should play with occlusion and no reverberation rather than fail to start --
- * and the caller says which of the two happened.
+ * and the caller says which of the two happened. `fetchOptionalBinary` is what
+ * decides "missing", and it is not `response.ok`: see its docblock.
  *
  * @param baseUrl e.g. `/assets/built/oa_dm1`
  */
 export async function loadProbeField(baseUrl: string): Promise<AcousticProbeField | null> {
-    const response = await fetch(`${baseUrl}/${PROBE_FILE}`);
-    if (!response.ok) return null;
+    const bytes = await fetchOptionalBinary(`${baseUrl}/${PROBE_FILE}`);
+    if (bytes === null) return null;
 
-    return decodeProbeField(await response.arrayBuffer());
+    return decodeProbeField(bytes);
 }
 
 /** The part of `EntityComponentDataset` this file uses. */

@@ -4368,3 +4368,79 @@ where it stops. `ProbeReverbRenderer` also picks its probe by plain nearest-neig
 nearest-*visible*, so a listener close to a wall can read the room on the other side of it; meep has
 `nearestVisibleIndex` and the reverb renderer does not use it. GAP-031 through GAP-033 record the
 engine-side halves of all of this.
+### D-107: The room's ambient light is where you are standing, and getting it required patching the engine twice
+
+Every build before this rendered indirect light from `ShadeIndirectLightingMode.IBL` -- one distant
+environment map, sampled identically everywhere. It is why `make_default_environment` is in
+`main.ts` at all: without an environment, Shade renders every surface unlit, and "my geometry is
+black" reads as a material problem (REPORT.md ergonomics). The consequence is that a sealed Q3
+corridor receives exactly as much ambient as the courtyard outside it. No bounce, no colour bleed,
+no dark.
+
+Brick4 is the other end of that: a sparse voxel hierarchy of irradiance probes, baked against the
+map's own geometry and lights, sampled per shading point. The ambient term becomes a function of
+position.
+
+**The runtime half is three lines and works.** `VolumetricLightMapSystem3` uploads whichever
+`VolumetricLightMap` component linked first into the one `Brick4LightMap` the scene keeps, and
+re-uploads after a device restart; the component is the bytes and nothing else. So loading a bake is
+fetch, assign, attach. Two things are worth stating because neither is implied by the other:
+uploading a lightmap does not turn Brick4 on -- the mode is the renderer's setting and a scene in
+IBL never reads the buffer -- and turning Brick4 on without a lightmap reads an empty buffer, which
+is a black level rather than an unlit one. So the mode follows the map: Brick4 when there is a bake,
+IBL when there is not, and `?gi=ibl` to opt back out and compare.
+
+**The bake cannot be a Node tool, unlike the acoustic one.** `brick4_bake_basic` is a compute
+shader: it traces the scene several bounces deep at tens of thousands of samples a probe, and there
+is no CPU path. So it runs in the browser against the live renderer -- `?bake=lightmap` -- and posts
+its result to a dev-server sink that writes it next to `scene.json`, the same shape as the
+screenshot sink. meep's own `brick4_bake_for_scene` ends in `downloadAsFile`, which is right for one
+scene in a console and wrong for six maps in a row.
+
+| map | baked | probes | bake |
+|---|---:|---:|---:|
+| `oa_dm4` | 0.92 MB | | ~2 min |
+| `oa_dm1` | 1.12 MB | 32,074 | 3 min |
+| `oa_dm5` | 1.13 MB | | ~3 min |
+| `am_thornish` | 1.73 MB | 49,924 | 6 min |
+| `aggressor` | 1.75 MB | | ~3 min |
+| `oa_dm7` | 2.90 MB | 83,490 | 5 min |
+
+**It did not work, and the reason is the finding.** meep 3.5.0 could not bake a volumetric lightmap
+at all. Two independent defects sit on the only code path that produces one:
+`StaticSceneBVH.raycast_nearest` passes `bvh_query_user_data_ray` its argument pairs swapped and
+throws on any scene with geometry in it (REPORT.md BUG-12, **fixed in 3.6.0**, which landed while
+this was being written); and `brick4_bake_basic` records a frame graph its own validator rejects,
+because the second of its two compute passes reads the pre-write handle of the buffer the first one
+writes (BUG-13, **live on 3.5.0 and 3.6.0**). The second is two lines.
+
+`meepBakePathFixes()` in `vite.config.ts` rewrites both on the way to the browser. That is a
+dev-server source transform and not an edit to `node_modules`, and it is deliberately the smallest
+thing that works: four lines of matched text, a hard error on a *partial* match, and a silent skip
+when a pattern is absent entirely -- because absent means fixed upstream, which is not hypothetical.
+The `StaticSceneBVH` entry became a no-op mid-session when the dependency moved to 3.6.0 underneath
+this work, and the guard is what noticed.
+
+The shape of those two bugs says more than either: they are independent, they sit on the *only*
+route to a `VolumetricLightMap`, and the second is caught by the engine's own validator the first
+time the graph compiles. Nothing has run this code. What that makes of the surrounding work is
+worth being explicit about -- the runtime half is well built and worked first time against a real
+1.12 MB bake -- so the gap is one end-to-end test that bakes a two-box scene and asserts a non-empty
+structure.
+
+**Two things the review caught that the first version got wrong.** Re-baking a map that already had
+a lightmap attached a *second* component, and `VolumetricLightMapSystem3` wires whichever linked
+first and silently ignores the rest -- so the file was written correctly and the level stayed lit by
+the map it had just replaced, which is indistinguishable from a bake that did nothing. The bake
+assigns into the existing component instead, whose `version` is precisely what the system watches.
+And `?gi=ibl` was overridden by a bake finishing, so an explicit "show me the environment map" would
+silently stop meaning that.
+
+**What is not claimed.** `LIGHTMAP_MEMORY_BUDGET` is 8 MB rather than the engine's 16 because of one
+map: `am_thornish` does not converge, and at the 32 MB this was first set to it reached 601,000
+probes with a 57-minute bake ahead of it. Eight bounds it at 49,924 and leaves the other five
+untouched -- checked by re-baking `oa_dm7`, the closest to the cap, and getting a byte-identical
+file back. The cell size is meep's own default and was not tuned. And nothing here has been looked
+at in a lit window by a person: the preview browser runs this application in a hidden tab where
+`requestAnimationFrame` never fires, so every claim above is about bytes, probe counts and component
+state rather than about how the arenas look.

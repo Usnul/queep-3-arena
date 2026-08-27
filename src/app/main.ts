@@ -56,6 +56,18 @@ import { SopraDefaultBus } from '@woosh/meep-engine/src/engine/sound/sopra/Sopra
 import { configureAcousticSimulation } from '@woosh/meep-engine/src/engine/sound/simulation/configureAcousticSimulation.js';
 import { ProbeReverbRenderer } from '@woosh/meep-engine/src/engine/sound/simulation/render/ProbeReverbRenderer.js';
 import { attachProbeField, loadProbeField } from '../client/Acoustics.ts';
+import type { GraphicsEngine3 } from '@woosh/meep-engine/src/engine/graphics3/GraphicsEngine3.js';
+import type { Scene } from '@woosh/meep-engine/src/shade/renderer/scene/Scene.js';
+import type { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
+import { VolumetricLightMap } from '@woosh/meep-engine/src/engine/graphics3/VolumetricLightMap.js';
+import { VolumetricLightMapSystem3 } from '@woosh/meep-engine/src/engine/graphics3/VolumetricLightMapSystem3.js';
+import { ShadeIndirectLightingMode } from '@woosh/meep-engine/src/shade/renderer/ShadeIndirectLightingMode.js';
+import {
+    attachVolumetricLightMap,
+    bakeVolumetricLightMap,
+    loadVolumetricLightMap,
+    postBake,
+} from '../client/VolumetricLight.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
@@ -135,6 +147,33 @@ function flyMode(): boolean {
 }
 
 /**
+ * `?gi=ibl` renders the map's ambient light from the environment map, as every
+ * build before the volumetric bake existed did.
+ *
+ * Brick4 is the default *when the map has a bake to read*, and this is how the
+ * two are compared without moving a file: the same A/B shape as `?trace=` and
+ * `?move=`, for a change that alters every pixel. There is nothing to force the
+ * other way -- `?gi=brick4` on a map with no lightmap would ask the renderer to
+ * read an empty buffer, which is a black room rather than an experiment.
+ */
+function useEnvironmentLighting(): boolean {
+    return new URLSearchParams(window.location.search).get('gi') === 'ibl';
+}
+
+/**
+ * `?bake=lightmap` bakes this map's volumetric lightmap and writes it back to
+ * `assets/built/<map>/`, then leaves the game running on the result.
+ *
+ * A query parameter rather than a script because the bake is a compute shader
+ * that needs the loaded scene, its materials and a live device; see
+ * `VolumetricLight.ts`. Minutes per map, and the browser tab is doing it, so it
+ * says so at both ends.
+ */
+function bakeRequested(): boolean {
+    return new URLSearchParams(window.location.search).get('bake') === 'lightmap';
+}
+
+/**
  * `?trace=clipmap` runs movement on the ported `cm_trace` instead of meep's
  * physics.
  *
@@ -182,6 +221,13 @@ async function main(): Promise<void> {
 
     await em.addSystem(new ShadedGeometrySystem3(graphics, scene));
     await em.addSystem(new LightSystem3(graphics, scene));
+    /*
+     The scene's baked indirect lighting, if the map has any. One buffer for the
+     whole scene rather than a thing per entity, so the system is a claim on it:
+     it uploads whichever `VolumetricLightMap` linked first and re-uploads after
+     a device restart. See `VolumetricLight.ts`.
+    */
+    await em.addSystem(new VolumetricLightMapSystem3(graphics, scene));
     await em.addSystem(new CameraSystem3(graphics));
     await em.addSystem(new DecalSystem3(graphics, engine.assetManager));
     await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
@@ -304,13 +350,15 @@ async function main(): Promise<void> {
     const mapName = requestedMap();
     const baseUrl = `/assets/built/${mapName}`;
 
-    const [loaded, clipMap, models, audio, probes] = await Promise.all([
+    const [loaded, clipMap, models, audio, probes, lightMap] = await Promise.all([
         loadMap(ecd, baseUrl),
         loadClipMap(baseUrl, mapName),
         loadModels('/assets/built/models'),
         AudioBank.load('/assets/built/sound', ecd, emitters),
         // Null on a checkout that has not run `node tools/bake-audio.ts`.
         reverb === null ? Promise.resolve(null) : loadProbeField(baseUrl),
+        // ...and the same for the volumetric lightmap, which `?bake=lightmap` writes.
+        loadVolumetricLightMap(baseUrl),
     ]);
 
     /*
@@ -346,6 +394,60 @@ async function main(): Promise<void> {
         (volumes.unmatched > 0 ? `, ${volumes.unmatched} unmatched` : '') +
         (volumes.unclaimed > 0 ? `, ${volumes.unclaimed} unclaimed` : '')
     );
+
+    /*
+     The map's indirect lighting, if it has a bake, and the renderer setting
+     that makes the buffer worth uploading.
+
+     Both halves are needed and neither implies the other:
+     `VolumetricLightMapSystem3` uploads whatever component is attached whether
+     or not anything reads it, and Brick4 mode reads the buffer whether or not
+     anything filled it -- which is a black level rather than an unlit one. So
+     the mode follows the map, and `?gi=ibl` opts back out for comparison.
+
+     After `applyLightVolumes` rather than beside the load, because the bake
+     below traces the scene's *lights* and those are only their final size once
+     the volumes are applied. A loaded map does not care about the order; a
+     baked one very much does.
+    */
+    const environmentOnly = useEnvironmentLighting();
+
+    if (lightMap !== null && !environmentOnly) {
+        attachVolumetricLightMap(ecd, lightMap);
+        graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
+
+        console.log(
+            `[queep] indirect lighting: brick4, ` +
+            `${(lightMap.data!.byteLength / (1024 * 1024)).toFixed(2)} MB baked volume`
+        );
+    } else {
+        console.log(
+            `[queep] indirect lighting: environment map` +
+            (lightMap === null
+                ? ` -- ${mapName} has no baked volume. Load \`?map=${mapName}&bake=lightmap\` to make one.`
+                : ' (?gi=ibl)')
+        );
+    }
+
+    if (bakeRequested()) {
+        /*
+         Not awaited. The bake is minutes of compute-shader work and the level is
+         already playable; blocking here would leave a black window for the whole
+         of it with no way to tell that from a hang. It logs at both ends and
+         publishes its own result when it lands, so the room lights up when it is
+         done.
+
+         Called from *here* -- after the map's lights are final and before items,
+         characters and the view weapon are built -- and that placement is the
+         bake's scope rather than a coincidence. `bakeVolumetricLightMap` builds
+         its BVH and its tree synchronously, before it awaits anything, so the
+         scene it captures is exactly the one standing at this line: world
+         geometry and lights, no pickups and no players. Which is what a *static*
+         lightmap should hold. Moving this call later would bake the spinning
+         rocket launcher into the room's indirect lighting.
+        */
+        void runLightMapBake(graphics, scene, ecd, mapName, lightMap, !environmentOnly);
+    }
 
     if (volumes.sized === 0 && loaded.bundle.lights.length > 0) {
         console.warn(
@@ -865,6 +967,87 @@ function firstGesture(element: HTMLElement, action: () => void): void {
         action();
     };
     element.addEventListener('pointerdown', once);
+}
+
+/**
+ * Bake this map's volumetric lightmap, write it back to the asset tree, and
+ * light the running level from the result.
+ *
+ * Long, loud, and deliberately not awaited by its caller. Three things happen at
+ * the end and all three matter:
+ *
+ *  - the bytes go to the dev server, which is the point of the exercise;
+ *  - the component is attached, so `VolumetricLightMapSystem3` uploads it and
+ *    the scene lights up without a reload -- which is also the only way to see
+ *    that the bake produced something rather than nothing;
+ *  - the renderer is put into Brick4 mode, for the same reason.
+ *
+ * A failure is reported and nothing else: the level was playable before the
+ * bake started and is no worse for it having failed, and throwing out of an
+ * un-awaited promise would only reach the console anyway.
+ */
+async function runLightMapBake(
+    graphics: GraphicsEngine3,
+    scene: Scene,
+    ecd: EntityComponentDataset,
+    mapName: string,
+    existing: VolumetricLightMap | null,
+    live: boolean
+): Promise<void> {
+    console.log(`[queep] baking ${mapName}'s volumetric lightmap -- this takes minutes...`);
+
+    try {
+        const bake = await bakeVolumetricLightMap(graphics, scene);
+
+        const written = await postBake(mapName, bake.bytes);
+
+        if (!live) {
+            console.log(
+                `[queep] baked ${mapName} -> ${written}\n` +
+                `  not shown: ?gi=ibl asked for the environment map, and it still means that. ` +
+                `Reload without it to see the bake.`
+            );
+            return;
+        }
+
+        /*
+         Assign into the component already on the scene rather than attaching a
+         second one. `VolumetricLightMapSystem3` wires whichever linked *first*
+         and silently ignores the rest -- a re-bake that added its own would
+         write the file and leave the level lit by the map it just replaced,
+         which is the one outcome that looks like the bake did nothing.
+         Assigning `data` bumps the component's version, which is exactly what
+         the system watches.
+        */
+        if (existing !== null) {
+            existing.data = bake.bytes;
+        } else {
+            const map = new VolumetricLightMap();
+            map.data = bake.bytes;
+
+            attachVolumetricLightMap(ecd, map);
+        }
+
+        graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
+
+        console.log(
+            `[queep] baked ${mapName}: ${bake.probes.toLocaleString()} probes, ` +
+            `${(bake.bytes.byteLength / (1024 * 1024)).toFixed(2)} MB in ` +
+            `${(bake.milliseconds / 1000).toFixed(0)} s -> ${written}`
+        );
+    } catch (e: unknown) {
+        /*
+         The stack as a string, not just the error object. A bake failure lands
+         several frames deep inside the engine's compute path, and a console
+         that collapses the object to `{stack: ..., message: ...}` shows the
+         reporting line here rather than the one that threw.
+        */
+        console.error(
+            `[queep] ${mapName}'s lightmap bake failed
+` +
+            (e instanceof Error ? (e.stack ?? e.message) : String(e))
+        );
+    }
 }
 
 /**
