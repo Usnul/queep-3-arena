@@ -39,25 +39,23 @@
  * CCD sweep passes straight through a sensor, so a "correct" sensor body would
  * have been a body plasma flew through.
  *
- * **Every contact is confirmed with a sweep before it detonates anything, and
- * that is not defensive coding.** meep reports a `ContactBegin` for a pair that
- * is merely *close*: a sphere against a `ConvexHullShape3D` produces a contact
- * at up to 0.01 m (0.32 Q3 units) of clear air, with `depth` carrying the
- * positive separation where the documented convention says a gap is negative.
- * The same sphere against a `BoxShape3D` of identical dimensions reports
- * nothing, which is the tell: `sphere_box_contact` is a closed form that returns
- * "separated", while a convex hull falls through to GJK + EPA, and EPA on a
- * simplex that does not enclose the origin returns a plausible-looking axis and
- * the separation as a depth. Minimal repro and the measured threshold are in
- * `test/missiles.test.ts`; the consequence without the guard is a rocket that
- * detonates in mid-air whenever it passes within a third of a unit of a wall,
- * which on a Q3 map is constantly.
+ * **A contact is a hit, and that is the whole of it.** Between 3.4.0 and 3.5.0 it
+ * was not: meep reported a `ContactBegin` between a sphere and a
+ * `ConvexHullShape3D` across up to 0.01 m of clear air, so this file grew a
+ * confirming sweep -- re-run the segment the missile had just flown and see
+ * whether it really reached what the contact named. Fixed in 3.6.0, and the
+ * sweep came out again in 3.7.0. `test/convex-contact.test.ts` is what watches
+ * the fix.
  *
- * The sweep is the missile's own step, re-run as a query: if the segment it just
- * flew does not actually touch the body the contact named, there was no impact.
- * It costs one `shape_cast` per contact event -- not per step -- and it pays for
- * itself twice, because the time of impact is also a better detonation point
- * than either the manifold's point or the post-step pose.
+ * It is worth knowing why the workaround could not simply be left in as
+ * insurance, because "harmless extra check" was exactly what it looked like. A
+ * missile that *grazes* a body is touching it at depth zero while moving
+ * **along** its surface: CCD clamps the blocked axis and the rest of the
+ * velocity carries on, so the segment swept between two steps never enters the
+ * thing it is already resting against, and the sweep says no. Ten of twenty-three
+ * rockets in the 64-direction test were rejected that way and slid down the side
+ * of the player they had hit. A guard that answers "did it arrive" cannot
+ * recognise a hit that has already arrived.
  *
  * **Grenades do not arc, and that is the balance table's doing rather than
  * this file's.** Q3's `fire_grenade` sets `TR_GRAVITY` and a bounce; the
@@ -78,8 +76,6 @@ import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js'
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
 import { PhysicsEvents } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsEvents.js';
 import { SphereShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/SphereShape3D.js';
-import { shape_cast } from '@woosh/meep-engine/src/engine/physics/queries/shape_cast.js';
-import { PhysicsSurfacePoint } from '@woosh/meep-engine/src/engine/physics/queries/PhysicsSurfacePoint.js';
 
 import type { CharacterBodies } from './CharacterBody.ts';
 import { LAYER_MISSILE, MISSILE_MASK } from './layers.ts';
@@ -116,36 +112,51 @@ interface MissilePhysics {
     setContactFilter(
         fn: (entityA: number, entityB: number, colliderA: unknown, colliderB: unknown) => boolean
     ): void;
+    overlap(
+        shape: unknown,
+        position: { x: number; y: number; z: number },
+        rotation: { x: number; y: number; z: number; w: number },
+        output: Uint32Array,
+        offset: number,
+        filter?: (entity: number, collider: unknown) => boolean
+    ): number;
+    entityOf(packedBodyId: number): number;
 }
 
 interface Flight {
     readonly projectile: Projectile;
     readonly entity: number;
     readonly transform: Transform;
-    /** Where the body was at the top of the step, for the confirming sweep. */
+    /** Where it was at the end of the previous step, to see whether it moved. */
     readonly previous: { x: number; y: number; z: number };
-    /** Set once a contact is confirmed, so a pair cannot detonate twice. */
+    /** Set the moment a contact is reported, so a pair cannot detonate twice. */
     spent: boolean;
 }
 
 /** No pair is refused unless a missile is one half of it. */
 const ACCEPT = true;
 
-/** A sphere has no orientation; every sweep here uses this. */
+
+/** Reused by the blocked-missile query; only the count and first id are read. */
+const OVERLAP_SCRATCH = new Uint32Array(8);
+
+/** A sphere has no orientation. */
 const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 
 export class Missiles implements MissileWorld {
     private readonly physics: MissilePhysics;
+
+    /**
+     * The probe for what a stopped missile is resting against.
+     *
+     * A unit wider than the missile, deliberately. A body that CCD has clamped
+     * against a surface is *touching* it, and touching is not overlapping: at a
+     * corner an exactly-sized sphere finds nothing, and at 0.75 units it finds
+     * the body. See the note on `blocked`.
+     */
+    private readonly restProbe = SphereShape3D.from((MISSILE_RADIUS + 1) * WORLD_SCALE);
     private readonly ecd: MissileDataset;
 
-    /** Reused: `shape_cast` is an output-parameter API. */
-    private readonly hit = new PhysicsSurfacePoint();
-
-    /** One sphere, reused by every confirming sweep. */
-    private readonly probe = SphereShape3D.from(MISSILE_RADIUS * WORLD_SCALE);
-
-    /** The fixed step, learned from `sync`, for the "did it stop" test. */
-    private stepSeconds = 0;
     private readonly bodies: CharacterBodies | null;
     private readonly flights = new Map<number, Flight>();
 
@@ -328,17 +339,15 @@ export class Missiles implements MissileWorld {
      * step that integrated it.
      */
     sync(deltaSeconds: number): void {
-        this.stepSeconds = deltaSeconds;
-
-        for (const flight of this.flights.values()) {
+        for (const flight of Array.from(this.flights.values())) {
             const p = flight.transform.position;
+
             flight.projectile.origin[0] = p.x / WORLD_SCALE;
             flight.projectile.origin[1] = -p.z / WORLD_SCALE;
             flight.projectile.origin[2] = p.y / WORLD_SCALE;
 
-            // The step just ended, so this pose is the next step's start -- and
-            // the start of the segment a contact reported during it has to be
-            // confirmed against.
+            if (!flight.spent) this.checkStopped(flight, deltaSeconds);
+
             flight.previous.x = p.x;
             flight.previous.y = p.y;
             flight.previous.z = p.z;
@@ -346,82 +355,80 @@ export class Missiles implements MissileWorld {
     }
 
     /**
-     * Did this missile actually reach `other` during the step just run?
+     * A missile that did not travel its own speed this step has hit something.
      *
-     * The segment it flew, swept as its own sphere, against that one body. A
-     * real impact returns the point it stopped at -- which is `trace.endpos` in
-     * `G_MissileImpact`'s terms, and a better detonation point than either the
-     * manifold's contact point or the post-step pose. A contact reported for a
-     * pair that never touched returns null, and the missile flies on.
+     * Q3's missiles are `TR_LINEAR` -- constant velocity until something stops
+     * them -- so "it went slower than it should have" is not a heuristic here,
+     * it is the model. What stops one is the CCD sweep clamping it at a blocker,
+     * and that is the whole of it.
      *
-     * See the header for why that second case exists and how far it reaches.
+     * It has to be asked separately from the contact event because **a body CCD
+     * has clamped against a hull's corner never raises one**: drive a sphere at
+     * a `ConvexHullShape3D`'s face and `ContactBegin` fires; drive the same
+     * sphere at the same hull's corner and it stops in exactly the same way, at
+     * the same step, and no event is ever dispatched. `test/convex-contact.test.ts`
+     * has the two side by side. Without this, ten of the twenty-eight rockets in
+     * the 64-direction test ground to a halt against a player's shoulder and sat
+     * there for their full ten seconds.
      */
-    private confirm(
-        flight: Flight,
-        other: number
-    ): { x: number; y: number; z: number } | null {
-        const from = flight.previous;
-        const to = flight.transform.position;
-
-        const dx = to.x - from.x;
-        const dy = to.y - from.y;
-        const dz = to.z - from.z;
-        const length = Math.hypot(dx, dy, dz);
-
-        /*
-         Did it stop?
-
-         A Q3 missile flies at a constant speed, so a step in which it covered
-         much less than that is a step in which something stopped it -- and the
-         only thing that stops one here is the CCD sweep clamping it at a
-         blocker. That case has to be caught separately, because a missile
-         already resting against a surface sweeps *nowhere*: the confirming
-         sweep below has no segment to work with and would reject the contact
-         every step, leaving a live rocket parked against someone's chest for
-         the rest of its ten seconds. Which is exactly what it did.
-
-         `stepSeconds` is zero until the first `sync`, so a missile that reports
-         a contact on the step it was created -- fired point-blank into a wall --
-         takes the same branch, which is the right answer for it too.
-        */
+    private checkStopped(flight: Flight, deltaSeconds: number): void {
         const speed = Math.hypot(
             flight.projectile.velocity[0]!,
             flight.projectile.velocity[1]!,
             flight.projectile.velocity[2]!
         ) * WORLD_SCALE;
 
-        const expected = speed * this.stepSeconds;
-        if (expected <= 0 || length < expected * 0.5) return to;
+        const expected = speed * deltaSeconds;
+        if (expected <= 0) return;
 
-        const ray = {
-            origin_x: from.x, origin_y: from.y, origin_z: from.z,
-            direction_x: dx / length, direction_y: dy / length, direction_z: dz / length,
-            tMax: length,
-        };
+        const p = flight.transform.position;
+        const travelled = Math.hypot(
+            p.x - flight.previous.x,
+            p.y - flight.previous.y,
+            p.z - flight.previous.z
+        );
 
-        const onlyOther = (entity: number): boolean => entity === other;
+        if (travelled >= expected * 0.5) return;
 
-        if (
-            !shape_cast(
-                this.physics as never,
-                ray as never,
-                this.probe as never,
-                NO_ROTATION as never,
-                this.hit as never,
-                onlyOther as never,
-                false
-            )
-        ) {
-            return null;
+        this.blocked(flight);
+    }
+
+    /**
+     * Detonate a missile that has stopped, against whatever it stopped on.
+     *
+     * The probe is a unit wider than the missile, and that is the point:
+     * `overlap` answers "do these two intersect", and a body clamped by CCD is
+     * touching rather than intersecting. Measured against a hull corner, an
+     * exactly-sized sphere reports nothing and 0.75 units reports the body.
+     *
+     * Nothing found means it stopped on the world, which is the common case and
+     * needs no entity to detonate.
+     */
+    private blocked(flight: Flight): void {
+        flight.spent = true;
+
+        const owner = this.owners.get(flight.entity) ?? -1;
+        const p = flight.transform.position;
+
+        const count = this.physics.overlap(
+            this.restProbe as never,
+            p,
+            NO_ROTATION,
+            OVERLAP_SCRATCH,
+            0,
+            (entity: number): boolean =>
+                entity !== flight.entity &&
+                !this.owners.has(entity) &&
+                (this.bodies?.clientOf(entity) ?? -1) !== owner
+        );
+
+        let clientId = -1;
+        for (let i = 0; i < count && clientId < 0; i++) {
+            const entity = this.physics.entityOf(OVERLAP_SCRATCH[i]!);
+            clientId = this.bodies?.clientOf(entity) ?? -1;
         }
 
-        const t = (this.hit as unknown as { t: number }).t;
-
-        return {
-            x: from.x + (dx / length) * t,
-            y: from.y + (dy / length) * t,
-            z: from.z + (dz / length) * t,
-        };
+        this.report(flight, clientId, null);
     }
 
     /**
@@ -452,15 +459,20 @@ export class Missiles implements MissileWorld {
          once.
         */
         if (flight.spent) return;
-
-        const other = payload.entityA === flight.entity ? payload.entityB : payload.entityA;
-
-        const at = this.confirm(flight, other);
-        if (at === null) return;
-
         flight.spent = true;
 
+        const other = payload.entityA === flight.entity ? payload.entityB : payload.entityA;
         const clientId = this.bodies?.clientOf(other) ?? -1;
+
+        /*
+         Where the missile got to, which is `G_MissileImpact`'s `trace.endpos`:
+         the CCD sweep has already clamped the body to its blocker, so its own
+         pose is the impact. Not the manifold's contact point -- meep's contacts
+         are speculative, and a pair reported at zero depth carries the closest
+         points on the two bodies rather than a touch, whose midpoint can sit
+         several units past the surface. Measured at 9 units inside a wall.
+        */
+        const at = flight.transform.position;
 
         /*
          The missile's own stopped position, not the contact point.
@@ -478,19 +490,30 @@ export class Missiles implements MissileWorld {
          engine documents it as valid only for the dispatch, and reuses one
          scratch object for every contact in the step.
         */
+        this.report(flight, clientId, payload.normal);
+    }
+
+    /** Hand `WeaponSystem` the impact, in the Q3 terms it deals in. */
+    private report(
+        flight: Flight,
+        clientId: number,
+        normal: ArrayLike<number> | null
+    ): void {
+        const at = flight.transform.position;
+
         const impact: MissileImpact = {
             projectile: flight.projectile,
             atQ3: vec3(at.x / WORLD_SCALE, -at.z / WORLD_SCALE, at.y / WORLD_SCALE),
             /*
              A surface normal is what a scorch mark is oriented by, and a player
-             is not a surface -- Q3 draws no mark on a direct hit either. So a
-             character contact reports null and the explosion is drawn without
-             one.
+             is not a surface -- Q3 draws no mark on a direct hit either. Nor is
+             there one for a missile that simply stopped, which is why `blocked`
+             passes none.
             */
             normalQ3:
-                clientId >= 0
+                normal === null || clientId >= 0
                     ? null
-                    : vec3(payload.normal[0]!, -payload.normal[2]!, payload.normal[1]!),
+                    : vec3(normal[0]!, -normal[2]!, normal[1]!),
             clientId,
         };
 

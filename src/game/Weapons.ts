@@ -123,8 +123,8 @@ export interface MissileWorld {
     /**
      * Copy live poses back into the `Projectile` records, once per fixed step.
      *
-     * @param deltaSeconds the step just run, which is also how far a missile
-     *   should have travelled in it -- a shorter one means something stopped it.
+     * @param deltaSeconds the step just run. A `TR_LINEAR` missile that covered
+     *   less than its own speed in it has hit something -- see `Missiles`.
      */
     sync(deltaSeconds: number): void;
     /** The entity a projectile is flying as, or -1. */

@@ -10,41 +10,32 @@
  *
  * ---
  *
- * The engine finding `Missiles`' confirming sweep exists for, reduced to two
- * shapes and a gap.
+ * meep 3.4.0 and 3.5.0 dispatched `PhysicsEvents.ContactBegin` between a sphere
+ * and a `ConvexHullShape3D` separated by up to 0.01 m of clear air, and gave the
+ * event a *positive* `depth` equal to the gap -- where `ManifoldStore`'s own
+ * layout comment says a gap is negative and a positive number is penetration. So
+ * neither the event nor its payload distinguished a hit from a near miss.
  *
- * A rocket fired down a clear corridor on `oa_dm1` detonated in mid-air, 18
- * units in front of the muzzle. The cause has nothing to do with the map: meep
- * dispatches `PhysicsEvents.ContactBegin` between a sphere and a
- * `ConvexHullShape3D` that are demonstrably *not* touching, and hands it a
- * **positive** `depth` equal to the gap -- where `ManifoldStore`'s own layout
- * comment says `depth (positive = penetration, negative = speculative gap)`. So
- * neither the event nor its payload distinguishes a hit from a near miss.
+ * It mattered because every brush in every level is a `ConvexHullShape3D` and a
+ * missile is a sphere, so the false band was a centimetre of phantom collision
+ * around every surface in the game: rockets detonated in mid-air in open
+ * corridors. `Missiles` still confirms every contact with a sweep, which is
+ * cheap, gives a better impact point than the manifold does, and is what caught
+ * this.
  *
- * **The same box built as a `BoxShape3D` reports nothing**, and that is what
- * points at the cause. `sphere_box_contact` is a closed form and can answer
- * "separated"; a convex hull has no such pair routine and falls through to
- * GJK + EPA, and EPA run on a simplex that does not enclose the origin returns a
- * plausible axis and the separation as a depth. The engine already knows this
- * about EPA -- `convex_convex_manifold`'s header records that it "returns a
- * non-minimal, non-scaling axis for polytopes (a 0.05 m overlap reports ~0.8 m
- * depth)" and routes hull-vs-hull around it with SAT. The sphere-vs-hull pair
- * has no such route.
+ * **Fixed in 3.6.0.** This file stays as the regression test for the fix, and it
+ * asserts both halves deliberately:
  *
- * It is the shape *class* and not the data: the box below is built from eight
- * exact vertices, not from a BSP brush. And it moves with where the sphere sits
- * over the face -- centred, nothing is reported; 198 units to one side, a
- * contact -- which is what a simplex-quality problem looks like and is not what
- * a wrong collider looks like.
+ *  - no contact while the shapes are apart -- the bug itself; and
+ *  - a contact, at the right depth, when they really do overlap.
  *
- * It matters to this port because every brush in every level is a
- * `ConvexHullShape3D` and a missile is a sphere, so the false band is a
- * centimetre of clear air around every surface in the game.
- *
- * The numbers are asserted rather than described because a fix could take two
- * shapes: no contact at all (the box's behaviour), or the same contact with a
- * negative depth. Either would be enough for `Missiles`, and either should make
- * this file fail and be read.
+ * The second is not padding. A fix that removed every contact from the convex
+ * path would satisfy the first on its own and would be far worse than the bug,
+ * and a `ConvexHullShape3D` is what all of this port's level collision is made
+ * of. The third case pins the property that identified the cause: the old
+ * behaviour moved with where the sphere sat over the face, because GJK picks its
+ * support vertices by direction and two placements hand EPA different simplices
+ * out of the same pair of shapes. It no longer does.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -61,6 +52,7 @@ import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ec
 import { PhysicsEvents } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsEvents.js';
 import { BoxShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/BoxShape3D.js';
 import { SphereShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/SphereShape3D.js';
+import { RigidBodyFlags } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBodyFlags.js';
 import { ConvexHullShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/ConvexHullShape3D.js';
 
 
@@ -197,57 +189,192 @@ async function contactDepth(
     return depth;
 }
 
-describe('a sphere near a slab it never touches', () => {
-    it('reports nothing against a BoxShape3D, at every gap', async () => {
-        const box = (): unknown => BoxShape3D.from(HALF_X, HALF_Y, HALF_Z);
+describe('a sphere and a slab', () => {
+    /** Every shape a level brush or a projectile is built from, by name. */
+    const shapes = (): { name: string; make: () => unknown }[] => [
+        { name: 'BoxShape3D', make: () => BoxShape3D.from(HALF_X, HALF_Y, HALF_Z) },
+        { name: 'ConvexHullShape3D', make: boxAsHull },
+    ];
 
-        for (const gap of [0.05, 0.1, 0.2, 0.3, 0.4, 1, 2]) {
-            expect(
-                await contactDepth(box(), gap),
-                `BoxShape3D reported a contact across a ${gap} unit gap`
-            ).toBeNull();
+    it('reports nothing while they are apart, whichever shape the slab is', async () => {
+        for (const { name, make } of shapes()) {
+            for (const gap of [0.05, 0.1, 0.2, 0.3, 0.4, 1, 2]) {
+                expect(
+                    await contactDepth(make(), gap),
+                    `${name} reported a contact across a ${gap} unit gap`
+                ).toBeNull();
+            }
         }
     });
 
-    it('reports one against the identical ConvexHullShape3D, inside 0.01 m', async () => {
-        for (const gap of [0.05, 0.1, 0.2, 0.3]) {
-            const depth = await contactDepth(boxAsHull(), gap);
-
-            expect(depth, `no contact across a ${gap} unit gap; the threshold moved`).not.toBeNull();
-
-            /*
-             And the depth is the gap. A contact reported for a pair 0.3 units
-             apart, carrying +0.3 units of "penetration", is indistinguishable
-             from a real 0.3-unit overlap -- which is why `Missiles` cannot
-             filter these on the payload and confirms with a sweep instead.
-            */
-            expect(depth! / WORLD_SCALE).toBeCloseTo(gap, 1);
-        }
-    });
-
-    it('stops past 0.01 m, which is where the threshold sits', async () => {
-        for (const gap of [0.4, 0.5, 1, 2]) {
-            expect(
-                await contactDepth(boxAsHull(), gap),
-                `ConvexHullShape3D reported a contact across a ${gap} unit gap`
-            ).toBeNull();
-        }
-    });
-
-    it('depends on where over the face the sphere sits, which is the tell', async () => {
+    it('still reports one when they really do overlap', async () => {
         /*
-         Directly above the slab's centre, nothing is reported at any gap; the
-         same sphere 198 units to one side reports one. GJK chooses its support
-         vertices by direction, so those two placements hand EPA different
-         simplices out of the same pair of shapes -- and a bug that moves with
-         the simplex rather than with the geometry is a bug in the fallback, not
-         in the collider.
+         The other half, and the reason this file did not simply get deleted when
+         the false contacts went away. A fix that removed *every* contact from the
+         convex path would pass the case above and would be catastrophic -- so the
+         real overlaps are asserted beside the false ones, at the same depths, in
+         the same rig.
+        */
+        for (const { name, make } of shapes()) {
+            for (const overlap of [0.05, 0.2, 0.5, 1]) {
+                const depth = await contactDepth(make(), -overlap);
+
+                expect(depth, `${name} reported no contact at a ${overlap} unit overlap`)
+                    .not.toBeNull();
+                expect(depth! / WORLD_SCALE).toBeCloseTo(overlap, 1);
+            }
+        }
+    });
+
+    it('agrees with itself whether the sphere is centred over the face or not', async () => {
+        /*
+         Position used to matter, and that it no longer does is the clearest
+         statement that the simplex-quality problem is gone: GJK picks its support
+         vertices by direction, so a sphere over the middle of a large face and one
+         6 m to the side hand EPA different simplices out of the same pair. Before
+         the fix the first reported nothing and the second reported a contact
+         across clear air.
         */
         for (const gap of [0.05, 0.1, 0.2, 0.3]) {
-            expect(
-                await contactDepth(boxAsHull(), gap, 0, 0),
-                `centred over the face, a ${gap} unit gap now reports a contact`
-            ).toBeNull();
+            expect(await contactDepth(boxAsHull(), gap, 0, 0)).toBeNull();
+            expect(await contactDepth(boxAsHull(), gap, OVER_X, OVER_Y)).toBeNull();
         }
+
+        for (const overlap of [0.05, 0.2, 0.5]) {
+            const centred = await contactDepth(boxAsHull(), -overlap, 0, 0);
+            const offset = await contactDepth(boxAsHull(), -overlap, OVER_X, OVER_Y);
+
+            expect(centred, `centred, a ${overlap} unit overlap went unreported`).not.toBeNull();
+            expect(offset, `off-centre, a ${overlap} unit overlap went unreported`).not.toBeNull();
+        }
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The other half: a contact that is never reported
+ * ------------------------------------------------------------------ */
+
+/**
+ * A body CCD stops against a hull's **corner** raises no contact event.
+ *
+ * The counterpart to everything above, and still live on 3.7.0. Drive a sphere
+ * at a `ConvexHullShape3D`'s face and the continuous-collision pass clamps it at
+ * the surface and `ContactBegin` fires. Drive the same sphere at the same hull's
+ * corner and it is clamped in exactly the same way, on exactly the same step, at
+ * exactly the geometric corner distance -- and no event is ever dispatched, for
+ * as long as you care to keep stepping.
+ *
+ * A game that reacts to impacts therefore never learns about one, while the body
+ * sits there blocked. In this port that was ten of twenty-eight rockets in the
+ * 64-direction test grinding against a player's shoulder for their full ten
+ * seconds, doing nothing. `Missiles.checkStopped` is the workaround -- a
+ * `TR_LINEAR` missile that covered less than its own speed in a step has hit
+ * something, whatever the engine did or did not say -- and this is what says why
+ * that code has to exist.
+ */
+describe('a missile driven into a convex hull', () => {
+    /** Q3's player box, 30 x 30 x 56 units, as a hull at the origin. */
+    function playerBoxHull(): unknown {
+        const hx = 15 * WORLD_SCALE;
+        const hy = 28 * WORLD_SCALE;
+        const hz = 15 * WORLD_SCALE;
+
+        const vertices = new Float32Array([
+            -hx, -hy, -hz, hx, -hy, -hz, hx, hy, -hz, -hx, hy, -hz,
+            -hx, -hy, hz, hx, -hy, hz, hx, hy, hz, -hx, hy, hz,
+        ]);
+        const indices = new Uint32Array([
+            0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7,
+            0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5,
+            2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7,
+        ]);
+
+        return ConvexHullShape3D.from(vertices, indices);
+    }
+
+    /**
+     * Fire a CCD sphere at the hull from 120 units out along `(dx, dz)`, and
+     * report where it came to rest and whether anything was raised about it.
+     */
+    async function fireAt(dx: number, dz: number): Promise<{
+        reported: boolean;
+        restedAt: number;
+        stoppedAtStep: number;
+    }> {
+        const { em, ecd } = await bareWorld();
+
+        place(ecd, BodyKind.Static, playerBoxHull(), 0, 0, 0);
+
+        const transform = new Transform();
+        transform.position.set(-dx * 120 * WORLD_SCALE, 0, -dz * 120 * WORLD_SCALE);
+
+        const rigidBody = new RigidBody();
+        rigidBody.kind = BodyKind.Dynamic;
+        rigidBody.mass = 1;
+        rigidBody.gravityScale = 0;
+        rigidBody.flags = RigidBodyFlags.CCD;
+        rigidBody.linearVelocity.set(dx * 900 * WORLD_SCALE, 0, dz * 900 * WORLD_SCALE);
+
+        const collider = new Collider() as unknown as { shape: unknown };
+        collider.shape = SphereShape3D.from(RADIUS);
+
+        const builder = new Entity();
+        builder.add(transform).add(rigidBody).add(collider as unknown as Collider).build(ecd);
+
+        let reported = false;
+        ecd.addEntityEventListener(builder.id, PhysicsEvents.ContactBegin, ((): void => {
+            reported = true;
+        }) as never);
+
+        let stoppedAtStep = -1;
+        let lastX = transform.position.x;
+        let lastZ = transform.position.z;
+
+        for (let step = 0; step < 30; step++) {
+            em.update(em.fixedUpdateStepSize);
+
+            const moved = Math.hypot(
+                transform.position.x - lastX,
+                transform.position.z - lastZ
+            ) / WORLD_SCALE;
+
+            lastX = transform.position.x;
+            lastZ = transform.position.z;
+
+            if (stoppedAtStep < 0 && moved < 1) stoppedAtStep = step;
+        }
+
+        return {
+            reported,
+            restedAt: Math.hypot(transform.position.x, transform.position.z) / WORLD_SCALE,
+            stoppedAtStep,
+        };
+    }
+
+    it('is stopped by the face, and the contact is reported', async () => {
+        const head = await fireAt(-1, 0);
+
+        // Box half-width 15 plus the sphere's own 0.5.
+        expect(head.restedAt).toBeCloseTo(15.5, 1);
+        expect(head.stoppedAtStep).toBeGreaterThanOrEqual(0);
+        expect(head.reported, 'a face impact raised no ContactBegin').toBe(true);
+    });
+
+    it('is stopped by the corner in exactly the same way, and nothing is reported', async () => {
+        const corner = await fireAt(-Math.SQRT1_2, -Math.SQRT1_2);
+
+        // The box's own diagonal half-extent, 15 * sqrt(2), plus the sphere.
+        expect(corner.restedAt).toBeCloseTo(21.71, 1);
+        expect(corner.stoppedAtStep, 'the corner did not stop it at all').toBeGreaterThanOrEqual(0);
+
+        /*
+         Asserted as `false` rather than skipped. When the engine starts raising
+         this, the assertion fails, and the failure is the signal to delete
+         `Missiles.checkStopped` -- which is a workaround and should not outlive
+         what it works around.
+        */
+        expect(corner.reported, 'the corner now reports a contact; see Missiles.checkStopped').toBe(
+            false
+        );
     });
 });

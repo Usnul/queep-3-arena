@@ -287,23 +287,45 @@ built from, which would have poisoned both halves.
 - **Sweeps are trustworthy.** `shape_cast` is what `PhysicsTrace`, `KinematicMover` and now the
   missile confirmation all run on, and the 64-direction rocket test passes using a sweep as its
   arbiter. Nothing in the sweep path is implicated.
-- **The defect is a contact-only bug in the engine**, recorded with a minimal repro in
-  `test/convex-contact.test.ts`: meep dispatches `ContactBegin` between a sphere and a
-  `ConvexHullShape3D` separated by up to **0.01 m** of clear air, and gives the event a *positive*
-  `depth` equal to the gap -- where `ManifoldStore`'s own layout comment says a gap is negative. The
-  identical box as a `BoxShape3D` reports nothing, because `sphere_box_contact` is a closed form that
-  can say "separated"; a convex hull falls through to GJK + EPA. It is the shape class, not the map
-  data -- an exact eight-vertex box reproduces it -- and it moves with where the sphere sits over the
-  face, which is what a simplex-quality problem looks like. The engine's own
-  `convex_convex_manifold` header already records EPA as unreliable for polytopes and routes
-  hull-vs-hull around it with SAT; sphere-vs-hull has no such route. **This wants a GAP entry.**
+- **The defect was a contact-only bug in the engine, and is fixed.** meep 3.4.0 and
+  3.5.0 dispatched `ContactBegin` between a sphere and a `ConvexHullShape3D`
+  separated by up to **0.01 m** of clear air, with a *positive* `depth` equal to
+  the gap -- where `ManifoldStore`'s own layout comment says a gap is negative.
+  The identical box as a `BoxShape3D` reported nothing, because
+  `sphere_box_contact` is a closed form that can say "separated" while a convex
+  hull falls through to GJK + EPA. **3.6.0 fixed it**, and
+  `test/convex-contact.test.ts` is now the regression test for the fix, asserting
+  both that separated shapes report nothing *and* that overlapping ones still
+  report at the right depth -- a fix that removed every contact from the convex
+  path would have satisfied the first alone and been far worse than the bug.
+- **3.6.0 also regressed `KinematicMover` and 3.7.0 fixed that.** For one version
+  a body pressed against geometry was pinned with all velocity zeroed while
+  reporting `grounded === false`, permanently: strafe-jumping fell from 386 to
+  140 units per second and a player could hang in mid-air indefinitely. Caught by
+  `meepmove` and, independently, by the wedge test that exists for exactly that
+  failure. Attributed by A/B against a scratch copy of the previous version
+  rather than by reinstalling, because `node_modules` is shared with other live
+  sessions.
+- **One engine finding is still open**, and it is why `Missiles.checkStopped`
+  exists: **a body that CCD stops against a hull's *corner* raises no contact
+  event.** Face-on, `ContactBegin` fires; at 45 degrees the same sphere is
+  clamped on the same step at the same geometric distance and nothing is ever
+  dispatched. Ten of twenty-eight rockets in the 64-direction test ground to a
+  halt against a player's shoulder and sat there for ten seconds. The workaround
+  is Q3's own model rather than a guess -- a `TR_LINEAR` missile that covered
+  less than its own speed in a step has hit something -- and what it stopped on
+  is resolved with `PhysicsSystem.overlap`, one unit wider than the missile,
+  because a body CCD has clamped is *touching* and touching is not overlapping.
+  `test/convex-contact.test.ts` asserts the absence, so the day it starts being
+  reported that test fails and the workaround can go.
 
-So the port-side fix is local to contacts and is in: `Missiles` confirms every `ContactBegin` with a
-sweep of the segment the missile just flew before it detonates anything, and the missile's collider
-carries `ColliderFlags.IsSensor` so the same phantom contact cannot shove it off course either. A
-missile that has stopped -- CCD clamped it against something -- is taken as a real impact without a
-sweep, because a body resting on a surface sweeps nowhere and the first version of the guard left
-live rockets parked against people's chests for ten seconds.
+The confirming sweep this port carried against the false contacts is **gone** on 3.7.0, and its
+removal is worth recording: it could not be left in as insurance. A missile that *grazes* a body is
+touching it at depth zero while moving along its surface, so the segment swept between two steps
+never enters the thing it is already resting against -- the guard rejected ten of twenty-three real
+hits. A check that answers "did it arrive" cannot recognise a hit that has already arrived. The
+missile's collider keeps `ColliderFlags.IsSensor`, which is Q3's `TR_LINEAR` and not a workaround:
+nothing ever pushes a missile off course.
 
 **Step 7 itself is therefore unblocked and still worth doing**, with one correction to its
 justification: `CanDamage` and hitscan go through *sweeps*, which are sound, so the objection that
@@ -316,8 +338,9 @@ the old loop beside it.
 
 ## What is left
 
-- **A GAP entry for the sphere-vs-convex-hull contact bug**, with `test/convex-contact.test.ts` as
-  its evidence. The port routes around it; the engine should not need routing around.
+- **A GAP entry for the corner contact that is never raised**, with
+  `test/convex-contact.test.ts` as its evidence. The two fixed engine bugs want writing up too:
+  they were found by this port and turned around in two releases.
 - **Step 7**, which the above unblocks.
 - **A DECISIONS entry for the priority inversion**, which is the first risk below and is now real
   rather than prospective.
