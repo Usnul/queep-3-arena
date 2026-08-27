@@ -1103,6 +1103,7 @@ describe('a light fixture is as bright as the light it emits', () => {
             indexOffset: number;
             indexCount: number;
         }[];
+        readonly lights: readonly { lumens: number; material?: number }[];
         readonly vertexStride: number;
         readonly vertexBytes: number;
         readonly indexBytes: number;
@@ -1151,10 +1152,21 @@ describe('a light fixture is as bright as the light it emits', () => {
 
     /*
      A Lambertian emitter radiating flux F over area A has luminance F / (pi A),
-     and the port decides F itself: one cluster's worth of `q3map_surfacelight`
-     lumens per fixture. So the luminance divided by that of a single cluster has
-     to come back as *how many clusters the material got* -- a whole number, and
-     at least one. Nothing about a magic divisor satisfies that by accident.
+     and the port decides F itself -- so the face and the lights standing in
+     front of it are one emission described twice, and the arithmetic joining
+     them can be checked rather than trusted.
+
+     What F *is* changed at D-105. It used to be one cluster's worth of
+     `q3map_surfacelight` per fixture, so this asserted that the luminance came
+     back as a whole number of clusters; that number is now whatever the
+     lightgrid fit settled on and is a whole number of nothing. The pairing it
+     was really testing survives intact, because each surface light records the
+     material it came out of: sum their flux, divide by the area, and it has to
+     be the luminance that shipped.
+
+     Which is the stronger form of the same check. The old one could be
+     satisfied by any rule that happened to land on an integer multiple; this
+     one only by the two actually being derived from each other.
     */
     /** Declared emitters seen per map, so the aggregate check below can be sure. */
     const checked = new Map<string, number>();
@@ -1164,6 +1176,13 @@ describe('a light fixture is as bright as the light it emits', () => {
             readFileSync(join(BUILT, map, 'scene.json'), 'utf8')
         ) as Bundle;
         const area = areaByMaterial(map, bundle);
+
+        /** Flux actually placed in front of each material, in lumens. */
+        const flux = new Map<number, number>();
+        for (const l of bundle.lights) {
+            if (l.material === undefined) continue;
+            flux.set(l.material, (flux.get(l.material) ?? 0) + l.lumens);
+        }
 
         let declared = 0;
 
@@ -1178,22 +1197,32 @@ describe('a light fixture is as bright as the light it emits', () => {
             /*
              A surface that is both declared and unlit takes whichever of the two
              is larger, so lava is not made dimmer than an ordinary unlit texture
-             by 666 lumens spread over 38 square metres. That case is the floor
-             exactly, and every other one has to be a whole number of fixtures.
+             by 666 lumens spread over 38 square metres. Same for a fixture the
+             fit drove to nothing, which is on the floor for the same reason and
+             by the same rule. Either way the shipped number is the floor and
+             says nothing about the flux, so there is nothing here to check.
             */
-            if (m.unlit && m.emissiveLuminance === UNLIT_LUMINANCE) return;
+            if (m.emissiveLuminance === UNLIT_LUMINANCE) return;
 
-            const perCluster = Math.min(m.surfaceLight, 20000) / (Math.PI * a);
-            const clusters = m.emissiveLuminance / perCluster;
+            const expected = (flux.get(i) ?? 0) / (Math.PI * a);
 
             expect(
-                Math.abs(clusters - Math.round(clusters)),
-                `${map}: ${m.name} is ${m.emissiveLuminance.toFixed(1)} cd/m2 over ${a.toFixed(1)} m2, which is ${clusters.toFixed(3)} fixtures' worth`
-            ).toBeLessThan(1e-3);
+                Math.abs(m.emissiveLuminance - expected) / Math.max(expected, 1e-9),
+                `${map}: ${m.name} ships ${m.emissiveLuminance.toFixed(1)} cd/m2, ` +
+                `but its ${(flux.get(i) ?? 0).toFixed(0)} lm over ${a.toFixed(1)} m2 ` +
+                `is ${expected.toFixed(1)}`
+            ).toBeLessThan(1e-6);
 
-            expect(Math.round(clusters), `${map}: ${m.name} fixture count`).toBeGreaterThanOrEqual(
-                1
-            );
+            /*
+             And not a face lit by nothing. A material that declared a light and
+             kept a luminance above the floor must have flux behind it -- that is
+             the pairing, and zero on either side with a number on the other is
+             the failure this whole block is for.
+            */
+            expect(
+                flux.get(i) ?? 0,
+                `${map}: ${m.name} glows at ${m.emissiveLuminance.toFixed(1)} cd/m2 with no light behind it`
+            ).toBeGreaterThan(0);
         });
 
         checked.set(map, declared);

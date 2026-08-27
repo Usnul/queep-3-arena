@@ -112,6 +112,20 @@ export interface SceneLight {
     /** How big the emitter itself is. Scene metres. See {@link SOURCE_EXTENT_FLOOR}. */
     sourceRadius: number;
     color?: [number, number, number];
+    /**
+     * Which material this light was reconstructed out of, for a surface light.
+     *
+     * Absent on a light fitted to the lightgrid, which came from no surface --
+     * the mirror of `color`, which only a fitted light carries. Between them
+     * every light in a bundle says which of the two routes made it.
+     *
+     * It is here so the fixture's face and the light coming off it stay one
+     * emission described twice (D-093): the face's luminance is the material's
+     * flux over its area, and since D-105 that flux is whatever the fit settled
+     * on rather than anything a shader declared. Without this the two can drift
+     * apart again with nothing able to notice.
+     */
+    material?: number;
 }
 
 /**
@@ -154,8 +168,24 @@ export interface GridFitOptions {
      * the second is rounding.
      */
     readonly minDeficitFraction: number;
-    /** Cutoff below which a light is considered not to reach, in lux. */
-    readonly cutoff: number;
+    /**
+     * Where a light stops being worth evaluating, as a fraction of the light
+     * that is already there.
+     *
+     * This replaced an absolute 0.25 lux, and the reason is that no absolute
+     * number can be right for two maps at once: a quarter lux is 1% of
+     * `oa_dm1`'s median illuminance and 5% of `am_thornish`'s, so one map's
+     * lights reached halfway across it while the other's were clipped short.
+     * Sixteen of `oa_dm1`'s 33 lights had an influence sphere larger than the
+     * entire map, and a third of the light-to-point pairs a shading point
+     * evaluated were delivering under half a lux.
+     *
+     * A fraction asks the question the threshold is actually for -- is this
+     * light still changing what a surface here looks like? -- and it asks it
+     * against the *local* level rather than a map-wide one. See
+     * `referenceLux`.
+     */
+    readonly cutoffFraction: number;
     /** Hard ceiling on the cutoff radius, in scene metres. */
     readonly maxRadius: number;
     /**
@@ -192,7 +222,7 @@ export interface GridFitOptions {
 export const DEFAULT_FIT: GridFitOptions = {
     minDeficit: 2,
     minDeficitFraction: 0.34,
-    cutoff: 0.25,
+    cutoffFraction: 0.03,
     maxRadius: 40,
     maxLights: 256,
     sweeps: 8,
@@ -241,6 +271,25 @@ function contribution(light: SceneLight, p: readonly [number, number, number]): 
 export interface GridFitResult {
     readonly lights: SceneLight[];
     /**
+     * The lights that were passed in as `existing`, with their output and reach
+     * recalibrated against the baked field. New objects; the input is not
+     * touched.
+     *
+     * Same length and same order as `existing`, including any the sweeps drove
+     * to nothing, so a caller holding a parallel array -- which material each
+     * light came out of, say -- can still index into it. Dropping the dark ones
+     * is the caller's to do, after it has read whatever it aligned.
+     *
+     * These are the `q3map_surfacelight` reconstructions, and until D-105 they
+     * were the one part of the lighting solution nothing measured. The fit read
+     * them, credited them with whatever their shader's directive said, and
+     * optimised only around them -- so a map whose shaders declared numbers too
+     * large simply stayed too bright and the fit had nothing to add. They are
+     * free variables now, in the same least squares, for the reason given on
+     * `relax`.
+     */
+    readonly surface: SceneLight[];
+    /**
      * RMS error of the *whole* lighting solution against the baked field, as a
      * fraction of mean target illuminance, before and after the fit.
      *
@@ -263,6 +312,14 @@ export function fitGridLights(
     options: Partial<GridFitOptions> = {}
 ): GridFitResult {
     const opt = { ...DEFAULT_FIT, ...options };
+    /*
+     Copied because the caller's array is the scene's, and this function now
+     changes what these lights emit. The greedy pass below still reads them at
+     the values their shaders declared -- that is the best guess available
+     before anything has been measured, and placement only needs to know
+     roughly where the map is already lit.
+    */
+    const surface: SceneLight[] = existing.map((l) => ({ ...l }));
     const placed: SceneLight[] = [];
     /** The site each placed light was fitted to, and how far it sits from it. */
     const fittedTo: { site: GridSite; distance: number }[] = [];
@@ -276,7 +333,7 @@ export function fitGridLights(
         if (placed.length >= opt.maxLights) break;
 
         let have = 0;
-        for (const l of existing) have += contribution(l, site.at);
+        for (const l of surface) have += contribution(l, site.at);
         for (const l of placed) have += contribution(l, site.at);
 
         const deficit = site.lux - have;
@@ -327,9 +384,19 @@ export function fitGridLights(
             lumens,
             // Where it falls below `cutoff` lux, which is where keeping it in the
             // cluster list stops paying for itself.
+            /*
+             Where it falls to `cutoffFraction` of what the grid says is at the
+             site it was fitted to. Provisional -- the relaxation resizes the
+             light and recomputes this from the region it ends up lighting --
+             but the site's own baked level is the right local reference to
+             start from, and it is already in hand.
+            */
             radius: Math.min(
                 opt.maxRadius,
-                Math.max(d, Math.sqrt(lumens / (4 * Math.PI) / opt.cutoff))
+                Math.max(
+                    d,
+                    Math.sqrt(lumens / (4 * Math.PI) / (site.lux * opt.cutoffFraction))
+                )
             ),
             // Never larger than the `d` above, which is floored at the same
             // quarter metre. See GRID_SOURCE_RADIUS.
@@ -340,7 +407,7 @@ export function fitGridLights(
     }
 
     const residualBefore = residualOf(sites, existing);
-    relax(placed, fittedTo, sites, existing, opt);
+    relax(surface, placed, fittedTo, sites, opt);
 
     // A light the sweeps drove to nothing is a light whose neighbours turned out
     // to cover its site. Dropping it is half the point of running them.
@@ -348,8 +415,9 @@ export function fitGridLights(
 
     return {
         lights: keep,
+        surface,
         residualBefore,
-        residualAfter: residualOf(sites, [...existing, ...keep]),
+        residualAfter: residualOf(sites, [...surface, ...keep]),
         sites: sites.length,
     };
 }
@@ -384,28 +452,118 @@ export function fitGridLights(
  * overshoot. That would have produced the same median and hidden a fixable
  * error inside a number that is supposed to mean something.
  *
+ * **The surface lights are in it too, and that is D-105.** They used to be held
+ * fixed -- `existing`, read into the residual and never adjusted -- which meant
+ * the one number nothing measured was the one doing most of the lighting. It is
+ * `q3map_surfacelight` passed through as lumens, and that directive is not
+ * luminous flux: it is q3map2's own scale, applied per unit area, so reading it
+ * as a per-fixture flux makes a 0.2 m2 torch quad on `oa_dm1` emit 3,787 lm
+ * while the 38 m2 lava lake beside it emits 666. Ten torches then hold 90% of
+ * that map's reconstructed flux over 2% of its emitting area.
+ *
+ * Measured against the baked field, the error is not a scale factor anyone
+ * could divide out. It is scrambled: on `oa_dm4` `ironcrosslt2_20000` ends up
+ * at 0.22 of what it declared and `skulllight01` at 5.4 times, on the same map.
+ * So the directive stops being a claim about lumens and becomes what it can
+ * support -- a starting point for the same least squares that already sizes
+ * everything else, against the same baked field, in the same sweeps.
  */
 function relax(
+    surface: SceneLight[],
     placed: SceneLight[],
     fittedTo: readonly { site: GridSite; distance: number }[],
     sites: readonly GridSite[],
-    existing: readonly SceneLight[],
     opt: GridFitOptions
 ): void {
-    if (placed.length === 0 || sites.length === 0) return;
+    const all = [...surface, ...placed];
+    if (all.length === 0 || sites.length === 0) return;
 
     /*
-     Influence lists, built once.
-
-     A light's radius changes as its output does, and letting the neighbour list
-     move with it would make the objective change under the optimiser. So reach
-     is frozen here at the greedy radius, and the shipped `radius` is recomputed
-     from the final output afterwards.
+     The near end of a light's range. A fitted light may not reach less far than
+     the standoff it was sized from, or it delivers less than the arithmetic
+     that placed it says it does; a surface light may not reach less far than
+     its own emitter, which is where its falloff even starts.
     */
-    const reach = placed.map((l) => l.radius);
-    const near: { j: number; c: number }[][] = placed.map((light, i) => {
+    const floorOf = (i: number): number =>
+        i < surface.length
+            ? Math.max(all[i]!.sourceRadius, SOURCE_EXTENT_FLOOR)
+            : fittedTo[i - surface.length]!.distance;
+
+    /*
+     Output and reach are one problem, so they are solved together.
+
+     The first version of this fitted output over a fixed generous reach and
+     then cut each light back to its cutoff radius afterwards. That ships a
+     field nobody optimised: every light was sized on the promise of lighting
+     cells it is then not evaluated at, and the shortfall is systematic and
+     one-directional. Measured on `oa_dm1`, that delivered 0.52 of the baked
+     target at the median; coupling the two brought it to 0.63.
+
+     So the loop alternates. Sweeps size the lights against exactly the sites
+     each one will actually be evaluated at; the resize then moves the reach to
+     match the new output; and the next round measures against that. Reach is
+     held still *within* a round, because a neighbour list that moved under the
+     optimiser would stop the descent being monotone.
+
+     It ends on a sweep rather than a resize, and that -- not the round count --
+     is the part that matters: it is what makes the shipped output one that was
+     fitted at the shipped reach.
+    */
+    let near = influence(all, sites);
+
+    for (let round = 0; round < REACH_ROUNDS; round++) {
+        sweep(all, near, sites, opt);
+        resize(all, near, sites, opt, floorOf);
+        near = influence(all, sites);
+    }
+
+    // Ending on a sweep rather than a resize, so what ships is an output fitted
+    // at the reach it ships with.
+    sweep(all, near, sites, opt);
+}
+
+/**
+ * How many times output and reach are solved against each other.
+ *
+ * The outer loop is not the monotone part -- coordinate descent is monotone for
+ * a *fixed* neighbour list, and this changes the list between rounds -- so what
+ * it does is measured rather than argued.
+ *
+ * The residual is flat from the first round: 79% on `oa_dm1` and 78% on
+ * `am_thornish` at one round, two, three, four and six. Total emitted flux
+ * moves by about a percent over that range. What does not fully settle is the
+ * individual light -- `oa_dm1`'s median reach wanders between 11.0 m and 13.7 m
+ * and its light count between 30 and 26 -- because a light near the one-lumen
+ * drop threshold moves in and out of the solution as its reach changes, and
+ * each one that leaves redistributes a little. That is a mild limit cycle at
+ * the margins, not a divergence, and no round count removes it.
+ *
+ * So three is not a convergence claim. It is one round for the coupling, which
+ * is the part that was actually broken, and two more because they are cheap and
+ * the answer is marginally better settled with them.
+ */
+const REACH_ROUNDS = 3;
+
+/**
+ * Which sites each light is evaluated at, and how much a lumen of it is worth
+ * there.
+ *
+ * Frozen for the duration of a sweep. A light's radius moves as its output
+ * does, and letting the neighbour list move with it would change the objective
+ * under the optimiser -- coordinate descent is only monotone while the thing it
+ * descends stays put.
+ */
+function influence(
+    lights: readonly SceneLight[],
+    sites: readonly GridSite[]
+): { j: number; c: number }[][] {
+    return lights.map((light) => {
         const list: { j: number; c: number }[] = [];
-        const r2 = reach[i]! * reach[i]!;
+        const r2 = light.radius * light.radius;
+
+        /** The closest site, in case nothing is in range. */
+        let nearest = -1;
+        let nearestD2 = Infinity;
 
         for (let j = 0; j < sites.length; j++) {
             const at = sites[j]!.at;
@@ -413,27 +571,44 @@ function relax(
             const dy = light.y - at[1];
             const dz = light.z - at[2];
             const d2 = dx * dx + dy * dy + dz * dz;
+
+            if (d2 < nearestD2) { nearestD2 = d2; nearest = j; }
             if (d2 > r2) continue;
+
             list.push({ j, c: perLumen(d2, light.sourceRadius) });
+        }
+
+        /*
+         A light can shrink until the lattice no longer has a cell inside it --
+         cells are 64 units apart and a dim fixture's reach is a couple of
+         metres. Measuring it against its nearest cell anyway is what stops the
+         resize from making a light unmeasurable and then, because nothing
+         measures it, permanent.
+        */
+        if (list.length === 0 && nearest >= 0) {
+            list.push({ j: nearest, c: perLumen(nearestD2, light.sourceRadius) });
         }
 
         return list;
     });
+}
 
-    // Running total at every site, so a sweep costs one light's neighbourhood
+/** One pass of coordinate descent over every light's output. */
+function sweep(
+    lights: SceneLight[],
+    near: readonly { j: number; c: number }[][],
+    sites: readonly GridSite[],
+    opt: GridFitOptions
+): void {
+    // Running total at every site, so a step costs one light's neighbourhood
     // rather than a full re-evaluation.
     const delivered = new Float64Array(sites.length);
-    for (let j = 0; j < sites.length; j++) {
-        let v = 0;
-        for (const l of existing) v += contribution(l, sites[j]!.at);
-        delivered[j] = v;
-    }
-    for (let i = 0; i < placed.length; i++) {
-        for (const { j, c } of near[i]!) delivered[j] += placed[i]!.lumens * c;
+    for (let i = 0; i < lights.length; i++) {
+        for (const { j, c } of near[i]!) delivered[j] += lights[i]!.lumens * c;
     }
 
-    for (let sweep = 0; sweep < opt.sweeps; sweep++) {
-        for (let i = 0; i < placed.length; i++) {
+    for (let pass = 0; pass < opt.sweeps; pass++) {
+        for (let i = 0; i < lights.length; i++) {
             const list = near[i]!;
             if (list.length === 0) continue;
 
@@ -442,30 +617,71 @@ function relax(
 
             for (const { j, c } of list) {
                 // Residual with this light's own contribution taken back out.
-                const r = sites[j]!.lux - (delivered[j]! - placed[i]!.lumens * c);
+                const r = sites[j]!.lux - (delivered[j]! - lights[i]!.lumens * c);
                 num += r * c;
                 den += c * c;
             }
 
             const next = den > 0 ? Math.max(0, num / den) : 0;
-            const change = next - placed[i]!.lumens;
+            const change = next - lights[i]!.lumens;
             if (change === 0) continue;
 
-            placed[i]!.lumens = next;
+            lights[i]!.lumens = next;
             for (const { j, c } of list) delivered[j] += change * c;
         }
     }
+}
 
-    for (let i = 0; i < placed.length; i++) {
-        const light = placed[i]!;
+/** Move every light's reach to `cutoffFraction` of the level around it. */
+function resize(
+    lights: SceneLight[],
+    near: readonly { j: number; c: number }[][],
+    sites: readonly GridSite[],
+    opt: GridFitOptions,
+    floorOf: (i: number) => number
+): void {
+    for (let i = 0; i < lights.length; i++) {
+        const light = lights[i]!;
+        const cutoff = referenceLux(near[i]!, sites) * opt.cutoffFraction;
+
+        // Nothing measured nearby, so there is no local level to be a fraction
+        // of, and the reach it arrived with is the only estimate there is.
+        if (cutoff <= 0) continue;
+
         light.radius = Math.min(
             opt.maxRadius,
-            Math.max(
-                fittedTo[i]!.distance,
-                Math.sqrt(light.lumens / (4 * Math.PI) / opt.cutoff)
-            )
+            Math.max(floorOf(i), Math.sqrt(light.lumens / (4 * Math.PI) / cutoff))
         );
     }
+}
+
+/**
+ * How much light is already in the region a light works in, in lux.
+ *
+ * The reference for `cutoffFraction`, and it is weighted by the light's own
+ * contribution rather than taken flat over its neighbourhood. A fixture stands
+ * a couple of metres from the surfaces it lights and tens of metres from the
+ * far end of its reach; an unweighted mean over that sphere is mostly the far
+ * end, which is the part the fixture has nothing to do with. Weighting by `c`
+ * asks what the places this light actually lights are lit to.
+ *
+ * So a lamp over a bright atrium is measured against the atrium and one in a
+ * dark corridor against the corridor, and the same 3% means the same thing in
+ * both -- which is the whole reason for a fraction over a fixed lux value.
+ */
+function referenceLux(
+    list: readonly { j: number; c: number }[],
+    sites: readonly GridSite[]
+): number {
+    let num = 0;
+    let den = 0;
+
+    for (const { j, c } of list) {
+        num += c * sites[j]!.lux;
+        den += c;
+    }
+
+    return den > 0 ? num / den : 0;
 }
 
 /** RMS illuminance error over the sites, relative to their mean target. */

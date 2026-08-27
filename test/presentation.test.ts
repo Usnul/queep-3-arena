@@ -72,6 +72,8 @@ interface Light {
 
 interface Scene {
     readonly worldScale: number;
+    /** Index 0 is the world model, whose bounds are the map's own. */
+    readonly submodels: { minsQ3: number[]; maxsQ3: number[] }[];
     readonly materials: Material[];
     /** Q3 shader name -> the flattened filename actually written. */
     readonly textures: Record<string, string>;
@@ -290,18 +292,21 @@ describe('the reconstructed lighting solution', () => {
         ).toBeLessThan(0.1);
     });
 
-    it('leaves a map that was already lit close to how it was', () => {
+    it('does not take a map over with fitted lights', () => {
         /*
-         The fit adds what the shader route left short and nothing else, so a
-         map the shaders already lit should barely move. Asserted because the
-         first working version did not have this property -- it emitted 256
-         lights on `oa_dm1` and took it from 8.7 lux to 63 -- and the fix was a
-         real one (a source-distance estimate and a least-squares pass), not a
-         threshold. See D-078.
+         The fit is a correction, not a replacement: a map whose author lit it
+         with surface shaders should still be lit by them afterwards. Asserted
+         because the first working version did not have this property -- it
+         emitted 256 lights on `oa_dm1` and took it from 8.7 lux to 63 -- and
+         the fix was a real one (a source-distance estimate and a least-squares
+         pass), not a threshold. See D-078.
 
-         The bound is loose on purpose. Some movement is correct: the lightgrid
-         is the *baked truth* and the shader reconstruction undershoots it on
-         `oa_dm1`, so converging toward the grid is the fit working.
+         What this used to say was that such a map "should barely move", which
+         stopped being true at D-105. The fit sizes the surface lights now
+         instead of taking them on faith, and on the maps whose shaders declared
+         too much it moves them a long way -- `am_thornish` went from delivering
+         4.3 times the baked target to 0.58 of it. Moving is the fix. Being
+         replaced is still the failure, and it is what this checks.
         */
         for (const name of ['oa_dm4', 'aggressor', 'am_thornish']) {
             const s = scene(name);
@@ -312,6 +317,77 @@ describe('the reconstructed lighting solution', () => {
                 `${name}: ${fitted} of ${s.lights.length} lights came from the grid`
             ).toBeLessThan(0.75);
         }
+    });
+
+    it.each(MAPS)('agrees with the field q3map2 baked [%s]', (name) => {
+        /*
+         The claim the rest of this block cannot make. Everything above asks
+         whether there is light in the right places; this asks whether there is
+         the right *amount* of it, against the only reference that exists -- the
+         lightgrid q3map2 baked, which is the same field the fit was solved
+         against.
+
+         It could not have been asserted before D-105. The fit was allowed to
+         add light and not to remove it, so a map whose shaders declared too
+         much simply stayed too bright and no bound here could have held:
+         `am_thornish` sat at 2,312% RMS, `oa_dm4` and `aggressor` at around
+         250%. All six now land between 52% and 79%.
+
+         The bound is 120% rather than 80% for this suite's usual reason -- a
+         guard at the current value fails on noise. It is still far under where
+         four of the six were, which is what makes it worth having.
+        */
+        const s = scene(name);
+        const after = s.stats.lightingResidualAfter;
+        const before = s.stats.lightingResidualBefore;
+
+        expect(after, `${name} recorded no residual against the lightgrid`).toBeTypeOf('number');
+        expect(
+            after!,
+            `RMS ${((after ?? 0) * 100).toFixed(0)}% of mean target ` +
+            `(shader route alone: ${((before ?? 0) * 100).toFixed(0)}%)`
+        ).toBeLessThan(1.2);
+    });
+
+    it.each(MAPS)('keeps a light inside the room it lights [%s]', (name) => {
+        /*
+         A cutoff radius is where the renderer stops evaluating a light, and it
+         used to be set from the shader directive that declared the light --
+         `6 + surfacelight / 120` metres -- which is a number about a texture
+         being asked a question about a room. On `oa_dm1` that gave sixteen of
+         thirty-three lights an influence sphere larger than the entire map, and
+         left a third of the light-to-point pairs a shading point evaluated
+         delivering under half a lux each.
+
+         The reach is a fraction of the local level now (D-105), so it is
+         bounded by how bright the place is rather than by how large a number
+         the mapper typed.
+
+         Summed over the map rather than per light, and against the map's own
+         volume rather than a constant, because a single far-reaching light is
+         not the failure -- a fit standing in for a distant source really does
+         place one, and `oa_dm7` has five. The failure is every light reaching
+         everywhere, which is what the shader directive produced and what a
+         shading point pays for: the six maps ran at 6 to 18 times their own
+         volume in summed influence and now run at 1 to 7.
+        */
+        const s = scene(name);
+        const world = s.submodels[0]!;
+        const span = [0, 1, 2].map((i) => (world.maxsQ3[i]! - world.minsQ3[i]!) * s.worldScale);
+        const volume = span[0]! * span[1]! * span[2]!;
+
+        // Clamped per light: a sphere that engulfs the map is not more of a
+        // problem for covering twice it, and leaving it unclamped would let one
+        // outlier decide the number.
+        const influence = s.lights.reduce(
+            (a, l) => a + Math.min((4 / 3) * Math.PI * l.radius ** 3, volume),
+            0
+        );
+
+        expect(
+            influence / volume,
+            `${s.lights.length} lights cover ${(influence / volume).toFixed(1)}x the map's own volume`
+        ).toBeLessThan(10);
     });
 
     it.each(MAPS)('gives every light a volume rather than leaving it a point [%s]', (name) => {

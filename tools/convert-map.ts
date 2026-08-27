@@ -57,6 +57,7 @@ import { UNLIT_LUMINANCE, type ImageBlend, type PbrMaterial } from './pipeline/s
 import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
 import {
     fitGridLights,
+    luma,
     sitesFromGrid,
     LUX_PER_BYTE,
     type SceneLight,
@@ -697,16 +698,28 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     }
 
     /**
-     * Luminance, in cd/m2, for each material that emitted light. See the block
-     * below the clustering loop.
+     * Luminance, in cd/m2, for each material that emitted light. Filled in
+     * after the lightgrid fit, because until that has run the port does not yet
+     * know how much light comes out of these surfaces. See the block below the
+     * clustering loop.
      */
     const emissiveLuminance = new Map<number, number>();
+
+    /**
+     * Total emitting area of each material that declared a surface light, in
+     * square metres.
+     *
+     * Kept because the fixture's face is derived from the light coming out of
+     * it and that number is not final until the fit has run: a material's
+     * emissive is its calibrated flux over its area, so the flux has to be
+     * summed back up per material afterwards.
+     */
+    const emissiveArea = new Map<number, number>();
 
     for (const [shaderNum, g] of groups) {
         const pbr = pbrByShaderNum[shaderNum]!;
         if (pbr.surfaceLight <= 0) continue;
 
-        const before = lights.length;
         const claimed: boolean[] = new Array(g.lightSamples.length).fill(false);
 
         for (let i = 0; i < g.lightSamples.length; i++) {
@@ -731,22 +744,39 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 x: sx / n,
                 y: sy / n,
                 z: sz / n,
+                material: g.materialIndex,
                 /*
-                 meep point lights are photometric: `intensity` is candela and
-                 `intensity_lumens` is lumens. That makes `q3map_surfacelight`
-                 unusually easy to map -- q3map2's units are already roughly
-                 proportional to emitted power, and the typical range (1000-2000
-                 for a ceiling fixture, 200-500 for a trim strip) lines up with
-                 real luminous flux almost 1:1. So it is passed through as lumens
-                 and the runtime does the lm -> cd conversion the engine
-                 documents.
+                 A starting point, not an answer. meep point lights are
+                 photometric -- `intensity` is candela, `intensity_lumens` is
+                 lumens -- and this used to hand `q3map_surfacelight` straight
+                 over as lumens on the reasoning that q3map2's range lines up
+                 with real luminous flux almost 1:1.
 
-                 Clamped at 20000 lm because a handful of OA lava and sky shaders
-                 declare values in the tens of thousands, which as real light
-                 would white out the room they are in.
+                 It does not. The directive is a per-unit-area quantity, so
+                 reading it as a per-fixture flux ignores how much surface is
+                 emitting: on `oa_dm1` that gave ten 0.2 m2 torch quads 3,787 lm
+                 each and the 38 m2 lava lake beside them 666, which is a
+                 thousandfold spread in radiance across one map and put 90% of
+                 its light in 2% of its emitting area. Against the baked
+                 lightgrid the error is not even a consistent scale: on `oa_dm4`
+                 `gothic_light/ironcrosslt2_20000` now ships at 0.22 of what it
+                 declared and `gothic_light/skulllight01` at 5.4 times, which is
+                 a 25-fold disagreement between two shaders in one level.
+
+                 So the number stays -- it is the mapper's own statement that
+                 light comes out of here, and its *relative* ordering within a
+                 shader set is worth something -- and the lightgrid fit sizes it
+                 (D-105). Where a map has no lightgrid this is what ships, which
+                 is why the 20,000 lm clamp is still here: a handful of OA lava
+                 and sky shaders declare values in the tens of thousands.
                 */
                 lumens: Math.min(pbr.surfaceLight, 20000),
-                // Cutoff radius, in metres.
+                /*
+                 Provisional cutoff radius, in metres. The fit recomputes it
+                 from what the light ends up emitting and how bright the region
+                 it lights is; this is what a map with no lightgrid keeps, and
+                 what seeds the fit's own placement pass.
+                */
                 radius: Math.min(60, 6 + pbr.surfaceLight / 120),
                 sourceRadius: sourceRadiusOf(faceArea),
             });
@@ -762,29 +792,36 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
          panel at 0.3 while the wall it lit sat at several cd/m2, so every light
          fixture in the game was *darker than what it illuminated*.
 
-         The port already decides how much light a surface emits -- that is the
-         cluster above, `surfaceLight` lumens of it -- so the fixture's face has
-         a right answer rather than a taste: a Lambertian emitter radiating flux
-         F over area A has luminance F / (pi * A). Emissive and point light stop
-         being two unrelated guesses and become two views of one emission.
+         The port already decides how much light a surface emits -- the clusters
+         above, and then the lightgrid fit that sizes them (D-105) -- so the
+         fixture's face has a right answer rather than a taste: a Lambertian
+         emitter radiating flux F over area A has luminance F / (pi * A).
+         Emissive and point light stop being two unrelated guesses and become
+         two views of one emission.
 
-         It comes out conservative against real fixtures, which is a good sign
-         that nothing here is inflated: `base_light/ceil1_38` lands at 96 cd/m2
-         and `gothic_light/ironcrosslt2_20000` at 1,600, against roughly 2,000
-         to 8,000 for the diffuser of an office ceiling panel.
+         Which is why only the *area* is recorded here. The flux is not known
+         yet: it was `q3map_surfacelight` per cluster when this was written, and
+         that number is now a starting point the fit is free to move. Deriving
+         the face from the pre-fit flux would put the two views back out of
+         agreement in exactly the way this block exists to prevent.
         */
-        const clusters = lights.length - before;
         let area = 0;
         for (const model of modelGroups) {
             const mg = model.get(shaderNum);
             if (mg !== undefined) area += groupArea(mg);
         }
 
-        if (area > 0) {
-            const flux = Math.max(clusters, 1) * Math.min(pbr.surfaceLight, 20000);
-            emissiveLuminance.set(g.materialIndex, flux / (Math.PI * area));
-        }
+        if (area > 0) emissiveArea.set(g.materialIndex, area);
     }
+
+    /**
+     * How many of `lights` came out of surfaces.
+     *
+     * The lightgrid fit appends its own after these and returns these in place,
+     * so this is the boundary between the two routes for the rest of the
+     * function.
+     */
+    const surfaceCount = lights.length;
 
     /* ---- sun ---- */
 
@@ -810,9 +847,12 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
         sun = {
             color: [...s.color],
-            // q3map_sun intensity is q3map2's own scale; 100 is a bright
-            // midday sun there. meep's `make_sunlight` defaults to 2.2, so the
-            // divisor lands a typical map near that.
+            /*
+             Fallback only, and on the wrong scale -- see the block that
+             measures this off the lightgrid. `make_sunlight`'s 2.2 default is
+             meep's artist-facing convention, not lux, and a map with no baked
+             grid to measure against has nothing better to offer.
+            */
             intensity: Math.min(s.intensity / 45, 6),
             direction: [dx, dy, dz],
         };
@@ -894,12 +934,97 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 },
             });
 
+            /*
+             The surface lights come back measured rather than declared. In
+             place and index for index, because the emissive faces below are
+             summed out of the first `surfaceCount` entries of this array.
+            */
+            for (let i = 0; i < fit.surface.length; i++) lights[i] = fit.surface[i]!;
+
             gridLights = fit.lights;
             gridFit = { before: fit.residualBefore, after: fit.residualAfter, sites: fit.sites };
 
-            for (const l of gridLights) lights.push(l);
+            /*
+             What a sun-facing surface receives, in the same lux the rest of
+             this file works in.
+
+             `q3map_sun`'s intensity is q3map2's own scale and the divisor that
+             used to convert it -- 45, chosen so a typical map landed near
+             meep's `make_sunlight` default of 2.2 -- was calibrating against
+             the engine's *artist-facing* convention while every point light in
+             the port is in real photometric units. The sun came out at 3.3 lux
+             on `am_thornish`, which is less than one of its torches at seven
+             metres, and 5 to 67 times under what the grid says arrives at the
+             cells that can see sky.
+
+             No single divisor fixes it: `q3map_sun 150` is worth 43.8 lux on
+             `aggressor` and 17.3 on `am_thornish`. So it is read off the same
+             baked field as everything else. The directed component is what
+             q3map2 recorded arriving from the dominant direction, and at a cell
+             with a clear line to the sky that direction is the sun.
+            */
+            if (sun !== null) {
+                const lit: number[] = [];
+
+                for (let i = 0; i < grid.count; i++) {
+                    const sample = grid.at(i);
+                    const directed = luma(sample.directed);
+                    if (luma(sample.ambient) + directed < GRID_MIN_BYTES) continue;
+                    if (!seesSky(sample.origin)) continue;
+                    lit.push(directed * LUX_PER_BYTE);
+                }
+
+                /*
+                 The median, and only when there are enough cells for one to
+                 mean anything. A map with a sun shader whose sky is a sliver --
+                 `oa_dm4` has nineteen such cells, and its "sun" is a red glow
+                 pointed straight down -- is not measuring a sun, and the
+                 declared value is the better guess there.
+                */
+                if (lit.length >= 32) {
+                    lit.sort((a, b) => a - b);
+                    sun.intensity = lit[Math.floor(lit.length / 2)]!;
+                }
+            }
         }
     }
+
+    /*
+     The fixture's face, now that the port knows how much light comes out of it.
+
+     `emissiveArea` was recorded during clustering and each light carries the
+     material it came out of; the flux is whatever the lights ended up at, which
+     is the fit's answer where
+     there was a lightgrid to fit against and the shader's declared value where
+     there was not. Either way the face and the light it casts are one emission
+     described twice, which is the property D-093 established and D-105 has to
+     keep.
+    */
+    {
+        const flux = new Map<number, number>();
+
+        for (let i = 0; i < surfaceCount; i++) {
+            const m = lights[i]!.material!;
+            flux.set(m, (flux.get(m) ?? 0) + lights[i]!.lumens);
+        }
+
+        for (const [material, area] of emissiveArea) {
+            emissiveLuminance.set(material, (flux.get(material) ?? 0) / (Math.PI * area));
+        }
+    }
+
+    /*
+     A surface light the fit drove to nothing is a fixture the baked field says
+     contributes no measurable light -- a glowing window on `oa_dm1`, whose room
+     is lit by the torches in it. Dropping it costs a GPU light and nothing
+     else: its face still glows, because `emissive` above is not this number.
+    */
+    const lit = lights.slice(0, surfaceCount).filter((l) => l.lumens > 1);
+    const darkened = surfaceCount - lit.length;
+
+    lights.splice(0, surfaceCount, ...lit);
+
+    for (const l of gridLights) lights.push(l);
 
     /* ---- textures ---- */
 
@@ -930,8 +1055,17 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
          the better-informed of the two: it keeps a torch at the thousands its own
          flux implies, and stops 666 lumens spread over 38 square metres of lava
          from making lava dimmer than an ordinary unlit texture.
+
+         The floor covers a *declared* emitter too, and until D-105 it did not
+         have to: flux was one cluster's worth of `q3map_surfacelight` and so
+         never zero. The fit can drive a fixture to nothing now, and a fixture
+         the baked field says casts no measurable light is still a fixture --
+         `e8/e8jumpspawn02b` on `am_thornish` went to 0.00 cd/m2 and stopped
+         glowing at all. Whatever Q3 declared a light source cannot come out
+         dimmer than a beam nobody declared anything about.
         */
-        const floor = materials[i]!.unlit ? UNLIT_LUMINANCE : 0;
+        const declared = materials[i]!.surfaceLight > 0;
+        const floor = materials[i]!.unlit || declared ? UNLIT_LUMINANCE : 0;
         materials[i] = {
             ...materials[i]!,
             emissiveLuminance: Math.max(luminance, floor),
@@ -1042,6 +1176,24 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             texturesWritten: textureCounts(written).written,
             texturesMissing: textureCounts(written).missing,
             submodels: models.length - 1,
+            /*
+             How far the shipped lighting is from the field q3map2 baked, as RMS
+             illuminance error over the fitted cells, relative to their mean
+             target. `Before` is the shader route on its own.
+
+             Written into the bundle rather than only logged because it is the
+             one number that says whether this map's lighting is *right*, as
+             against merely present, and a build that quietly stops agreeing
+             with the bake looks identical from every other statistic here.
+             Absent, rather than zero, on a map with no lightgrid to measure
+             against -- there is a difference between agreeing with the bake and
+             having no bake. See D-105.
+            */
+            ...(gridFit === null ? {} : {
+                lightingSites: gridFit.sites,
+                lightingResidualBefore: gridFit.before,
+                lightingResidualAfter: gridFit.after,
+            }),
         },
     };
 
@@ -1059,9 +1211,11 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     console.log(
         `${mapName}: ${meshes.length} meshes, ${totalVerts} verts, ${totalIndices / 3} tris, ` +
         `${materials.length} materials, ${lights.length} lights` +
-        (gridFit !== null && gridLights.length > 0
-            ? ` (${gridLights.length} fitted to ${gridFit.sites} lightgrid cells, ` +
-              `RMS ${(gridFit.before * 100).toFixed(0)}% -> ${(gridFit.after * 100).toFixed(0)}%)`
+        (gridFit !== null
+            ? ` (${gridLights.length} fitted and ${surfaceCount - darkened} ` +
+              `calibrated against ${gridFit.sites} lightgrid cells, ` +
+              `RMS ${(gridFit.before * 100).toFixed(0)}% -> ${(gridFit.after * 100).toFixed(0)}%` +
+              (darkened > 0 ? `, ${darkened} surface lights dropped as dark` : '') + ')'
             : '') +
         `, ${scene.stats.texturesWritten} textures` +
         (scene.stats.texturesMissing > 0 ? ` (${scene.stats.texturesMissing} missing)` : '') +

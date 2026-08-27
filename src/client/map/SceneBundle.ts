@@ -103,6 +103,17 @@ export interface BundleLight {
      * lit each cell, and a room lit red in Q3 should be lit red here.
      */
     readonly color?: readonly [number, number, number] | number[];
+    /**
+     * Index into `materials` of the surface this light was reconstructed out
+     * of, or absent on a light fitted to the lightgrid.
+     *
+     * The mirror of `color`: between the two, every light says which of the two
+     * reconstruction routes made it. The runtime does not read it -- it is here
+     * so the bundle can be checked against itself, because a material's
+     * emissive luminance is its lights' flux over its area and nothing else
+     * records that pairing. See D-093 and D-105.
+     */
+    readonly material?: number;
 }
 
 export interface BundleSun {

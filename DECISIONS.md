@@ -2359,8 +2359,12 @@ means measuring the existing solution against it, and the existing solution over
 against the baked field is 256% on `oa_dm4`, 332% on `aggressor` and **6,855%** on `am_thornish`,
 which delivers 58 lux at player height where q3map2 baked 10. Passing `q3map_surfacelight`
 through as lumens is far too generous on a map with many bright shader emitters. Now that there
-is a reference it could be calibrated per map. Not done: it would re-light the three maps the
+is a reference it could be calibrated per map. Not done here: it would re-light the three maps the
 demo presents, which is a larger change than this one and belongs in its own.
+
+**Done in D-105**, and per map was not enough — the surface lights became free variables in this
+same least squares, because the declared values are wrong in both directions within a single map.
+`am_thornish` now delivers 7.1 lux at player height against the 7.7 the grid baked.
 
 **What was pinned is now asserted.** `test/presentation.test.ts` pinned the shortfall -- "records
 the two maps where the reconstruction is thin" -- specifically so a fix would fail there and
@@ -4155,3 +4159,119 @@ takes a seed, a diffusion model reproduced across a re-run is a claim to test ra
 D-095's counts and the per-channel verdicts in the report were measured against the set that was
 on disk, not against a set that can be conjured back. ASSETS.md now carries the rebuild cost of
 every tree, so the next person to reach for `rm -rf` can read what it is worth first.
+
+### D-105: `q3map_surfacelight` was never a number of lumens, and the reach was that number again
+
+The port read `q3map_surfacelight` off a shader and shipped it as the fixture's luminous flux, one
+cluster's worth per fixture. Every consequence of a light in a converted map came out of that one
+integer: `oa_dm1`'s torches emit 3,787 lm because `textures/sfx/flame2` says
+`q3map_surfacelight 3787`, they shine at 301 cd because that is `3787 / 4pi`, and they reach 37.6 m
+because the cutoff radius was `6 + 3787 / 120`.
+
+**The directive is a per-unit-area quantity and it was read as a per-fixture one.** That ignores how
+much surface is emitting, and on `oa_dm1` the result inverts:
+
+| shader | declared | clusters | m² per cluster | lm per cluster | implied lm/m² |
+|---|---:|---:|---:|---:|---:|
+| `sfx/flame2` | 3787 | 10 | 0.20 | 3787 | **18,734** |
+| `base_light/ceil1_38` | 300 | 6 | 1.00 | 300 | 300 |
+| `base_light/xlight5` | 1000 | 1 | 22.0 | 1000 | 45 |
+| `gothic_block/mkc_evil_e3window` | 200 | 4 | 8.0 | 200 | 25 |
+| `liquids/lavahell` | 666 | 1 | 38.0 | 666 | **18** |
+
+A thousandfold spread in radiance across one level, with the largest emitters the dimmest per unit
+area: ten torch quads covering 2 m² held **90% of the map's reconstructed flux over 2% of its
+emitting area**, and the 38 m² lava lake got 666 lm. `UNLIT_LUMINANCE` was already flooring that
+lava so it did not come out dimmer than a texture nobody declared anything about — a symptom being
+patched rather than a rule being fixed.
+
+**The error is not a scale factor.** D-078 recorded the overshoot and guessed at a per-map
+calibration; the guess was too kind. Fitting one global scale per map against the baked lightgrid
+gives 0.91 for `oa_dm1` and 0.022 for `am_thornish`, and within a single map the declared values are
+wrong in both directions at once — `oa_dm4` now ships `ironcrosslt2_20000` at 0.22 of what it
+declared and `skulllight01` at 5.4 times. No divisor was available to be found.
+
+**The fix is that the machinery to size these lights already existed and was being withheld from
+them.** `fitGridLights` fits point lights to `LUMP_LIGHTGRID` by least-squares coordinate descent
+over every lit cell (D-078). It took the surface lights as `existing`: read into the residual, never
+adjusted. So the one number in the solution that nothing measured was the one doing most of the
+lighting, and because the fit could only *add*, a map whose shaders declared too much stayed too
+bright no matter how well the fit behaved.
+
+They are free variables now, in the same objective, against the same field, in the same sweeps.
+`q3map_surfacelight` stops being a claim about lumens and becomes what it can support: the mapper's
+statement that light comes out of here, and a starting point.
+
+**Reach is a fraction of the local level, not an absolute lux floor.** The old cutoff was 0.25 lux,
+and no absolute number can be right for two maps at once — a quarter lux is 1% of `oa_dm1`'s median
+illuminance and 5% of `am_thornish`'s. Sixteen of `oa_dm1`'s 33 lights had an influence sphere
+larger than the entire map, a shading point had a median of 15 lights in range, and a third of those
+pairs were delivering under half a lux each.
+
+It is 3% of the baked level in the region the light works in, weighted by the light's own
+contribution so that a lamp over a bright atrium is measured against the atrium and one in a dark
+corridor against the corridor.
+
+**Output and reach had to be solved together, and the first attempt did not.** Fitting output over a
+fixed generous reach and cutting each light back afterwards ships a field nobody optimised: every
+light is sized on the promise of lighting cells it is then not evaluated at. Measured on `oa_dm1`,
+delivered illuminance came out at 0.52 of the baked target while the fit reported closing to 0.8.
+The loop alternates instead — sweeps against exactly the sites a light will be evaluated at, then a
+resize, then again — and ends on a sweep, so what ships is an output fitted at the reach it ships
+with. Three rounds; the third moves the residual by under a point.
+
+**The sun was on the other scale entirely.** `q3map_sun`'s intensity was divided by 45 and capped at
+6, chosen so a typical map landed near meep's `make_sunlight` default of 2.2 — which is the engine's
+*artist-facing* convention, while every point light in this port is in real photometric units and a
+`DirectionalLight`'s intensity is lux. `am_thornish`'s sun was 3.3 lux, less than one of its own
+torches at seven metres. No divisor works there either: `q3map_sun 150` is worth 43.8 lux of baked
+directed light on `aggressor` and 17.3 on `am_thornish`. So it is measured off the same field as
+everything else — the median directed component at cells with a clear trace to sky — and falls back
+to the old formula on a map with too few such cells for a median to mean anything.
+
+**Results.** RMS against the baked field, and illuminance where a player stands:
+
+| map | RMS before | RMS after | player-height lux | lights in range | summed reach |
+|---|---:|---:|---|---:|---|
+| `oa_dm1` | 87% | **79%** | 16.7 → 14.9 | 15 → 5 | 18.2× → 7.3× |
+| `oa_dm4` | 256% | **67%** | 32.9 → 23.9 | 7 → 5 | 6.1× → 3.6× |
+| `oa_dm5` | 139% | **65%** | 10.8 → 11.1 | 9 → 5 | 14.6× → 5.8× |
+| `oa_dm7` | 116% | **63%** | 27.3 → 26.1 | 12 → 6 | 16.5× → 6.7× |
+| `aggressor` | 250% | **52%** | 20.2 → 11.7 | 17 → 6 | 12.0× → 5.1× |
+| `am_thornish` | 2312% | **78%** | 54.2 → **7.1** | 24 → 4 | 17.5× → 0.9× |
+
+"RMS before" is the shader route on its own, and "summed reach" is the lights' influence volume
+against the map's own. `am_thornish` is the case D-078 called out and could not fix: it delivered
+54 lux at player height where the grid baked 7.7, and it now delivers 7.1.
+
+Nothing went dark. Player positions under 1 lux stayed at zero on five maps and `oa_dm5` lost the
+one it had; `am_thornish` gained one of 136. The median number of lights a shading point evaluates
+fell by two-thirds to three-quarters everywhere, which is the reach fix and is free.
+
+**What the fit may now do that it could not before: take a fixture away.** A surface light the
+sweeps drive to nothing is dropped — 22 of 63 on `aggressor`, 7 of 22 on `oa_dm1` — because a GPU
+light the baked field says contributes nothing measurable is being paid for and not seen. The *face*
+still glows: the declared-emitter floor that used to be redundant is now load-bearing and says so,
+because `e8/e8jumpspawn02b` on `am_thornish` went to 0.00 cd/m² and stopped glowing at all before it
+was written down.
+
+**The pairing D-093 established had to be re-established.** A material's emissive luminance is its
+flux over its area, and that flux is no longer anything a shader declared, so it is summed back up
+from the lights after the fit. Each surface light records the material it came out of —
+`BundleLight.material`, the mirror of `color`, which only a fitted light carries — and
+`materials.test.ts` checks the two against each other directly rather than, as before, checking that
+the luminance came back as a whole number of clusters.
+
+**What is asserted now that could not have been.** `presentation.test.ts` gains a bound on the
+residual against the baked field, which no map could have passed before this — four of the six were
+over it — and a bound on summed reach against the map's own volume, which five of the six failed.
+The bundle carries `lightingResidualAfter`, so the claim is checkable from the artifact rather than
+only from a build log.
+
+**Two things this does not claim.** The absolute scale is still `LUX_PER_BYTE = 0.2`, which puts a
+Q3 interior at tens of lux where a real one is hundreds. Everything here is calibrated to the bake,
+and the bake's own unit is a bridge that was measured once against the route this entry has just
+rewritten — circular, and it does not matter while the renderer's exposure is automatic, but it is
+the next thing to be suspicious of if that ever changes. And the bake is itself clipped: 16.5% of
+`oa_dm1`'s lit cells and 30.3% of `oa_dm4`'s have a saturated byte, so the reference is flat-topped
+at 102 lux exactly where the bright fixtures are, and a fit against it is pulled down there.

@@ -1102,6 +1102,12 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   emitters, and now that there is a reference it could be calibrated per map rather than
   assumed. Not done here: it would re-light the three maps the demo presents, which is a bigger
   change than this belongs inside.
+
+  **Since done, in D-105, and per map turned out not to be enough.** The declared values are
+  wrong in both directions inside a single level, so the surface lights became free variables in
+  this same least squares rather than getting a per-map divisor. All six maps now land between
+  52% and 79% RMS, and `am_thornish` delivers 7.1 lux at player height against the 7.7 the grid
+  baked.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.
@@ -3092,10 +3098,16 @@ Specific things that would be a loss to regress.
   paired `.d.ts`, and `.d.ts.map` meant go-to-definition landed in the real JavaScript with its
   docblocks — which, given GAP-002, is where all the documentation actually is.
 
-- **Photometric light units.** Filed as GAP-005 for the missing guidance, but the design is
-  right and worth defending: `q3map_surfacelight`'s values turned out to map to lumens almost
-  1:1 with no per-map tuning, because both are proportional to emitted power. An ad-hoc
-  0-to-1 intensity scale would have required hand-tuning every map.
+- **Photometric light units.** Filed as GAP-005 for the missing guidance. The design is right
+  and worth defending — a real unit is what let the lighting be *measured* against q3map2's own
+  bake at all, and an ad-hoc 0-to-1 intensity scale would have had nothing to measure.
+
+  The claim originally made here, that `q3map_surfacelight`'s values map to lumens almost 1:1
+  with no per-map tuning, was wrong and is retracted. The directive is a per-unit-area quantity;
+  reading it as a per-fixture flux gave one `oa_dm1` shader a thousand times another's radiance
+  and left `am_thornish` delivering five times the light q3map2 baked. It looked 1:1 because
+  `oa_dm1` and `oa_dm4` are where it was checked, and `oa_dm1` is the map it happens to be right
+  on. See D-105 for what replaced it.
 
 ### Added during phase 3
 
