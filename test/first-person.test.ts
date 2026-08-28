@@ -43,6 +43,7 @@ import { Effects } from '../src/client/Effects.ts';
 import { ModelLibrary } from '../src/client/map/loadModels.ts';
 import type { ModelBundle } from '../src/client/map/SceneBundle.ts';
 import {
+    barrelOffset,
     bobFracSin,
     bobOddCycle,
     handOffset,
@@ -187,7 +188,7 @@ describe('an impact mark is a projector aimed into the surface', () => {
     it('faces every surface it is placed on, rather than away from it', () => {
         for (const normal of NORMALS) {
             const ecd = newDataset();
-            new Effects(ecd).bulletImpact([100, 200, 300], normal);
+            new Effects(ecd).impactMark('WP_MACHINEGUN', [100, 200, 300], normal);
 
             const marks = decalsIn(ecd);
             expect(marks.length, `one mark for normal ${normal.join(',')}`).toBe(1);
@@ -207,7 +208,7 @@ describe('an impact mark is a projector aimed into the surface', () => {
     it('encloses the point it was placed at, so there is something to paint', () => {
         for (const normal of NORMALS) {
             const ecd = newDataset();
-            new Effects(ecd).bulletImpact([100, 200, 300], normal);
+            new Effects(ecd).impactMark('WP_MACHINEGUN', [100, 200, 300], normal);
 
             const local = decalLocal(marksOf(ecd), [
                 100 * WORLD_SCALE,
@@ -223,7 +224,7 @@ describe('an impact mark is a projector aimed into the surface', () => {
 
     it('is `CG_MissileHitWall`\'s size, and its box is twice the radius across', () => {
         const ecd = newDataset();
-        new Effects(ecd).bulletImpact([0, 0, 0], [0, 0, 1]);
+        new Effects(ecd).impactMark('WP_MACHINEGUN', [0, 0, 0], [0, 0, 1]);
 
         const transform = marksOf(ecd);
 
@@ -257,7 +258,7 @@ describe('an impact mark is a projector aimed into the surface', () => {
         const ecd = newDataset();
         const wall: [number, number, number] = [0, 1, 0];
 
-        new Effects(ecd).explosion([0, 0, 0], 120, wall);
+        new Effects(ecd).impactMark('WP_ROCKET_LAUNCHER', [0, 0, 0], wall);
 
         const marks = decalsIn(ecd);
         expect(marks.length).toBe(1);
@@ -265,18 +266,71 @@ describe('an impact mark is a projector aimed into the surface', () => {
         expect(decalFade(marks[0]!.transform, dirToMeep(wall))).toBe(1);
     });
 
-    it('falls back to Q3 up when a detonation struck no surface at all', () => {
-        const ecd = newDataset();
-        new Effects(ecd).explosion([0, 0, 0], 120);
+    /**
+     * `CG_MissileHitWall`'s `switch (weapon)`, transcribed from the C.
+     *
+     * Written out here rather than imported from `Effects` so the test is an
+     * independent statement of what Q3 does: a table checked against itself
+     * passes however it is edited. `radiusQ3` is `CG_ImpactMark`'s argument and
+     * the decal's box is twice it across, which is what the scale asserts.
+     */
+    const HIT_WALL: readonly [string, string, number][] = [
+        ['WP_MACHINEGUN', 'mark_bullet', 8],
+        ['WP_CHAINGUN', 'mark_bullet', 8],
+        ['WP_SHOTGUN', 'mark_bullet', 4],
+        ['WP_GRENADE_LAUNCHER', 'mark_burn', 64],
+        ['WP_ROCKET_LAUNCHER', 'mark_burn', 64],
+        ['WP_PROX_LAUNCHER', 'mark_burn', 64],
+        ['WP_BFG', 'mark_burn', 32],
+        ['WP_RAILGUN', 'mark_plasma', 24],
+        ['WP_PLASMAGUN', 'mark_plasma', 16],
+        ['WP_LIGHTNING', 'mark_hole', 12],
+        ['WP_NAILGUN', 'mark_hole', 12],
+        // `default:` falls through into `case WP_NAILGUN` with no break, so an
+        // unnamed weapon really does leave a 12-unit hole.
+        ['WP_GAUNTLET', 'mark_hole', 12],
+        ['WP_GRAPPLING_HOOK', 'mark_hole', 12],
+    ];
 
-        expect(decalFade(marksOf(ecd), dirToMeep([0, 0, 1]))).toBe(1);
+    it("leaves each weapon's own mark, at CG_MissileHitWall's own radius", () => {
+        for (const [weapon, texture, radiusQ3] of HIT_WALL) {
+            const ecd = newDataset();
+            new Effects(ecd).impactMark(weapon, [0, 0, 0], [0, 0, 1]);
+
+            const marks = decalsIn(ecd);
+            expect(marks.length, `one mark for ${weapon}`).toBe(1);
+            expect(marks[0]!.decal.uri, `texture for ${weapon}`).toContain(texture);
+            expect(marks[0]!.transform.scale.x, `radius for ${weapon}`).toBeCloseTo(
+                radiusQ3 * 2 * WORLD_SCALE,
+                6
+            );
+        }
+    });
+
+    /*
+     Every texture the table names is a file the pipeline actually builds. The
+     two that were never reached until this table existed -- the plasma scorch
+     and the large hole -- had been converted and shipped in the bundle the whole
+     time, so nothing downstream would have complained about a name that only
+     *looked* right.
+    */
+    it('names four marks that are all on disk', () => {
+        const named = new Set(HIT_WALL.map(([, texture]) => texture));
+        expect(named.size).toBe(4);
+
+        for (const texture of named) {
+            expect(
+                existsSync(join(BUILT, 'fx', `${texture}.png`)),
+                `assets/built/fx/${texture}.png`
+            ).toBe(true);
+        }
     });
 
     it('retires nothing while under the cap, and everything a mark needs is set', () => {
         const ecd = newDataset();
         const effects = new Effects(ecd);
 
-        for (let i = 0; i < 32; i++) effects.bulletImpact([i, 0, 0], [0, 0, 1]);
+        for (let i = 0; i < 32; i++) effects.impactMark('WP_MACHINEGUN', [i, 0, 0], [0, 0, 1]);
 
         const marks = decalsIn(ecd);
         expect(marks.length).toBe(32);
@@ -493,6 +547,75 @@ describe('every weapon can be drawn in the player\'s hands', () => {
         // The railgun ships no `railgun_hand.md3`; the C answers that with the
         // shotgun's, and the shotgun's is the machinegun's to the digit.
         expect(handOffset(library, 'WP_RAILGUN')).toEqual(handOffset(library, 'WP_SHOTGUN'));
+    });
+});
+
+/*
+ * The barrel: where a projectile leaves the gun rather than the eye.
+ *
+ * `handOffset` is the camera's frame and `flashOffset` is the model's, and this
+ * is stated in a third -- Q3's forward/right/up, because `WeaponSystem` is the
+ * consumer. Three frames and one sum, which is the kind of arithmetic that is
+ * wrong in a way nothing draws: a sign error puts the rocket out of the wrong
+ * side of the gun and it still looks like a rocket. See D-116.
+ */
+describe('a projectile leaves the barrel, in the axes the simulation uses', () => {
+    it('adds the muzzle tag to the hands tag: forward, right and down', () => {
+        const library = modelLibrary();
+        const [forward, right, up] = barrelOffset(library, 'WP_ROCKET_LAUNCHER')!;
+
+        /*
+         `rocketl_hand.md3`'s `tag_weapon` is 11.92 in front of the eye, 11.78
+         below it and 5.78 to its right, and `rocketl.md3`'s `tag_flash` is 14.77
+         further down the barrel and 3.75 back up it.
+        */
+        expect(forward, 'a foot and a half in front of the eye').toBeCloseTo(26.68, 2);
+        expect(right, 'out of the right-hand side of the screen').toBeCloseTo(5.72, 2);
+        expect(up, 'and below the crosshair').toBeCloseTo(-8.04, 2);
+    });
+
+    /*
+     The trade, as a number. The projectile travels along `forward` from a point
+     that is not on the aim ray, so its path is *parallel* to that ray -- the
+     miss is a constant rather than an angle. It is the same 9.9 units at ten
+     feet and at a thousand, and against a rocket's 120-unit splash radius that
+     is 8% of the blast.
+    */
+    it('is off the aim ray by a constant, at every range', () => {
+        const library = modelLibrary();
+
+        for (const weapon of ['WP_ROCKET_LAUNCHER', 'WP_GRENADE_LAUNCHER', 'WP_PLASMAGUN']) {
+            const [, right, up] = barrelOffset(library, weapon)!;
+            const miss = Math.hypot(right, up);
+
+            expect(miss, weapon + ' is off the crosshair').toBeGreaterThan(0);
+            expect(miss, weapon + ' misses by less than a player is wide').toBeLessThan(15);
+        }
+    });
+
+    it('is null for a model with no muzzle, so the caller keeps `CalcMuzzlePoint`', () => {
+        const library = modelLibrary();
+
+        // OA's prox launcher model carries no tags at all, and the gauntlet has
+        // no muzzle -- the same two `presentation.test.ts` names.
+        expect(barrelOffset(library, 'WP_PROX_LAUNCHER')).toBeNull();
+        expect(barrelOffset(library, 'WP_GAUNTLET')).toBeNull();
+    });
+
+    it('has one for every weapon that throws something', () => {
+        const library = modelLibrary();
+
+        const projectile = Object.entries(
+            balance.weapons as Record<string, { hitscan?: boolean }>
+        )
+            .filter(([, stats]) => stats.hitscan !== true)
+            .map(([tag]) => tag);
+
+        const without = projectile.filter((tag) => barrelOffset(library, tag) === null);
+
+        expect(without, 'these still spawn at the eye, and it is the model that says so').toEqual([
+            'WP_PROX_LAUNCHER',
+        ]);
     });
 });
 

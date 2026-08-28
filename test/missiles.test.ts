@@ -74,7 +74,12 @@ const openSpawn = allSpawns[3] ?? spawn;
 
 /** Damage and explosions, without the particles. */
 class Board implements WeaponEvents {
-    explosions: { at: Vec3; radius: number; normal: ArrayLike<number> | null }[] = [];
+    explosions: {
+        at: Vec3;
+        radius: number;
+        weapon: WeaponId;
+        normal: ArrayLike<number> | null;
+    }[] = [];
     hits: { id: number; damage: number }[] = [];
     spawned: { projectile: Projectile; entity: number }[] = [];
     gone = 0;
@@ -82,10 +87,16 @@ class Board implements WeaponEvents {
     muzzleFlash(): void {}
     bulletImpact(): void {}
 
-    explosion(originQ3: ArrayLike<number>, radiusQ3: number, normalQ3?: ArrayLike<number>): void {
+    explosion(
+        originQ3: ArrayLike<number>,
+        radiusQ3: number,
+        weapon: WeaponId,
+        normalQ3?: ArrayLike<number>
+    ): void {
         this.explosions.push({
             at: vec3(originQ3[0]!, originQ3[1]!, originQ3[2]!),
             radius: radiusQ3,
+            weapon,
             normal: normalQ3 === undefined ? null : [...(normalQ3 as ArrayLike<number> as number[])],
         });
     }
@@ -167,6 +178,121 @@ function aim(from: ArrayLike<number>, to: ArrayLike<number>): Vec3 {
 
     return vec3(pitch, yaw, 0);
 }
+
+/*
+ * Where a projectile is born.
+ *
+ * It used to be `CalcMuzzlePoint` for everything, which is fourteen units
+ * straight out from the eye: inside the player's own hull, on the aim ray, and
+ * visibly not the end of the gun -- a rocket appeared out of thin air in the
+ * middle of the screen. It now leaves `tag_flash` for the shooters that have a
+ * model to read one off. See D-116, and `first-person.test.ts` for the offset's
+ * own arithmetic.
+ *
+ * Angles of zero throughout, so Q3's axes can be written out rather than
+ * borrowed from the code under test: forward is +x, right is -y, up is +z.
+ */
+describe('a projectile leaves the end of the gun', () => {
+    /** The rocket launcher's, from `first-person.test.ts`. */
+    const BARREL = [26.68, 5.72, -8.04] as const;
+
+    it('spawns at the barrel when the shooter has one', async () => {
+        const r = await rig();
+
+        const eye: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_ROCKET_LAUNCHER', eye, vec3(0, 0, 0), 999, 1, BARREL);
+
+        const origin = r.board.spawned[0]!.projectile.origin;
+
+        expect(origin[0]!, 'down the barrel').toBeCloseTo(eye[0]! + BARREL[0], 3);
+        expect(origin[1]!, 'and out of its right-hand side').toBeCloseTo(eye[1]! - BARREL[1], 3);
+        expect(origin[2]!, 'below the crosshair').toBeCloseTo(eye[2]! + BARREL[2], 3);
+    });
+
+    /*
+     The control, and the contract for every caller that passes nothing:
+     `roster.ts` fires the bots this way, and so does every headless test.
+    */
+    it('spawns at `CalcMuzzlePoint` when it does not', async () => {
+        const r = await rig();
+
+        const eye: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_ROCKET_LAUNCHER', eye, vec3(0, 0, 0), 999, 1);
+
+        const origin = r.board.spawned[0]!.projectile.origin;
+
+        expect(origin[0]!).toBeCloseTo(eye[0]! + 14, 3);
+        expect(origin[1]!).toBeCloseTo(eye[1]!, 3);
+        expect(origin[2]!).toBeCloseTo(eye[2]!, 3);
+    });
+
+    /**
+     * The reason the barrel is checked before it is used.
+     *
+     * Q3's muzzle is inside the player's own box and is therefore in open space
+     * by construction; the barrel is a foot past the front of it and can be
+     * inside a wall the player is pressed against. A missile born in solid
+     * detonates on nothing and puts its blast on the far side of the surface.
+     *
+     * Set up by measurement rather than by a hand-picked coordinate: find the
+     * wall, then stand twenty units off it, which leaves the muzzle six units
+     * clear of it and the barrel six units past.
+     */
+    it('falls back to the muzzle when the barrel is inside the world', async () => {
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        const far: Vec3 = vec3(from[0]! + 4096, from[1]!, from[2]!);
+
+        const wall = createTrace();
+        boxTrace(wall, cm, from, far, vec3(), vec3(), MASK_SHOT);
+        expect(wall.fraction, 'nothing to hit along +x from this spawn').toBeLessThan(1);
+
+        // Twenty units back from where the trace stopped, facing it.
+        const eye: Vec3 = vec3(wall.endpos[0]! - 20, from[1]!, from[2]!);
+
+        const clear = createTrace();
+        boxTrace(clear, cm, eye, vec3(eye[0]! + 14, eye[1]!, eye[2]!), vec3(), vec3(), MASK_SHOT);
+        expect(clear.fraction, 'the muzzle itself has to be in open space').toBe(1);
+
+        const r = await rig();
+        r.weapons.fire('WP_ROCKET_LAUNCHER', eye, vec3(0, 0, 0), 999, 1, BARREL);
+
+        const origin = r.board.spawned[0]!.projectile.origin;
+
+        expect(origin[0]!, 'the barrel is in the wall, so the muzzle it is').toBeCloseTo(
+            eye[0]! + 14,
+            3
+        );
+        expect(origin[1]!).toBeCloseTo(eye[1]!, 3);
+        expect(origin[2]!).toBeCloseTo(eye[2]!, 3);
+    });
+
+    /*
+     Hitscan is deliberately not moved. A railgun shot from the barrel would land
+     5.7 units right and 8 low of the crosshair at every range, and a hitscan
+     weapon is the one place in this game where the shot has to go exactly where
+     the dot is. So the offset is offered to `fire` and only the projectile
+     branch reads it.
+    */
+    it('does not move a hitscan shot, whatever it is handed', async () => {
+        const r = await rig();
+
+        const eye: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        const target = dummy(11, vec3(eye[0]! + 400, eye[1]!, eye[2]!));
+        r.weapons.targets.push(target);
+
+        const slot = r.bodies.create(11);
+        slot.track(() => target.origin);
+        r.bodies.sync();
+
+        // Dead level at a target 400 units away, with a barrel that would put the
+        // shot 5.7 units to the side of it if the origin moved.
+        r.weapons.fire('WP_RAILGUN', eye, vec3(0, 0, 0), 999, 1, BARREL);
+
+        expect(r.board.hits.map((h) => h.id), 'the railgun still goes where it points').toEqual([
+            11,
+        ]);
+    });
+});
 
 describe('a missile', () => {
     it('hits a stationary target from every direction that has a clear run at it', async () => {

@@ -5188,3 +5188,119 @@ order.
 Pinned in `test/missiles.test.ts`, which already fired a rocket at a wall and asserted the normal
 was *not null* — true of the wrong vector as much as the right one. It now dots the reported normal
 against the ported `cm_trace`'s plane normal for the same shot and requires better than 0.9.
+
+### D-116: a projectile leaves the barrel, and gives up flying at the crosshair to do it
+
+Rockets, grenades, plasma and the BFG were all created at `CalcMuzzlePoint` -- fourteen units
+straight out from the eye. That point is *inside the player's own bounding box*, which is what it is
+for: a projectile born there cannot be born in a wall, and D-115 records the same fact from the other
+side. What it is not is the end of the gun. A rocket appeared out of thin air in the middle of the
+screen, half a metre behind and above the launcher that was supposed to have fired it, which is the
+same complaint the muzzle flash had and the same tag answers it.
+
+**Where.** `barrelOffset` in `ViewWeapon.ts` adds `tag_flash` to `tag_weapon` -- the gun hangs off
+the hands model, the muzzle hangs off the gun -- and states the sum in **Q3's own axes**, forward /
+right / up, because the consumer is `WeaponSystem` and that class must not learn about the camera's
+frame or the model's. Three frames meet in one line and only the arithmetic says so; that line has
+its own test.
+
+| weapon | forward | right | up | miss |
+| --- | --- | --- | --- | --- |
+| grenade launcher | 21.5 | 5.8 | -4.9 | 7.6 |
+| rocket launcher | 26.7 | 5.7 | -8.0 | 9.9 |
+| plasma gun | 22.2 | 5.8 | -3.6 | 6.8 |
+| BFG | 24.2 | 7.1 | -9.2 | 11.6 |
+| prox launcher | -- | -- | -- | -- |
+
+**The trade, which is real and was accepted deliberately.** The projectile still flies along
+`forward`, and it now starts off the aim ray, so its path is *parallel* to that ray rather than on
+it. It no longer goes where the crosshair is.
+
+The saving grace is in the last column: because the paths are parallel, **the miss is a constant and
+not an angle**. It is the same 9.9 units for a rocket at ten feet as at a thousand, where a
+convergence error would grow without bound. Against a rocket's 120-unit splash radius that is 8% of
+the blast, and against a player's 30-unit width it is a third of a body. Where it will be felt is the
+plasma gun at long range -- 6.8 units of miss against a 20-unit splash -- and shooting through a gap
+the crosshair clears and the barrel does not.
+
+**Aiming at the crosshair instead was considered and rejected.** Spawning at the barrel and
+converging on whatever the aim ray hits fixes the miss and buys three worse problems: the shot's
+direction becomes a function of the *geometry behind the crosshair*, so the same click fires
+differently at a near wall and at open sky; the convergence angle grows without bound as the target
+gets closer, so a rocket fired at something a metre away leaves the gun visibly sideways; and it
+costs a world trace per shot to decide any of it. Q3 does not converge and neither does this.
+
+**Hitscan is not moved, and that is the point of putting the offset on `fire` rather than on the
+muzzle.** A railgun shot from the barrel would land 5.7 units right and 8 low at every range, and a
+hitscan weapon is the one place in this game where the shot has to go exactly where the dot is.
+`CalcMuzzlePoint` therefore remains the origin of every traced shot and the point the muzzle flash
+event reports; only the projectile branch reads the barrel.
+
+**The sway is not in it either.** `barrelOffset` is the gun *at rest* -- a pure function of the
+bundle, not of the pose `ViewWeapon` drew this frame. A spawn point that read the live pose would
+make a projectile's flight a function of `weaponSway`, which runs on a render-rate clock, and that is
+a rendering flourish reaching into the simulation. The drawn barrel and the fired one differ by up to
+about five centimetres during a run, which is a distance nothing in this game can measure.
+
+**And the barrel has to be reachable.** This is the one piece of machinery the fix needed:
+`CalcMuzzlePoint` is inside the player's hull and open by construction, and a rocket launcher's
+`tag_flash` is twelve units past the front face of that hull, where a wall can be. A missile born in
+solid detonates on nothing and puts its blast through the surface. So `projectileOrigin` traces from
+the safe point to the barrel and uses the safe point if the world is in the way -- binary rather than
+a lerp and an epsilon, because the correction only fires when you are jammed against geometry and
+what it gives up is thirteen units of a shot that is about to hit that wall anyway.
+
+**Who gets one is the caller's decision**, which is how "only the shooter with a model on screen"
+is expressed without `WeaponSystem` learning who the local player is. `main.ts` passes an offset;
+`roster.ts` fires the bots and passes nothing; every headless test passes nothing and gets Q3's
+behaviour unchanged. The prox launcher passes nothing too, for the reason D-115 already named -- OA's
+model ships no tags at all.
+
+Pinned in two places, because the change is in two: `first-person.test.ts` owns the offset's
+arithmetic -- the sum, the three frames, the constant miss, and that every projectile weapon but the
+prox launcher has one -- and `missiles.test.ts` owns what the simulation does with it: the spawn
+point, the unchanged spawn when nothing is passed, the fallback when the barrel is in a wall (set up
+by measuring where the wall is rather than by a hand-picked coordinate), and a railgun that still
+hits what it points at when handed an offset it must ignore.
+
+### D-117: an impact mark is chosen by the weapon, and two of the four this port ships had never been drawn
+
+Every hitscan shot left the machinegun's pockmark and every detonation left the rocket's burn,
+whatever fired them. A railgun slug scarred a wall like a bullet, a plasma bolt scorched it like a
+rocket, and the lightning gun's hole and the plasma scorch — `hole_lg_mrk` and `plasma_mrk`, both
+converted by `convert-fx.ts`, both in the shipped bundle — were never once put on a wall.
+
+**Q3 has a table and this port had a habit.** `CG_MissileHitWall` is one function for a bullet and
+for a rocket alike, and the first thing it does is `switch (weapon)` over a `mark`/`radius` pair:
+bullet at 8 for the machinegun and the chaingun, 4 for a shotgun pellet, burn at 64 for the three
+launchers and 32 for the BFG, `plasma_mrk` at 24 for the railgun and 16 for the plasma gun,
+`hole_lg_mrk` at 12 for the lightning gun and the nailgun — and for `default:`, which falls straight
+into `case WP_NAILGUN` with no `break` in between. That table is now `MISSILE_MARKS` in `Effects`,
+transcribed, and `first-person.test.ts` states it a second time from the C so that a table checked
+against itself cannot pass however it is edited.
+
+**Which meant the weapon had to reach the presentation.** `WeaponEvents.bulletImpact` and
+`.explosion` did not carry it — the mark was inferred from which of the two events fired, which is
+exactly the two-way split that produced two marks. Both now take a `WeaponId`, which is the same
+argument `CG_MissileHitWall` takes and for the same reason.
+
+**And the mark came out of the explosion.** `Effects.explosion` used to draw one itself, which is
+why it needed a surface normal it had no other use for and defaulted that normal to straight up.
+Q3's shape is: build the fireball, then call `CG_ImpactMark` as a separate act. So
+`Effects.impactMark` is that second act, `Effects.explosion` is the first, and `Arena` is where they
+are put back together, because it is the only layer that knows both the weapon and the surface.
+
+Two consequences worth stating, both of them Q3's answer rather than a simplification:
+
+- **No surface, no mark.** A missile that stopped on a player carries no normal, and
+  `CG_MissileHitPlayer` draws blood and a spark and calls no `CG_ImpactMark` — Q3 marks walls and
+  never marks people. The old up-vector fallback stamped a scorch on whatever floor was under the
+  body.
+- **A death detonation is not an impact.** It is this port's own invention (nothing struck
+  anything), so it is `Arena.deathExplosion` rather than a call to `explosion` with a made-up
+  weapon. Unifying it also removed an `impact/rocket` that played on the *player's* death and on
+  nobody else's, because the two death sites reached the same explosion through different doors.
+
+The alphas are this port's and not Q3's, and `ImpactMark.alpha` says so where it is declared: the C
+stamps at full strength and fades the mark out over its ten-second life, while these decals are
+retired oldest-first at a cap of 2048 and never fade, so the alpha is standing in for the fade.

@@ -37,9 +37,6 @@ const WORLD_SCALE = 1 / 32;
 
 const TAU = Math.PI * 2;
 
-/** Q3's up, for an explosion with no surface to report. */
-const UP_Q3: readonly number[] = [0, 0, 1];
-
 /** Q3 (Z-up, units) -> meep (Y-up, metres). */
 function toMeep(q3: ArrayLike<number>): [number, number, number] {
     return [q3[0]! * WORLD_SCALE, q3[2]! * WORLD_SCALE, -q3[1]! * WORLD_SCALE];
@@ -94,6 +91,69 @@ function track(name: string, itemSize: number, positions: number[], data: number
 
 const SCALE = ParticleParameters.Scale;
 const COLOR = ParticleParameters.Color;
+
+/** One row of `CG_MissileHitWall`'s mark table. */
+interface ImpactMark {
+    /** A file under `assets/built/fx/`, and one of the four `cg_main.c` registers. */
+    readonly texture: string;
+    /** `CG_ImpactMark`'s `radius`, in Q3 units. */
+    readonly radiusQ3: number;
+    /**
+     * How dark the stamp lands, which is this port's number and not Q3's.
+     *
+     * `CG_MissileHitWall` passes `1,1,1,1` and lets `CG_AddMarks` fade the mark
+     * out over its 10-second life. These decals do not fade -- they are retired
+     * oldest-first at a cap of 2048, so every one of them is at full strength
+     * until it disappears -- and a wall that has taken a magazine at alpha 1 is
+     * black. The alpha is therefore standing in for the fade, and the values are
+     * graded by how much of a mark the weapon should leave rather than being one
+     * constant: a rocket scorch reads at a distance and a nail hole should not.
+     */
+    readonly alpha: number;
+}
+
+/**
+ * `CG_MissileHitWall`'s `switch (weapon)`, which is the only place Q3 says what
+ * an impact looks like.
+ *
+ * The four textures are `cg_main.c`'s four mark shaders, and `convert-fx.ts`
+ * builds all four: `bullet_mrk`, `burn_med_mrk`, `hole_lg_mrk` and `plasma_mrk`.
+ * Radii are the C's own, unscaled -- `mark` takes Q3 units.
+ *
+ * Keyed by `WP_*` string rather than by `WeaponId`, because a mark is presentation
+ * and the presentation is handed weapon ids that come from the item table, which
+ * is the wider of the two lists (see `isWeaponId`).
+ */
+const MISSILE_MARKS: Readonly<Record<string, ImpactMark>> = {
+    WP_MACHINEGUN: { texture: 'mark_bullet', radiusQ3: 8, alpha: 0.6 },
+    WP_CHAINGUN: { texture: 'mark_bullet', radiusQ3: 8, alpha: 0.6 },
+    // Q3's shotgun mark is a quarter the machinegun's, because there are eleven
+    // of them per shot and a full-size stamp each would black out the wall.
+    WP_SHOTGUN: { texture: 'mark_bullet', radiusQ3: 4, alpha: 0.6 },
+
+    WP_GRENADE_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64, alpha: 0.35 },
+    WP_ROCKET_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64, alpha: 0.35 },
+    WP_PROX_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64, alpha: 0.35 },
+    WP_BFG: { texture: 'mark_burn', radiusQ3: 32, alpha: 0.35 },
+
+    WP_RAILGUN: { texture: 'mark_plasma', radiusQ3: 24, alpha: 0.7 },
+    WP_PLASMAGUN: { texture: 'mark_plasma', radiusQ3: 16, alpha: 0.7 },
+
+    WP_LIGHTNING: { texture: 'mark_hole', radiusQ3: 12, alpha: 0.5 },
+    WP_NAILGUN: { texture: 'mark_hole', radiusQ3: 12, alpha: 0.5 },
+};
+
+/**
+ * `CG_MissileHitWall`'s `default:`, which falls straight into `WP_NAILGUN`.
+ *
+ * Not a stand-in written here: the C's `default` label sits immediately above
+ * `case WP_NAILGUN` with no `break` between them, so a weapon the switch does not
+ * name really does leave a 12-unit hole. That is the gauntlet and the grappling
+ * hook, neither of which reaches a wall in this port -- and it is also whatever
+ * arrives next, which is the reason to write the fallback down rather than to
+ * throw.
+ */
+const DEFAULT_MARK: ImpactMark = { texture: 'mark_hole', radiusQ3: 12, alpha: 0.5 };
 
 /**
  * A unit vector perpendicular to `n`, rotated `roll` radians about it.
@@ -205,16 +265,14 @@ export class Effects {
      * fireball, and smoke that outlives both. `radiusQ3` is the weapon's
      * `splashRadius`, so the visual matches the damage.
      *
-     * `normalQ3` is the surface the missile struck, and it exists so that the
-     * scorch mark lands on the wall a rocket actually hit. It used to be assumed
-     * to be straight up, which projects the mark downwards: correct for a floor,
-     * and nothing at all on the far more common wall shot.
+     * The scorch mark is **not** here, and used to be. It is
+     * {@link impactMark}'s, called alongside this one by whoever knows the
+     * weapon -- which is the shape `CG_MissileHitWall` has: build the explosion,
+     * then call `CG_ImpactMark` with a mark chosen per weapon. Keeping it here
+     * meant every detonation left a burn, and meant this function needed a
+     * surface normal it otherwise had no use for and defaulted to straight up.
      */
-    explosion(
-        originQ3: ArrayLike<number>,
-        radiusQ3: number,
-        normalQ3: ArrayLike<number> = UP_Q3
-    ): void {
+    explosion(originQ3: ArrayLike<number>, radiusQ3: number): void {
         const [x, y, z] = toMeep(originQ3);
         const radius = radiusQ3 * WORLD_SCALE;
 
@@ -320,19 +378,43 @@ export class Effects {
             2.5
         );
 
-        /*
-         A scorch mark that outlives the explosion. Half the splash radius is
-         60 units for a rocket, which is `CG_MissileHitWall`'s own 64 for the
-         burn mark to within the difference between the two weapons that use it.
-        */
-        this.mark(originQ3, normalQ3, radiusQ3 * 0.5, 'mark_burn', 0.35, Math.random() * TAU);
     }
 
     /* ------------------------------------------------------------------ *
      * Impacts
      * ------------------------------------------------------------------ */
 
-    /** A bullet strike: a small spark burst plus a mark. */
+    /**
+     * `CG_MissileHitWall`'s impact mark, whichever weapon arrived.
+     *
+     * The explosion is not the mark and never was: Q3 builds the fireball, plays
+     * the sound and then calls `CG_ImpactMark` as a separate act at the bottom of
+     * the same function, off a `mark`/`radius` pair the switch above it chose per
+     * weapon. This is that pair, and its call site is `Arena` for the same reason
+     * the C's is `CG_MissileHitWall` -- the mark is a property of *what hit the
+     * wall*, and neither `explosion` nor `bulletImpact` is told that.
+     *
+     * Everything before this drew one of two marks: a burn for anything that
+     * exploded, a bullet hole for anything hitscan. Q3 draws four, and the two
+     * this port has never once put on a wall -- the plasma scorch and the large
+     * hole -- were being converted by `convert-fx.ts` and shipped in the bundle
+     * the whole time. A railgun slug leaving a machinegun's pockmark is not
+     * *missing*, which is what makes it the kind of wrong that survives.
+     */
+    impactMark(weapon: string, originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void {
+        const mark = MISSILE_MARKS[weapon] ?? DEFAULT_MARK;
+
+        this.mark(
+            originQ3,
+            normalQ3,
+            mark.radiusQ3,
+            mark.texture,
+            mark.alpha,
+            Math.random() * TAU
+        );
+    }
+
+    /** A bullet strike: a small spark burst. The mark is `impactMark`'s. */
     bulletImpact(originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void {
         const [x, y, z] = toMeep(originQ3);
 
@@ -371,9 +453,6 @@ export class Effects {
             },
             0.5
         );
-
-        // `CG_MissileHitWall`'s radius for WP_MACHINEGUN.
-        this.mark(originQ3, normalQ3, 8, 'mark_bullet', 0.6, Math.random() * TAU);
     }
 
     /* ------------------------------------------------------------------ *

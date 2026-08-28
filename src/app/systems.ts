@@ -124,7 +124,7 @@ export class PlayerSystem extends System<never> {
 
         if (player.inventory.health <= 0 && this.respawnIn < 0) {
             this.respawnIn = 2;
-            this.arena.explosion(player.ps.origin, 90);
+            this.arena.deathExplosion(player.ps.origin);
             this.audio.play('impact/flesh', player.ps.origin);
         }
 

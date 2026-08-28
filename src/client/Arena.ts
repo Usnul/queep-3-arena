@@ -300,18 +300,56 @@ export class Arena implements WeaponEvents {
         this.audio?.play(`weapon/${weapon}`, originQ3);
     }
 
-    bulletImpact(originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void {
+    /*
+     `CG_MissileHitWall`, split in two down the seam the C already has: the
+     explosion, then `CG_ImpactMark` off a per-weapon `mark`/`radius` pair. This
+     is where they are put back together, because it is the only layer that knows
+     both the weapon and the surface.
+    */
+
+    bulletImpact(
+        originQ3: ArrayLike<number>,
+        normalQ3: ArrayLike<number>,
+        weapon: WeaponId
+    ): void {
         this.effects.bulletImpact(originQ3, normalQ3);
+        this.effects.impactMark(weapon, originQ3, normalQ3);
         this.audio?.play('impact/bullet', originQ3);
     }
 
     explosion(
         originQ3: ArrayLike<number>,
         radiusQ3: number,
+        weapon: WeaponId,
         normalQ3?: ArrayLike<number>
     ): void {
-        this.effects.explosion(originQ3, radiusQ3, normalQ3);
+        this.effects.explosion(originQ3, radiusQ3);
+
+        /*
+         No surface, no mark. A missile that stopped on a player carries no
+         normal (see `Missiles.report`), and `CG_MissileHitPlayer` draws blood
+         and a spark and no `CG_ImpactMark` -- Q3 marks walls and never marks
+         people. This used to fall back to straight up and stamp a scorch on
+         whatever floor happened to be under the body.
+        */
+        if (normalQ3 !== undefined) this.effects.impactMark(weapon, originQ3, normalQ3);
+
         this.audio?.play('impact/rocket', originQ3);
+    }
+
+    /**
+     * A death detonates, which makes the kill legible without a death animation.
+     * Bots have one; boxes never will.
+     *
+     * Its own method rather than a call to {@link explosion} with a made-up
+     * weapon, because it is not a `CG_MissileHitWall`: nothing struck a surface,
+     * so there is no mark and no weapon to choose one by. Overloading the two
+     * meanings is also what put an `impact/rocket` on the *player's* death and on
+     * nobody else's -- the two call sites went through different doors to reach
+     * the same explosion. They now go through this one.
+     */
+    deathExplosion(originQ3: ArrayLike<number>): void {
+        this.effects.explosion(originQ3, 90);
     }
 
     hit(target: Damageable, damage: number): void {
@@ -342,9 +380,7 @@ export class Arena implements WeaponEvents {
         if (target.id !== 0) this.kills += 1;
         else this.deaths += 1;
 
-        // A death detonates, which makes the kill legible without a death
-        // animation. Bots have one; boxes never will.
-        this.effects.explosion(target.origin, 90);
+        this.deathExplosion(target.origin);
         this.audio?.play('impact/flesh', target.origin);
 
         if (box === null) return;

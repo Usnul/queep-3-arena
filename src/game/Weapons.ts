@@ -106,15 +106,33 @@ export interface WeaponEvents {
      * the shot and the shooter, and the presentation decides. See D-115.
      */
     muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId, ownerId: number): void;
-    bulletImpact(originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void;
     /**
-     * `normalQ3` is the surface the missile struck, for the scorch mark. Absent
-     * where there is no surface -- a rocket that hit a player in mid-air, or a
-     * body detonating -- and the presentation falls back to Q3's up.
+     * A hitscan shot reached a surface.
+     *
+     * `weapon` comes with it because `CG_MissileHitWall` -- which is the same
+     * function in the C for a bullet as for a rocket -- chooses the impact mark
+     * and its radius from the weapon and from nothing else. A machinegun leaves
+     * an 8-unit pockmark, a shotgun pellet a 4-unit one, and the lightning gun a
+     * 12-unit hole. Without the id here the presentation can only guess, and what
+     * it guessed was "hitscan means bullet".
+     */
+    bulletImpact(
+        originQ3: ArrayLike<number>,
+        normalQ3: ArrayLike<number>,
+        weapon: WeaponId
+    ): void;
+    /**
+     * `normalQ3` is the surface the missile struck, for the scorch mark.
+     *
+     * **Absent where there is no surface** -- a rocket that hit a player in
+     * mid-air -- and the presentation then draws no mark at all, which is what
+     * the C does: `CG_MissileHitPlayer` builds the blood and the spark and calls
+     * no `CG_ImpactMark`, because a person is not a wall.
      */
     explosion(
         originQ3: ArrayLike<number>,
         radiusQ3: number,
+        weapon: WeaponId,
         normalQ3?: ArrayLike<number>
     ): void;
     hit(target: Damageable, damage: number): void;
@@ -225,6 +243,7 @@ const t_up = vec3();
 const t_end = vec3();
 const t_dir = vec3();
 const t_muzzle = vec3();
+const t_barrel = vec3();
 const trace = createTrace();
 
 export class WeaponSystem {
@@ -283,14 +302,22 @@ export class WeaponSystem {
      *
      * `CalcMuzzlePoint` in the C offsets the muzzle forward and up from the eye;
      * the same offset is applied here so a rocket does not spawn inside the
-     * player's own bounding box.
+     * player's own bounding box. It remains the origin of every hitscan shot and
+     * the point the muzzle flash event reports.
+     *
+     * @param barrelQ3 where the shooter's *model* puts its muzzle, as (forward,
+     *     right, up) from the eye in Q3 units -- `client/ViewWeapon.barrelOffset`
+     *     computes it from `tag_flash`. **Projectiles only**, and null for a
+     *     shooter with no weapon model, which is every bot and every headless
+     *     caller. See D-116 for why hitscan is excluded and what the trade is.
      */
     fire(
         weapon: WeaponId,
         eyeQ3: ArrayLike<number>,
         anglesQ3: ArrayLike<number>,
         ownerId: number,
-        seed: number
+        seed: number,
+        barrelQ3: readonly [number, number, number] | null = null
     ): void {
         const stats = weaponStats(weapon);
 
@@ -329,17 +356,19 @@ export class WeaponSystem {
                 const range = stats.range ?? 8192;
                 vectorMA(t_end, t_muzzle, range, t_dir);
 
-                this.hitscanShot(t_muzzle, t_end, stats.damage, ownerId);
+                this.hitscanShot(weapon, t_muzzle, t_end, stats.damage, ownerId);
             }
 
             return;
         }
 
-        // Projectile.
+        // Projectile, and the one thing that does not start at `t_muzzle`.
+        const origin = this.projectileOrigin(eyeQ3, barrelQ3);
+
         const projectile: Projectile = {
             id: this.nextProjectileId++,
             weapon,
-            origin: vec3(t_muzzle[0]!, t_muzzle[1]!, t_muzzle[2]!),
+            origin,
             velocity: vec3(
                 t_forward[0]! * (stats.speed ?? 900),
                 t_forward[1]! * (stats.speed ?? 900),
@@ -355,8 +384,47 @@ export class WeaponSystem {
         this.events.projectileSpawned(projectile, this.missiles?.entityOf(projectile.id) ?? -1);
     }
 
+    /**
+     * Where a projectile is born: the model's muzzle, or Q3's if it cannot be.
+     *
+     * **The barrel is outside the player's own hull and `CalcMuzzlePoint` is
+     * not.** That is the whole reason this is a method and not three lines at
+     * the call site. Fourteen units forward is less than the 15 a Q3 player's
+     * box is wide, so Q3's muzzle is in space the player is standing in and is
+     * therefore open by definition; a rocket launcher's `tag_flash` is 26.7
+     * units out and 8 down, which is a foot past the front face of the box and
+     * can be inside a wall you are pressed against. A missile born inside solid
+     * is a missile that detonates on nothing, through the wall, in your face.
+     *
+     * So the barrel has to be *reachable*: trace from the safe point to it, and
+     * if the world is in the way, use the safe point. Binary rather than a
+     * lerp-and-epsilon, because the correction only happens when you are jammed
+     * against geometry and the difference it gives up is 13 units of a shot that
+     * is about to hit that wall anyway.
+     */
+    private projectileOrigin(
+        eyeQ3: ArrayLike<number>,
+        barrelQ3: readonly [number, number, number] | null
+    ): Vec3 {
+        const fallback = (): Vec3 => vec3(t_muzzle[0]!, t_muzzle[1]!, t_muzzle[2]!);
+
+        if (barrelQ3 === null) return fallback();
+
+        copy(t_barrel, eyeQ3);
+        vectorMA(t_barrel, t_barrel, barrelQ3[0]!, t_forward);
+        vectorMA(t_barrel, t_barrel, barrelQ3[1]!, t_right);
+        vectorMA(t_barrel, t_barrel, barrelQ3[2]!, t_up);
+
+        boxTrace(trace, this.cm, t_muzzle, t_barrel, ZERO, ZERO, MASK_SHOT);
+
+        if (trace.startsolid || trace.fraction < 1) return fallback();
+
+        return vec3(t_barrel[0]!, t_barrel[1]!, t_barrel[2]!);
+    }
+
     /** One hitscan ray: trace the world, then look for a closer target. */
     private hitscanShot(
+        weapon: WeaponId,
         start: ArrayLike<number>,
         end: ArrayLike<number>,
         damage: number,
@@ -402,7 +470,7 @@ export class WeaponSystem {
         if (trace.fraction < 1) {
             // `SURF_NOIMPACT` is Q3's "sky and similar leave no mark".
             if ((trace.surfaceFlags & SURF.NOIMPACT) === 0) {
-                this.events.bulletImpact(trace.endpos, trace.planeNormal);
+                this.events.bulletImpact(trace.endpos, trace.planeNormal, weapon);
             }
         }
     }
@@ -480,7 +548,7 @@ export class WeaponSystem {
         const stats = weaponStats(projectile.weapon);
 
         this.events.projectileGone(projectile);
-        this.events.explosion(atQ3, stats.splashRadius ?? 100, surfaceQ3);
+        this.events.explosion(atQ3, stats.splashRadius ?? 100, projectile.weapon, surfaceQ3);
 
         if (directHit !== null) {
             this.damage(directHit, stats.damage);

@@ -296,7 +296,7 @@ describe("an effect's own lights", () => {
         const ecd = newDataset();
         const effects = new Effects(ecd, shadows);
 
-        effects.explosion([0, 0, 0], 120, [0, 0, 1]);
+        effects.explosion([0, 0, 0], 120);
         effects.muzzleFlash([0, 0, 0], 'WP_MACHINEGUN');
 
         const lights = lightsIn(ecd);
