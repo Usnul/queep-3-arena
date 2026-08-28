@@ -5666,3 +5666,120 @@ What is *not* covered, deliberately:
   output is committed per map, so including facets is a re-bake rather than a code change.
 - **The inside of a column is not solid**, and should not be: Q3's `CM_PointContents` consults
   brushes only, and what stops a player there is the surface.
+
+### D-126: the menu grows a gameplay page, because "graphics" had become the name for "settings"
+
+The menu shipped with one page called Graphics and every setting on it. That was honest while it
+was true — the first settings the port could offer were the ones the engine would let it reach,
+and reaching them was the work — but three of the rows on it were never graphics settings, and
+one page called Graphics with a field of view and a crosshair on it is a menu organised by *what
+was implementable* rather than by *what a player is looking for*.
+
+Q3's own menu is the test, and it agrees. `cg_fov`, `cg_drawCrosshair` and `cg_crosshairHealth`
+are `cg_` cvars — client **game** — and id put the crosshair rows under "Game Options", one
+screen away from the "System" screen that held the renderer. So:
+
+| page | sections | rows |
+|---|---|---|
+| Gameplay | View, Reticle | field of view, crosshair, colour crosshair by health |
+| Graphics | Lighting, Effects, Performance | shadows, ambient occlusion, reflections, bloom, adaptive resolution, render scale, frame-rate target, frame-rate counter |
+| Audio | Volume | master, effects, music |
+
+**The dividing line is not cost, it is whether there is a right answer.** Every row on the
+graphics page has one for a given machine — more of it looks better and costs more, and the
+player is buying frames. None of the three gameplay rows does: 90 degrees is not worse than 110,
+crosshair D is not worse than crosshair G, and neither costs a measurable microsecond. A menu
+that mixes the two kinds makes the player read every row to find out which kind it is.
+
+**Nothing in the shell changed**, which is what D-097 built it for: a page is a `SettingsPage`
+value, `Menu` renders the list it is given, and the storage path is flat *precisely* so that
+moving a setting between pages does not forget its value (`Settings.group` is one flat
+`OptionGroup`, and the docblock there says so). The three rows kept their ids, so a player who
+had set a field of view before this change still has it.
+
+`graphicsPage` lost its `camera` and `hud` hosts along with the rows, which is the visible half
+of the argument: the graphics page had been given two objects it needed for three rows that were
+not about graphics.
+
+### D-127: motion blur is not a setting, it is an argument, and this port has taken the side it takes
+
+The graphics page shipped a motion-blur toggle and a blur-strength slider (D-109). Both are
+gone. Not defaulted off — removed.
+
+The toggle was already off, and the reason given for that default was: Q3 is a twitch shooter
+played by people who come round a corner at 800 units a second and expect the room to be legible
+on the frame it appears in. Reconstruction blur is very good at making a fast turn look like a
+camera and slightly worse at making it *readable*, and "turn off motion blur" is the first line
+of every competitive config for every shooter since.
+
+That argument does not stop at the default. A setting whose right answer is the same for every
+player of this particular game is not a setting; it is a decision with a control in front of it,
+and the control costs two rows on the page a player is reading to find the one that will get
+their frame rate up. The strength slider was worse: it was the *only* quality knob on the page
+and it tuned the one effect that should not be on.
+
+**What stays off is the engine's own field initialiser.** `Renderer.feature_motion_blur_enabled
+= false`, so nothing has to hold it down — and `RendererFeatures` no longer declares the property
+at all, which means a stale `motion-blur: true` in someone's IndexedDB from a build that had the
+row reaches a `Settings` with no such id and is dropped by `coerce`. The removal is complete in
+the direction that matters.
+
+**The finding it produced is kept**, in `graphics.ts`'s header and in D-109 above: `MotionBlur`
+is the one post-process in this renderer whose flag and whose tuning are both public
+(`get motion_blur()`, "Configure it via `renderer.motion_blur.*`"), where `GTAO` and `SSR` live
+in a private `#postprocess` and take their quality as call arguments the renderer hardcodes.
+That is the shape GAP-024 asks for, and it is the most hopeful thing in that entry. It is worth
+recording whether or not this port ships a row that exercises it.
+
+### D-128: shadows default to the sun, because a Q3 arena has dozens of lights and one of them throws a shadow anyone reads
+
+`SHADOW_MODE_DEFAULT` was `all` and is now `sun`. D-108 chose the expensive one deliberately and
+gave a good reason: a converted map's lights are reconstructed fixtures standing where the
+level's own lamps are, and having them throw shadows is the difference between a room lit by a
+renderer and a room lit by its light fittings.
+
+What decides it the other way is arithmetic that was not done at the time. **A Q3 arena is lit
+by dozens of local fixtures per room.** All of them are shadow-casting spot and point lights, all
+of them are shadow maps in one atlas whose size is a module-private constant in the renderer
+(GAP-024, again), and the shadows they throw are short, overlapping, and mostly land on the
+geometry that was already occluding them. The picture they buy is real and it is *diffuse* — the
+room reads as slightly contactier.
+
+The sun is the other case entirely. It is **one** light, its shadow is long, it crosses open
+space, and it is the shadow a player actually reads as a shape: the edge of a building across a
+courtyard, the shaft through a grate. One light's worth of cost for the shadow that does the
+work.
+
+So the default is the mode that keeps the shadow worth having and drops the several dozen that
+mostly cost, and `All lights` is one click away on the page for anyone with the frames to spend
+on it. D-108's argument is not wrong; it is an argument for the mode being *offered*, which it
+still is, rather than for it being what the game starts as on an unknown machine.
+
+The frame-rate counter moved the same way and for a smaller reason: it defaulted to on wherever
+there was a panel to show, because the panel had been this port's own instrumentation before it
+was a setting. `cg_drawFPS` is 0 in Q3, the arena is what the player came to look at, and the
+row is still there for anyone tuning the two rows above it.
+
+### D-129: the crosshair defaults to D, which is the one place this port disagrees with `cg_drawCrosshair`
+
+`cg_drawCrosshair` defaults to 4 in both Q3 and OpenArena, and
+`crosshairShader[i] = RegisterShader(va("gfx/2d/crosshair%c", 'a' + i))` makes 4 `crosshaire` —
+a dot. `CROSSHAIR_DEFAULT` is now 3, `crosshaird`, a cross with the centre left open.
+
+A dot is the most honest reticle there is: it marks the point of aim and occludes nothing. It is
+also the one that depends most on the background staying quiet, and **the background did not stay
+quiet.** Q3 drew flat lightmapped walls at 640x480. This port draws the same walls through
+GTAO, a bloom composite, automatic exposure and a volumetric lightmap, and the whole point of
+the exercise was to make that picture busier and brighter than id's. A three-pixel dot on a
+blown-out wall is a three-pixel dot nobody can find.
+
+The cross with a gap solves it the way crosses do — four strokes in the periphery of where you
+are looking, and the centre still empty, so it is found at a glance without covering what it is
+aimed at.
+
+This is a **default and not a restriction**, which is the whole of why it is defensible under
+"faithful in simulation, meep-native in presentation": all ten of `gfx/2d/crosshair[a-j]` are
+converted, all ten are on the gameplay page, and `?crosshair=4` puts id's back in one query
+parameter. Fidelity here is offering the choice id offered; which of the ten a player who has
+not chosen gets is presentation, and presentation follows the picture this port draws rather
+than the one it was ported from.

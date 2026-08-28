@@ -68,42 +68,72 @@ translucent and unblurred on purpose: a render-scale or field-of-view change is 
 does to the picture, so the picture has to still be there (D-099). Settings are saved to
 IndexedDB and applied on the next load.
 
+Three pages, split by whether the row has a right answer. Every graphics row has one for a given
+machine — more of it looks better, costs more, and the player is buying frames. No gameplay or
+audio row does, which is why they are not on the same page (D-126).
+
+**Gameplay**
+
 | setting | what it writes |
 |---|---|
 | Field of view | `Camera.fov`; `cg_fov`, 60–130, default 90 |
-| Shadows | which lights cast: off, the sun only, or all of them. Defaults to all (D-108) |
+| Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]`. Defaults to **D** and not id's E — a dot is hard to find against a lit-and-bloomed render, and `?crosshair=4` puts id's back (D-129) |
+| Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
+
+**Graphics**
+
+| setting | what it writes |
+|---|---|
+| Shadows | which lights cast: off, the sun only, or all of them. Defaults to the sun — one light throwing the shadow a player reads as a shape, rather than dozens throwing short ones into geometry that already occludes them (D-108, D-128) |
 | Ambient occlusion | `feature_ssao_enabled`, which is GTAO. On, and the one of the three the arenas need: the lightmaps shade the level and nothing moving through it (D-109) |
 | Screen-space reflections | `feature_ssr_enabled`. Off, and greyed out on any map with a baked light volume — SSR and Brick4 are alternatives in the renderer, and setting the flag there costs the fused indirect path for nothing (D-109) |
 | Bloom | `feature_bloom_enabled`. On. Off saves the composite and not the bright pass, which automatic exposure needs either way (D-109) |
-| Motion blur | `feature_motion_blur_enabled`, Jimenez 2014 reconstruction. Off, and that one is an argument about the game rather than about cost (D-109) |
-| Blur strength | `renderer.motion_blur.strength`, 0.5–3.0x. 1.0 is the real per-frame movement; the ceiling is where the engine stops vouching for the reconstruction (D-109) |
 | Adaptive resolution | meep's `DynamicResolutionScaling`, which trades internal resolution for frame time |
 | Render scale | `Renderer.internal_resolution_scale`, 50–100%. Alternative to adaptive resolution — each greys the other out (D-101) |
 | Frame-rate target | what adaptive resolution aims to hold. Default 60, against the engine's own 30 |
-| Frame-rate counter | the `stats.js` panel |
-| Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]` |
-| Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
+| Frame-rate counter | the `stats.js` panel. Off; `cg_drawFPS` is 0 in Q3 too, and the arena is what you came to look at (D-128) |
 
-Six of those rows exist because **3.6.0 opened the smallest possible door** — a `renderer` getter
-with "Danger zone" written on it — and the shape of what came through it is worth stating: with one
-exception they are switches, and there is not a quality setting among them. The `GTAO` and `SSR`
-objects are a private field of `Renderer` with no getter, so they are out of reach with the renderer
-already in hand; the quality knobs that exist are call arguments `Renderer` hardcodes —
-`SSR.graph_pass`'s `mip`, `graph_postprocess_bloom`'s `intensity` and `mips` — and the shadow
-*resolution* is a module-private constant, as is the atlas size beside it. So there is no
-anti-aliasing row and no Low / Medium / High, and that is still GAP-024 — smaller than it was, and
-the menu says so in its own footer rather than looking thin for no reason (D-108, D-109). There is
-no supersampling for a second reason: `pixelRatio`, the one property that reaches it, throws on any
-scale that is not a whole number (BUG-11).
+**Audio**
 
-**Blur strength is the exception, and it points at the fix.** `MotionBlur` is newer than GTAO and
-SSR and was built the other way round: the renderer owns one and hands it out, `get motion_blur()`,
-with the getter's docblock reading "Configure it via `renderer.motion_blur.*`". `dof` is the same.
-The flag and the tuning are deliberately separated and both are public — which is exactly the shape
-GAP-024 asks for, already in the package, for whatever the engine added most recently.
+| setting | what it writes |
+|---|---|
+| Master | `SoundEngine.volume`, the gain node every path runs through — the sopra bus tree *and* the probe reverb's wet return, which is why it is not the bus called `master` (GAP-034) |
+| Effects | sopra's `effects` **and** `ambient` buses. One row, because one-shots and looping map speakers are a mixing distinction and not one a player has a word for — Q3's `s_volume` covered both |
+| Music | sopra's `music` bus: the background track a map's `worldspawn` asks for |
+
+Each fader is a fraction of the mix the engine ships rather than an absolute gain, so 100% is
+`SopraEngine.defaultBuses()` untouched. That is not a flourish: the shipped mix is effects at
+**1.2** and music at **0.1**, so sliders that wrote linear gains and defaulted to 1.0 would quieten
+every effect and raise the background track by 20 dB on the first frame the menu applied its
+defaults — a settings screen that remixes the game by existing.
+
+**There is no motion blur row**, and it was removed rather than defaulted off (D-127). Q3 is played
+by people who come round a corner at 800 units a second and expect the room to be legible on the
+frame it appears in; a setting whose right answer is the same for every player of this game is a
+decision with a control in front of it. `Renderer`'s own field initialiser is `false` and nothing
+in the port names the flag, so the removal holds against a stale value in storage too.
+
+The graphics rows exist because **3.6.0 opened the smallest possible door** — a `renderer` getter
+with "Danger zone" written on it — and the shape of what came through it is worth stating: they are
+switches, and there is not a quality setting among them. The `GTAO` and `SSR` objects are a private
+field of `Renderer` with no getter, so they are out of reach with the renderer already in hand; the
+quality knobs that exist are call arguments `Renderer` hardcodes — `SSR.graph_pass`'s `mip`,
+`graph_postprocess_bloom`'s `intensity` and `mips` — and the shadow *resolution* is a module-private
+constant, as is the atlas size beside it. So there is no anti-aliasing row and no Low / Medium /
+High, and that is still GAP-024 — smaller than it was, and the menu says so in its own footer rather
+than looking thin for no reason (D-108, D-109). There is no supersampling for a second reason:
+`pixelRatio`, the one property that reaches it, throws on any scale that is not a whole number
+(BUG-11).
+
+**`MotionBlur` is the exception, and it points at the fix** — which is why the finding is kept
+although the row is gone. It is newer than GTAO and SSR and was built the other way round: the
+renderer owns one and hands it out, `get motion_blur()`, with the getter's docblock reading
+"Configure it via `renderer.motion_blur.*`". `dof` is the same. The flag and the tuning are
+deliberately separated and both are public — which is exactly the shape GAP-024 asks for, already in
+the package, for whatever the engine added most recently.
 
 A map picker and a match setup screen are the next two pages. The shell takes a list of pages and
-nothing in it names "graphics"; what is missing for maps is a manifest of what the pipeline has
+nothing in it names any of them; what is missing for maps is a manifest of what the pipeline has
 actually built (D-097, Q-008).
 
 | query parameter | effect |
@@ -208,12 +238,14 @@ what that difference is, and includes a claim I got wrong twice before getting i
 
 - **The menu**, on meep's `View` hierarchy over meep's own `Option` model, with the settings
   saved to IndexedDB. Escape opens it, the game keeps running behind it, and it is a shell over a
-  list of pages rather than a screen — a map picker and a match setup screen go in beside
-  Graphics without the shell changing (D-097). What is on the graphics page is bounded by what
-  the engine hands an application: most quality knobs behind `Renderer` are still out of reach,
-  which is GAP-024 for the second time, and the five rows over the renderer's own feature flags —
-  shadows, ambient occlusion, reflections, bloom and motion blur — are what 3.6.0 gave back, along
-  with the one tuning number of the five that has a getter (D-108, D-109).
+  list of pages rather than a screen — Gameplay, Graphics and Audio are three values in an array,
+  and a map picker and a match setup screen go in beside them without the shell changing (D-097,
+  D-126). What is on the graphics page is bounded by what the engine hands an application: most
+  quality knobs behind `Renderer` are still out of reach, which is GAP-024 for the second time,
+  and the four rows over the renderer's own feature flags — shadows, ambient occlusion,
+  reflections and bloom — are what 3.6.0 gave back (D-108, D-109). The audio page is three faders
+  over sopra's bus graph, and master is the one node in the mix that is not a bus: the probe
+  reverb's wet return joins below the tree, so the bus called `master` is not one (GAP-034).
 - **A stylesheet with defines.** `src/style/_tokens.scss` is the single source for colour, type,
   space, shape, motion and stacking; it emits the same values as `--queep-*` custom properties
   for runtime overrides, and feeds meep's own `--meep-*` theme hooks from the same variables

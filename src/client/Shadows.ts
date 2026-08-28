@@ -92,15 +92,25 @@ export type ShadowMode = 'off' | 'sun' | 'all';
 export const SHADOW_MODES: readonly ShadowMode[] = ['off', 'sun', 'all'];
 
 /**
- * Every light casts.
+ * The sun casts, and the map's own fixtures do not.
  *
- * The default is the expensive one deliberately. A converted map's lights are
- * reconstructed fixtures standing where the level's own lamps are, and having
- * them throw shadows is the difference between a room lit by a renderer and a
- * room lit by its light fittings. The two cheaper modes are for hardware that
- * cannot hold the frame rate, which is what a graphics menu is for.
+ * The middle mode, and it was the expensive one for a while: a converted map's
+ * lights are reconstructed fixtures standing where the level's own lamps are,
+ * and having them throw shadows is the difference between a room lit by a
+ * renderer and a room lit by its light fittings, which is a good enough picture
+ * to have been worth defaulting to.
+ *
+ * What decides it the other way is how many of them there are and what they are.
+ * A Q3 arena is lit by dozens of fixtures per room, all local, all of them
+ * shadow maps in one atlas whose size is a module-private constant, and the
+ * shadows they throw are short and mostly land on the geometry that already
+ * occludes them. The sun is the one light whose shadow is a shape a player reads
+ * -- the long edge across a courtyard -- and it is one light. So the mode that
+ * keeps the shadow worth having and drops the several dozen that mostly cost is
+ * the default, and `all` is a click away for anyone with the frame rate to spend
+ * on it. See D-128.
  */
-export const SHADOW_MODE_DEFAULT: ShadowMode = 'all';
+export const SHADOW_MODE_DEFAULT: ShadowMode = 'sun';
 
 /**
  * What a light is for, which is the whole of what decides whether it casts.

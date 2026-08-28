@@ -521,12 +521,24 @@ describe('the crosshair is Q3\'s, artwork and rules alike', () => {
         }
     });
 
-    it('defaults to the one `cg_drawCrosshair 4` selects', () => {
-        // `crosshairShader[i] = RegisterShader(va("gfx/2d/crosshair%c", 'a' + i))`,
-        // so 4 is 'e' -- a dot, which is not what most people picture and is
-        // what id shipped.
-        expect(CROSSHAIR_DEFAULT).toBe(4);
-        expect(crosshairTexture(CROSSHAIR_DEFAULT)).toContain('crosshaire');
+    /*
+     The one place this port disagrees with `cg_drawCrosshair`, and it is a
+     default rather than a restriction -- all ten are converted above and all ten
+     are on the menu.
+
+     `crosshairShader[i] = RegisterShader(va("gfx/2d/crosshair%c", 'a' + i))`, so
+     id's 4 is 'e', a dot. A dot is the most honest reticle there is and it is
+     hard to see against what this port draws, which is a lit-and-bloomed WebGPU
+     render rather than 1999's flat lightmaps. 3 is 'd', a cross with the centre
+     left empty. See D-129.
+    */
+    it("defaults to D, and id's E is still one of the ten", () => {
+        expect(CROSSHAIR_DEFAULT).toBe(3);
+        expect(crosshairTexture(CROSSHAIR_DEFAULT)).toContain('crosshaird');
+
+        // What `cg_drawCrosshair 4` selects, which `?crosshair=4` and the menu
+        // both still reach.
+        expect(crosshairTexture(4)).toContain('crosshaire');
     });
 
     it('wraps out-of-range selections the way `ca % NUM_CROSSHAIRS` does', () => {

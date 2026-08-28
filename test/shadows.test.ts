@@ -148,15 +148,26 @@ describe('which lights cast', () => {
         }
     }
 
-    it('starts with every light casting, which is what the request was', () => {
-        expect(SHADOW_MODE_DEFAULT).toBe('all');
+    /*
+     The middle mode, and it was `all` for a while (D-128). What decided it the
+     other way is the count: a Q3 arena is lit by dozens of local fixtures per
+     room, all of them shadow maps in one atlas, throwing short shadows that
+     mostly land on the geometry already occluding them -- while the sun is one
+     light throwing the one shadow a player reads as a shape.
+    */
+    it("starts with the sun casting and the map's own fixtures not", () => {
+        expect(SHADOW_MODE_DEFAULT).toBe('sun');
 
         const shadows = new Shadows();
 
-        expect(shadows.mode).toBe('all');
-        expect(shadows.casts('world')).toBe(true);
-        expect(shadows.casts('effect')).toBe(true);
+        expect(shadows.mode).toBe('sun');
         expect(shadows.casts('sun')).toBe(true);
+        expect(shadows.casts('world')).toBe(false);
+        expect(shadows.casts('effect')).toBe(false);
+
+        // And the expensive mode is still there to be chosen, which is the whole
+        // of what makes this a default.
+        expect(new Shadows(null, 'all').casts('world')).toBe(true);
     });
 
     it('gives a light source with no policy the flag it had before there was one', () => {

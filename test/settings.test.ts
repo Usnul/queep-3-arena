@@ -46,14 +46,23 @@ import {
     type ToggleSetting,
 } from '../src/client/ui/Settings.ts';
 import {
-    FOV_DEFAULT,
     FRAME_RATE_TARGET_DEFAULT,
-    MOTION_BLUR_STRENGTH_DEFAULT,
     graphicsPage,
-    type CameraHost,
     type GraphicsHost,
+    type GraphicsPageHosts,
 } from '../src/client/ui/graphics.ts';
-import type { Hud } from '../src/client/Hud.ts';
+import {
+    FOV_DEFAULT,
+    gameplayPage,
+    type CameraHost,
+} from '../src/client/ui/gameplay.ts';
+import {
+    VOLUME_DEFAULT,
+    audioPage,
+    type MasterHost,
+    type MixerHost,
+} from '../src/client/ui/audio.ts';
+import { CROSSHAIR_DEFAULT, type Hud } from '../src/client/Hud.ts';
 import { SHADOW_MODE_DEFAULT, Shadows } from '../src/client/Shadows.ts';
 
 /* ------------------------------------------------------------------ *
@@ -474,14 +483,14 @@ function fakeRenderer() {
         feature_ssr_enabled: false,
         feature_ssao_enabled: true,
         feature_bloom_enabled: true,
-        feature_motion_blur_enabled: false,
 
         /**
-         * `MotionBlur`, which the renderer builds in `init` and hands out
-         * through a getter. Its own initialiser, and the only settable number
-         * anywhere behind these five switches.
+         * `feature_motion_blur_enabled` is deliberately not here, and neither is
+         * the `MotionBlur` behind it. The port removed both rows (D-127), so the
+         * flag is the renderer's own `false` and nothing in this file should be
+         * able to name it -- a fixture that still carried the field would let a
+         * page quietly start writing it again without a test noticing.
          */
-        motion_blur: { strength: 1 },
 
         /**
          * IBL, which is what a map with no bake leaves it at. Written by the
@@ -612,15 +621,18 @@ function hosts(): {
     return { graphics, camera, hud, shadows: new Shadows(shade), shade };
 }
 
-/** The page, built against the stand-ins. */
+/** The graphics page, built against the stand-ins. */
 function pageFor(h: ReturnType<typeof hosts>): SettingsPage {
     return graphicsPage({
         graphics: h.graphics,
-        camera: h.camera,
-        hud: h.hud as unknown as Hud,
         frameRateCounter: null,
         shadows: h.shadows,
     });
+}
+
+/** The gameplay page, over the same stand-ins. */
+function gameplayFor(h: ReturnType<typeof hosts>): SettingsPage {
+    return gameplayPage({ camera: h.camera, hud: h.hud as unknown as Hud });
 }
 
 describe('the graphics page', () => {
@@ -630,11 +642,46 @@ describe('the graphics page', () => {
 
         settings.applyAll();
 
-        expect(h.camera.value).toBe(FOV_DEFAULT);
         expect(h.graphics.dynamic_resolution.target_frame_rate).toBe(FRAME_RATE_TARGET_DEFAULT);
-        expect(h.hud.crosshair).toBe(4);
-        expect(h.hud.crosshairHealth).toBe(true);
         expect(h.shadows.mode).toBe(SHADOW_MODE_DEFAULT);
+    });
+
+    /*
+     The rows that left. Asserted by absence rather than trusted, because the two
+     pages are built from the same `hosts()` and a row that failed to move would
+     be a duplicate id -- which `Settings` throws on -- only if *both* pages were
+     handed to it, and half of these tests hand it one.
+    */
+    it('is not where the gameplay rows are', () => {
+        const ids = pageFor(hosts()).settings.map((setting) => setting.id);
+
+        expect(ids).not.toContain('fov');
+        expect(ids).not.toContain('crosshair');
+        expect(ids).not.toContain('crosshair-health');
+    });
+
+    /*
+     Motion blur, which is gone from the menu entirely (D-127): a Quake player
+     wants the frame they turn onto to be readable, and the switch that was one
+     flag away was one nobody should move. The whole of how it stays off is that
+     nothing writes it -- `Renderer`'s own field initialiser is `false` -- so
+     what is worth a test is that nothing does.
+    */
+    it('has no motion-blur row, and does not reach for the flag behind one', () => {
+        const h = hosts();
+        const page = pageFor(h);
+        const ids = page.settings.map((setting) => setting.id);
+
+        expect(ids).not.toContain('motion-blur');
+        expect(ids).not.toContain('motion-blur-strength');
+
+        // And nothing on the page writes the flag by another name. `applyAll`
+        // pushes every row at the fixture; a renderer that never grew the
+        // property is one no row assigned.
+        new Settings([page]).applyAll();
+
+        expect('feature_motion_blur_enabled' in h.graphics.renderer).toBe(false);
+        expect('motion_blur' in h.graphics.renderer).toBe(false);
     });
 
     it('never hands the renderer a scale it refuses, at any step of the slider', () => {
@@ -760,19 +807,40 @@ describe('the graphics page', () => {
         expect(ids.indexOf('adaptive-resolution')).toBeLessThan(ids.indexOf('frame-rate-target'));
     });
 
-    it("offers Q3's ten crosshairs and no more", () => {
+    /*
+     Off, and off whether or not there is a panel -- which is the change worth an
+     assertion, because the row used to start at `frameRateCounter !== null` and
+     "on wherever it could be on" is a plausible thing for it to drift back to.
+    */
+    it('starts the frame-rate counter off, and hides a panel that exists', () => {
         const h = hosts();
-        const settings = new Settings([pageFor(h)]);
 
-        const crosshair = settings.definition('crosshair');
-        expect(crosshair.kind).toBe('choice');
+        /*
+         `stats.js` in an `EmptyView`, narrowed to the one property the row
+         writes. Cast because meep's `View` is a class with a good deal more on
+         it, and none of the rest is reachable from this row.
+        */
+        const panel = { visible: true };
 
-        if (crosshair.kind !== 'choice') return;
+        const settings = new Settings([
+            graphicsPage({
+                graphics: h.graphics,
+                frameRateCounter: panel as unknown as GraphicsPageHosts['frameRateCounter'],
+                shadows: h.shadows,
+            }),
+        ]);
 
-        expect(crosshair.options.map((o) => o.value)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        expect(crosshair.options.map((o) => o.label)).toEqual(
-            ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
-        );
+        expect(settings.get('frame-rate-counter')).toBe(false);
+        expect(settings.definition('frame-rate-counter').enabled?.()).toBe(true);
+
+        // Applied, not merely held: the panel is added by `addFrameRateCounter`
+        // before the menu exists and is visible when it arrives, so the default
+        // has to be pushed at it rather than assumed.
+        settings.applyAll();
+        expect(panel.visible).toBe(false);
+
+        expect(settings.set('frame-rate-counter', true)).toBe(true);
+        expect(panel.visible).toBe(true);
     });
 
     it('greys the frame-rate counter out when there is no panel to toggle', () => {
@@ -810,9 +878,19 @@ describe('the graphics page', () => {
         settings.applyAll();
         expect(h.shade.renderer.feature_shadows_enabled).toBe(true);
 
-        expect(settings.set('shadows', 'sun')).toBe(true);
+        /*
+         The default is the middle mode (D-128), so the page arrives with the
+         sun casting and the map's own fixtures not -- and both directions off
+         it are worth walking, because a `setMode` that ignored its argument
+         would agree with whichever one this test only asserted the default of.
+        */
         expect(h.shadows.mode).toBe('sun');
+        expect(h.shadows.casts('sun')).toBe(true);
         expect(h.shadows.casts('world')).toBe(false);
+
+        expect(settings.set('shadows', 'all')).toBe(true);
+        expect(h.shadows.mode).toBe('all');
+        expect(h.shadows.casts('world')).toBe(true);
 
         expect(settings.set('shadows', 'off')).toBe(true);
         expect(h.shade.renderer.feature_shadows_enabled).toBe(false);
@@ -824,8 +902,8 @@ describe('the graphics page', () => {
     });
 
     /*
-     The three `feature_*` rows. Worth their own assertions and not folded into
-     the defaults test above, because two of the three are the engine's own
+     The three `feature_*` rows that are left. Worth their own assertions and not
+     folded into the defaults test above, because all three are the engine's own
      initial value -- an `applyAll` that wrote nothing at all would pass a test
      that only compared them afterwards. So each one is moved off its default
      and back.
@@ -839,7 +917,6 @@ describe('the graphics page', () => {
         expect(h.graphics.renderer.feature_ssao_enabled).toBe(true);
         expect(h.graphics.renderer.feature_bloom_enabled).toBe(true);
         expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
-        expect(h.graphics.renderer.feature_motion_blur_enabled).toBe(false);
 
         expect(settings.set('ambient-occlusion', false)).toBe(true);
         expect(h.graphics.renderer.feature_ssao_enabled).toBe(false);
@@ -891,44 +968,6 @@ describe('the graphics page', () => {
     });
 
     /*
-     The one slider on this page that is a quality setting rather than a
-     resolution, and the one row whose default is an argument about the game: a
-     Quake player wants the frame they turn onto to be readable, so it is off.
-    */
-    it('carries the blur strength, and greys it out while the effect is off', () => {
-        const h = hosts();
-        const settings = new Settings([pageFor(h)]);
-
-        settings.applyAll();
-
-        expect(settings.get('motion-blur')).toBe(false);
-        expect(settings.get('motion-blur-strength')).toBe(MOTION_BLUR_STRENGTH_DEFAULT);
-        expect(settings.definition('motion-blur-strength').enabled?.()).toBe(false);
-
-        /*
-         Written while the effect is off, unlike the render scale: nothing else
-         owns this number, so the value is already right on the frame the toggle
-         moves. That is the assertion -- a row that only wrote when it was
-         enabled would leave the renderer at 1.0 for one frame of a blur the
-         player asked to be 2.5.
-        */
-        expect(settings.set('motion-blur-strength', 2.5)).toBe(true);
-        expect(h.graphics.renderer.motion_blur.strength).toBe(2.5);
-
-        expect(settings.set('motion-blur', true)).toBe(true);
-        expect(h.graphics.renderer.feature_motion_blur_enabled).toBe(true);
-        expect(settings.definition('motion-blur-strength').enabled?.()).toBe(true);
-
-        // The range is the engine's: past ~3 the reconstruction samples reach
-        // beyond what the NeighborMax dilation vouches for.
-        expect(settings.set('motion-blur-strength', 99)).toBe(true);
-        expect(h.graphics.renderer.motion_blur.strength).toBe(3);
-
-        expect(settings.set('motion-blur-strength', 0)).toBe(true);
-        expect(h.graphics.renderer.motion_blur.strength).toBe(0.5);
-    });
-
-    /*
      `GraphicsEngine3.renderer` is null before `start()` and after `stop()`, and
      its `.d.ts` says otherwise -- so this is the case TypeScript will not catch
      and the browser will. `applyAll` at startup is exactly where it would land.
@@ -938,8 +977,6 @@ describe('the graphics page', () => {
         const settings = new Settings([
             graphicsPage({
                 graphics: { ...h.graphics, renderer: null },
-                camera: h.camera,
-                hud: h.hud as unknown as Hud,
                 frameRateCounter: null,
                 shadows: h.shadows,
             }),
@@ -949,7 +986,298 @@ describe('the graphics page', () => {
         expect(settings.definition('reflections').enabled?.()).toBe(false);
 
         // The rows that do not need one still work.
+        expect(settings.set('adaptive-resolution', false)).toBe(true);
+        expect(settings.set('render-scale', 0.75)).toBe(true);
+        expect(h.graphics.renderer.internalScale).toBe(0.75);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The gameplay page
+ * ------------------------------------------------------------------ */
+
+/*
+ * The three rows that used to be on the graphics page, and the two defaults that
+ * changed on the way over. Their own block, because "the crosshair reaches the
+ * HUD" is the same assertion wherever the row is filed and the thing worth
+ * testing about the move is that it is complete: `Settings` throws on a
+ * duplicate id, so the two pages together are the check that no row was copied
+ * rather than moved.
+ */
+describe('the gameplay page', () => {
+    it('pushes its defaults at the camera and the HUD', () => {
+        const h = hosts();
+        const settings = new Settings([gameplayFor(h)]);
+
+        settings.applyAll();
+
+        expect(h.camera.value).toBe(FOV_DEFAULT);
+        expect(h.hud.crosshair).toBe(CROSSHAIR_DEFAULT);
+        expect(h.hud.crosshairHealth).toBe(true);
+    });
+
+    /*
+     `crosshaird` rather than id's `crosshaire`, which is the one place this port
+     disagrees with `cg_drawCrosshair`'s default (D-129). Written as the index
+     *and* the letter because the two are a `String.fromCharCode` apart and a
+     test that only checked the number would pass on a page that had renumbered
+     the options.
+    */
+    it("starts on D, which is not cg_drawCrosshair's own default", () => {
+        const h = hosts();
+        const settings = new Settings([gameplayFor(h)]);
+
+        const crosshair = settings.definition('crosshair');
+        expect(crosshair.kind).toBe('choice');
+        if (crosshair.kind !== 'choice') return;
+
+        expect(CROSSHAIR_DEFAULT).toBe(3);
+        expect(crosshair.initial).toBe(CROSSHAIR_DEFAULT);
+        expect(crosshair.options[CROSSHAIR_DEFAULT]?.label).toBe('D');
+
+        // And id's is still one of the ten on offer, which is the whole of what
+        // makes this a default rather than a decision taken away from anyone.
+        expect(crosshair.options.map((o) => o.value)).toContain(4);
+    });
+
+    it("offers Q3's ten crosshairs and no more", () => {
+        const h = hosts();
+        const settings = new Settings([gameplayFor(h)]);
+
+        const crosshair = settings.definition('crosshair');
+        expect(crosshair.kind).toBe('choice');
+
+        if (crosshair.kind !== 'choice') return;
+
+        expect(crosshair.options.map((o) => o.value)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(crosshair.options.map((o) => o.label)).toEqual(
+            ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
+        );
+    });
+
+    it('carries the field of view to the camera, within the range it offers', () => {
+        const h = hosts();
+        const settings = new Settings([gameplayFor(h)]);
+        settings.applyAll();
+
         expect(settings.set('fov', 110)).toBe(true);
         expect(h.camera.value).toBe(110);
+
+        // Q3's cvar clamps at 1 and 160; the row is narrowed to where the game
+        // is playable, and `coerce` clamps rather than refusing.
+        expect(settings.set('fov', 400)).toBe(true);
+        expect(h.camera.value).toBe(130);
+
+        expect(settings.set('fov', 1)).toBe(true);
+        expect(h.camera.value).toBe(60);
+    });
+
+    /*
+     The move itself. Both pages into one `Settings`, which is what `main.ts`
+     does -- and which throws on a duplicate id, so a row left behind on the
+     graphics page fails here rather than showing up twice in the menu.
+    */
+    it('shares no setting with the graphics page, and is built alongside it', () => {
+        const h = hosts();
+
+        const settings = new Settings([gameplayFor(h), pageFor(h)]);
+
+        expect(() => settings.applyAll()).not.toThrow();
+
+        expect(settings.definition('fov').section).toBe('View');
+        expect(settings.definition('crosshair').section).toBe('Reticle');
+        expect(settings.definition('shadows').section).toBe('Lighting');
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The audio page
+ * ------------------------------------------------------------------ */
+
+/**
+ * sopra's `BusGraph`, and the mix `SopraEngine.defaultBuses()` actually ships.
+ *
+ * The levels are the fixture's whole point and are the engine's own:
+ * `LEGACY_EFFECTS_VOLUME` is **1.2** and `LEGACY_MUSIC_VOLUME` is **0.1**, so
+ * the shipped mix is emphatically not flat. A page whose faders wrote linear
+ * gains would test green against a fixture that started every bus at 1, and
+ * would remix the game on the first frame against the engine.
+ */
+function fakeBuses(): MixerHost & { levels: Record<string, number> } {
+    const levels: Record<string, number> = {
+        master: 1,
+        effects: 1.2,
+        music: 0.1,
+        ambient: 1,
+    };
+
+    return {
+        levels,
+        has: (id: string): boolean => id in levels,
+        getVolume: (id: string): number => {
+            const level = levels[id];
+            if (level === undefined) throw new Error(`no such bus '${id}'`);
+            return level;
+        },
+        setVolume: (id: string, linear: number): void => {
+            if (!(id in levels)) throw new Error(`no such bus '${id}'`);
+            levels[id] = linear;
+        },
+    };
+}
+
+describe('the audio page', () => {
+    /*
+     The regression the whole design is arranged around. Faders that wrote
+     absolute gains and defaulted to 1.0 would, on the first frame `applyAll`
+     ran, drop every effect from 1.2 to 1.0 and raise the background track from
+     0.1 to 1.0 -- a settings screen that remixes the game by existing, in the
+     direction of a twenty-decibel music track.
+    */
+    it('leaves the shipped mix exactly where it was when it applies its defaults', () => {
+        const buses = fakeBuses();
+        const master = { volume: 1 };
+        const before = { ...buses.levels };
+
+        const settings = new Settings([audioPage({ master, buses })]);
+        settings.applyAll();
+
+        expect(buses.levels).toEqual(before);
+        expect(master.volume).toBe(1);
+    });
+
+    it('scales each bus by its fader rather than replacing it', () => {
+        const buses = fakeBuses();
+        const master = { volume: 1 };
+
+        const settings = new Settings([audioPage({ master, buses })]);
+        settings.applyAll();
+
+        expect(settings.set('volume-music', 0.5)).toBe(true);
+        expect(buses.levels['music']).toBeCloseTo(0.05, 10);
+
+        // Half of the shipped 1.2, and not 0.5.
+        expect(settings.set('volume-effects', 0.5)).toBe(true);
+        expect(buses.levels['effects']).toBeCloseTo(0.6, 10);
+
+        // All the way down is silence, and all the way back up is the mix as
+        // shipped -- a multiplier has to be able to return to where it started.
+        expect(settings.set('volume-effects', 0)).toBe(true);
+        expect(buses.levels['effects']).toBe(0);
+
+        expect(settings.set('volume-effects', VOLUME_DEFAULT)).toBe(true);
+        expect(buses.levels['effects']).toBeCloseTo(1.2, 10);
+    });
+
+    /*
+     One row over two buses. `AudioBank` sends one-shots to `effects` and looping
+     map speakers to `ambient`, which is a mixing distinction and not one a
+     player has a word for -- so a fader that moved only the first would leave
+     the fire in the corner of `oa_dm5` roaring away under a volume control the
+     player had set to zero.
+    */
+    it('takes the looping ambience down with the effects', () => {
+        const buses = fakeBuses();
+        const settings = new Settings([audioPage({ master: { volume: 1 }, buses })]);
+        settings.applyAll();
+
+        settings.set('volume-effects', 0);
+
+        expect(buses.levels['effects']).toBe(0);
+        expect(buses.levels['ambient']).toBe(0);
+
+        // ...and nothing else moved with them.
+        expect(buses.levels['music']).toBeCloseTo(0.1, 10);
+        expect(buses.levels['master']).toBe(1);
+    });
+
+    /*
+     Master is the `SoundEngine`'s gain node and not sopra's `master` bus, and
+     the difference is audible rather than academic: `ProbeReverbRenderer` mixes
+     its wet return into `sound.destination`, below the bus tree, so a master
+     fader on the bus would take the dry signal to zero and leave the
+     reverberation of it at full level.
+    */
+    it('writes master below the bus tree, where the reverb return also lands', () => {
+        const buses = fakeBuses();
+        const master = { volume: 1 };
+
+        const settings = new Settings([audioPage({ master, buses })]);
+        settings.applyAll();
+
+        expect(settings.set('volume-master', 0)).toBe(true);
+        expect(master.volume).toBe(0);
+
+        // The bus is untouched. If this ever fails, the wet tail of every sound
+        // survives a master fader set to silence.
+        expect(buses.levels['master']).toBe(1);
+    });
+
+    /*
+     No `AudioContext`, which is a browser decision and not an error, and no
+     sopra engine, which is what a run with no sound systems looks like.
+     `applyAll` runs at startup either way.
+    */
+    it('applies with no sound engine at all', () => {
+        const settings = new Settings([audioPage({ master: null, buses: null })]);
+
+        expect(() => settings.applyAll()).not.toThrow();
+
+        // The values are still held and still saved -- a session that had no
+        // audio should not forget the levels a session that did had chosen.
+        expect(settings.set('volume-music', 0.25)).toBe(true);
+        expect(settings.get('volume-music')).toBe(0.25);
+    });
+
+    /*
+     `SopraEngine.setBuses` takes any list of `BusDefinition`s, so the bus tree
+     is not a constant, and a page that assumed the four default ids would throw
+     out of `getVolume` on a game that had replaced it.
+    */
+    it('ignores a bus the mixer does not have', () => {
+        const buses = fakeBuses();
+        delete buses.levels['music'];
+
+        const settings = new Settings([audioPage({ master: { volume: 1 }, buses })]);
+
+        expect(() => settings.applyAll()).not.toThrow();
+
+        expect(settings.set('volume-music', 0.5)).toBe(true);
+        expect(settings.get('volume-music')).toBe(0.5);
+        expect(buses.has('music')).toBe(false);
+
+        // The two that are there still work.
+        settings.set('volume-effects', 0.5);
+        expect(buses.levels['effects']).toBeCloseTo(0.6, 10);
+    });
+
+    /*
+     A fader is a fraction of the shipped mix, and the fraction is what is
+     stored. So a level chosen in one session has to mean the same thing in the
+     next -- which it does only because the shipped level is read at page build,
+     before anything has written to it, rather than read back off the bus. A page
+     that read the bus lazily would compound its own output and the mix would
+     ratchet down one reload at a time.
+    */
+    it('means the same thing after a reload as it did before one', async () => {
+        const buses = fakeBuses();
+        const store = memoryStorage();
+
+        const first = new Settings([audioPage({ master: { volume: 1 }, buses })]);
+        await first.attach(store);
+        first.applyAll();
+
+        first.set('volume-effects', 0.4);
+        expect(buses.levels['effects']).toBeCloseTo(0.48, 10);
+
+        // A second session, over a mixer back at the shipped mix because the
+        // engine builds it fresh.
+        const reloaded = fakeBuses();
+        const second = new Settings([audioPage({ master: { volume: 1 }, buses: reloaded })]);
+        await second.attach(store);
+        second.applyAll();
+
+        expect(second.get('volume-effects')).toBe(0.4);
+        expect(reloaded.levels['effects']).toBeCloseTo(0.48, 10);
     });
 });

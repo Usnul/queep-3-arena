@@ -87,6 +87,8 @@ import { takePointerLock } from '../client/pointerLock.ts';
 import { Menu } from '../client/ui/Menu.ts';
 import { Settings, type SettingsStorage } from '../client/ui/Settings.ts';
 import { graphicsPage } from '../client/ui/graphics.ts';
+import { gameplayPage } from '../client/ui/gameplay.ts';
+import { audioPage, type MasterHost, type MixerHost } from '../client/ui/audio.ts';
 import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
 import { buildRoster } from './roster.ts';
 import { CharacterBodies } from '../client/CharacterBody.ts';
@@ -122,9 +124,9 @@ function requestedMap(): string {
 /**
  * `?crosshair=N` picks one of Q3's ten, exactly as `cg_drawCrosshair` does.
  *
- * Defaults to Q3's own default, which is a dot rather than the cross most
- * people picture. All ten convert, so disagreeing with id about that is a
- * query parameter rather than a rebuild -- or, now, the menu.
+ * Defaults to `CROSSHAIR_DEFAULT`, which is D and is *not* id's own default of
+ * E -- a dot, which this port draws a busier picture behind than Q3 did (D-129).
+ * All ten convert, so `?crosshair=4` is id's back, and so is the menu.
  *
  * `null` for "not asked for", which is what lets the parameter beat the stored
  * setting without a stored setting having to lose to an absent parameter.
@@ -606,9 +608,29 @@ async function main(): Promise<void> {
      `camera` and not `graphics.camera.camera` this time -- unlike the view
      weapon (D-081), this writes a value that `CameraSystem3` copies forward
      rather than reads a pose it has already copied.
+
+     Three pages, in the order a player wants them rather than the order they
+     were written (D-126). Each is a value and the shell takes any number of
+     them, which is what D-097 built it for.
+
+     The audio page is handed two nulls' worth of honesty. `engine.sound` is null
+     when the browser would not give the engine an `AudioContext`, and the sopra
+     bus graph does not exist until some sound system has called `obtainSopra` --
+     which `AudioEmitterSystem`'s constructor does, so `emitters` is the thing
+     that knows. Neither is an error and the page builds either way.
+
+     The cast is the same shape as the storage one below and for the same reason.
+     `SoundEngine` installs `volume` with `Object.defineProperties`, so it is a
+     real accessor over the master gain node that `SoundEngine.d.ts` -- which
+     declares only the fields assigned through `this` -- cannot see. GAP-034.
     */
     const settings = new Settings([
-        graphicsPage({ graphics, camera, hud, frameRateCounter, shadows }),
+        gameplayPage({ camera, hud }),
+        graphicsPage({ graphics, frameRateCounter, shadows }),
+        audioPage({
+            master: sound as unknown as MasterHost | null,
+            buses: (emitters?.sopra.busGraph as MixerHost | undefined) ?? null,
+        }),
     ]);
 
     settings.applyAll();

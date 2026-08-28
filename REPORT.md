@@ -2000,6 +2000,18 @@ That is an accurate description of a component that cannot be used for its state
 - **Suggested fix:** type the parameter structurally -- `{addManySystems(...systems: System[]): void}` -- or return the systems and let the caller register them. The second is smaller and composes with both registration routes.
 - **Evidence:** `node_modules/@woosh/meep-engine/src/engine/sound/simulation/configureAcousticSimulation.js:34-48`, `src/engine/EngineConfiguration.js:88-111,160-181`, `src/app/main.ts`
 
+### GAP-034: `SoundEngine.volume` is the only master fader in the graph and is invisible to TypeScript
+
+- **Needed:** a master volume slider on the settings screen, and one that also brings the reverberation down.
+- **meep offers:** the right node, in the right place. `SoundEngine`'s constructor builds a `GainNode`, keeps it as `this.destination`, wires it into a `DynamicsCompressor` and then the context destination, and installs a `volume` accessor over its `gain` with `Object.defineProperties`. Everything is downstream of it: `obtainSopra` passes `this.destination` as the sopra bus tree's output, and `ProbeReverbRenderer` is constructed against the same node, so the dry mix and the wet return both pass through that one gain. It is exactly the fader a settings screen wants.
+- **The gap:** `SoundEngine.d.ts` declares `sopra`, `context`, `destination` and the four methods — the members assigned through `this` — and not `volume`, because the generator does not see a property installed by `Object.defineProperties`. So `sound.volume = 0.5` is a compile error against a property that exists and works. This is GAP-001's failure mode with a different cause and the same result, and it is worth separating because the fix is not "add the missing import": the declaration generator would have to read `defineProperty`/`defineProperties` calls in a constructor, or the class would have to use a `get`/`set` pair.
+- **Why the obvious alternative is wrong**, and this is the part worth the entry: sopra's bus tree has a bus literally called `master`, `busGraph.setVolume('master', v)` typechecks, and it is **not** a master. The probe reverb's return joins below the tree, so a master fader on that bus takes the dry signal to silence and leaves the wet tail of every sound at full level — audible, and audible only in the reverberant rooms, which is the hardest kind of bug to be handed. The typed door leads somewhere plausible and wrong; the untyped one is correct.
+- **Workaround:** a two-line structural interface (`{ volume: number }`) and one `as unknown as` at the call site, the same shape as GAP-029's (`src/client/ui/audio.ts`, `src/app/main.ts`).
+- **Severity:** papercut on its own; minor together with the trap above, because the shape of the mistake is "reach for the thing that compiles".
+- **Suggested fix:** declare it. `/** @type {number} */ volume;` beside `destination` would do, or convert the `defineProperties` block to a real accessor pair — the class is already an ES class and the block predates that. Separately, and worth more: a line in `SoundEngine`'s docblock saying which node is downstream of everything, since the answer is not the one called master.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/sound/SoundEngine.js:48-66,81-87`, `src/engine/sound/SoundEngine.d.ts:6-16`, `src/engine/sound/sopra/SopraEngine.js:126-133`, `src/engine/sound/simulation/render/ProbeReverbRenderer.js`, `src/client/ui/audio.ts`
+
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.

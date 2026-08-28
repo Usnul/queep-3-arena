@@ -91,8 +91,21 @@ const PICKUP_SECONDS = 3;
  */
 const CROSSHAIR_FRACTION = 24 / 480;
 
-/** `cg_drawCrosshair`, whose default is 4 in both Q3 and OpenArena. */
-export const CROSSHAIR_DEFAULT = 4;
+/**
+ * `cg_drawCrosshair`, and the one place this port disagrees with id about it.
+ *
+ * `cg_drawCrosshair` defaults to 4 in both Q3 and OpenArena, and 4 is `crosshaire`
+ * -- a dot. A dot is the most honest reticle there is and it is very hard to see
+ * against this port's picture, which is a lit-and-bloomed WebGPU render rather
+ * than 1999's flat lightmaps: the thing a crosshair has to stay legible against
+ * got considerably busier. 3 is `crosshaird`, a cross with a gap at the centre,
+ * which reads at a glance on a bright wall and still leaves the point of aim
+ * empty.
+ *
+ * A default rather than a restriction -- all ten convert, the menu offers all
+ * ten, and `?crosshair=4` is id's back in one query parameter. See D-129.
+ */
+export const CROSSHAIR_DEFAULT = 3;
 
 export interface HudOptions {
     /** `cg_drawCrosshair`: which of `gfx/2d/crosshair[a-j]` to draw. */
