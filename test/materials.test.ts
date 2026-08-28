@@ -1572,8 +1572,31 @@ describe('a pane of glass is a transparent interface and not a transparent image
         const m = project(DSIGLASS);
 
         expect(m.transparency).toBe('blend');
-        expect(m.transmission, 'clear: no diffuse base left at all').toBe(1);
         expect(m.ior, 'F0 = 0.04').toBe(1.5);
+        expect(m.transmission).toBeGreaterThan(0);
+    });
+
+    /*
+     Coverage is `mix(surface_alpha, F_scalar, transmission)` and the OIT resolve
+     premultiplies by it, so transmission 1 hands the whole pane to a Fresnel
+     term worth 0.04 head-on. With no SSR under Brick4 (D-109) there is nothing
+     for that 4% to show, and shipping it made these windows vanish. The floor is
+     what stops that, and it is the property worth pinning rather than the
+     particular value: `surface_alpha` is 0.196 for this material, so anything
+     short of full transmission leaves a tenth of the background covered.
+    */
+    it('keeps a coverage floor, so the pane does not disappear head-on', () => {
+        const m = project(DSIGLASS);
+
+        expect(m.transmission, 'never fully transmissive in this renderer').toBeLessThan(1);
+
+        const SURFACE_ALPHA = 0.196; // one texel of the flattened tinfx, measured
+        const F0 = 0.04;
+        const headOn = SURFACE_ALPHA * (1 - m.transmission) + F0 * m.transmission;
+        const grazing = SURFACE_ALPHA * (1 - m.transmission) + 1 * m.transmission;
+
+        expect(headOn, 'visible looking straight at it').toBeGreaterThan(0.05);
+        expect(grazing / headOn, 'and markedly brighter edge-on').toBeGreaterThan(3);
     });
 
     /*
@@ -1583,18 +1606,33 @@ describe('a pane of glass is a transparent interface and not a transparent image
      which is the only thing a fully transmissive surface has left -- smears into
      the haze this change is about.
     */
-    it('is smooth, because a blended material has no ORM to carry roughness for it', () => {
+    /*
+     A blended material is owed no generated ORM, so this number is the one the
+     renderer uses rather than a multiplier over a sampled one. It wants to be
+     smoother than the 0.85 default, which was picked for concrete — but not
+     mirror-smooth, because with no SSR the direct highlight is most of what
+     sells the surface and at 0.05 it is a pinpoint nobody lines up with.
+    */
+    it('is smoother than concrete and rougher than a mirror', () => {
         const m = project(DSIGLASS);
 
         expect(m.orm).toBeNull();
-        expect(m.roughness).toBeLessThan(0.2);
+        expect(m.roughness).toBeGreaterThan(0.1);
+        expect(m.roughness).toBeLessThan(0.4);
     });
 
-    it('stops emitting the fake reflection that is now computed for real', () => {
+    /*
+     An earlier version dropped this, on the argument that the additive pass is a
+     reflection the renderer now computes for real. It does not compute it on any
+     map with a baked light volume, so the drop left the pane with no colour
+     behind what coverage it had. The transmission is what fixes the flat-film
+     look, by putting this brightness under a Fresnel curve.
+    */
+    it('keeps the additive pass, which is the only reflection it gets', () => {
         const m = project(DSIGLASS);
 
-        expect(m.emissive, 'a `tcGen environment` pass is a reflection, not a glow').toBeNull();
-        expect(m.emissiveLuminance).toBe(0);
+        expect(m.emissive).toBe('textures/effects/tinfx');
+        expect(m.emissiveLuminance).toBeGreaterThan(0);
     });
 
     /*
@@ -1652,9 +1690,9 @@ textures/liquids/clear_calm1
     }
 }`);
 
-        expect(m.transmission).toBe(1);
+        expect(m.transmission).toBeGreaterThan(0);
+        expect(m.transmission, 'a coverage floor, as for the glass').toBeLessThan(1);
         expect(m.ior, 'F0 = 0.02, half of glass').toBeCloseTo(1.333, 3);
-        expect(m.emissive, 'the brightening passes were never a glow either').toBeNull();
     });
 
     /*
@@ -1741,7 +1779,7 @@ textures/liquids2/clear_ripple1_q3dm1light
     }
 }`);
 
-        expect(m.transmission).toBe(1);
+        expect(m.transmission).toBeGreaterThan(0);
         expect(m.emissive).not.toBeNull();
         expect(m.emissiveLuminance).toBeGreaterThan(0);
     });
@@ -1765,15 +1803,16 @@ describe('the built maps carry the transmissive surfaces', () => {
         ) as TransBundle,
     }));
 
-    it('has am_thornishs glass, transmitting and no longer glowing', () => {
+    it('has am_thornishs glass, transmitting and still visible', () => {
         const map = built.find((b) => b.name === 'am_thornish')!;
         const glass = map.bundle.materials.find((m) => m.name === 'textures/dsi/dsiglass');
 
         expect(glass, 'am_thornish still has its window panels').toBeDefined();
-        expect(glass!.transmission).toBe(1);
+        expect(glass!.transmission).toBeGreaterThan(0);
+        expect(glass!.transmission, 'and not so transmissive it vanishes').toBeLessThan(1);
         expect(glass!.ior).toBe(1.5);
-        expect(glass!.roughness).toBeLessThan(0.2);
-        expect(glass!.emissive).toBeNull();
+        expect(glass!.roughness).toBeLessThan(0.4);
+        expect(glass!.emissive, 'its reflection stand-in').not.toBeNull();
     });
 
     /*

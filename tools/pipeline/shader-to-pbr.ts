@@ -302,14 +302,46 @@ const IOR_WATER = 1.333;
  * these surfaces does today -- so an unlisted shader is unchanged rather than
  * wrong.
  *
+ * # Why transmission is never 1 here, even for a pane that really is clear
+ *
+ * `opacity = mix(surface_alpha, F_scalar, transmission)`, and the OIT resolve
+ * premultiplies -- `color * coverage` -- so coverage scales everything the
+ * surface shows, its emissive included. At transmission 1 a dielectric's
+ * coverage *is* its Fresnel term, which is F0 = 0.04 looking straight at it.
+ * That is correct physics and it is invisible here, because the 4% is 4% of a
+ * reflection this renderer does not compute: every map with a baked light volume
+ * runs in Brick4, and D-109 records that SSR there is not merely off but cannot
+ * be switched on. What is left is the ambient probe, which in a Q3 interior is
+ * dim.
+ *
+ * Shipping transmission 1 made `am_thornish`'s windows disappear outright. So
+ * each entry names a transmission that leaves coverage a floor while still
+ * letting Fresnel carry the view dependence. `dsiglass`'s albedo is one texel at
+ * alpha 0.196, so at 0.6 the pane covers `mix(0.196, 0.04, 0.6)` = 10% of the
+ * background head-on and 68% edge-on: something you can see, walk into, and
+ * watch brighten as you turn past it.
+ *
+ * # The additive pass stays, because it is the only reflection there is
+ *
+ * An earlier version of this dropped the emissive, arguing that a `blendfunc
+ * add` of an environment map is a reflection and the renderer now computes
+ * reflections for real. The second half is false on these maps, for the reason
+ * just given, and dropping it left the pane with no colour to show through the
+ * coverage it had left. Q3's pane *added* light and this port has to as well.
+ * What transmission buys is not the removal of that addition but its modulation:
+ * a flat film before, and now a sheet that is faint head-on and bright at a
+ * glancing angle, which is the behaviour that reads as glass.
+ *
  * # Roughness has to come with it
  *
  * A blended material is owed no generated ORM (see `derivedFrom` below), so its
  * `roughness` *is* the number the renderer uses rather than a multiplier over a
  * sampled one. {@link DEFAULT_ROUGHNESS} is 0.85, chosen for concrete and
- * painted metal, and on a window it is frosting: it smears the Fresnel
- * reflection into a haze at exactly the moment transmission has made that
- * reflection the only thing the surface has. Each entry states its own.
+ * painted metal, and on a window it is frosting. It is also what decides how
+ * broadly the room's lights smear across the pane, and with no SSR that direct
+ * highlight is most of what sells the surface: at 0.05 it is a pinpoint nobody
+ * ever stands in line with. Each entry states its own, in the 0.15-0.2 band
+ * rather than at mirror smoothness.
  */
 interface TransmissiveSurface {
     /** Fraction of the dielectric base that transmits. 1 is clear. */
@@ -321,13 +353,13 @@ interface TransmissiveSurface {
 
 export const TRANSMISSIVE: Readonly<Record<string, TransmissiveSurface>> = {
     'textures/dsi/dsiglass': {
-        transmission: 1,
-        roughness: 0.05,
+        transmission: 0.6,
+        roughness: 0.2,
         note: "am_thornish's window panels. One `blendfunc add` pass of textures/effects/tinfx through `tcGen environment`, over a lightmap: Q3 for a clear pane with a chrome reflection on it. The reflection becomes a real one.",
     },
     'textures/pulchr/pulglass': {
-        transmission: 1,
-        roughness: 0.05,
+        transmission: 0.6,
+        roughness: 0.2,
         note: 'The same shader without the lightmap stage, on tinfx2. No map in the shipped six uses it.',
     },
 
@@ -346,43 +378,43 @@ export const TRANSMISSIVE: Readonly<Record<string, TransmissiveSurface>> = {
      {@link IOR_WATER}, which is the part of this that is true of all water.
     */
     'textures/liquids/clear_calm1': {
-        transmission: 1,
-        roughness: 0.08,
+        transmission: 0.5,
+        roughness: 0.15,
         note: 'am_thornish and oa_dm7.',
     },
     'textures/liquids/clear_calm2': {
-        transmission: 1,
-        roughness: 0.08,
+        transmission: 0.5,
+        roughness: 0.15,
         note: 'Not used by the shipped six.',
     },
     'textures/liquids/clear_ripple1': {
-        transmission: 1,
-        roughness: 0.1,
+        transmission: 0.5,
+        roughness: 0.2,
         note: 'Rippled by `deformVertexes wave`, which this projection drops, so the roughness carries what is left of it.',
     },
     'textures/liquids/clear_ripple2': {
-        transmission: 1,
-        roughness: 0.1,
+        transmission: 0.5,
+        roughness: 0.2,
         note: 'As clear_ripple1, at half the wave amplitude.',
     },
     'textures/liquids/clear_ripple3': {
-        transmission: 1,
-        roughness: 0.1,
+        transmission: 0.5,
+        roughness: 0.2,
         note: 'As clear_ripple1.',
     },
     'textures/liquids2/clear_calm1v': {
-        transmission: 1,
-        roughness: 0.08,
+        transmission: 0.5,
+        roughness: 0.15,
         note: 'The liquids2 variants add a `tcGen environment` sky pass over the same pool images.',
     },
     'textures/liquids2/clear_ripple1_q3dm1v': {
-        transmission: 1,
-        roughness: 0.1,
+        transmission: 0.5,
+        roughness: 0.2,
         note: 'As clear_calm1v, rippled.',
     },
     'textures/liquids2/clear_ripple1_q3dm1light': {
-        transmission: 1,
-        roughness: 0.1,
+        transmission: 0.5,
+        roughness: 0.2,
         note: 'The same again, declaring `q3map_surfacelight 100`, so it keeps its emissive and the light convert-map fits to it.',
     },
 };
@@ -812,25 +844,12 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
     }
 
     /*
-     A transmissive surface's additive pass is a reflection, and a reflection is
-     not a light source.
-
-     This undoes D-079's restatement for exactly the shaders the table names,
-     and it has to. That rule reads a `blendfunc add` stage as a glow map, which
-     is right for a beam and a flame -- their colour has to be emitted or the
-     room they light ends up lighting them. On a window it is wrong twice over:
-     `dsiglass` emitted the mean colour of `textures/effects/tinfx` at
-     {@link UNLIT_LUMINANCE} across the whole pane, so the glass was a uniform
-     luminous haze, and that haze *was* the fake reflection -- the very thing
-     `transmission_factor` and the IBL now compute for real. Keeping both would
-     draw the reflection twice, once as physics and once as paint.
-
-     A declared `q3map_surfacelight` is the exception and keeps its emissive:
-     `liquids2/clear_ripple1_q3dm1light` is a lit pool, the map's light
-     compiler was told so, and `convert-map.ts` fits a real light to it. That is
-     a statement about the surface rather than an artefact of how it was blended.
+     A transmissive surface keeps its additive pass. D-079's restatement is left
+     alone here on purpose -- see the note on {@link TRANSMISSIVE}: with no SSR
+     under Brick4 that pass is the only reflection the pane gets, and taking it
+     away leaves nothing behind the coverage. It is the transmission that fixes
+     the flat-film look, by putting that brightness under a Fresnel curve.
     */
-    if (transmissive !== null && surfaceLight === 0) emissive = null;
 
     /*
      Q3 had no notion of roughness or metalness, so both are conventions rather

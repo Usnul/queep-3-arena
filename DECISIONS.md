@@ -4956,18 +4956,17 @@ volume you can be inside of", not "this liquid is water".
 
 **Roughness had to come with it.** A blended material is owed no generated ORM, so its `roughness`
 *is* the number the renderer uses rather than a multiplier over a sampled one, and the 0.85 default
-was chosen for concrete and painted metal. On a window it is frosting — it smears the Fresnel
-reflection into a haze at exactly the moment transmission has made that reflection the only thing
-the surface has left. Each entry states its own: 0.05 for glass, 0.08 and 0.1 for calm and rippled
-water, the latter carrying what is left of a `deformVertexes wave` this projection drops.
+was chosen for concrete and painted metal. On a window it is frosting. It also decides how broadly
+the room's lights smear across the pane, and with no screen-space reflections that direct highlight
+is most of what sells the surface — at mirror smoothness it is a pinpoint nobody ever stands in line
+with. Each entry states its own, in the 0.15–0.2 band: 0.2 for glass, 0.15 for calm water and 0.2
+for rippled, the latter carrying what is left of a `deformVertexes wave` this projection drops.
 
-**And a transmissive surface stops emitting.** D-079's restatement is undone for exactly the shaders
-the table names, because on a window the additive pass is a reflection and a reflection is not a
-light source; keeping it would draw the reflection twice, once as physics and once as paint. A
-declared `q3map_surfacelight` is the exception and keeps its emissive —
-`liquids2/clear_ripple1_q3dm1light` is a lit pool, the light compiler was told so, and `convert-map.ts`
-fits a real light to it. That is a statement about the surface rather than an artefact of how it was
-blended.
+**And the additive pass stays, which took a wrong turn to establish.** The first version of this
+dropped it, reasoning that on a window the additive pass is a reflection, a reflection is not a light
+source, and keeping it alongside `transmission_factor` would draw the reflection twice — once as
+physics and once as paint. The second half of that is false on these maps, and the correction below
+is where the reasoning is.
 
 **What is deliberately left alone.** The tinted and murky waters stay on the alpha-blend path, which
 is what meep's own note says to do without a per-channel transmission tint: making
@@ -4979,7 +4978,40 @@ water instead of matching it.
 
 **The size of it.** Across the shipped six, two materials became transmissive — `dsi/dsiglass` on
 `am_thornish` and `liquids/clear_calm1` on `am_thornish` and `oa_dm7` — and three took the water
-index. Nothing else in any bundle moved except two emissive images that no material references any
-more. Verified on the running app rather than argued: the live `StandardShadeMaterial` for the glass
-reads `transmission_factor: 1`, `ior_factor: 1.5`, `roughness_factor: 0.05` and no emissive texture,
-while `textures/sfx/beam` beside it is untouched at 0 / 1.5 / 0.85 with its glow intact.
+index. Nothing else in any bundle moved at all. Verified on the running app rather than argued: the
+live `StandardShadeMaterial` for the glass reads `transmission_factor: 0.6`, `ior_factor: 1.5`,
+`roughness_factor: 0.2` with its emissive intact, while `textures/sfx/beam` beside it is untouched at
+0 / 1.5 / 0.85.
+
+#### The correction: transmission 1 is right, and it made the windows disappear
+
+The version first committed set `transmission: 1` for glass and clear water and deleted their
+emissive. Loaded, `am_thornish`'s panels were not subtle — they were *gone*, nothing visible at all
+where the glass should be. Three facts multiply out to that, and the third is the one that was not
+checked:
+
+- `opacity = mix(surface_alpha, F_scalar, transmission)`. At transmission 1 the coverage of a
+  dielectric *is* its Fresnel term, and F0 = 0.04 looking straight at it.
+- The OIT resolve premultiplies — `color * coverage` in `shader_oit_resolve_moments` — so coverage
+  scales everything the surface shows, emissive included. There is no channel that escapes it.
+- **There is no reflection for that 4% to show.** Every map with a baked light volume runs in
+  Brick4, which is the common case and not the corner (D-107), and D-109 already recorded that SSR
+  there is not merely off by default but *cannot be switched on* — the row refuses to be written.
+  What is left is the ambient probe's radiance, which in a Q3 interior is dim.
+
+So "the renderer now computes the reflection for real" — the argument for deleting the emissive —
+was simply untrue on these maps. Deleting it removed the pane's only colour; transmission 1 removed
+its only coverage. Between them the surface had nothing left to draw.
+
+The fix keeps both halves and moderates each. The emissive stays, because it *is* the reflection
+here, and transmission stops at 0.6 for glass and 0.5 for water so coverage keeps a floor while
+Fresnel still carries the view dependence. `dsiglass`'s albedo is one texel at alpha 0.196, so the
+pane now covers 10.2% of the background head-on and 67.8% edge-on, against a flat 19.6% before any
+of this. Half as assertive as the original film when you look straight at it, three and a half times
+as bright when you look along it — which is the difference between a grey sheet and a pane of glass.
+
+The general lesson is the one D-077 already paid for once: a claim about what the renderer computes
+has to be checked against the renderer that is actually running, and the renderer that is actually
+running here is Brick4 on every map with a bake. The material was verified end to end and the
+*scene* was not, because this app runs in a hidden tab where compositing is dead and screenshots
+fail. Reading a material back proves plumbing; it cannot prove a surface is visible.
