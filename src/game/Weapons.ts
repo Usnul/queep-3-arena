@@ -174,6 +174,16 @@ export interface WeaponEvents {
     /**
      * One hitscan ray, from where the gun is to where the shot stopped.
      *
+     * **The C's nearest thing is `CG_Bullet`**, which is handed the shot's `end`,
+     * recovers its `start` with `CG_CalcMuzzlePoint` and then decides for itself
+     * whether to draw anything -- a `CG_Tracer` dash two times in five for the
+     * bullet weapons, and nothing at all for the shotgun, whose pellets go
+     * through `CG_ShotgunPellet` and never reach it. The railgun and the
+     * lightning gun do not come through there at all; they are `CG_RailTrail` off
+     * an event and a per-frame `RT_LIGHTNING` beam respectively. `Effects`
+     * collapses all of that into one table and this event feeds it; the whole
+     * comparison is written out at `HITSCAN_TRAILS`.
+     *
      * Raised for **every** ray, which is what separates it from
      * `bulletImpact`: a shot that hit a player leaves no mark, and a shot that
      * hit nothing at all does not reach an impact of any kind, and both of them

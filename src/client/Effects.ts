@@ -12,9 +12,21 @@
  *
  * Q3's `cg_effects.c` and `cg_localents.c` are in the bin, per the brief. Every
  * effect here is meep's own: `ParticleEmitter` for smoke and sparks, `Decal` for
- * impact marks, `Light` for the flash. What survives from Q3 is the *artwork*
- * and the *timing* -- a rocket explosion still lights the room for the same
- * fraction of a second.
+ * impact marks, `Trail3D` for shot trails, `Light` for the flash. What survives
+ * from Q3 is the *artwork* and the *timing* -- a rocket explosion still lights
+ * the room for the same fraction of a second.
+ *
+ * # Where each of these is in the C, and how faithful it is
+ *
+ * Worth stating up front, because three of the four collapse several unrelated
+ * pieces of Q3 into one mechanism and the numbers in them read as ported:
+ *
+ * | here | the C | how close |
+ * | --- | --- | --- |
+ * | {@link Effects.impactMark} | `CG_MissileHitWall`'s mark table, `CG_ImpactMark`, `CG_AddMarks` | the table, the radii and both fade curves are the C's |
+ * | {@link Effects.explosion} | `CG_MissileHitWall`'s `CG_MakeExplosion` half | timing only; the fireball is particles where Q3 has a sprite model |
+ * | {@link Effects.muzzleFlash} | `CG_RegisterWeapon`'s `flashDlightColor` | colour and reach are the C's, brightness is not (see `muzzleFlash.ts`) |
+ * | {@link Effects.hitscanTrail} | **three** unrelated things -- see {@link HITSCAN_TRAILS} | one mechanism where Q3 has three; numbers are the C's where the C has any |
  *
  * Everything is created in **meep space**: metres, Y up. Callers hand in Q3
  * coordinates and this module converts, because the alternative is every call
@@ -190,37 +202,103 @@ interface HitscanTrail {
  * What each hitscan weapon draws between the barrel and what it hit.
  *
  * **Q3 does not have one of these**, and the difference is worth stating before
- * the numbers are read as ported. The C draws three unrelated things:
- * `CG_Tracer` for bullets, `CG_RailTrail` for the railgun and a per-frame
- * `RT_LIGHTNING` beam for the lightning gun, and only the middle one is a line
- * from the shot's start to its end that fades. So the *table* is this port's --
- * one mechanism where Q3 has three -- and the numbers in it are the C's wherever
- * the C has one.
+ * the numbers are read as ported. There is no per-weapon trail table in the C
+ * and no shared trail mechanism either; there are four different answers in
+ * three different files, and only one of them is a fading line from a shot's
+ * start to its end.
  *
- * Widths are Q3's own, as diameters. The renderer's rail cvars are half-extents:
- * `DoRailCore` extrudes `+/-spanWidth`, so `r_railCoreWidth` 6 is a 12-unit beam
- * and `RB_SurfaceLightningBolt`'s hard-coded 8 is a 16-unit one, and
- * `cg_tracerWidth` 1 is a 2-unit dash.
+ * # `CG_Tracer` -- the machinegun, the chaingun, and the big divergence
  *
- * The two absences are the interesting rows:
+ * `CG_Bullet` in `cg_weapons.c` is the dispatch. It recovers the shot's start
+ * with `CG_CalcMuzzlePoint` -- the eye plus fourteen units of `forward`, which
+ * is the same point the server traced from -- and then rolls for a tracer:
  *
- * - **The shotgun**, because `CG_ShotgunPellet` does not call `CG_Bullet` and so
- *   never reaches `CG_Tracer`. Eleven pellets per shot would be eleven lines out
- *   of one barrel, which is a cage rather than a shot, and Q3 evidently thought
- *   so too.
+ * ```c
+ * if ( random() < cg_tracerChance.value ) {   // 0.4
+ *     CG_Tracer( start, end );
+ * }
+ * ```
+ *
+ * And `CG_Tracer` does **not** draw that line. It draws a short dash somewhere
+ * along it:
+ *
+ * ```c
+ * if ( len < 100 ) { return; }                       // short shots get nothing
+ * begin = 50 + random() * (len - 60);                // at least 50 units out
+ * end   = begin + cg_tracerLength.value;             // 100 units long
+ * if ( end > len ) { end = len; }
+ * ...
+ * trap_R_AddPolyToScene( cgs.media.tracerShader, 4, verts );
+ * ```
+ *
+ * A camera-facing quad, `cg_tracerWidth` 1 to each side, submitted in immediate
+ * mode -- so it is **one frame** and there is no local entity, no lifetime and
+ * no fade anywhere in it. Four things follow that this port does differently,
+ * and all four are deliberate:
+ *
+ * - **It draws the whole line, not a dash.** What that buys is a shot you can
+ *   follow back to whoever fired it; what it costs is that a machinegun reads as
+ *   a stream rather than an occasional spark, which the 60 ms life is there to
+ *   keep down to a flicker.
+ * - **Every shot, not two in five.** `cg_tracerChance` is a `CVAR_CHEAT` in the
+ *   C and there is no equivalent knob here to hang it on.
+ * - **It fades.** Q3 has nothing to fade -- the poly is gone next frame.
+ * - **It starts at the barrel**, where Q3's starts at `CG_CalcMuzzlePoint`. This
+ *   is the one that needed the change rather than merely allowing it: Q3 never
+ *   has to decide where a beam *begins*, because `begin = 50 + random()...`
+ *   guarantees the dash starts at least fifty units down the path and its origin
+ *   is never on screen. A full-length line has a visible origin, and drawn from
+ *   the muzzle point that origin hangs in mid-air in front of the eye. See
+ *   {@link Effects.hitscanTrail}.
+ *
+ * # `CG_RailTrail` -- the one that is already the right shape
+ *
+ * A `LE_FADE_RGB` local entity from start to end over `cg_railTrailTime`, 600 ms,
+ * in the shooter's own `ci->color1` at 0.75. The only one of the four with a
+ * lifetime to port, and the row below takes it unchanged.
+ *
+ * # `RT_LIGHTNING` -- a beam with no lifetime at all
+ *
+ * `CG_LightningBolt` re-adds a `refEntity` from the muzzle to the trace endpoint
+ * on **every frame the trigger is held**, so the bolt exists exactly while it is
+ * being fired and decays not at all. There is nothing here to port; see the row.
+ *
+ * # And two weapons that draw nothing
+ *
+ * - **The shotgun.** `CG_ShotgunPellet` traces and marks and never calls
+ *   `CG_Bullet`, so a pellet never reaches `CG_Tracer`. Eleven lines out of one
+ *   barrel is a cage rather than a shot, and Q3 evidently thought so too.
  * - **The gauntlet**, which has a 32-unit reach and no beam of any kind. A trail
  *   the length of your own arm is not a thing anyone would see.
+ *
+ * # Widths
+ *
+ * Q3's own, converted to diameters, because the renderer's rail cvars are
+ * half-extents -- `DoRailCore` extrudes `+/-spanWidth` about the centre line:
+ *
+ * | source | C value | here |
+ * | --- | --- | --- |
+ * | `r_railCoreWidth` | 6 | 12 |
+ * | `RB_SurfaceLightningBolt`'s literal | 8 | 16 |
+ * | `cg_tracerWidth` | 1 | 2 |
  */
 const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
     /*
-     `CG_Tracer`, and the divergence is the shape rather than the size: Q3 draws
-     a 100-unit dash somewhere along the path for one frame, at
-     `cg_tracerChance` 0.4, and this draws the whole line and fades it. What that
-     buys is a shot you can follow back to whoever fired it, which a one-frame
-     dash at four in ten cannot do; what it costs is that a machinegun is a
-     visible stream rather than an occasional spark. Hence the shortest life in
-     the table and a nearly-dead source end -- at 60 ms a burst reads as a
-     flicker down the line of fire.
+     `CG_Tracer`, whose four divergences are listed above. Two numbers are this
+     row's own and neither is in the C, because the C has no fading tracer to
+     take them from:
+
+     - **60 ms**, the shortest life in the table. This draws a line for every
+       shot where Q3 flickered a dash for two in five, so the life is what keeps
+       a nine-round-a-second machinegun a flicker down the line of fire rather
+       than a rope.
+     - **`ageFrom` 0.75**, a source end born three quarters dead, so the line
+       retracts towards the target instead of fading in place. That is the only
+       part of the read that a dash gave for free: Q3's begins fifty units out
+       and moves, so it always looked like something in flight.
+
+     The colour is `gfx/misc/tracer`'s own warm white, which is what the shader
+     tints; the poly's `modulate` is a flat 255 in the C.
     */
     WP_MACHINEGUN: { color: 0xffe9b0, widthQ3: 2, seconds: 0.06, ageFrom: 0.75, ageTo: 0 },
     WP_CHAINGUN: { color: 0xffe9b0, widthQ3: 2, seconds: 0.06, ageFrom: 0.75, ageTo: 0 },
@@ -237,9 +315,7 @@ const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
     WP_RAILGUN: { color: 0x9fd8ff, widthQ3: 12, seconds: 0.6, ageFrom: 0, ageTo: 0 },
 
     /*
-     The lightning gun is a beam Q3 re-adds every frame for as long as the trigger
-     is down, not a trail that decays -- there is no lifetime in the C to port,
-     because the bolt exists exactly while it is being fired. This port fires it
+      has no lifetime to port, as above. This port fires it
      as discrete shots (see `muzzleFlash.ts`), so the beam becomes a very short
      trail instead: 50 ms is one shot at the lightning gun's own 50 ms fire rate,
      which makes a held trigger a continuous bolt and a tap a flicker. That is
@@ -638,9 +714,17 @@ export class Effects {
      * that point starts fourteen units in front of your eye, in mid-air, which is
      * the complaint D-116 fixed for projectiles. So the shot is traced from the
      * muzzle and the trail is drawn from the gun, and they differ by the length
-     * of the weapon. Q3 takes the same liberty in the other direction --
-     * `CG_RailTrail` opens with `start[2] -= 4` to move the beam off the ray
-     * because it reads better there.
+     * of the weapon.
+     *
+     * **Q3 draws its tracer from `CG_CalcMuzzlePoint` and gets away with it**,
+     * which is worth knowing before this looks like an unforced divergence. It
+     * gets away with it because `CG_Tracer` never draws the beginning of the
+     * line: `begin = 50 + random() * (len - 60)` puts the dash at least fifty
+     * units down the path, so the point it would have started from is never on
+     * screen and Q3 never had to choose one. A full-length line has a visible
+     * origin and has to. The C takes the same liberty in the other direction
+     * where it does draw a whole beam -- `CG_RailTrail` opens with
+     * `start[2] -= 4` to move it off the ray, because it reads better there.
      *
      * Nothing is drawn for a weapon the table has no row for, which is the
      * shotgun and the gauntlet. See {@link HITSCAN_TRAILS}.
