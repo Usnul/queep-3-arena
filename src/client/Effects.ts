@@ -30,6 +30,7 @@ import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particle
 import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js';
 
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
+import { applyMuzzleFlash, MUZZLE_FLASH_SECONDS } from './muzzleFlash.ts';
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -521,23 +522,25 @@ export class Effects {
      * face views for the fifty milliseconds it exists. It is still the honest
      * reading of "every light casts", and it is the mode's cost rather than this
      * effect's -- the two cheaper modes are one row of the menu away.
+     *
+     * **This is the flash for a shooter with no gun on screen**, which is every
+     * bot: nothing draws a weapon model for them, so there is no `tag_flash` to
+     * hang a light on and the shot's own origin is the best point available.
+     * The player's own flash rides the barrel instead -- see `ViewWeapon.flash`
+     * and D-115 -- and `Arena` picks between the two.
      */
-    muzzleFlash(originQ3: ArrayLike<number>): void {
+    muzzleFlash(originQ3: ArrayLike<number>, weapon: string): void {
         const [x, y, z] = toMeep(originQ3);
 
         const light = new Light();
-        light.type.set(LightType.POINT);
-        light.color.setRGB(1, 0.9, 0.65);
-        light.intensity.set(2500 / (4 * Math.PI));
-        light.distance.set(6);
-        light.castShadow.set(this.shadows.casts('effect'));
+        applyMuzzleFlash(light, weapon, this.shadows.casts('effect'));
 
         const transform = new Transform();
         transform.position.set(x, y, z);
 
         const entity = new Entity();
         entity.add(transform).add(light).build(this.ecd);
-        this.expire(entity.id, 0.05);
+        this.expire(entity.id, MUZZLE_FLASH_SECONDS);
     }
 
     /* ------------------------------------------------------------------ *

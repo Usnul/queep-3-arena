@@ -5064,3 +5064,86 @@ and the port would be editing the map rather than admitting a gap in itself.
 Pinned by `test/items.test.ts`: the nailgun specifically, and then the rule over the whole item
 table — every `IT_WEAPON` that can be autoswitched to must answer `weaponStats` — so a weapon
 arriving in a future extraction fails in the suite rather than mid-match.
+
+### D-115: the muzzle flash belongs on `tag_flash`, and the light has to follow the gun that carries it
+
+The flash light was drawn at the shot's own origin, which is `CalcMuzzlePoint`: the eye plus
+fourteen units of `forward`. That is exactly right for a *shot* -- it is why a rocket does not spawn
+inside the player's own bounding box -- and it is the wrong point for a *lamp*, because it is on the
+view axis by construction. Whichever way the player faced, the light sat 44 cm dead ahead at eye
+height, so firing lit the room from the middle of the screen and the gun in your hands threw nothing
+at all. The report was "the muzzle flash light seems to be centered on the player", and it was.
+
+**Q3 has the point already, and it is on the model.** `CG_AddPlayerWeapon` builds a flash entity,
+puts it on the weapon model's `tag_flash` with `CG_PositionRotatedEntityOnTag`, and adds the dlight
+at `flash.origin`. The pipeline already converts every tag on every model -- that is how
+`ViewWeapon` finds `tag_weapon` on the hands model -- so the muzzle was in the bundle the whole
+time and nothing was reading it. Nine of the eleven weapons carry one; measured from the eye, it
+puts the machinegun's flash 0.72 m forward, 0.18 m down and 0.18 m right, and the shotgun's
+0.91 m forward. Off the axis, below the crosshair, on the side the gun is drawn on.
+
+Where it sits is measured, not chosen, for the same reason the gun itself is (see the header of
+`ViewWeapon.ts`): these are points the people who made the models authored, and the alternative is
+a number somebody picks that is wrong per weapon.
+
+**It rides the gun rather than being dropped at it.** The first shape of this fix placed the light
+once, at the tag, when the trigger was pulled. That is half a fix: the flash lives 50 ms, and 50 ms
+at Q3's run speed is half a metre, so a light nailed to the world is a light the player runs *out
+of* -- and a machinegun leaves ten of them a second strung out down the corridor behind a strafing
+player. So the light is placed every frame of its life, from whichever `tag_flash` is in your hands,
+which is what Q3 does and for the same reason: its flash dlight is re-added on every frame the flash
+is up. That put the light in `ViewWeapon` -- the only thing that knows where the gun is this frame
+-- rather than in `Effects`.
+
+**Two shooters, two lights, one table.** Only the local player has a weapon model on screen; nothing
+draws one for a bot, so there is no tag to hang anything on and their flash stays where it always
+was. `WeaponEvents.muzzleFlash` therefore carries the `ownerId` the event always had to hand, and
+`Arena` offers every flash to the gun first:
+
+```ts
+const onTheGun = ownerId === LOCAL_CLIENT && this.viewWeapon?.flash(weapon) === true;
+if (!onTheGun) this.effects.muzzleFlash(originQ3, weapon);
+```
+
+Refusal is a real answer and not a formality. A dead player has no gun drawn, a weapon the bundle
+has no model for is not on screen, and the gauntlet and OA's prox launcher ship no `tag_flash` --
+all three decline, and all three still light something, because a shot with no flash at all is a
+worse bug than a flash in the wrong place. Q3 lights the gauntlet from the player's own origin
+anyway, which is within a few centimetres of where the fallback puts it.
+
+**The per-weapon settings, and which column is Q3's.** `src/client/muzzleFlash.ts` is one table read
+by both paths, so the player's plasma gun and a bot's cannot be different colours.
+
+| column | where it comes from |
+| --- | --- |
+| `color` | `CG_RegisterWeapon`'s `flashDlightColor`, transcribed. Yellow for the three weapons firing the same round, blue for the plasma and lightning family, two distinct oranges for the launchers, `1, 0.7, 1` for the BFG. |
+| `reachQ3` | the radius `trap_R_AddLightToScene` is given: 300 for the impulse flash every weapon gets, 150 for the three Q3 lights *continuously* while firing. |
+| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 800 to the BFG's 6,000. |
+
+Two things are deliberately absent from that table.
+
+**A source radius**, which is the column it would most like to have: a shotgun's blast is a
+hand-sized ball of fire and a railgun's is a slit, and that difference is exactly what an area light
+is for. meep's ECS `Light` has no field for it (GAP-030), so a value here would be a number nothing
+reads. The workaround that exists -- reaching past the component into `Scene.lights.elements`, as
+`lightVolume.ts` does for a map's fixtures -- rebuilds the ECS-to-Shade association from *position*,
+which is affordable once at load and not for a light that moves every frame and is created per shot.
+Recorded rather than faked.
+
+**`MUZZLE_FLASH_TIME`**, which is 20 ms in the C and 50 ms here. 20 ms is one frame at 60 Hz and
+none at all if a frame runs long, so the faithful number turns a light that should read as a pop
+into one that some shots have and others do not. The divergence is named at the constant rather than
+buried at a call site.
+
+Pinned by `test/muzzle-flash.test.ts`: that the light lands off the view axis on the side the gun is
+drawn, that it is the weapon's *own* muzzle (a launcher and a shotgun light different points from
+the same eye), that it follows the player for the whole life of the flash, that it goes out, that it
+is one entity however many shots go through it, and that each of the three refusals falls back to a
+world light. `presentation.test.ts` checks the other end: every weapon model in the built bundle
+carries a `tag_flash` except the two named above, so a pipeline change that drops the tags fails in
+the suite rather than putting the light back in the middle of the screen.
+
+**What still needs eyes.** Everything above is plumbing and arithmetic, which is all this port can
+self-verify -- the preview browser runs the app in a hidden tab where nothing composites (D-077,
+D-113). Whether 1,800 lumens of yellow at 9.4 m reads as a machinegun is a judgement about a picture,
+and the lumens column is the one to turn if it does not.

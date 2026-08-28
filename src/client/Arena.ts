@@ -37,11 +37,21 @@ import {
     type WeaponId,
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
+import type { MuzzleFlashSink } from './ViewWeapon.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
 import { interpolatedBody } from './interpolation.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
 
 const WORLD_SCALE = 1 / 32;
+
+/**
+ * The Q3 client id the person at the keyboard fires with.
+ *
+ * `roster.ts` hands out 0 to the player, `1000 +` to `addTarget`'s boxes and
+ * `2000 +` to bots, and the zero is load-bearing beyond this file -- a bot
+ * firing with it shoots itself, because `hitscanShot` skips the owner.
+ */
+const LOCAL_CLIENT = 0;
 
 function toMeep(q3: ArrayLike<number>): [number, number, number] {
     return [q3[0]! * WORLD_SCALE, q3[2]! * WORLD_SCALE, -q3[1]! * WORLD_SCALE];
@@ -114,6 +124,16 @@ export class Arena implements WeaponEvents {
      * audio during load is not worth a failure path.
      */
     audio: AudioBank | null = null;
+
+    /**
+     * The gun in the player's own hands, once there is one.
+     *
+     * Set after construction like `audio` and for the same reason: the view
+     * weapon needs the model library, which is fetched, and the arena is built
+     * before it. Null leaves every flash in the world, which is what this class
+     * did before there was a first-person weapon at all.
+     */
+    viewWeapon: MuzzleFlashSink | null = null;
 
     /**
      * @param shadows what the effects' own lights ask before they cast. Defaults
@@ -256,8 +276,27 @@ export class Arena implements WeaponEvents {
      * WeaponEvents
      * ------------------------------------------------------------------ */
 
-    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId): void {
-        this.effects.muzzleFlash(originQ3);
+    /**
+     * The flash goes on the gun when there is a gun, and in the world otherwise.
+     *
+     * `ViewWeapon` draws exactly one weapon -- the local player's -- and it is
+     * the only thing in the scene with a `tag_flash` to hang a light on, so it
+     * gets first refusal on the local player's own shots and everything else
+     * falls through to a light at the shot's origin. Refusal is a real answer
+     * and not a formality: a dead player, a weapon the bundle has no model for
+     * and a weapon that ships no flash tag all decline, and each of them still
+     * has to light something.
+     *
+     * The *sound* does not move with the light. It is the shot's own event, it
+     * is placed by the simulation, and the listener is at the eye a half-metre
+     * behind the barrel -- moving it would be a change to what the player hears
+     * in exchange for nothing they can hear.
+     */
+    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId, ownerId: number): void {
+        const onTheGun = ownerId === LOCAL_CLIENT && this.viewWeapon?.flash(weapon) === true;
+
+        if (!onTheGun) this.effects.muzzleFlash(originQ3, weapon);
+
         this.audio?.play(`weapon/${weapon}`, originQ3);
     }
 

@@ -63,9 +63,12 @@ import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometryFlags.js';
+import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 
 import type { ModelLibrary } from './map/loadModels.ts';
 import { weaponItemByTag } from '../game/Items.ts';
+import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
+import { applyMuzzleFlash, MUZZLE_FLASH_SECONDS } from './muzzleFlash.ts';
 
 const WORLD_SCALE = 1 / 32;
 
@@ -75,6 +78,9 @@ const FALLBACK_HANDS = 'models/weapons2/shotgun/shotgun_hand.md3';
 /** The tag `CG_AddPlayerWeapon` hangs the weapon off. */
 const TAG_WEAPON = 'tag_weapon';
 
+/** And the one it hangs the muzzle flash off, on the weapon's own model. */
+const TAG_FLASH = 'tag_flash';
+
 const DEG_TO_RAD = Math.PI / 180;
 
 interface EcsDataset {
@@ -82,6 +88,11 @@ interface EcsDataset {
     registerComponentType(type: unknown): void;
     addComponentToEntity(entity: number, component: unknown): void;
     removeComponentFromEntity(entity: number, type: unknown): void;
+}
+
+/** What `Arena` needs of this class, so it can hand a flash to the gun. */
+export interface MuzzleFlashSink {
+    flash(weapon: string): boolean;
 }
 
 /**
@@ -216,6 +227,28 @@ export function handOffset(
 }
 
 /**
+ * `tag_flash` on a weapon's world model, in the model's own axes.
+ *
+ * The muzzle, as the people who made the gun placed it: 16.7 units down the
+ * machinegun's barrel, 23.1 down the shotgun's, and between 0 and 4 units above
+ * the model origin on every weapon that has one. There is no fallback to
+ * another model's the way {@link handOffset} falls back to the shotgun's hands,
+ * because a flash point is a property of *this* mesh and borrowing one would
+ * hang the light in the air beside the gun.
+ *
+ * Q3 units. Null when the model ships no such tag.
+ */
+export function flashOffset(
+    library: ModelLibrary,
+    model: string
+): [number, number, number] | null {
+    const tag = library.definition(model)?.tags.find((t) => t.name === TAG_FLASH);
+    if (tag === undefined) return null;
+
+    return [tag.origin[0]!, tag.origin[1]!, tag.origin[2]!];
+}
+
+/**
  * A model-space rotation taking the weapon's own axes onto the camera's.
  *
  * A converted model points +X down the barrel, +Y up and +Z to its right; the
@@ -292,6 +325,17 @@ interface DrawnWeapon {
     readonly entities: number[];
     readonly offset: readonly [number, number, number];
     /**
+     * `tag_flash` in the model's own axes, Q3 units, or null for a weapon that
+     * ships none -- the gauntlet, and OA's prox launcher.
+     *
+     * Not permuted the way {@link handOffset} permutes `tag_weapon`, and for a
+     * reason: the hands tag is an offset *from the eye* and has to be expressed
+     * in the camera's frame, while this one is a point *on the model* and is
+     * carried into the world by the model's own rotation, which already contains
+     * `MODEL_TO_VIEW`. Permuting it as well would apply that turn twice.
+     */
+    readonly flash: readonly [number, number, number] | null;
+    /**
      * Whether the geometries are attached, which is what "on screen" means.
      *
      * Redundant with `current` by construction -- exactly the held weapon is
@@ -305,10 +349,12 @@ interface DrawnWeapon {
 
 const scratchPosition = new Vector3();
 const scratchRotation = new Quaternion();
+const scratchFlash = new Vector3();
 
-export class ViewWeapon {
+export class ViewWeapon implements MuzzleFlashSink {
     private readonly ecd: EcsDataset;
     private readonly library: ModelLibrary;
+    private readonly shadows: ShadowPolicy;
     private readonly drawn = new Map<string, DrawnWeapon>();
 
     private timeSeconds = 0;
@@ -316,17 +362,41 @@ export class ViewWeapon {
     private current: DrawnWeapon | null = null;
     private currentName = '';
 
+    /**
+     * The flash light, and there is one of it.
+     *
+     * One entity for the whole class rather than one per weapon, because you
+     * fire one gun at a time; the transform is rewritten from whichever
+     * `tag_flash` is in your hands. Built on the first shot, so a session that
+     * never fires never pays for it, and lit by *membership* -- the `Light`
+     * component goes on and comes off the entity -- for the same reason `show`
+     * moves the `ShadedGeometry` rather than setting a flag on it.
+     */
+    private flashEntity = -1;
+    private readonly flashLight = new Light();
+    private readonly flashTransform = new Transform();
+    private flashSeconds = 0;
+    private lit = false;
+
     /** `WP_*` ids whose model or hands tag the bundle does not have. */
     readonly unmodelled: string[] = [];
 
-    constructor(ecd: EcsDataset, library: ModelLibrary) {
+    /**
+     * @param shadows what the muzzle flash asks before it casts, exactly as the
+     *     world's own flashes ask in `Effects`. Defaults to the answer given
+     *     before there was a setting, so a test that only wants the mesh half of
+     *     this class is unaffected.
+     */
+    constructor(ecd: EcsDataset, library: ModelLibrary, shadows: ShadowPolicy = NO_SHADOWS) {
         this.ecd = ecd;
         this.library = library;
+        this.shadows = shadows;
 
         if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
         if (!ecd.isComponentTypeRegistered(ShadedGeometry)) {
             ecd.registerComponentType(ShadedGeometry);
         }
+        if (!ecd.isComponentTypeRegistered(Light)) ecd.registerComponentType(Light);
     }
 
     /**
@@ -340,6 +410,7 @@ export class ViewWeapon {
      */
     update(camera: CameraPose, deltaSeconds: number, state: ViewWeaponState): void {
         this.timeSeconds += deltaSeconds;
+        if (this.flashSeconds > 0) this.flashSeconds -= deltaSeconds;
 
         const wanted = state.visible ? this.acquire(state.weapon) : null;
 
@@ -365,6 +436,24 @@ export class ViewWeapon {
             }
         }
 
+        /*
+         The flash, on the barrel it came out of, for every frame of its life.
+
+         Placed rather than fired-and-forgotten because a light left at the point
+         the trigger was pulled is a light the player runs away from: fifty
+         milliseconds at Q3's run speed is half a metre, and a machinegun leaves
+         ten of those a second strung out behind a strafing player. Q3 has the
+         same answer for the same reason -- `CG_AddPlayerWeapon` re-adds the
+         dlight at `tag_flash` on every frame the flash is up.
+        */
+        if (wanted !== null && wanted.flash !== null && this.flashSeconds > 0) {
+            // `scratchPosition`/`scratchRotation` are this frame's: they are
+            // written exactly when `wanted` is non-null, which is this branch.
+            this.lightFlash(wanted.flash);
+        } else {
+            this.douseFlash();
+        }
+
         if (wanted !== this.current) {
             this.show(this.current, false);
             this.show(wanted, true);
@@ -374,9 +463,45 @@ export class ViewWeapon {
         }
     }
 
+    /**
+     * Light `weapon`'s muzzle, if that weapon is the one on screen.
+     *
+     * Called from the shot rather than from the frame, so it is the only part of
+     * this class the simulation reaches: `Arena` offers every muzzle flash to
+     * the gun first and falls back to a light in the world when the answer is
+     * no. Answering honestly is what makes that fallback correct -- a player who
+     * is dead, holding a weapon the bundle has no model for, or holding one that
+     * ships no `tag_flash` has nothing to hang a light on, and would otherwise
+     * fire with no flash at all.
+     *
+     * @returns whether the gun took it.
+     */
+    flash(weapon: string): boolean {
+        if (this.current === null || this.currentName !== weapon) return false;
+        if (this.current.flash === null) return false;
+
+        this.flashSeconds = MUZZLE_FLASH_SECONDS;
+
+        /*
+         Re-pointed per shot rather than per weapon, because the weapon in hand
+         is not the only thing that can change under a kept component: the
+         shadow setting is a row in the menu, and this light is created once and
+         then lives for the rest of the map. `Effects` asks the same question at
+         the same moment for the same reason.
+        */
+        applyMuzzleFlash(this.flashLight, weapon, this.shadows.casts('effect'));
+
+        return true;
+    }
+
     /** Which weapon is on screen, or `''`. For the load log and the tests. */
     get drawnWeapon(): string {
         return this.currentName;
+    }
+
+    /** Whether the muzzle flash is in the scene. For the tests. */
+    get flashLit(): boolean {
+        return this.lit;
     }
 
     /**
@@ -414,6 +539,48 @@ export class ViewWeapon {
         }
     }
 
+    /**
+     * Put the flash on the model's `tag_flash`, in world space.
+     *
+     * Which is `CG_PositionRotatedEntityOnTag` with the rotation already done:
+     * the gun's own transform maps model space onto the world, so the tag rides
+     * it like any other point on the mesh -- scaled, turned by the view and the
+     * sway, and offset to the eye.
+     */
+    private lightFlash(offsetQ3: readonly [number, number, number]): void {
+        scratchFlash.set(
+            offsetQ3[0]! * WORLD_SCALE,
+            offsetQ3[1]! * WORLD_SCALE,
+            offsetQ3[2]! * WORLD_SCALE
+        );
+        scratchFlash.applyQuaternion(scratchRotation);
+
+        this.flashTransform.position.set(
+            scratchPosition.x + scratchFlash.x,
+            scratchPosition.y + scratchFlash.y,
+            scratchPosition.z + scratchFlash.z
+        );
+
+        if (this.lit) return;
+
+        if (this.flashEntity < 0) {
+            const builder = new Entity().add(this.flashTransform);
+            builder.build(this.ecd);
+            this.flashEntity = builder.id;
+        }
+
+        this.ecd.addComponentToEntity(this.flashEntity, this.flashLight);
+        this.lit = true;
+    }
+
+    /** Take it back out of the scene. Idempotent, and called far more often. */
+    private douseFlash(): void {
+        if (!this.lit) return;
+
+        this.ecd.removeComponentFromEntity(this.flashEntity, Light);
+        this.lit = false;
+    }
+
     /** Build a weapon's entities on the first frame it is held, then keep them. */
     private acquire(weapon: string): DrawnWeapon | null {
         const existing = this.drawn.get(weapon);
@@ -422,6 +589,14 @@ export class ViewWeapon {
         const world = weaponItemByTag(weapon)?.models[0];
         const offset = world === undefined ? null : handOffset(this.library, weapon);
         const components = world === undefined ? null : this.library.components(world);
+        /*
+         `tag_flash`, and unlike the other two it is allowed to be missing. Every
+         weapon OA ships carries one except the gauntlet -- which has no muzzle
+         to flash -- and the prox launcher, whose model has no tags at all. Both
+         fall back to a light at the shot's own origin, which is roughly where Q3
+         puts the gauntlet's anyway.
+        */
+        const flash = world === undefined ? null : flashOffset(this.library, world);
 
         if (offset === null || components === null || components.length === 0) {
             if (!this.unmodelled.includes(weapon)) this.unmodelled.push(weapon);
@@ -461,7 +636,14 @@ export class ViewWeapon {
             entities.push(builder.id);
         }
 
-        const drawn: DrawnWeapon = { transforms, geometries, entities, offset, visible: false };
+        const drawn: DrawnWeapon = {
+            transforms,
+            geometries,
+            entities,
+            offset,
+            flash,
+            visible: false,
+        };
         this.drawn.set(weapon, drawn);
 
         return drawn;

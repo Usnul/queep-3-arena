@@ -768,7 +768,16 @@ async function main(): Promise<void> {
          simulation, and because it needs the model library, which the controller
          has no other reason to know about.
         */
-        const viewWeapon = new ViewWeapon(ecd, models);
+        const viewWeapon = new ViewWeapon(ecd, models, shadows);
+
+        /*
+         And it is where the player's own muzzle flash goes -- on `tag_flash`,
+         riding the barrel, rather than at the shot's origin half a metre in
+         front of the eye. Set here rather than passed to the constructor for the
+         same reason `audio` is: the arena is built before the model library has
+         finished being turned into meshes. See D-115.
+        */
+        arena.viewWeapon = viewWeapon;
 
         console.log(
             `[queep] items: ${itemsView.itemCount} placed, ${itemsView.pieceCount} pieces, ` +

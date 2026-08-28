@@ -37,7 +37,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { itemByClassname } from '../src/game/Items.ts';
+import { itemByClassname, weaponItemByTag } from '../src/game/Items.ts';
+import balance from '../src/game/balance.generated.json' with { type: 'json' };
 import { GRID_SOURCE_RADIUS, SOURCE_EXTENT_FLOOR } from '../tools/pipeline/lightgrid.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
@@ -550,6 +551,50 @@ describe('every pickup the maps spawn is drawable', () => {
             NO_SHELL.filter((m) => !m.endsWith('porter.md3')).sort()
         );
         expect(models.stats['missing']).toBe(NO_SHELL.length);
+    });
+});
+
+/*
+ * Muzzle flashes: the light goes where the model says, so the model has to say.
+ *
+ * `ViewWeapon` hangs the player's own flash on `tag_flash`, which is a point the
+ * people who made the weapon authored and the pipeline copies through. A weapon
+ * whose model reaches the bundle without one still fires and still lights the
+ * room -- `Arena` falls back to the shot's own origin -- but it fires with the
+ * light back in the middle of the screen, which is the defect D-115 fixed. That
+ * is a silent regression, so the tags are counted here rather than trusted.
+ */
+describe('every weapon that can flash has a point to flash from', () => {
+    const bundle = JSON.parse(
+        readFileSync(join(BUILT, 'models', 'models.json'), 'utf8')
+    ) as { models: { name: string; tags: { name: string }[] }[] };
+
+    const byName = new Map(bundle.models.map((m) => [m.name, m]));
+
+    /**
+     * The two that ship none, and why each is fine.
+     *
+     * The gauntlet has no muzzle: Q3 lights it from the player's own origin for
+     * as long as the trigger is held, which is roughly where the fallback puts
+     * it. OA's prox launcher model carries no tags at all -- not `tag_flash`,
+     * not `tag_barrel` -- so there is nothing to hang anything on.
+     */
+    const NO_FLASH_TAG = ['WP_GAUNTLET', 'WP_PROX_LAUNCHER'];
+
+    it('carries `tag_flash` on every weapon model but the two that cannot', () => {
+        const without: string[] = [];
+
+        for (const weapon of Object.keys(balance.weapons)) {
+            const path = weaponItemByTag(weapon)?.models[0];
+            expect(path, `${weapon} has no world model in the item table`).toBeDefined();
+
+            const model = byName.get(path!);
+            expect(model, `${weapon}: ${path} never reached the bundle`).toBeDefined();
+
+            if (!model!.tags.some((t) => t.name === 'tag_flash')) without.push(weapon);
+        }
+
+        expect(without.sort()).toEqual([...NO_FLASH_TAG].sort());
     });
 });
 

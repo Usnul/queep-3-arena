@@ -97,7 +97,15 @@ export interface Damageable {
 
 /** What the presentation layer is told about. */
 export interface WeaponEvents {
-    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId): void;
+    /**
+     * A shot was fired, at the muzzle `CalcMuzzlePoint` computes.
+     *
+     * `ownerId` comes with it because *where* the flash belongs depends on who
+     * fired: the local player has a weapon model on screen with a `tag_flash` on
+     * it, and nobody else does. This layer has no opinion on that -- it reports
+     * the shot and the shooter, and the presentation decides. See D-115.
+     */
+    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId, ownerId: number): void;
     bulletImpact(originQ3: ArrayLike<number>, normalQ3: ArrayLike<number>): void;
     /**
      * `normalQ3` is the surface the missile struck, for the scorch mark. Absent
@@ -292,7 +300,7 @@ export class WeaponSystem {
         copy(t_muzzle, eyeQ3);
         vectorMA(t_muzzle, t_muzzle, 14, t_forward);
 
-        this.events.muzzleFlash(t_muzzle, weapon);
+        this.events.muzzleFlash(t_muzzle, weapon, ownerId);
 
         if (stats.hitscan === true) {
             const pellets = stats.pellets ?? 1;
