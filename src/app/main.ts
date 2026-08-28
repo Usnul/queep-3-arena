@@ -17,6 +17,8 @@ import { LightSystem3 } from '@woosh/meep-engine/src/engine/graphics3/LightSyste
 import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem3.js';
 import { DecalSystem3 } from '@woosh/meep-engine/src/engine/graphics3/DecalSystem3.js';
 import { ParticleEmitterSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticleEmitterSystem3.js';
+import { SpriteSystemPE } from '@woosh/meep-engine/src/engine/graphics/ecs/sprite/SpriteSystemPE.js';
+import { TransformAttachmentSystem } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachmentSystem.js';
 import { MeshSystem3 } from '@woosh/meep-engine/src/engine/graphics3/MeshSystem3.js';
 import { AnimationSystem3 } from '@woosh/meep-engine/src/engine/graphics3/AnimationSystem3.js';
 import { GLTFSceneBundleAssetLoader } from '@woosh/meep-engine/src/engine/asset/loaders/GLTFSceneBundleAssetLoader.js';
@@ -75,6 +77,7 @@ import { FlyCamera } from '../client/FlyCamera.ts';
 import { CROSSHAIR_DEFAULT, Hud } from '../client/Hud.ts';
 import { NUM_CROSSHAIRS } from '../client/crosshair.ts';
 import { barrelOffset, ViewWeapon } from '../client/ViewWeapon.ts';
+import { MissileView } from '../client/MissileView.ts';
 import { Arena } from '../client/Arena.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
 import { Missiles } from '../client/Missiles.ts';
@@ -233,6 +236,32 @@ async function main(): Promise<void> {
     await em.addSystem(new CameraSystem3(graphics));
     await em.addSystem(new DecalSystem3(graphics, engine.assetManager));
     await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
+
+    /*
+     Camera-facing sprites, which in this port is exactly one thing: the plasma
+     bolt. `CG_Missile` returns early for `WP_PLASMAGUN` with `reType =
+     RT_SPRITE`, because OpenArena ships no model for it -- the
+     `weaponInfo->missileModel` line is commented out in the C. The system builds
+     a one-particle emitter per sprite entity, so it needs
+     `ParticleEmitterSystem3` above it and nothing else.
+    */
+    await em.addSystem(new SpriteSystemPE());
+
+    /*
+     The spatial hierarchy, and the missile models are what want it.
+
+     A Q3 missile model is more than one surface -- `rocket.md3` is a body, a
+     thrust flare and a rocket flare; `bfg.md3` is two additive surfaces and no
+     solid part -- while an entity holds one `ShadedGeometry` and the missile's
+     entity is a `RigidBody` the solver owns. So each surface is its own entity
+     attached to that body, and this is what composes `parent x local` for them.
+
+     Registered here rather than next to the mesh systems because it is an ECS
+     relation and not a renderer: it subscribes to the parent's `Transform`, which
+     is why an attached mesh inherits `InterpolationSystem`'s smoothing instead of
+     snapping once per fixed step behind a parent that glides. See `MissileView`.
+    */
+    await em.addSystem(new TransformAttachmentSystem());
 
     /*
      Skinned models. Three registrations, and none of them are optional:
@@ -778,6 +807,13 @@ async function main(): Promise<void> {
          finished being turned into meshes. See D-115.
         */
         arena.viewWeapon = viewWeapon;
+
+        /*
+         And what comes out of the barrel. `CG_Missile`'s models, off the same
+         library, set the same way and for the same reason -- see `MissileView`,
+         and D-118 for why a rocket was a box until now.
+        */
+        arena.missileView = new MissileView(ecd, models);
 
         console.log(
             `[queep] items: ${itemsView.itemCount} placed, ${itemsView.pieceCount} pieces, ` +

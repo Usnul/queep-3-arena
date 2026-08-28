@@ -5304,3 +5304,65 @@ Two consequences worth stating, both of them Q3's answer rather than a simplific
 The alphas are this port's and not Q3's, and `ImpactMark.alpha` says so where it is declared: the C
 stamps at full strength and fades the mark out over its ten-second life, while these decals are
 retired oldest-first at a cap of 2048 and never fade, so the alpha is standing in for the fade.
+
+### D-118: a rocket, a grenade, a plasma bolt and a BFG shot were the same orange box
+
+`Arena.projectileSpawned` put one `BoxGeometry(1, 1, 1)` on every missile the game fires, scaled to
+eight units and tinted with an orange emissive. Five projectile weapons, one cube. The report was
+"many projectiles appear as a box, no proper geometry", and there was nothing more to it than that.
+
+**The models were in the pk3s the whole time.** `CG_RegisterWeapon` names one per weapon —
+`models/ammo/rocket/rocket.md3`, `models/ammo/grenade1.md3`, `models/weaphits/bfg.md3`,
+`models/weaphits/nail.md3`, `models/weaphits/proxmine.md3`, `models/ammo/hook/hook.md3` — and the
+asset pipeline had simply never been told to convert them, because the only list it read was
+`bg_itemlist`, which names the gun on the floor and the box of ammunition and says nothing about
+what comes *out* of the gun.
+
+So `extract-balance.mjs` now reads `cgame/cg_weapons.c` as well, scoped to each `case WP_*:` block
+the way every other regex in that tool is scoped to a named function, and emits `missileModels`
+keyed over the whole of `weapon_t` (also extracted, from `bg_public.h`). One table, from the C, that
+both `convert-models.ts` and the runtime read — a path is exactly the kind of string this project
+does not retype, because a typo in either half is a projectile that silently does not draw.
+
+**Absence is a real answer and is recorded as one.** Six of thirteen weapons come back `null` because
+they are hitscan. The seventh is the plasma gun, whose `missileModel` line is *commented out* in the
+C: `CG_Missile` returns early for it with `reType = RT_SPRITE`, `radius = 16` and
+`plasmaBallShader`. The extractor's regex is deliberately not multiline-anchored past a `//` so that
+it reads the comment as the absence it is, and `MissileView` gives that one weapon a `Sprite` — on
+the missile's own entity, which already has the `Transform` a sprite needs, so the sprite path is
+the cheaper of the two rather than a special case that costs something.
+
+**Why a missile needs more than one entity.** An ECS entity holds one `ShadedGeometry`, and these
+models are not one surface: `rocket.md3` is a body, a thrust flare and a rocket flare, and
+`bfg.md3` is *entirely* two additive surfaces with no solid part at all. Drawing only the first
+mesh would have drawn a four-vertex flare and called it a BFG shot. So each surface is its own
+entity, attached to the body by `TransformAttachment`, and `TransformAttachmentSystem` is registered
+for it.
+
+That system rather than a loop in the game's own tick, for one reason: it *subscribes* to the
+parent's `Transform` instead of polling it. A missile carries `Interpolated`, so its transform is
+rewritten between fixed steps by `InterpolationSystem`; a child updated once per fixed step would
+snap along behind a parent that glides. Subscribing inherits the smoothing for nothing.
+
+The attachment is spatial and **not** a lifetime relation — meep is explicit about it — so when the
+body is retired the component is dropped and the child stands still, which is a rocket model left
+hanging in the air at the site of every explosion. `MissileView.despawn` is what stops that, called
+from `projectileGone`, which fires however a missile leaves. `missile-view.test.ts` pins the engine's
+behaviour here as well as this port's, because a registration is the kind of change that is either
+completely right or completely absent and the absent version has no symptom in this port's own code:
+the entities are built either way and the models simply never move.
+
+Orientation is ported and the spin is not. `CG_Missile` writes the normalized velocity straight into
+`ent.axis[0]` — a converted model points +X down its own length, which is the same fact `ViewWeapon`
+turns a gun by, so `MODEL_TO_VIEW` is now exported and shared rather than written twice.
+`RotateAroundDirection(ent.axis, cg.time / 4)` is left out: it is a rotation per missile per frame
+written into the transform `InterpolationSystem` rewrites between steps, and what it buys is a barrel
+roll on a shape that is very nearly a surface of revolution. A `TR_LINEAR` missile never changes
+direction, so the orientation is read once at the launch and is right for the whole flight.
+
+Two new materials came with the models and are classified in `material-classification.json`:
+`models/ammo/` and `models/weaphits/`, both metal. A third, `models/weaphits/proxlite`, joins
+`bfgtube` in `OPAQUE_BY_DESIGN`: its stage is `blendfunc gl_dst_color gl_src_color`, a multiply
+against what is already there that takes no alpha from anywhere at all, so there is nothing the image
+could have been authored with. It draws as a solid emissive patch on the mine's casing, which is
+close enough to the lit panel the multiply was for.

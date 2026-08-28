@@ -38,6 +38,7 @@ import {
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
 import type { MuzzleFlashSink } from './ViewWeapon.ts';
+import type { MissileSink } from './MissileView.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
 import { interpolatedBody } from './interpolation.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
@@ -96,8 +97,6 @@ export class Arena implements WeaponEvents {
     private readonly targetMaterial = new StandardShadeMaterial();
     private readonly targetHitMaterial = new StandardShadeMaterial();
     private readonly targetGeometry = new BoxGeometry(1, 1, 1);
-    private readonly rocketGeometry = new BoxGeometry(1, 1, 1);
-    private readonly rocketMaterial = new StandardShadeMaterial();
 
     private now = 0;
 
@@ -136,6 +135,18 @@ export class Arena implements WeaponEvents {
     viewWeapon: MuzzleFlashSink | null = null;
 
     /**
+     * What a projectile in flight is drawn as, once there are models to draw it
+     * with.
+     *
+     * Set after construction like `audio` and `viewWeapon`, and for the same
+     * reason: it needs the model library, which is fetched, and the arena is
+     * built before it. Null flies every missile invisibly, which is the honest
+     * failure -- what it replaced was one orange box standing in for a rocket, a
+     * grenade, a plasma bolt, a nail and a BFG shot alike.
+     */
+    missileView: MissileSink | null = null;
+
+    /**
      * @param shadows what the effects' own lights ask before they cast. Defaults
      *     to the answer they gave before there was a setting, so a test or a
      *     tool that builds an arena for the collision half of it is unaffected.
@@ -164,11 +175,6 @@ export class Arena implements WeaponEvents {
         this.targetHitMaterial.diffuse_color = new Color(1, 1, 1);
         this.targetHitMaterial.emissive_factor = new Color(3, 2.2, 1.4);
         this.targetHitMaterial.roughness_factor = 0.5;
-
-        this.rocketMaterial.name = 'rocket';
-        this.rocketMaterial.diffuse_color = new Color(0.4, 0.4, 0.42);
-        this.rocketMaterial.emissive_factor = new Color(2.5, 1.2, 0.3);
-        this.rocketMaterial.roughness_factor = 0.4;
     }
 
     /* ------------------------------------------------------------------ *
@@ -390,27 +396,30 @@ export class Arena implements WeaponEvents {
     }
 
     projectileSpawned(projectile: Projectile, entity: number): void {
-        /*
-         The body the engine is already flying, dressed rather than duplicated.
-         `PhysicsSystem` reads only `position` and `rotation` off a transform, so
-         scaling it to the model's size cannot disturb the collider.
-        */
         if (entity >= 0) {
-            const transform = this.ecd.getComponent(entity, Transform) as Transform | undefined;
-            // Rockets are ~8 units across in Q3.
-            transform?.scale.set(8 * WORLD_SCALE, 8 * WORLD_SCALE, 8 * WORLD_SCALE);
-
-            this.ecd.addComponentToEntity(
-                entity,
-                ShadedGeometry.from(this.rocketGeometry, this.rocketMaterial)
-            );
             /*
              Blended by `InterpolationSystem` on the physics timeline, for which
              `PhysicsSystem` is already the producer. A missile crosses a room in
              a handful of fixed steps, so this is the difference between a rocket
              and a dotted line of rockets.
+
+             Added before the model, so the model's own `TransformAttachment`
+             composes against a transform the interpolation is already writing.
             */
             this.ecd.addComponentToEntity(entity, interpolatedBody());
+
+            /*
+             `CG_Missile`. Null before the model library has finished loading and
+             in every headless caller, and a missile then flies invisibly rather
+             than as the orange box this used to draw for all five projectile
+             weapons alike -- see `MissileView`.
+            */
+            this.missileView?.spawn(
+                projectile.id,
+                entity,
+                projectile.weapon,
+                projectile.velocity
+            );
         }
 
         /*
@@ -429,12 +438,22 @@ export class Arena implements WeaponEvents {
         const fly = this.projectileSounds.get(projectile.id);
         this.projectileSounds.delete(projectile.id);
 
-        /*
-         `S_StopLoopingSound`. The missile's own entity is retired by `Missiles`
-         -- it owns the body, and the model and the interpolation went on to that
-         same entity, so they leave with it.
-        */
+        // `S_StopLoopingSound`.
         fly?.stop();
+
+        /*
+         And the model, which does **not** leave with the body.
+
+         `Missiles` owns the missile's entity and retires it, and the
+         interpolation and the plasma gun's sprite go with it because they are
+         components on it. A mesh model is not: it is one entity per surface,
+         held in place by a `TransformAttachment`, and meep is explicit that an
+         attachment is a spatial relation and not a lifetime one -- when the
+         parent goes the component is dropped and the child stands still. Without
+         this line every rocket fired leaves a rocket hanging in the air at the
+         point it exploded.
+        */
+        this.missileView?.despawn(projectile.id);
     }
 
     /**

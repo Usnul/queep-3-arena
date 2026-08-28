@@ -75,6 +75,40 @@ export function isWeaponId(tag: string): tag is WeaponId {
     return Object.hasOwn(balance.weapons, tag);
 }
 
+/**
+ * The model a weapon's projectile is drawn as, or null for one that has none.
+ *
+ * `CG_RegisterWeapon`'s `weaponInfo->missileModel`, extracted from
+ * `cg_weapons.c` rather than transcribed -- see `extract-balance.mjs`. Seven of
+ * the thirteen weapons have one; the hitscan weapons do not, and neither does
+ * the plasma gun, whose line is commented out in the C because `CG_Missile`
+ * draws its bolt as a sprite instead.
+ *
+ * Presentation, in the simulation's file, for the reason `ItemDef.models` is:
+ * the thing that knows which weapon fired is here, the table is keyed by weapon,
+ * and the alternative is a second weapon table in the client that has to be kept
+ * in step with this one. Null is a real answer and both of its meanings -- "not
+ * a projectile" and "drawn some other way" -- belong to the caller.
+ *
+ * Keyed over `weapon_t` rather than over `WeaponId`, so it answers for the
+ * nailgun and the grappling hook too; `string` in and null out for anything
+ * else.
+ */
+export function missileModel(weapon: string): string | null {
+    const models = balance.missileModels as Record<string, string | null>;
+    return models[weapon] ?? null;
+}
+
+/**
+ * `weapon_t`, in the order Q3 declares it.
+ *
+ * Which is the order the mouse wheel cycles and the order `weapon 1`..`weapon 13`
+ * select, extracted from `bg_public.h` so that neither can drift from the enum.
+ * It is not the order of increasing power and it is not the order of
+ * `balance.weapons`; it is the one Q3 players know by muscle memory.
+ */
+export const WEAPON_ORDER: readonly string[] = balance.weaponOrder;
+
 /** Anything a shot can hit and hurt. */
 export interface Damageable {
     readonly id: number;

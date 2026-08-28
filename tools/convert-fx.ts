@@ -132,6 +132,18 @@ const TEXTURES: readonly FxTexture[] = [
     { name: 'tracer', sources: ['gfx/misc/tracer2.jpg'], blend: 'add' },
 
     /*
+     The plasma bolt, which is the one projectile Q3 draws with no model at all:
+     `CG_Missile` returns early for `WP_PLASMAGUN` with `reType = RT_SPRITE` and
+     `cgs.media.plasmaBallShader`, and that shader is `sprites/plasma1` --
+     `sprites/plasmaa.tga` drawn twice over itself, `blendfunc gl_src_alpha
+     gl_one`, at two different `tcMod rotate` rates. One pass here, because the
+     counter-rotation is a scrolling texture matrix and this port draws sprites
+     through a particle layer that has no such thing; what it buys is a shimmer
+     on a ball that crosses the room in half a second.
+    */
+    { name: 'plasma_ball', sources: ['sprites/plasmaa.tga'], blend: 'add' },
+
+    /*
      Decals. Three of the four are `gl_zero gl_one_minus_src_color` marks and
      convert to black-with-coverage; `plasma_mrk` is the one Q3 drew with a
      plain `blendfunc blend` and is the one whose own RGBA is already right.

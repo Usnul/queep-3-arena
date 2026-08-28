@@ -736,8 +736,20 @@ describe('a materials transparency and its albedo image agree', () => {
      * the wave is dropped (see the projection's own `dropped` list). It draws
      * solid, which is the honest consequence of dropping `alphaGen`, and it is
      * one surface on one weapon.
+     *
+     * `proxlite` is the prox mine's blinking panel and fails for a neighbouring
+     * reason: its stage is `blendfunc gl_dst_color gl_src_color`, which is a
+     * *multiply* against what is already there and takes no alpha from anywhere
+     * at all. There is nothing for the image to have been authored with. The
+     * projection calls it translucent because the stage is not `blendfunc
+     * filter`-shaped, and it draws as a solid emissive patch over the casing --
+     * which is a lit panel on a mine, and is close enough to what the multiply
+     * was for that the honest failure is the better of the two.
      */
-    const OPAQUE_BY_DESIGN = new Set(['models/weapons2/bfg/bfgtube']);
+    const OPAQUE_BY_DESIGN = new Set([
+        'models/weapons2/bfg/bfgtube',
+        'models/weaphits/proxlite',
+    ]);
 
     /**
      * The one material in the whole set with no texture at all: `telep.md3`

@@ -37,11 +37,27 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GAME = join(ROOT, '.refs', 'oa-gamecode', 'code', 'game');
+
+/**
+ * The client game, which is where the *presentation* numbers live.
+ *
+ * One thing is read from here and it is a list of model paths:
+ * `CG_RegisterWeapon` is the only statement in Q3 of what a missile in flight
+ * looks like, and a path
+ * is exactly the kind of string this tool exists to stop being retyped -- the
+ * asset pipeline has to convert the file and the runtime has to name the same
+ * one, and a typo in either is a projectile that silently does not draw.
+ */
+const CGAME = join(ROOT, '.refs', 'oa-gamecode', 'code', 'cgame');
 const BG_PUBLIC = join(GAME, 'bg_public.h');
 const OUT = join(ROOT, 'src', 'game', 'balance.generated.json');
 
 function read(file) {
     return readFileSync(join(GAME, file), 'latin1');
+}
+
+function readCgame(file) {
+    return readFileSync(join(CGAME, file), 'latin1');
 }
 
 /**
@@ -236,6 +252,81 @@ function projectile(missile, fnName) {
     };
 }
 
+/**
+ * `weapon_t`, in order, from `bg_public.h`.
+ *
+ * The order is load-bearing and is not the order of anything else in this file:
+ * it is what the mouse wheel cycles and what `weapon 1`..`weapon 13` select, so
+ * a Q3 player knows it by muscle memory. `WP_NONE` and the two sentinels at the
+ * bottom are dropped; everything between them is a weapon, including the three
+ * `balance.weapons` has no numbers for.
+ */
+function extractWeaponOrder() {
+    const src = readFileSync(BG_PUBLIC, 'latin1');
+
+    const m = /WP_NONE\s*,([\s\S]*?)WP_NUM_WEAPONS/.exec(src);
+    if (m === null) throw new Error('the weapon_t enum was not found in bg_public.h');
+
+    const names = [...m[1].matchAll(/\bWP_[A-Z_]+\b/g)].map((x) => x[0]);
+
+    if (names.length < 9) throw new Error(`only ${names.length} weapons in weapon_t`);
+
+    return names;
+}
+
+/**
+ * `CG_RegisterWeapon`'s `missileModel`, per weapon, from `cg_weapons.c`.
+ *
+ * The whole of what Q3 says a projectile looks like in flight is one line inside
+ * a `case WP_*:` of that function, and this reads exactly those lines. Scoped to
+ * the case rather than searched file-wide for the reason every other regex here
+ * is scoped to a named function: there are seven of these lines and a file-wide
+ * match would attach whichever came first to whichever weapon asked.
+ *
+ * Absence is a real answer and is recorded as one. The plasma gun's line is
+ * *commented out* in the C -- `CG_Missile` draws it as an `RT_SPRITE` with
+ * `plasmaBallShader` instead, which is the only weapon handled that way -- and
+ * the gauntlet, machinegun, shotgun, lightning gun and railgun fire nothing that
+ * flies. Every one of those comes back `null` rather than being omitted, so the
+ * runtime table is total over the weapon list and a weapon that gains a model
+ * later shows up as a diff here rather than as a lookup that quietly misses.
+ */
+function extractMissileModels(weaponNames) {
+    const src = readCgame('cg_weapons.c');
+
+    const at = src.indexOf('void CG_RegisterWeapon');
+    if (at === -1) throw new Error('CG_RegisterWeapon not found in cg_weapons.c');
+
+    const out = {};
+
+    for (const name of weaponNames) {
+        /*
+         From this weapon's `case` label to the next one, so a model registered
+         under `WP_ROCKET_LAUNCHER` cannot be read as the prox launcher's. The
+         `[^\n]*` on the case line is `//#ifdef MISSIONPACK` and friends; the
+         terminator is the next `case WP_` or the `default:` at the bottom.
+        */
+        const block = new RegExp(
+            `case\\s+${name}\\s*:[^\\n]*\\n([\\s\\S]*?)(?=\\n\\s*(?://[^\\n]*\\n\\s*)?(?:case\\s+WP_|default\\s*:))`
+        ).exec(src.slice(at));
+
+        if (block === null) throw new Error(`no case ${name} in CG_RegisterWeapon`);
+
+        /*
+         Deliberately not multiline-anchored past a `//`: the plasma gun's line
+         is `//\t\tweaponInfo->missileModel = ...`, and reading it would give the
+         plasma bolt a model Q3 does not draw.
+        */
+        const model = /^[ \t]*weaponInfo->missileModel\s*=\s*trap_R_RegisterModel\(\s*"([^"]+)"/m.exec(
+            block[1]
+        );
+
+        out[name] = model === null ? null : model[1].replace(/\\/g, '/');
+    }
+
+    return out;
+}
+
 function extractWeapons() {
     const weapon = read('g_weapon.c');
     const missile = read('g_missile.c');
@@ -340,6 +431,8 @@ function main() {
     const items = extractItems();
     const weapons = extractWeapons();
     const respawn = extractRespawns();
+    const weaponOrder = extractWeaponOrder();
+    const missileModels = extractMissileModels(weaponOrder);
 
     if (items.length < 30) {
         throw new Error(`only ${items.length} items extracted; the bg_itemlist parse is wrong`);
@@ -353,6 +446,8 @@ function main() {
                 items,
                 weapons,
                 respawn,
+                weaponOrder,
+                missileModels,
             },
             null,
             1

@@ -296,8 +296,14 @@ export function barrelOffset(
  * does it is a quarter turn about the shared up axis. Which way that turn goes
  * is the whole content of the constant: the other one points the barrel at the
  * player.
+ *
+ * Exported because it is a fact about the *pipeline* rather than about the view
+ * weapon -- every MD3 this port converts points +X down its own length, missiles
+ * included -- and `MissileView` turns a rocket to face its flight with the same
+ * quarter turn on the right of the same kind of look rotation. Two copies of a
+ * sign convention is two chances for one of them to be corrected alone.
  */
-const MODEL_TO_VIEW = new Quaternion()._fromAxisAngle(0, 1, 0, -Math.PI / 2);
+export const MODEL_TO_VIEW = new Quaternion()._fromAxisAngle(0, 1, 0, -Math.PI / 2);
 
 const scratchSway = new Quaternion();
 const scratchAxis = new Quaternion();

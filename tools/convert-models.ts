@@ -90,12 +90,39 @@ interface BalanceItem {
     readonly models: string[];
 }
 
-function balanceItems(): readonly BalanceItem[] {
-    const balance = JSON.parse(
+function balance(): {
+    items: BalanceItem[];
+    missileModels: Record<string, string | null>;
+} {
+    return JSON.parse(
         readFileSync(join(ROOT, 'src', 'game', 'balance.generated.json'), 'utf8')
-    ) as { items: BalanceItem[] };
+    ) as { items: BalanceItem[]; missileModels: Record<string, string | null> };
+}
 
-    return balance.items;
+function balanceItems(): readonly BalanceItem[] {
+    return balance().items;
+}
+
+/**
+ * The models a projectile is drawn as, which are not in the item table.
+ *
+ * `bg_itemlist` names the gun on the floor and the box of ammunition for it, and
+ * has nothing to say about the thing that comes *out* of the gun -- that is
+ * `CG_RegisterWeapon`'s `missileModel`, extracted alongside the balance numbers
+ * so the pipeline and the runtime cannot name different files. Seven of the
+ * thirteen weapons have one; the rest are hitscan, or are the plasma gun, whose
+ * bolt Q3 draws as a sprite. See `extract-balance.mjs`.
+ */
+function missileModelPaths(): string[] {
+    const seen = new Set<string>();
+
+    for (const path of Object.values(balance().missileModels)) {
+        if (path !== null && path.toLowerCase().endsWith('.md3')) {
+            seen.add(path.replace(/\\/g, '/'));
+        }
+    }
+
+    return [...seen].sort();
 }
 
 /** Every model an item can spawn, from the generated balance table. */
@@ -263,7 +290,14 @@ async function convertModels(): Promise<void> {
     mkdirSync(textureDir, { recursive: true });
 
     const hands = handModelPaths();
-    const paths = [...new Set([...itemModelPaths(), ...hands.paths, ...EXTRA_MODELS])].sort();
+    const paths = [
+        ...new Set([
+            ...itemModelPaths(),
+            ...hands.paths,
+            ...missileModelPaths(),
+            ...EXTRA_MODELS,
+        ]),
+    ].sort();
 
     const accum: Accum = { vertices: [], indices: [], vertexCursor: 0, indexCursor: 0 };
 

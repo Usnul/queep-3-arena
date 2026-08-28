@@ -59,6 +59,8 @@
     { "prefix": "models/powerups/armor/shard", "metalness": 0, "roughness": 0.25, "note": "The armour shard is a translucent crystal in the artwork, not a plate." },
     { "prefix": "models/powerups/holdable/", "metalness": 0, "roughness": 0.4 },
     { "prefix": "models/powerups/instant/", "metalness": 0, "roughness": 0.35, "note": "Powerup shells and rings -- moulded plastic in the artwork." },
+    { "prefix": "models/ammo/", "metalness": 1, "roughness": 0.4, "note": "The rocket in flight. Painted ordnance -- a machined steel body with a red nose -- and paint over metal would be a dielectric except that this one is bare metal over most of its area, which is also how it reads against the thrust flare." },
+    { "prefix": "models/weaphits/", "metalness": 1, "roughness": 0.45, "note": "proxbomb: the prox mine's casing while it is in the air, a pressed and stencilled steel drum. The rest of weaphits is flares and energy shells, which carry their own emissive materials and never reach this table." },
     { "prefix": "models/weapons/", "metalness": 1, "roughness": 0.4, "note": "Team Arena weapon world models: nailgun, proxmine, vulcan." },
     { "prefix": "models/weapons2/", "metalness": 1, "roughness": 0.4, "note": "Every weapon skin. They are mixed materials -- grips, lenses, painted panels -- but metal is the dominant area on all eleven and metalness is one bit per material." }
   ],

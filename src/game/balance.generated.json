@@ -821,5 +821,35 @@
   "holdableSeconds": 60,
   "megaHealthSeconds": 35,
   "powerupSeconds": 120
+ },
+ "weaponOrder": [
+  "WP_GAUNTLET",
+  "WP_MACHINEGUN",
+  "WP_SHOTGUN",
+  "WP_GRENADE_LAUNCHER",
+  "WP_ROCKET_LAUNCHER",
+  "WP_LIGHTNING",
+  "WP_RAILGUN",
+  "WP_PLASMAGUN",
+  "WP_BFG",
+  "WP_GRAPPLING_HOOK",
+  "WP_NAILGUN",
+  "WP_PROX_LAUNCHER",
+  "WP_CHAINGUN"
+ ],
+ "missileModels": {
+  "WP_GAUNTLET": null,
+  "WP_MACHINEGUN": null,
+  "WP_SHOTGUN": null,
+  "WP_GRENADE_LAUNCHER": "models/ammo/grenade1.md3",
+  "WP_ROCKET_LAUNCHER": "models/ammo/rocket/rocket.md3",
+  "WP_LIGHTNING": null,
+  "WP_RAILGUN": null,
+  "WP_PLASMAGUN": null,
+  "WP_BFG": "models/weaphits/bfg.md3",
+  "WP_GRAPPLING_HOOK": "models/ammo/hook/hook.md3",
+  "WP_NAILGUN": "models/weaphits/nail.md3",
+  "WP_PROX_LAUNCHER": "models/weaphits/proxmine.md3",
+  "WP_CHAINGUN": null
  }
 }
