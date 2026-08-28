@@ -360,18 +360,19 @@ export class Missiles implements MissileWorld {
         if (flight.spent) return;
         flight.spent = true;
 
-        const other = payload.entityA === flight.entity ? payload.entityB : payload.entityA;
-        const clientId = this.bodies?.clientOf(other) ?? -1;
-
         /*
-         Where the missile got to, which is `G_MissileImpact`'s `trace.endpos`:
-         the CCD sweep has already clamped the body to its blocker, so its own
-         pose is the impact. Not the manifold's contact point -- meep's contacts
-         are speculative, and a pair reported at zero depth carries the closest
-         points on the two bodies rather than a touch, whose midpoint can sit
-         several units past the surface. Measured at 9 units inside a wall.
+         Which side of the pair the missile is on, which two separate things
+         need: what it hit, and which way the contact normal points.
+
+         The engine canonicalises a contact pair as `(min, max)` by entity id and
+         documents the payload's normal as pointing *from `entityB` toward
+         `entityA`*. So the side is not a detail of the lookup below -- it is the
+         sign of the surface normal, and see {@link report}.
         */
-        const at = flight.transform.position;
+        const missileIsA = payload.entityA === flight.entity;
+
+        const other = missileIsA ? payload.entityB : payload.entityA;
+        const clientId = this.bodies?.clientOf(other) ?? -1;
 
         /*
          The missile's own stopped position, not the contact point.
@@ -389,14 +390,20 @@ export class Missiles implements MissileWorld {
          engine documents it as valid only for the dispatch, and reuses one
          scratch object for every contact in the step.
         */
-        this.report(flight, clientId, payload.normal);
+        this.report(flight, clientId, payload.normal, missileIsA ? 1 : -1);
     }
 
-    /** Hand `WeaponSystem` the impact, in the Q3 terms it deals in. */
+    /**
+     * Hand `WeaponSystem` the impact, in the Q3 terms it deals in.
+     *
+     * `outward` is `+1` when the payload's normal already points away from the
+     * surface and `-1` when it points into it -- see the sign below.
+     */
     private report(
         flight: Flight,
         clientId: number,
-        normal: ArrayLike<number> | null
+        normal: ArrayLike<number> | null,
+        outward: number
     ): void {
         const at = flight.transform.position;
 
@@ -408,11 +415,33 @@ export class Missiles implements MissileWorld {
              is not a surface -- Q3 draws no mark on a direct hit either. Nor is
              there one for a missile that simply stopped, which is why `blocked`
              passes none.
+
+             **Turned to face out of the wall, which the payload's own normal
+             does not do.** meep's contract is "from `entityB` toward `entityA`"
+             over a pair canonicalised as `(min, max)` by entity id, and a
+             missile is built mid-match while the level's bodies are built at
+             load -- so the missile is `entityB` essentially always, and the
+             normal arrives pointing *along the flight*, into the surface. A
+             decal is discarded on exactly that: `chunk_decal_surface_frame`
+             fades it by `dot(face_normal, outward)`, which is -1 for a mark
+             projected from inside the wall it is drawn on, and every rocket,
+             grenade, plasma and BFG scorch mark in the game was thrown away
+             silently. Measured against the ported `cm_trace`'s own answer for
+             the same shot: the clipmap says `[-1, 0, 0]` for a wall hit flying
+             down +x, and this reported `[+1, 0, 0]`.
+
+             Read off the *side* rather than assumed, because the id ordering is
+             an allocation accident and a rule that happens to hold is a rule
+             that stops holding.
             */
             normalQ3:
                 normal === null || clientId >= 0
                     ? null
-                    : vec3(normal[0]!, -normal[2]!, normal[1]!),
+                    : vec3(
+                          normal[0]! * outward,
+                          -normal[2]! * outward,
+                          normal[1]! * outward
+                      ),
             clientId,
         };
 

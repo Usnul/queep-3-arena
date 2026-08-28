@@ -307,8 +307,30 @@ describe('a missile', () => {
         */
         expect(Math.abs(at[0]! - reference.endpos[0]!)).toBeLessThan(4);
 
-        // And it carries the wall's own normal, for the scorch mark.
-        expect(r.board.explosions[0]!.normal, 'no surface normal on a world impact').not.toBeNull();
+        /*
+         And it carries the wall's own normal, for the scorch mark -- pointing
+         *out* of the wall, which is the half of this that was wrong.
+
+         Asserting it is not null is not enough and was not: meep hands over a
+         normal oriented by which side of the contact pair a body is on, the
+         missile is reliably the higher entity id, and the vector arrived
+         pointing along the flight and into the surface. It reads perfectly at
+         every call site and then falls off the end of the renderer -- a decal
+         projected from inside the wall it is drawn on is faded to nothing by
+         `chunk_decal_surface_frame` with no error and no warning. So the
+         direction is checked against the ported `cm_trace`, which is bit-exact
+         against the C and is this project's ground truth for what a wall's
+         normal is.
+        */
+        const normal = r.board.explosions[0]!.normal;
+        expect(normal, 'no surface normal on a world impact').not.toBeNull();
+
+        const dot =
+            normal![0]! * reference.planeNormal[0]! +
+            normal![1]! * reference.planeNormal[1]! +
+            normal![2]! * reference.planeNormal[2]!;
+
+        expect(dot, 'the impact normal points into the wall, not out of it').toBeGreaterThan(0.9);
     });
 
     it('ages on the fixed step and takes its body with it when it goes', async () => {

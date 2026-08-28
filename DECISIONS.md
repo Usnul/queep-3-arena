@@ -5155,3 +5155,36 @@ move: the ratios between the weapons are the part that was right, and a per-weap
 have thrown them away to fix a single number. This is the entry recording that the dial exists and
 where it has been set, which is the only thing a decision record can usefully say about a judgement
 made by eye.
+
+### D-116: a contact normal has a side, and reading it without one threw away every missile scorch mark
+
+Rockets, grenades, plasma and the BFG left no mark on the wall they hit. Bullets did, explosions
+lit the room, the smoke and the fireball were there, and the decal — the one thing that outlives
+the effect — was silently absent.
+
+**The normal arrived pointing the wrong way.** meep canonicalises a contact pair as `(min, max)` by
+entity id and documents the payload's normal as pointing *from `entityB` toward `entityA`*.
+`Missiles.impact` already reads the side to work out what was hit — `payload.entityA ===
+flight.entity ? entityB : entityA` — and then passed `payload.normal` on untouched, as though it
+were side-independent. It is not. A missile is built mid-match and the level's bodies are built at
+load, so the missile is the higher id and therefore `entityB` essentially always, and the normal it
+carried pointed *along the flight*, into the surface. Against the ported `cm_trace`'s own answer for
+a rocket fired down +x on `oa_dm1`: the clipmap says `[-1, 0, 0]`, and this reported `[+1, 0, 0]`.
+
+**Why nothing said so.** `Effects.mark` builds a decal that projects along its own +Z and takes its
+outward direction as the opposite, and `chunk_decal_surface_frame` fades the result by
+`smoothstep(0.35, 0.6, dot(face_normal, outward))`. For a mark projected from *inside* the wall it
+is drawn on that dot is -1, the fade is zero, and the composite discards the fragment. There is no
+error and no warning, because a fade reaching zero is also how a decal grazing a wall at a shallow
+angle is skipped — the same trap D-093 fell into from the other direction, and the one the docblock
+in that chunk is written to warn about.
+
+The fix is one sign, derived from the side rather than assumed: `+1` when the missile is `entityA`
+and the normal already points away from the surface, `-1` when it is `entityB`. Reading the side is
+the point. The id ordering that makes a missile `entityB` is an allocation accident, and a rule that
+merely happens to hold is a rule that stops holding the first time a body is created in a different
+order.
+
+Pinned in `test/missiles.test.ts`, which already fired a rocket at a wall and asserted the normal
+was *not null* — true of the wrong vector as much as the right one. It now dots the reported normal
+against the ported `cm_trace`'s plane normal for the same shot and requires better than 0.9.
