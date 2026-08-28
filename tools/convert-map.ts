@@ -171,6 +171,10 @@ interface SceneMaterial {
     readonly emissiveLuminance: number;
     readonly roughness: number;
     readonly metallic: number;
+    /** See `PbrMaterial.transmission`; 0 for all but glass and clear water. */
+    readonly transmission: number;
+    /** See `PbrMaterial.ior`. */
+    readonly ior: number;
     readonly transparency: string;
     readonly alphaCutoff: number;
     readonly doubleSided: boolean;
@@ -399,6 +403,8 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                     emissiveLuminance: pbr.emissiveLuminance,
                     roughness: pbr.roughness,
                     metallic: pbr.metallic,
+                    transmission: pbr.transmission,
+                    ior: pbr.ior,
                     transparency: pbr.transparency,
                     alphaCutoff: pbr.alphaCutoff,
                     doubleSided: pbr.doubleSided,

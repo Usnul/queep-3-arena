@@ -191,6 +191,14 @@ export interface PbrMaterial {
     readonly environmentMapped: boolean;
     readonly roughness: number;
     readonly metallic: number;
+    /**
+     * Fraction of the dielectric base that transmits rather than diffuses, for
+     * the surfaces that are a transparent *interface* rather than a transparent
+     * image. 0 for everything but the handful in {@link TRANSMISSIVE}.
+     */
+    readonly transmission: number;
+    /** Index of refraction of that interface. See {@link IOR_WATER}. */
+    readonly ior: number;
     readonly transparency: TransparencyMode;
     /** Alpha cutoff for `mask`. */
     readonly alphaCutoff: number;
@@ -238,6 +246,146 @@ const RGBGEN_BENIGN = new Set(['identity', 'identitylighting', 'vertex', 'exactv
 
 const DEFAULT_ROUGHNESS = 0.85;
 const DEFAULT_METALLIC = 0.0;
+
+/**
+ * Index of refraction for a dielectric this projection has nothing better to say
+ * about. It is meep's own default, it is plate glass, and it is the F0 = 0.04
+ * that renderers hardcoded before the field existed -- so it is also the value
+ * that changes nothing.
+ */
+export const IOR_DEFAULT = 1.5;
+
+/**
+ * Water, and near enough for the acids and slimes that share `surfaceparm
+ * water`.
+ *
+ * F0 = ((1.333 - 1) / (1.333 + 1))^2 = 0.020, against glass's 0.040: a water
+ * surface reflects half of what a pane of glass does at normal incidence. Both
+ * have been the same number in this port until now, because nothing set the
+ * field at all. This is the one part of the change read off the shader rather
+ * than hand-listed -- `surfaceparm water` is Q3 recording what the liquid *is*,
+ * and the refractive index of water does not depend on whether the mapper drew
+ * it clear or brown.
+ */
+const IOR_WATER = 1.333;
+
+/**
+ * Which surfaces are a transparent *interface* rather than a transparent image,
+ * and how smooth each one is.
+ *
+ * # What transmission buys, and what a constant alpha cannot
+ *
+ * meep draws glass by setting `transmission_factor`: the diffuse base drops out
+ * (`diffuse_weight = (1 - metallic) * (1 - transmission)`) and coverage becomes
+ * view-angle Fresnel instead of the albedo's alpha. The surface is then nearly
+ * invisible head-on and a bright reflection at a glancing one, which is what a
+ * pane of glass does and is the one thing a fixed alpha cannot imitate.
+ *
+ * # Why this is a list and not a rule
+ *
+ * The obvious rule -- blended, and every drawn stage `tcGen environment`, i.e.
+ * "a see-through surface whose whole content is a fake reflection" -- describes
+ * `dsiglass` exactly, and describes 31 shaders in the OA set. Twenty-five of
+ * those are powerup shells: quad, battlesuit, regen, invisibility, the kamikaze
+ * sphere, the four health-cross shells. Applying it to them would zero their
+ * diffuse and hand their coverage to Fresnel, which is the correct treatment of
+ * a window and the deletion of a powerup. Narrowing it with `$lightmap` -- world
+ * geometry the light compiler lit -- cuts the 31 to two, one of which is
+ * `textures/sfx/proto_zzztblu3`, and it drops the genuine glass in
+ * `textures/pulchr/pulglass`, which is `nolightmap`. There is no rule here.
+ *
+ * So this is the same instrument as `tools/material-classification.json`, for
+ * the reason that file already gives: Q3 had no notion of transmission, a
+ * name-shaped guess is wrong often enough to look like a bug, and a table
+ * checked against the artwork is not a heuristic. Absence means
+ * `transmission: 0` -- the legacy alpha-blend path, which is what every one of
+ * these surfaces does today -- so an unlisted shader is unchanged rather than
+ * wrong.
+ *
+ * # Roughness has to come with it
+ *
+ * A blended material is owed no generated ORM (see `derivedFrom` below), so its
+ * `roughness` *is* the number the renderer uses rather than a multiplier over a
+ * sampled one. {@link DEFAULT_ROUGHNESS} is 0.85, chosen for concrete and
+ * painted metal, and on a window it is frosting: it smears the Fresnel
+ * reflection into a haze at exactly the moment transmission has made that
+ * reflection the only thing the surface has. Each entry states its own.
+ */
+interface TransmissiveSurface {
+    /** Fraction of the dielectric base that transmits. 1 is clear. */
+    readonly transmission: number;
+    /** GGX roughness of the interface, replacing {@link DEFAULT_ROUGHNESS}. */
+    readonly roughness: number;
+    readonly note: string;
+}
+
+export const TRANSMISSIVE: Readonly<Record<string, TransmissiveSurface>> = {
+    'textures/dsi/dsiglass': {
+        transmission: 1,
+        roughness: 0.05,
+        note: "am_thornish's window panels. One `blendfunc add` pass of textures/effects/tinfx through `tcGen environment`, over a lightmap: Q3 for a clear pane with a chrome reflection on it. The reflection becomes a real one.",
+    },
+    'textures/pulchr/pulglass': {
+        transmission: 1,
+        roughness: 0.05,
+        note: 'The same shader without the lightmap stage, on tinfx2. No map in the shipped six uses it.',
+    },
+
+    /*
+     The `clear_*` family is one shader written eight times over different pool
+     images: `gl_dst_color gl_one` passes of pool3d_* and a `$lightmap`,
+     `surfaceparm water`, and `clear` in the name because the author meant it.
+     They are the water you are meant to see the floor through, and this port
+     drew them as a luminous grey film.
+
+     The tinted and murky waters are deliberately not here. meep carries no
+     per-channel transmission tint, and its own note says what to do without
+     one: for coloured or dark liquid the legacy alpha-blend path is the
+     authoring path. Making `acc_dm5/brwnwater` transmissive would throw its
+     brown away and leave clear water in a mud pit. It still takes
+     {@link IOR_WATER}, which is the part of this that is true of all water.
+    */
+    'textures/liquids/clear_calm1': {
+        transmission: 1,
+        roughness: 0.08,
+        note: 'am_thornish and oa_dm7.',
+    },
+    'textures/liquids/clear_calm2': {
+        transmission: 1,
+        roughness: 0.08,
+        note: 'Not used by the shipped six.',
+    },
+    'textures/liquids/clear_ripple1': {
+        transmission: 1,
+        roughness: 0.1,
+        note: 'Rippled by `deformVertexes wave`, which this projection drops, so the roughness carries what is left of it.',
+    },
+    'textures/liquids/clear_ripple2': {
+        transmission: 1,
+        roughness: 0.1,
+        note: 'As clear_ripple1, at half the wave amplitude.',
+    },
+    'textures/liquids/clear_ripple3': {
+        transmission: 1,
+        roughness: 0.1,
+        note: 'As clear_ripple1.',
+    },
+    'textures/liquids2/clear_calm1v': {
+        transmission: 1,
+        roughness: 0.08,
+        note: 'The liquids2 variants add a `tcGen environment` sky pass over the same pool images.',
+    },
+    'textures/liquids2/clear_ripple1_q3dm1v': {
+        transmission: 1,
+        roughness: 0.1,
+        note: 'As clear_calm1v, rippled.',
+    },
+    'textures/liquids2/clear_ripple1_q3dm1light': {
+        transmission: 1,
+        roughness: 0.1,
+        note: 'The same again, declaring `q3map_surfacelight 100`, so it keeps its emissive and the light convert-map fits to it.',
+    },
+};
 
 /**
  * What an *unlit* Q3 surface is worth, in cd/m2.
@@ -442,6 +590,26 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
             .filter((s): s is string => s !== undefined)
     );
 
+    /*
+     `surfaceparm water` covers the acids and slimes as well -- `liquids/acid`
+     and `cosmo_liquids/icewater` declare both -- and those are aqueous, so the
+     same index is the right answer for them rather than merely the available
+     one.
+
+     `lava` has to veto it, because five shaders in `liquid_lavas.shader` --
+     `lavahell` and its three variants, and `lavalol` -- declare `surfaceparm
+     water` next to `surfaceparm lava`. That pairing is Q3 saying "this is a
+     liquid volume you can be inside of", not "this liquid is water", and
+     molten rock is neither aqueous nor something this port has any way to
+     measure. They keep {@link IOR_DEFAULT}. It is a small thing either way --
+     all five are opaque emitters whose F0 sits under an emission that swamps
+     it -- but the rule should say what it means.
+    */
+    const ior =
+        surfaceParms.has('water') && !surfaceParms.has('lava') ? IOR_WATER : IOR_DEFAULT;
+
+    const transmissive = TRANSMISSIVE[entry.name.toLowerCase()] ?? null;
+
     const isSky = surfaceParms.has('sky');
     const isNoDraw =
         surfaceParms.has('nodraw') ||
@@ -644,13 +812,35 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
     }
 
     /*
+     A transmissive surface's additive pass is a reflection, and a reflection is
+     not a light source.
+
+     This undoes D-079's restatement for exactly the shaders the table names,
+     and it has to. That rule reads a `blendfunc add` stage as a glow map, which
+     is right for a beam and a flame -- their colour has to be emitted or the
+     room they light ends up lighting them. On a window it is wrong twice over:
+     `dsiglass` emitted the mean colour of `textures/effects/tinfx` at
+     {@link UNLIT_LUMINANCE} across the whole pane, so the glass was a uniform
+     luminous haze, and that haze *was* the fake reflection -- the very thing
+     `transmission_factor` and the IBL now compute for real. Keeping both would
+     draw the reflection twice, once as physics and once as paint.
+
+     A declared `q3map_surfacelight` is the exception and keeps its emissive:
+     `liquids2/clear_ripple1_q3dm1light` is a lit pool, the map's light
+     compiler was told so, and `convert-map.ts` fits a real light to it. That is
+     a statement about the surface rather than an artefact of how it was blended.
+    */
+    if (transmissive !== null && surfaceLight === 0) emissive = null;
+
+    /*
      Q3 had no notion of roughness or metalness, so both are conventions rather
      than data. Uniform dielectric with high roughness is the least-wrong default
      for painted metal, concrete and rock, which is most of the OA texture set. A
      texture-name heuristic would guess wrong often enough to look like a bug.
     */
-    const roughness = DEFAULT_ROUGHNESS;
+    const roughness = transmissive?.roughness ?? DEFAULT_ROUGHNESS;
     const metallic = DEFAULT_METALLIC;
+    const transmission = transmissive?.transmission ?? 0;
 
     /*
      Which surfaces are worth a normal map and an ORM, and what they are derived
@@ -718,6 +908,8 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         environmentMapped,
         roughness,
         metallic,
+        transmission,
+        ior,
         transparency,
         alphaCutoff,
         doubleSided,

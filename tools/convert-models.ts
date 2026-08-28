@@ -188,6 +188,8 @@ function toBundleMaterial(
         emissiveLuminance: pbr.emissiveLuminance ?? 0,
         roughness: pbr.roughness,
         metallic: pbr.metallic,
+        transmission: pbr.transmission,
+        ior: pbr.ior,
         transparency: pbr.transparency,
         alphaCutoff: pbr.alphaCutoff,
         doubleSided: pbr.doubleSided,

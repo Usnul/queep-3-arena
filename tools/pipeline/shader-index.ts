@@ -28,7 +28,13 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseShaderScript, type ShaderScriptEntry } from './shader-script.ts';
-import { shaderToPbr, shaderSun, type PbrMaterial, type SunLight } from './shader-to-pbr.ts';
+import {
+    shaderToPbr,
+    shaderSun,
+    IOR_DEFAULT,
+    type PbrMaterial,
+    type SunLight,
+} from './shader-to-pbr.ts';
 import { readFileSync, readdirSync } from 'node:fs';
 
 /** Extensions Q3's renderer tried, in the order it tried them. */
@@ -161,6 +167,10 @@ export class ShaderIndex {
                 environmentMapped: false,
                 roughness: 0.85,
                 metallic: 0,
+                // Opaque, and no `surfaceparm` to call it water: nothing to
+                // transmit and no reason to leave plate glass.
+                transmission: 0,
+                ior: IOR_DEFAULT,
                 transparency: 'opaque',
                 alphaCutoff: 0.5,
                 doubleSided: false,

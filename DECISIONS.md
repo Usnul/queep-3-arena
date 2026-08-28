@@ -4907,3 +4907,79 @@ headless match runs what the browser runs.
 Neither would have been found by looking at the running game, which is the same lesson as REPORT.md's
 item 16 arriving from a third direction. A quarter of a unit of drift on a resting door is invisible,
 and bots that cannot see are bots that look busy.
+
+### D-113: Glass is a transparent interface, and which surfaces are one is a list rather than a rule
+
+`StandardShadeMaterial` carries `transmission_factor` and `ior_factor`, and nothing in this port
+had ever set either. Every surface in every map therefore sat on meep's defaults — transmission 0,
+IOR 1.5 — which is to say every dielectric in the game reflected exactly as much as plate glass,
+and nothing was a transparent interface at all.
+
+**What `am_thornish`'s windows actually were.** `textures/dsi/dsiglass` is one `blendfunc add` pass
+of `textures/effects/tinfx` through `tcGen environment`, over a `$lightmap`. Q3 for "a clear pane
+with a chrome reflection on it". The projection read that additive pass through D-079 — luminance
+becomes coverage, an additive stage over nothing else is a glow map — and produced a black diffuse
+at a constant alpha, plus an emissive of the environment map, flattened to its mean colour by the
+`environmentMapped` writers, at `UNLIT_LUMINANCE`. So the pane was a uniform luminous grey film
+whose brightness did not change with the angle you looked at it from, which is the one thing glass
+does. And the film *was* the fake reflection: the port was drawing as paint the thing the renderer
+can now compute.
+
+`transmission_factor` is the fix and it is exact. The diffuse base drops out
+(`diffuse_weight = (1 - metallic) * (1 - transmission)`) and coverage becomes view-angle Fresnel
+instead of the albedo's alpha, so the surface is nearly invisible head-on and a bright reflection at
+a glancing one. `ior_factor` sets how bright: `F0 = ((n - 1) / (n + 1))^2`.
+
+**Why the set is hand-listed.** The structural rule is obvious and it does not work. "Blended, and
+every drawn stage `tcGen environment`" — a see-through surface whose whole content is a fake
+reflection — describes `dsiglass` exactly, and describes 31 shaders in the OA set. Twenty-five of
+them are powerup shells: quad, battlesuit, regen, invisibility, the kamikaze sphere, the four
+health-cross shells. Zeroing their diffuse and handing their coverage to Fresnel is the correct
+treatment of a window and the deletion of a powerup. Narrowing it with `$lightmap` — world geometry
+the light compiler lit — cuts 31 to two, of which one is `textures/sfx/proto_zzztblu3`, and it drops
+the genuine glass in `textures/pulchr/pulglass`, which is `nolightmap`. Measured, not guessed at:
+those are counts over the 1960 unique shaders in the corpus.
+
+So `TRANSMISSIVE` is a table, the same instrument as `tools/material-classification.json` and for the
+reason that file already gives — Q3 had no notion of transmission, a name-shaped guess is wrong
+often enough to look like a bug, and a table checked against the artwork is not a heuristic. Absence
+means transmission 0, which is the legacy alpha-blend path every one of these surfaces was already
+on, so an unlisted shader is unchanged rather than wrong. It holds two panes of glass and the eight
+`clear_*` pool shaders.
+
+**The IOR is the part that is real data.** `surfaceparm water` is Q3 recording what the liquid *is*,
+and the refractive index of water does not depend on whether the mapper drew it clear or brown, so
+that one is read off the shader: 1.333, F0 = 0.020, against glass's 0.040. `surfaceparm lava` has to
+veto it, because five shaders in `liquid_lavas.shader` — `lavahell` and its three variants, and
+`lavalol` — declare `surfaceparm water` beside `surfaceparm lava`. That pairing means "a liquid
+volume you can be inside of", not "this liquid is water".
+
+**Roughness had to come with it.** A blended material is owed no generated ORM, so its `roughness`
+*is* the number the renderer uses rather than a multiplier over a sampled one, and the 0.85 default
+was chosen for concrete and painted metal. On a window it is frosting — it smears the Fresnel
+reflection into a haze at exactly the moment transmission has made that reflection the only thing
+the surface has left. Each entry states its own: 0.05 for glass, 0.08 and 0.1 for calm and rippled
+water, the latter carrying what is left of a `deformVertexes wave` this projection drops.
+
+**And a transmissive surface stops emitting.** D-079's restatement is undone for exactly the shaders
+the table names, because on a window the additive pass is a reflection and a reflection is not a
+light source; keeping it would draw the reflection twice, once as physics and once as paint. A
+declared `q3map_surfacelight` is the exception and keeps its emissive —
+`liquids2/clear_ripple1_q3dm1light` is a lit pool, the light compiler was told so, and `convert-map.ts`
+fits a real light to it. That is a statement about the surface rather than an artefact of how it was
+blended.
+
+**What is deliberately left alone.** The tinted and murky waters stay on the alpha-blend path, which
+is what meep's own note says to do without a per-channel transmission tint: making
+`acc_dm5/brwnwater` transmissive would throw its brown away and leave clear water in a mud pit. It
+takes the water IOR and nothing else. `acc_dm5/watershore` and `acc_dm5/fx_waterfall` have `water` in
+their names, declare no `surfaceparm water`, and are the foam and spray sprites — the one part of
+water that genuinely is diffuse rather than an interface. They are the reason the test names its
+water instead of matching it.
+
+**The size of it.** Across the shipped six, two materials became transmissive — `dsi/dsiglass` on
+`am_thornish` and `liquids/clear_calm1` on `am_thornish` and `oa_dm7` — and three took the water
+index. Nothing else in any bundle moved except two emissive images that no material references any
+more. Verified on the running app rather than argued: the live `StandardShadeMaterial` for the glass
+reads `transmission_factor: 1`, `ior_factor: 1.5`, `roughness_factor: 0.05` and no emissive texture,
+while `textures/sfx/beam` beside it is untouched at 0 / 1.5 / 0.85 with its glow intact.

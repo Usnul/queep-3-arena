@@ -61,6 +61,18 @@ export interface BundleMaterial {
     readonly emissiveLuminance: number;
     readonly roughness: number;
     readonly metallic: number;
+    /**
+     * Fraction of the dielectric base that transmits rather than diffuses --
+     * clear glass and clear water, and 0 for everything else. Absent in bundles
+     * written before transmission existed, which the runtime reads as 0.
+     */
+    readonly transmission?: number;
+    /**
+     * Index of refraction of the surface's Fresnel layer: 1.333 for anything Q3
+     * called `surfaceparm water`, 1.5 otherwise. Absent in older bundles, where
+     * the runtime keeps meep's own 1.5.
+     */
+    readonly ior?: number;
     readonly transparency: TransparencyName;
     readonly alphaCutoff: number;
     readonly doubleSided: boolean;

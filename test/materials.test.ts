@@ -40,6 +40,7 @@ import sharp from 'sharp';
 import { parseShaderScript } from '../tools/pipeline/shader-script.ts';
 import {
     shaderToPbr,
+    TRANSMISSIVE,
     UNLIT_LUMINANCE,
     type PbrMaterial,
 } from '../tools/pipeline/shader-to-pbr.ts';
@@ -1537,5 +1538,291 @@ describe('the hand-authored material table', () => {
         expect(dropped.length, 'materials with the normal map switched off').toBe(16);
         expect(classify('quadDamage', spec)?.effect).toBe(true);
         expect(classify('textures/gothic_block/blocks10', spec)?.normal).toBeUndefined();
+    });
+});
+
+/*
+ `am_thornish`'s window panels, written out as `evil8.shader` has them: one
+ `blendfunc add` pass of an environment map over a lightmap, which is Q3 for "a
+ clear pane with a chrome reflection on it".
+*/
+const DSIGLASS = `
+textures/dsi/dsiglass
+{
+    qer_editorimage textures/dsi/dsiglass.tga
+    surfaceparm trans
+    cull disable
+    qer_trans 0.5
+    {
+        map textures/effects/tinfx.tga
+        blendfunc add
+        rgbGen identity
+        tcGen environment
+    }
+    {
+        map $lightmap
+        blendfunc filter
+        rgbGen identity
+        tcGen lightmap
+    }
+}`;
+
+describe('a pane of glass is a transparent interface and not a transparent image', () => {
+    it('transmits, at plate glass', () => {
+        const m = project(DSIGLASS);
+
+        expect(m.transparency).toBe('blend');
+        expect(m.transmission, 'clear: no diffuse base left at all').toBe(1);
+        expect(m.ior, 'F0 = 0.04').toBe(1.5);
+    });
+
+    /*
+     `derivedFrom` refuses a generated ORM to anything blended, so a blended
+     material's `roughness` is the number the renderer uses rather than a
+     multiplier over a sampled one. At the 0.85 default the Fresnel reflection --
+     which is the only thing a fully transmissive surface has left -- smears into
+     the haze this change is about.
+    */
+    it('is smooth, because a blended material has no ORM to carry roughness for it', () => {
+        const m = project(DSIGLASS);
+
+        expect(m.orm).toBeNull();
+        expect(m.roughness).toBeLessThan(0.2);
+    });
+
+    it('stops emitting the fake reflection that is now computed for real', () => {
+        const m = project(DSIGLASS);
+
+        expect(m.emissive, 'a `tcGen environment` pass is a reflection, not a glow').toBeNull();
+        expect(m.emissiveLuminance).toBe(0);
+    });
+
+    /*
+     The rule that this table exists instead of. "Blended, and every drawn stage
+     `tcGen environment`" describes `dsiglass` exactly -- and describes 31
+     shaders in the OA set, 25 of which are powerup shells. Zeroing a quad
+     shell's diffuse and handing its coverage to view-angle Fresnel is the
+     correct treatment of a window and the deletion of a powerup.
+    */
+    it('does not catch a powerup shell, which has the identical shader shape', () => {
+        const m = project(`
+powerups/quad
+{
+    cull none
+    {
+        map models/powerups/quad.tga
+        blendfunc add
+        rgbGen identity
+        tcGen environment
+    }
+}`);
+
+        expect(m.environmentMapped, 'the same structural signal as the glass').toBe(true);
+        expect(m.transparency).toBe('blend');
+        expect(m.transmission, 'and still a shell rather than a window').toBe(0);
+        expect(m.emissive, 'so it keeps the glow that is all it is').not.toBeNull();
+    });
+});
+
+describe('a liquid reflects like the liquid it is', () => {
+    /*
+     The clear pool family: `gl_dst_color gl_one` passes of the pool3d images
+     under a lightmap, `surfaceparm water`, and `clear` in the name. This is
+     `am_thornish` and `oa_dm7`'s water.
+    */
+    it('gives clear water transmission and waters own index', () => {
+        const m = project(`
+textures/liquids/clear_calm1
+{
+    qer_editorimage textures/liquids/pool3d_5e.jpg
+    surfaceparm trans
+    surfaceparm nonsolid
+    surfaceparm water
+    cull none
+    {
+        map textures/liquids/pool3d_5e.jpg
+        blendFunc gl_dst_color gl_one
+        rgbgen identity
+        tcmod turb .04 .01 .5 .03
+    }
+    {
+        map $lightmap
+        blendFunc gl_dst_color gl_zero
+        rgbgen identity
+    }
+}`);
+
+        expect(m.transmission).toBe(1);
+        expect(m.ior, 'F0 = 0.02, half of glass').toBeCloseTo(1.333, 3);
+        expect(m.emissive, 'the brightening passes were never a glow either').toBeNull();
+    });
+
+    /*
+     meep carries no per-channel transmission tint, and says so: for coloured or
+     dark liquid the legacy alpha-blend path is the authoring path. Transmission
+     would throw the brown away and leave clear water in a mud pit. The index is
+     the part that is true of water however it was drawn, and it is the part
+     this surface was getting wrong.
+    */
+    it('leaves a murky water alpha-blended, and still fixes its Fresnel', () => {
+        const m = project(`
+textures/acc_dm5/brwnwater
+{
+    surfaceparm trans
+    surfaceparm nonsolid
+    surfaceparm water
+    cull disable
+    {
+        map textures/acc_dm5/brwnwater.tga
+        blendFunc blend
+        tcmod scroll .025 -.001
+    }
+}`);
+
+        expect(m.transmission, 'still an image, not an interface').toBe(0);
+        expect(m.transparency).toBe('blend');
+        expect(m.ior).toBeCloseTo(1.333, 3);
+    });
+
+    /*
+     Five shaders in `liquid_lavas.shader` declare `surfaceparm water` beside
+     `surfaceparm lava`. That pairing says "a liquid volume you can be inside
+     of", not "this liquid is water", and molten rock is neither aqueous nor
+     something this port can measure.
+    */
+    it('does not read lavas stray `surfaceparm water` as water', () => {
+        const m = project(`
+textures/liquids/lavahell
+{
+    qer_editorimage textures/liquids/lavahell.tga
+    q3map_lightimage textures/liquids/lavafloor.tga
+    surfaceparm nolightmap
+    surfaceparm trans
+    surfaceparm nomarks
+    surfaceparm lava
+    surfaceparm water
+    q3map_surfacelight 3000
+    cull disable
+    {
+        map textures/liquids/lavahell.tga
+        tcmod scroll .05 .05
+    }
+}`);
+
+        expect(m.ior).toBe(1.5);
+        expect(m.transmission).toBe(0);
+    });
+
+    /*
+     A declared `q3map_surfacelight` is a statement about the surface rather
+     than an artefact of how it was blended, and `convert-map.ts` fits a real
+     light to it, so the emissive survives the drop that the glass gets.
+    */
+    it('keeps a declared emitters emissive even where it transmits', () => {
+        const m = project(`
+textures/liquids2/clear_ripple1_q3dm1light
+{
+    qer_editorimage textures/liquids/pool3d_5e.jpg
+    surfaceparm trans
+    surfaceparm nonsolid
+    surfaceparm water
+    q3map_surfacelight 100
+    cull disable
+    {
+        map textures/liquids/pool3d_5e.jpg
+        blendFunc gl_dst_color gl_one
+        rgbgen identity
+    }
+    {
+        map textures/effects/sky.jpg
+        tcgen environment
+        blendfunc add
+        rgbgen vertex
+    }
+}`);
+
+        expect(m.transmission).toBe(1);
+        expect(m.emissive).not.toBeNull();
+        expect(m.emissiveLuminance).toBeGreaterThan(0);
+    });
+});
+
+describe('the built maps carry the transmissive surfaces', () => {
+    interface TransBundle {
+        readonly materials: readonly {
+            readonly name: string;
+            readonly transmission?: number;
+            readonly ior?: number;
+            readonly roughness: number;
+            readonly emissive: string | null;
+        }[];
+    }
+
+    const built = MAPS.map((name) => ({
+        name,
+        bundle: JSON.parse(
+            readFileSync(join(BUILT, name, 'scene.json'), 'utf8')
+        ) as TransBundle,
+    }));
+
+    it('has am_thornishs glass, transmitting and no longer glowing', () => {
+        const map = built.find((b) => b.name === 'am_thornish')!;
+        const glass = map.bundle.materials.find((m) => m.name === 'textures/dsi/dsiglass');
+
+        expect(glass, 'am_thornish still has its window panels').toBeDefined();
+        expect(glass!.transmission).toBe(1);
+        expect(glass!.ior).toBe(1.5);
+        expect(glass!.roughness).toBeLessThan(0.2);
+        expect(glass!.emissive).toBeNull();
+    });
+
+    /*
+     The water in the shipped six, named rather than pattern-matched, because
+     the name is precisely the thing that does not say: `acc_dm5/fx_waterfall`
+     and `acc_dm5/watershore` both have `water` in them and neither declares
+     `surfaceparm water`. They are the foam and spray sprites -- the one part of
+     water that really is diffuse rather than an interface -- and they stay at
+     plate glass along with everything else that is not a liquid.
+    */
+    const WATER = new Set([
+        'textures/liquids/clear_calm1', // am_thornish, oa_dm7
+        'textures/acc_dm5/brwnwater', // oa_dm5
+        'textures/liquids/tele', // aggressor
+    ]);
+
+    it('gives every surface Q3 called water the index of water, and nothing else', () => {
+        const seen = new Set<string>();
+
+        for (const { name, bundle } of built) {
+            for (const m of bundle.materials) {
+                if (WATER.has(m.name)) {
+                    seen.add(m.name);
+                    expect(m.ior, `${name}: ${m.name}`).toBeCloseTo(1.333, 3);
+                } else {
+                    expect(m.ior, `${name}: ${m.name}`).toBe(1.5);
+                }
+            }
+        }
+
+        expect(seen, 'every liquid named here is in a shipped map').toEqual(WATER);
+    });
+
+    /*
+     The whole-set invariant, and the one that would catch a rule quietly
+     growing back: nothing transmits unless it was named, and everything else
+     sits on meep's own default.
+    */
+    it('leaves every unlisted surface opaque-based and at plate glass', () => {
+        for (const { name, bundle } of built) {
+            for (const m of bundle.materials) {
+                const listed = TRANSMISSIVE[m.name.toLowerCase()];
+                if (listed === undefined) {
+                    expect(m.transmission, `${name}: ${m.name}`).toBe(0);
+                } else {
+                    expect(m.transmission, `${name}: ${m.name}`).toBe(listed.transmission);
+                    expect(m.roughness, `${name}: ${m.name}`).toBe(listed.roughness);
+                }
+            }
+        }
     });
 });

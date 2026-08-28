@@ -192,6 +192,28 @@ export async function buildMaterials(
                 material.metallic_factor = m.metallic;
             }
 
+            /*
+             Glass and clear water, which are a transparent *interface* rather
+             than a transparent image.
+
+             `transmission_factor` takes the diffuse base out
+             (`diffuse_weight = (1 - metallic) * (1 - transmission)`) and hands
+             coverage to view-angle Fresnel instead of the albedo's alpha, so the
+             pane is nearly invisible head-on and a bright reflection at a
+             glancing one. `ior_factor` is what sets how bright: F0 = ((n - 1) /
+             (n + 1))^2, so 0.04 for glass and 0.02 for water, and until this was
+             plumbed every surface in the port sat on meep's 1.5 whether it was a
+             window or a pool.
+
+             Both are read through `??` rather than assigned unconditionally,
+             because a bundle written before the pipeline emitted them carries
+             neither, and meep's own defaults -- 0 and 1.5 -- are exactly the
+             behaviour those bundles were built for. See `shader-to-pbr.ts`'s
+             `TRANSMISSIVE` for why the set is a hand-checked list.
+            */
+            material.transmission_factor = m.transmission ?? material.transmission_factor;
+            material.ior_factor = m.ior ?? material.ior_factor;
+
             material.transparency_mode = transparencyOf(m);
 
             /*
