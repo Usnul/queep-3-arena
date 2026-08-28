@@ -74,7 +74,7 @@ import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
 import { CROSSHAIR_DEFAULT, Hud } from '../client/Hud.ts';
 import { NUM_CROSSHAIRS } from '../client/crosshair.ts';
-import { ViewWeapon } from '../client/ViewWeapon.ts';
+import { barrelOffset, ViewWeapon } from '../client/ViewWeapon.ts';
 import { Arena } from '../client/Arena.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
 import { Missiles } from '../client/Missiles.ts';
@@ -936,7 +936,22 @@ async function main(): Promise<void> {
         };
 
         player.onFire = (eye, angles) => {
-            arena.weapons.fire(player.weapon, eye, angles, 0, (Math.random() * 0xffff) | 0);
+            /*
+             The barrel, for the weapons that throw something rather than trace a
+             line. `barrelOffset` is a pure function of the bundle -- the gun at
+             rest, no sway -- and it is the *caller* that decides who gets one,
+             which is how "only the shooter with a model on screen" is expressed
+             without `WeaponSystem` learning who the local player is. `roster.ts`
+             fires the bots and passes nothing. See D-116.
+            */
+            arena.weapons.fire(
+                player.weapon,
+                eye,
+                angles,
+                0,
+                (Math.random() * 0xffff) | 0,
+                barrelOffset(models, player.weapon)
+            );
         };
 
         /*

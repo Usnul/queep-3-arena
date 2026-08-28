@@ -165,10 +165,16 @@ export class Missiles implements MissileWorld {
 
         /*
          `CalcMuzzlePoint` puts the muzzle 14 units in front of the eye and a Q3
-         player box is 30 wide, so every missile is created *inside* the person
-         who fired it. Q3 handles that with `ent->r.ownerNum` and a `svFlags`
-         skip; meep's equivalent is the contact filter, which the narrowphase and
-         the CCD sweep both consult.
+         player box is 30 wide, so a missile created there is created *inside*
+         the person who fired it. Q3 handles that with `ent->r.ownerNum` and a
+         `svFlags` skip; meep's equivalent is the contact filter, which the
+         narrowphase and the CCD sweep both consult.
+
+         Still load-bearing after D-116, and it is worth saying why: the player's
+         own projectiles now leave `tag_flash`, which for every one of them is
+         far enough forward to clear the box. Nobody else's does -- a bot has no
+         weapon model to read a muzzle off, and the player falls back to the
+         muzzle whenever the barrel is inside the world.
 
          Installed here because nothing else in this port sets one -- if that
          changes, this has to become a chain rather than an assignment.

@@ -249,6 +249,45 @@ export function flashOffset(
 }
 
 /**
+ * Where a weapon's projectiles leave it, as an offset from the eye.
+ *
+ * `tag_flash` reached through `tag_weapon`: the gun hangs off the hands model
+ * and the muzzle hangs off the gun, so the two add. Returned as **(forward,
+ * right, up)** in Q3 units -- the axes `AngleVectors` hands out -- because the
+ * consumer is `WeaponSystem`, which knows about Q3's frame and must not be made
+ * to know about the camera's or the model's. See D-116.
+ *
+ * The sway is deliberately not in it. `weaponSway` is a rendering flourish on a
+ * render-rate clock, and a projectile whose spawn point is a function of it is a
+ * projectile whose flight depends on the frame rate. This is the gun at rest,
+ * which is within a few centimetres of the drawn one and is the same every time.
+ *
+ * Null when the weapon has no hands tag or its model ships no `tag_flash`, which
+ * is the caller's cue to use `CalcMuzzlePoint` as the port always has.
+ */
+export function barrelOffset(
+    library: ModelLibrary,
+    weapon: string
+): [number, number, number] | null {
+    const hand = handOffset(library, weapon);
+
+    const world = weaponItemByTag(weapon)?.models[0];
+    const flash = world === undefined ? null : flashOffset(library, world);
+
+    if (hand === null || flash === null) return null;
+
+    /*
+     Three frames meet here and only the arithmetic says so. `hand` is the
+     camera's -- x **left**, y up, z forward -- and `flash` is the model's -- x
+     forward, y up, z right. Adding them componentwise would be wrong twice over;
+     what makes the sum legal is that the model's rotation is the camera's turned
+     by `MODEL_TO_VIEW`, so both land in the same frame once permuted, and the
+     result is stated in the third.
+    */
+    return [hand[2] + flash[0], -hand[0] + flash[2], hand[1] + flash[1]];
+}
+
+/**
  * A model-space rotation taking the weapon's own axes onto the camera's.
  *
  * A converted model points +X down the barrel, +Y up and +Z to its right; the
