@@ -80,6 +80,14 @@ interface Stats {
     readonly patchHoles: number;
     readonly hullMilliseconds: number;
     readonly bodyMilliseconds: number;
+    /**
+     * What `PhysicsSystem.optimize` cost after the bodies were linked.
+     *
+     * Separate from `bodyMilliseconds` because it is not part of building them:
+     * it is a one-off re-shape of the broadphase that the browser build also
+     * pays, and load-time accounting that hides it would understate both.
+     */
+    readonly optimizeMilliseconds: number;
 }
 
 export class HeadlessPhysics {
@@ -195,13 +203,30 @@ export class HeadlessPhysics {
             if (HeadlessPhysics.addHull(ecd, queries, hull)) bodies += 1;
         }
 
+        const bodyMilliseconds = performance.now() - t0;
+
+        /*
+         And the broadphase reshaped, because the browser build does it once the
+         level's statics are linked and this harness exists to measure what the
+         browser runs. It is not a free call: a re-shaped tree hands a shape
+         cast its candidates in a different order, and one to two sweeps in
+         every thousand converge on a fraction 1e-5 away -- which is exactly why
+         it belongs here. Leaving it out would not remove that movement, it
+         would hide it, by reporting a divergence figure for a tree nobody
+         plays on: the D-036 and D-061 failure in its cheapest form. See D-131.
+        */
+        const t0Bvh = performance.now();
+        system.optimize();
+        const optimizeMilliseconds = performance.now() - t0Bvh;
+
         return new HeadlessPhysics(cm, entityManager, ecd, system, queries, {
             bodies,
             skipped: set.skipped,
             facets: patches.hulls.length,
             patchHoles: patches.dropped,
             hullMilliseconds: set.milliseconds + patches.milliseconds,
-            bodyMilliseconds: performance.now() - t0,
+            bodyMilliseconds,
+            optimizeMilliseconds,
         });
     }
 

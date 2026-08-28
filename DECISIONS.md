@@ -5858,3 +5858,62 @@ defect and then dressing the workaround up as a design choice, and this is the o
 What is left behind is `assets/built/fx/plasma_ball.png` and its line in `convert-fx.ts`, now
 referenced by nothing. Kept rather than deleted: it is a converted Q3 sprite, it is cheap, and
 `CG_PlasmaTrail` is a thing this port has not ported yet.
+
+### D-131: the broadphase is re-shaped once after the level's statics are in, and the sweep answers move by 1e-5
+
+meep 3.10.0 adds `PhysicsSystem.optimize()`: a treelet re-shape of both broadphase trees, meant to
+be called once after a level's statics are linked. `main.ts` calls it after `addStaticModel` has
+built the brush entities Q3 makes solid without simulating, and `headless-physics.ts` calls it after
+its own body loop, so the harness walks the tree the browser walks.
+
+**What it buys, measured rather than quoted.** The engine's docblock says ~12% fewer nodes visited.
+On this port's maps the static tree's SAH traversal cost — the sum of internal-node surface areas
+over the root's, which is the expected node count for a random ray up to constants — falls by:
+
+| map | leaves | SAH cost | `optimize` cost |
+|---|---|---|---|
+| `oa_dm1` | 529 | 25.89 → 23.85 (**-7.9%**) | 7 ms |
+| `aggressor` | 820 | 18.90 → 17.79 (**-5.9%**) | 3 ms |
+| `am_thornish` | 6,693 | 30.86 → 28.54 (**-7.5%**) | 16 ms |
+
+Positive on every map and short of the headline, which is what a 500-to-6,700-leaf tree should give:
+these trees are 11 to 16 levels deep and there is less to win than in the 4,000-body scene the
+figure was quoted from.
+
+**Wall clock, honestly: not separable from noise on the machine this was measured on.** 100,000
+player-sized sweeps and 200,000 raycasts, best-of-nine alternating rounds, came out between 10%
+faster and 10% slower depending on map and run, with round-to-round spread wider than the effect.
+The SAH number is the one to trust, because it is deterministic and the timing is not. And for the
+sweeps there is a reason the tree matters less than it might: a body here is a `ConvexHullShape3D`
+with a dozen planes, so the cost is dominated by narrowphase against the candidates rather than by
+finding them.
+
+**What it changes that is not free.** `optimize` is documented as leaving stepping bit-identical,
+and does — but *queries are not bit-identical*, and this port is a query workload. Over 200,000
+sweeps, optimized tree against un-optimized:
+
+| map | sweeps whose fraction differs | largest difference |
+|---|---|---|
+| `oa_dm1` | 138 of 200,000 (0.07%) | 7.4e-5 of a ≤48-unit sweep — about 0.003 Q3 units |
+| `aggressor` | 480 of 200,000 (0.24%) | 8.4e-5 |
+
+Contact normals and entity ids never differ across those 400,000 sweeps, and 200,000 raycasts per map
+return the same number of hits either way. So
+the shape of the answer is stable and its last digits are not: a re-shaped tree finds candidates in
+a different order, and the cast's conservative advancement converges from a different bound.
+
+That is enough to move `npm run divergence`, and it does — 240 frames of strafe jumping amplify a
+1e-5 fraction into tens of units of position, in both directions: `oa_dm1` strafe-jump p90 16.73 →
+22.24, `aggressor` bunny-hop p90 1.20 → 3.01, against `aggressor` strafe-jump ≤1u 83% → 84% and
+`walk-into-walls` 80% → 81%. The 20,000-sweep agreement table above it — hit/miss agreement, median
+and p90 fraction error, normals — is unchanged to every digit it prints.
+
+**Read that as the table's own caption asks to be read.** Those maxima are chaos, not error: two
+runs that separate at frame 100 explore different parts of a level. The medians are still exactly
+zero and the hit/miss predicate is still 100%, which is what says the backend agrees with Q3 on the
+typical frame. A change that moves the p90 of a chaotic metric by a few units in both directions has
+not made the port more or less faithful; it has made it a different member of the same family.
+
+**The alternative was to optimize in the browser and not in the harness**, which would have hidden
+the movement rather than removed it — the browser's trajectories would be the ones nobody measures.
+That is D-036 and D-061's failure, and it is worth more than the tidiness of an unchanged table.

@@ -965,6 +965,48 @@ async function main(): Promise<void> {
   unhandled: ${movers.unhandled.join(', ')}` : '')
         );
 
+        /*
+         Every static body the level has is now linked, so re-shape the
+         broadphase before anything queries it. The static tree keeps whatever
+         this buys *for good* -- a static never moves, so the tree built here is
+         the tree every raycast, shape cast and overlap walks for the rest of
+         the match, and this port sweeps it for every pmove step of every player
+         and bot rather than only for shots.
+
+         What it buys, measured: 6 to 8% off the static tree's SAH traversal
+         cost on this port's maps, for 3 to 16 ms at load. Not the engine's
+         quoted 12% -- these trees hold 500 to 6,700 leaves, not the 4,000-body
+         scene that number came from -- and not separable from noise in wall
+         clock, because a sweep here is dominated by narrowphase against a
+         dozen-plane hull rather than by finding it. D-131 has the numbers.
+
+         Here rather than at the end of `PhysicsWorld.create`: Q3 makes a brush
+         entity solid whether or not the game code simulates it, so
+         `addStaticModel` above is still adding statics, and a tree optimized
+         before them is optimized around a hole where they go.
+
+         Once, not per frame. The same call re-shapes the dynamic tree, whose
+         win fades within seconds as bodies move; the engine's own note says
+         repeat calls are not worth scheduling, and the characters that populate
+         that tree are not built until `buildRoster` below in any case.
+
+         Not free of consequence, though the engine's note reads that way. No
+         body is moved, woken or re-paired and stepping stays bit-identical, but
+         a re-shaped tree hands the candidates to a shape cast in a different
+         order, and one to two sweeps in every thousand then converge on a
+         fraction 1e-5 away -- a few thousandths of a Q3 unit at the length a
+         movement frame issues, and enough that 240 frames of strafe jumping
+         land somewhere else. So the headless harness optimizes too, rather than
+         measuring a differently shaped tree from the one the browser walks. See
+         `headless-physics.ts`, and D-131 for the numbers.
+        */
+        const t0Bvh = performance.now();
+        physicsWorld.system.optimize();
+        console.log(
+            `[queep] broadphase: static and dynamic trees optimized ` +
+            `(${(performance.now() - t0Bvh).toFixed(0)} ms)`
+        );
+
         /* ---- navigation ---- */
 
         const t0Nav = performance.now();

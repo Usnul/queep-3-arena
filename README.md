@@ -17,7 +17,7 @@ The point of the exercise is the engineering report in [REPORT.md](REPORT.md).
 
 ## Setup
 
-Requires Node >= 24, `@woosh/meep-engine` >= 3.9.0, and a WebGPU-capable browser.
+Requires Node >= 24, `@woosh/meep-engine` >= 3.10.0, and a WebGPU-capable browser.
 
 ```bash
 npm install

@@ -3387,16 +3387,25 @@ the context pool recycling properly.
 Separately, `Context.link` subscribing the transform before it can throw is what turns a one-time
 link failure into a permanent per-frame one, and is worth fixing whether or not the flags are.
 
-**Status: live on 3.9.0.** This port no longer registers the system — the plasma bolt was its only
-consumer and is now an emissive sphere with a point light, which is a better picture regardless
-(D-130) — so nothing here is blocked on it.
+**Status: fixed in 3.10.0**, both halves, including the one this entry filed as secondary.
+`ParticleEmitter.dispose` now nulls `particles` and clears `Built | Initialized` — verified
+headlessly on 3.10.0: build gives 12 attributes, dispose leaves `Built=false` and `particles=null`,
+and the recycle path that used to skip `build()` rebuilds to 12 attributes again. And
+`SpriteSystemPE.Context.link` now subscribes `__copy_transform` to the transform's signals *below*
+the build rather than twenty-four lines above it, under a comment naming this failure — read from
+the source rather than run, because exercising it needs a renderer. This port still does not
+register the system: the plasma bolt was its only consumer and is now an emissive sphere with a
+point light, which is a better picture regardless (D-130), so the fix changes nothing here beyond
+retiring the entry.
 
-**Evidence:** `engine/ecs/system/AbstractContextSystem.js:44-56,93`,
+**Evidence, on 3.9.0 where the bug is:** `engine/ecs/system/AbstractContextSystem.js:44-56,93`,
 `engine/graphics/ecs/sprite/SpriteSystemPE.js:49,69,83-103`,
 `engine/graphics/particles/particular/engine/emitter/ParticlePool.js:199-220,468-470`,
 `engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js:549-569,1111-1114`,
 `engine/graphics3/ParticleEmitterSystem3.js:159-208` for the flag pair `rebuild` clears and
-`unlink` does not.
+`unlink` does not. **On 3.10.0 where it is fixed:** `ParticleEmitter.js:1116-1123` (the clear, and
+a docblock naming the recycle it protects) and `SpriteSystemPE.js:96-102` (the subscriptions, now
+below `__copy_transform`'s first call).
 
 ## 7. What worked well
 

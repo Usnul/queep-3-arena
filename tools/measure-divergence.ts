@@ -217,7 +217,8 @@ async function measure(map: string): Promise<void> {
     console.log(
         `\n${map}: ${cm.numBrushes} brushes -> ${physics.stats.bodies} bodies ` +
         `(${physics.stats.hullMilliseconds.toFixed(0)} ms hulls, ` +
-        `${physics.stats.bodyMilliseconds.toFixed(0)} ms bodies)`
+        `${physics.stats.bodyMilliseconds.toFixed(0)} ms bodies, ` +
+        `${physics.stats.optimizeMilliseconds.toFixed(0)} ms broadphase)`
     );
 
     compareTraces(cm, physics, spawns, 0x7ace);
