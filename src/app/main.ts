@@ -17,7 +17,6 @@ import { LightSystem3 } from '@woosh/meep-engine/src/engine/graphics3/LightSyste
 import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem3.js';
 import { DecalSystem3 } from '@woosh/meep-engine/src/engine/graphics3/DecalSystem3.js';
 import { ParticleEmitterSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticleEmitterSystem3.js';
-import { SpriteSystemPE } from '@woosh/meep-engine/src/engine/graphics/ecs/sprite/SpriteSystemPE.js';
 import { Trail3DSystem3 } from '@woosh/meep-engine/src/engine/graphics3/Trail3DSystem3.js';
 import { TransformAttachmentSystem } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachmentSystem.js';
 import { MeshSystem3 } from '@woosh/meep-engine/src/engine/graphics3/MeshSystem3.js';
@@ -241,14 +240,18 @@ async function main(): Promise<void> {
     await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
 
     /*
-     Camera-facing sprites, which in this port is exactly one thing: the plasma
-     bolt. `CG_Missile` returns early for `WP_PLASMAGUN` with `reType =
-     RT_SPRITE`, because OpenArena ships no model for it -- the
-     `weaponInfo->missileModel` line is commented out in the C. The system builds
-     a one-particle emitter per sprite entity, so it needs
-     `ParticleEmitterSystem3` above it and nothing else.
+     `SpriteSystemPE` **used to be registered here** and deliberately is not.
+
+     It had one consumer -- the plasma bolt, which `CG_Missile` draws as an
+     `RT_SPRITE` because OpenArena ships no model for it -- and that bolt is now
+     an emissive sphere with a point light inside it, built by `MissileView` out
+     of components these systems already draw. See D-130 for why that is the
+     better picture and REPORT.md BUG-17 for why the sprite route could not have
+     stayed: the system pools its per-entity contexts and rebuilds an emitter
+     only when it is not flagged `Built`, while `ParticleEmitter.dispose` empties
+     the particle pool without clearing that flag -- so the second sprite to
+     recycle a context writes into an emptied pool and throws.
     */
-    await em.addSystem(new SpriteSystemPE());
 
     /*
      Shot trails, which in this port is the line a hitscan weapon leaves between
@@ -861,8 +864,12 @@ async function main(): Promise<void> {
          And what comes out of the barrel. `CG_Missile`'s models, off the same
          library, set the same way and for the same reason -- see `MissileView`,
          and D-118 for why a rocket was a box until now.
+
+         `shadows` because the plasma bolt is the one missile that carries a
+         light of its own (D-130), and a light in this port asks the policy
+         rather than deciding for itself.
         */
-        arena.missileView = new MissileView(ecd, models);
+        arena.missileView = new MissileView(ecd, models, shadows);
 
         console.log(
             `[queep] items: ${itemsView.itemCount} placed, ${itemsView.pieceCount} pieces, ` +

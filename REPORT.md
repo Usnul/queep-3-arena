@@ -3311,6 +3311,93 @@ probe finds nothing at a corner and 0.75 units finds the body.
 **Evidence:** `test/convex-contact.test.ts` (three cases: face, corner, and that both stop on the
 same step), `src/client/Missiles.ts`, D-111.
 
+### BUG-17: `SpriteSystemPE` throws on the second sprite to recycle a context, because `ParticleEmitter.dispose` empties the particle pool without clearing `Built`
+
+Three engine facts that are individually defensible and together make the system unusable for more
+than one sprite:
+
+1. `AbstractContextSystem` pools its per-entity contexts. `link` takes one from an
+   `ObjectPoolFactory` and `unlink` returns it, and the pool's reset callback is
+   `(ctx) => { //ctx.unlink(); }` — commented out. A context comes back with all of its state,
+   including the `ParticleEmitter` its constructor built.
+2. `ParticleEmitter.dispose()` half-destroys that emitter. `ParticlePool.dispose()` is
+   `this.attributes.length = 0`, and the emitter is left with `particles` non-null and
+   `ParticleEmitterFlag.Built | Initialized` still set. `ParticleEmitterSystem3.unlink` calls it
+   when the context destroys its hidden emitter entity.
+3. `SpriteSystemPE.Context.link` rebuilds only when the flag is clear:
+   `if (!emitter.getFlag(ParticleEmitterFlag.Built)) emitter.build();`
+
+So the second sprite to recycle a context skips `build()` and writes into a pool with no attributes.
+`emitter.particles?.` guards against `null`, which this is not:
+
+```
+TypeError: Cannot read properties of undefined (reading 'array')
+    at ParticlePool.writeAttributeVector4 (…/emitter/ParticlePool.js:409)
+    at Context.link (…/ecs/sprite/SpriteSystemPE.js:93)
+    at SpriteSystemPE.link (…/ecs/system/AbstractContextSystem.js:93)
+    at EntityComponentDataset.processObservers_ComponentAdded (…/ecs/EntityComponentDataset.js:1602)
+```
+
+**The reported symptom is the second-order one**, and is worse than the throw. `Context.link` adds
+`__copy_transform` to `transform.position.onChanged` at line 69, twenty-four lines before it can
+throw, and `AbstractContextSystem.link` throws before `this.__live_contexts[entity] = ctx`. So the
+dead context stays subscribed to a live entity and is registered nowhere — not in the live map, not
+back in the pool. Every later write of that transform re-enters it, and `Signal.send6` catches and
+logs rather than propagating:
+
+```
+Signal.js:724 Failed to dispatch handler -22.089149475852242 TypeError: Cannot read properties of undefined (reading 'array')
+    at ParticlePool.writeAttributeVector3 (ParticlePool.js:369)
+    at Context.__copy_transform (SpriteSystemPE.js:49)
+    at Signal.send6 (Signal.js:722)
+    at Vector3.set (Vector3.js:181)
+    at integrate_position (integrate_position.js:73)
+    at PhysicsSystem.fixedUpdate (PhysicsSystem.js:2197)
+```
+
+`-22.089…` is not an error code: `console.error("Failed to dispatch handler", f, e)` prints the
+signal's sixth argument, which for a `Vector3.set` is the previous z.
+
+**Reproduction**, against the running app on 3.9.0 — the second build is enough:
+
+```js
+const mk = () => new Entity().add(new Transform()).add(sprite()).build(ecd);
+const a = mk();  // 12 attributes on the pool, emitter entity built, draws
+destroy(a);      //  0 attributes, Built still set, context returned to the pool
+const b = mk();  // TypeError
+```
+
+Measured on the live system: 12 attributes after the first link, **0** after the context is
+released, and a throw on the next one. Because a broken context leaks rather than returning to the
+pool, the pool drains and the next sprite gets a fresh one — so with sprites created one at a time
+the failure alternates exactly: bolt 0 fine, 1 broken, 2 fine, 3 broken.
+
+**What it costs:** every second sprite is invisible — `__emitter_entity.build(this.getDataset())` is
+line 103, past the throw, so the emitter never reaches `ParticleEmitterSystem3` — plus one
+`console.error` per transform write for the rest of that entity's life, and one leaked `Context`,
+`ParticleEmitter` and `ParticleLayer` each time.
+
+**The fix is one line and the engine already knows it.** `ParticleEmitterSystem3.rebuild` does
+`emitter.clearFlag(ParticleEmitterFlag.Built | ParticleEmitterFlag.Initialized)` immediately before
+`emitter.build()`; `dispose()` should clear the same pair, or null `particles`. Verified by patching
+the captured `unlink` callback on the live system to clear those flags: six consecutive sprites, all
+with 12 attributes and one live particle, emitter entity built, position written, zero errors, and
+the context pool recycling properly.
+
+Separately, `Context.link` subscribing the transform before it can throw is what turns a one-time
+link failure into a permanent per-frame one, and is worth fixing whether or not the flags are.
+
+**Status: live on 3.9.0.** This port no longer registers the system — the plasma bolt was its only
+consumer and is now an emissive sphere with a point light, which is a better picture regardless
+(D-130) — so nothing here is blocked on it.
+
+**Evidence:** `engine/ecs/system/AbstractContextSystem.js:44-56,93`,
+`engine/graphics/ecs/sprite/SpriteSystemPE.js:49,69,83-103`,
+`engine/graphics/particles/particular/engine/emitter/ParticlePool.js:199-220,468-470`,
+`engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js:549-569,1111-1114`,
+`engine/graphics3/ParticleEmitterSystem3.js:159-208` for the flag pair `rebuild` clears and
+`unlink` does not.
+
 ## 7. What worked well
 
 Specific things that would be a loss to regress.

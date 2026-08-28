@@ -20,15 +20,21 @@
  *
  * Two of them are about the *engine* rather than about this port, and are here
  * because this is the change that started depending on them.
- * `TransformAttachmentSystem` and `SpriteSystemPE` are registered in `main.ts`
- * by this feature and by nothing else, and this app runs in a hidden tab where a
- * screenshot cannot be taken -- so "the child follows its parent" and "a sprite
- * links without throwing" are checked here, headless, or they are not checked at
- * all until someone plays the game.
+ * `TransformAttachmentSystem` is registered in `main.ts` by this feature and by
+ * nothing else, and this app runs in a hidden tab where a screenshot cannot be
+ * taken -- so "the child follows its parent" is checked here, headless, or it is
+ * not checked at all until someone plays the game.
+ *
+ * `SpriteSystemPE` was the second of those two and is gone: the plasma bolt is
+ * an emissive sphere with a point light in it rather than a `Sprite` (D-130),
+ * and nothing else in the port ever wanted one. What is left in its place is a
+ * regression test that the bolt is *not* a sprite -- see the last case in "a
+ * missile model", which fails if that system is ever registered again by
+ * something adding a `Sprite` back.
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EntityManager } from '@woosh/meep-engine/src/engine/ecs/EntityManager.js';
@@ -40,9 +46,12 @@ import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { TransformAttachment } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachment.js';
 import { TransformAttachmentSystem } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachmentSystem.js';
+import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
+import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 import { Sprite } from '@woosh/meep-engine/src/engine/graphics/ecs/sprite/Sprite.js';
 
 import { MissileView, orientAlong } from '../src/client/MissileView.ts';
+import { muzzleFlashLight } from '../src/client/muzzleFlash.ts';
 import { ModelLibrary } from '../src/client/map/loadModels.ts';
 import type { ModelBundle } from '../src/client/map/SceneBundle.ts';
 import { missileModel, WEAPON_ORDER } from '../src/game/Weapons.ts';
@@ -106,9 +115,16 @@ const MISSILE_MODELS: Readonly<Record<string, string | null>> = {
     WP_CHAINGUN: null,
 };
 
+/*
+ `Sprite` is in this map on purpose and `MissileView` no longer imports it. It is
+ what lets the plasma case assert that *nothing* builds one -- a type the dataset
+ does not know cannot be counted, so leaving it out would turn "no sprites" into
+ "no way to tell", which is the shape of assertion that passes after the feature
+ it guards has been deleted.
+*/
 function newDataset(): EntityComponentDataset {
     const ecd = new EntityComponentDataset();
-    ecd.setComponentTypeMap([Transform, ShadedGeometry, TransformAttachment, Sprite]);
+    ecd.setComponentTypeMap([Transform, ShadedGeometry, TransformAttachment, Light, Sprite]);
     return ecd;
 }
 
@@ -177,9 +193,14 @@ describe('the missile model table', () => {
         expect(bfg.meshes.length).toBeGreaterThan(1);
     });
 
-    it('has a sprite on disk for the one weapon with no model', () => {
+    /*
+     The plasma gun's `missileModel` line is *commented out* in `cg_weapons.c`,
+     and the extractor has to read that as the absence it is rather than as a
+     path. Absence is what routes the bolt to `plasmaBall`, so this is the
+     assertion the whole plasma path hangs off.
+    */
+    it('reports no model for the one weapon the C draws by hand', () => {
         expect(missileModel('WP_PLASMAGUN')).toBeNull();
-        expect(existsSync(join(BUILT, 'fx', 'plasma_ball.png'))).toBe(true);
     });
 });
 
@@ -258,29 +279,165 @@ describe('a missile model', () => {
         expect(componentsIn(ecd, TransformAttachment).length).toBe(0);
     });
 
-    it('gives the plasma bolt a sprite on the body itself, and no mesh', () => {
-        const ecd = newDataset();
-        const view = new MissileView(ecd, realLibrary());
+    /*
+     The plasma bolt, which is the one missile drawn without a model -- and since
+     D-130 without a `Sprite` either. Both of its components ride the body, so
+     the shape under test is "two components on one entity, no children, and
+     nothing to take away".
+    */
+    describe('the plasma bolt', () => {
+        function bolt(shadows?: { casts(role: string): boolean }): {
+            ecd: EntityComponentDataset;
+            view: MissileView;
+            body: number;
+        } {
+            const ecd = newDataset();
+            const view =
+                shadows === undefined
+                    ? new MissileView(ecd, realLibrary())
+                    : new MissileView(ecd, realLibrary(), shadows as never);
 
-        const body = new Entity().add(new Transform());
-        body.build(ecd);
+            const body = new Entity().add(new Transform());
+            body.build(ecd);
 
-        view.spawn(3, body.id, 'WP_PLASMAGUN', [2000, 0, 0]);
+            view.spawn(3, body.id, 'WP_PLASMAGUN', [2000, 0, 0]);
 
-        expect(componentsIn(ecd, ShadedGeometry).length, 'a plasma bolt is not a mesh').toBe(0);
+            return { ecd, view, body: body.id };
+        }
 
-        const sprites = componentsIn<Sprite>(ecd, Sprite);
-        expect(sprites.length).toBe(1);
-        expect(sprites[0]![0], 'the sprite rides the body, not a child').toBe(body.id);
-        expect(sprites[0]![1].url).toContain('plasma_ball');
-        // `ent.radius = 16` in `CG_Missile`, which is a half-extent.
-        expect(sprites[0]![1].size).toBeCloseTo((16 * 2) / 32, 9);
+        it('is a sphere and a light on the body itself, and no child entity', () => {
+            const { ecd, body } = bolt();
 
-        // It leaves with the body it is a component of, so this is a no-op --
-        // and has to be, because `Arena` calls it for every projectile.
-        expect(() => {
-            view.despawn(3);
-        }).not.toThrow();
+            const meshes = componentsIn<ShadedGeometry>(ecd, ShadedGeometry);
+            expect(meshes.length, 'one ball, not one per surface').toBe(1);
+            expect(meshes[0]![0], 'the ball rides the body, not a child').toBe(body);
+
+            const lights = componentsIn<Light>(ecd, Light);
+            expect(lights.length).toBe(1);
+            expect(lights[0]![0], 'the light rides the body too').toBe(body);
+
+            /*
+             No attachment, which is the saving: a rocket is three entities and
+             three attachments because its model is three surfaces, and this is
+             two components on an entity the solver already flies.
+            */
+            expect(componentsIn(ecd, TransformAttachment).length).toBe(0);
+        });
+
+        /*
+         The route this replaced. `SpriteSystemPE` is no longer registered in
+         `main.ts` and meep's own sprite path cannot survive a second bolt
+         (REPORT.md BUG-17), so a `Sprite` reappearing here is a regression into
+         a crash rather than a change of look.
+        */
+        it('is not a sprite, and nothing in this port builds one', () => {
+            const { ecd } = bolt();
+
+            expect(componentsIn(ecd, Sprite).length, 'the sprite route is back').toBe(0);
+        });
+
+        it('glows without being lit, at the brightest fitting in the map', () => {
+            const { ecd } = bolt();
+
+            const material = componentsIn<ShadedGeometry>(ecd, ShadedGeometry)[0]![1]
+                .material as unknown as {
+                diffuse_color: { r: number; g: number; b: number };
+                emissive_factor: { r: number; g: number; b: number };
+            };
+
+            /*
+             Emissive only: a bolt is a light source, and a ball with a diffuse
+             response would take the colour of whatever corridor it flew down.
+            */
+            expect(material.diffuse_color.r).toBe(0);
+            expect(material.diffuse_color.g).toBe(0);
+            expect(material.diffuse_color.b).toBe(0);
+
+            /*
+             `MAKERGB( flashDlightColor, 0.6f, 0.6f, 1.0f )` scaled by the
+             luminance, so blue carries it. 300 is the number, and what makes it
+             checkable rather than tuned is the scale it is on: the same
+             `emissiveLuminance` a map material carries, whose top value on
+             `am_thornish` is 295.7 for `base_light/light5_15k`. A bolt is the
+             brightest thing in the room and not an order of magnitude past it.
+            */
+            expect(material.emissive_factor.b).toBeCloseTo(300, 6);
+            expect(material.emissive_factor.r).toBeCloseTo(0.6 * 300, 6);
+            expect(material.emissive_factor.g).toBeCloseTo(0.6 * 300, 6);
+
+            // Brightest channel is Q3's blue, not white with a blue halo.
+            expect(material.emissive_factor.b).toBeGreaterThan(material.emissive_factor.r);
+        });
+
+        it("takes the light's colour from CG_RegisterWeapon, the same line the muzzle flash reads", () => {
+            const { ecd } = bolt();
+
+            const light = componentsIn<Light>(ecd, Light)[0]![1];
+
+            expect(light.type.getValue()).toBe(LightType.POINT);
+
+            /*
+             Not transcribed twice. `muzzleFlash.ts` already carries
+             `MAKERGB( weaponInfo->flashDlightColor, 0.6f, 0.6f, 1.0f )` for this
+             weapon, and the bolt reads the same three numbers -- so this fails
+             if the two ever disagree about what colour a plasma gun is.
+            */
+            const flash = muzzleFlashLight('WP_PLASMAGUN');
+            expect(light.color.r).toBeCloseTo(flash.color[0], 9);
+            expect(light.color.g).toBeCloseTo(flash.color[1], 9);
+            expect(light.color.b).toBeCloseTo(flash.color[2], 9);
+        });
+
+        it('lights continuously and dimly, which is not what the muzzle does', () => {
+            const { ecd } = bolt();
+
+            const light = componentsIn<Light>(ecd, Light)[0]![1];
+            const flash = muzzleFlashLight('WP_PLASMAGUN');
+
+            // 400 lm as luminous intensity, the conversion every light in this
+            // port is authored through.
+            expect(light.intensity.getValue()).toBeCloseTo(400 / (4 * Math.PI), 9);
+
+            /*
+             Far below the muzzle pop it was launched by, and that is the whole
+             argument for the number: `fireRateMs` 100 and `speed` 2000 put ten
+             or more of these in the air at once, where the flash is one light
+             for 50 ms.
+            */
+            expect(light.intensity.getValue()).toBeLessThan(flash.lumens / (4 * Math.PI));
+
+            /*
+             150 Q3 units, which is `muzzleFlash.ts`'s reach for the three
+             weapons `CG_AddPlayerWeapon` lights *continuously* rather than
+             pulsing at 300. A bolt in flight is the continuous case.
+            */
+            expect(light.distance.getValue()).toBeCloseTo(150 / 32, 9);
+            expect(light.distance.getValue()).toBeLessThan(flash.reachQ3 / 32);
+        });
+
+        it('asks the shadow policy rather than deciding for itself', () => {
+            expect(
+                componentsIn<Light>(bolt().ecd, Light)[0]![1].castShadow.getValue(),
+                'the default is what every effect light had before there was a setting'
+            ).toBe(false);
+
+            expect(
+                componentsIn<Light>(bolt({ casts: () => true }).ecd, Light)[0]![1]
+                    .castShadow.getValue(),
+                'under `all` the mode owns the cost, as it does for the muzzle flash'
+            ).toBe(true);
+        });
+
+        it('leaves with the body, so despawn has nothing to do', () => {
+            const { view } = bolt();
+
+            // It has no entity of its own to remove -- and this has to be a
+            // no-op rather than an error, because `Arena` calls it for every
+            // projectile however it leaves.
+            expect(() => {
+                view.despawn(3);
+            }).not.toThrow();
+        });
     });
 
     it('draws nothing at all for a weapon the C draws nothing for', () => {
@@ -295,6 +452,7 @@ describe('a missile model', () => {
         view.spawn(1, body.id, 'WP_RAILGUN', [1, 0, 0]);
 
         expect(componentsIn(ecd, ShadedGeometry).length).toBe(0);
+        expect(componentsIn(ecd, Light).length, 'a hitscan shot lit the room').toBe(0);
         expect(componentsIn(ecd, Sprite).length).toBe(0);
         expect(view.unmodelled, 'a weapon with no missile is not a missing model').toEqual([]);
     });

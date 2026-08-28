@@ -5307,6 +5307,10 @@ it reads the comment as the absence it is, and `MissileView` gives that one weap
 the missile's own entity, which already has the `Transform` a sprite needs, so the sprite path is
 the cheaper of the two rather than a special case that costs something.
 
+> **Superseded in part by D-130.** The extraction above is unchanged and is what still routes the
+> plasma gun away from the model path; what that route now builds is an emissive sphere with a point
+> light in it rather than a `Sprite`, and `SpriteSystemPE` is no longer registered.
+
 **Why a missile needs more than one entity.** An ECS entity holds one `ShadedGeometry`, and these
 models are not one surface: `rocket.md3` is a body, a thrust flare and a rocket flare, and
 `bfg.md3` is *entirely* two additive surfaces with no solid part at all. Drawing only the first
@@ -5783,3 +5787,74 @@ converted, all ten are on the gameplay page, and `?crosshair=4` puts id's back i
 parameter. Fidelity here is offering the choice id offered; which of the ten a player who has
 not chosen gets is presentation, and presentation follows the picture this port draws rather
 than the one it was ported from.
+
+### D-130: the plasma bolt is an emissive sphere with a light in it, and `SpriteSystemPE` is gone
+
+`CG_Missile` draws one weapon's projectile by hand. The plasma gun's `missileModel` line is
+commented out in `cg_weapons.c`, so the branch sets `reType = RT_SPRITE`, `radius = 16` and
+`plasmaBallShader` and returns — a camera-facing quad with `sprites/plasmaa.tga` on it, drawn
+twice, additively. D-118 ported that literally, onto meep's `Sprite`, and `main.ts` registered
+`SpriteSystemPE` for the one component in the port that ever used it.
+
+**It is now a 128-triangle sphere a quarter of a metre across, emissive at 300, with a 400 lm point
+light inside it.** Both are components of the missile's own entity, so a plasma bolt still costs no
+entity of its own and still leaves with the body.
+
+**Why the sprite was the wrong shape here, and not merely an old one.** A Q3 sprite is a bright core
+and its painted falloff baked into one image, because the renderer it was drawn by had neither bloom
+nor local lights and the artist had to supply both by hand. This port has both. Painting a glow into
+a texture and then running it through a bloom chain is drawing the same falloff twice, and — the
+part that actually matters in play — a sprite lights nothing. Q3's plasma gun is a torch you cannot
+see by. Ten bolts down a corridor here throw ten travelling lights on the walls, which is the single
+biggest difference this change makes and the one the sprite could not have been talked into.
+
+Two departures from the C, both deliberate:
+
+- **The ball is half Q3's size.** `ent.radius = 16` is a half-extent, so id's bolt is 32 units
+  across; the sphere is 16. The missing half is the bloom chain's, and that chain is thresholdless —
+  `downsample_karis` weights each pixel by its own luminance rather than testing it against a cutoff
+  — so a bright small ball spreads in proportion to how bright it is and arrives back at roughly the
+  sprite's footprint without being asked to.
+- **Q3 gives this weapon no `missileDlight` at all.** Only the rocket (200) and the BFG light their
+  own flight; `case WP_PLASMAGUN` has no such line. So the light is an addition, not a transcription,
+  and the numbers are chosen against the port's own scale rather than invented:
+
+  | quantity | value | where it comes from |
+  |---|---|---|
+  | colour | `0.6, 0.6, 1.0` | `MAKERGB( weaponInfo->flashDlightColor, … )`, the one colour the C states for this weapon — and the same three numbers `muzzleFlash.ts` already holds, read rather than retyped |
+  | reach | 150 Q3 units | `muzzleFlash.ts`'s reach for the gauntlet, lightning gun and grapple: the three `CG_AddPlayerWeapon` lights *continuously* rather than pulsing at 300. A bolt in flight is the continuous case |
+  | flux | 400 lm | below the gauntlet's 560, the dimmest continuous flash in that table, because `fireRateMs` 100 and `speed` 2000 put ten or more bolts down a long sightline at once where only ever one gauntlet glow exists |
+  | emissive | 300 | the same quantity as a map material's `emissiveLuminance`, whose top value on `am_thornish` is **295.7** for `base_light/light5_15k`. A bolt is level with the brightest fitting in the level, and not an order of magnitude past it |
+
+  The emissive is applied *through* the colour, so blue carries the 300 and the other two carry 180
+  — the bundle's own convention for a coloured emitter, and why the ball reads blue rather than
+  white with a blue halo. `diffuse_color` is black: a bolt is a light source, and a ball with a
+  diffuse response takes the colour of whatever corridor it flies down.
+
+  Exposure is automatic, which is the argument against reaching for a bigger number. A bolt authored
+  ten times brighter does not look ten times brighter; it darkens the room around it.
+
+The light asks `Shadows.casts('effect')` rather than answering for itself, because that module exists
+so that four files cannot each decide this in a comment. Worth stating what the answer costs under
+`all`: a muzzle flash is one static light for 50 ms, and this is ten moving omni casters for a second
+each, every one re-rendering six faces per frame because it moved. That is the mode's bill and not
+this effect's — the reading `muzzleFlash.ts` already takes — and the default mode is `sun`, so out of
+the box a bolt lights the corridor without shadowing it.
+
+**`SpriteSystemPE` is no longer registered, and could not have stayed.** It was the port's only
+sprite consumer, and it is unusable as shipped: REPORT.md BUG-17. `AbstractContextSystem` pools its
+per-entity contexts, `SpriteSystemPE.Context.link` rebuilds an emitter only when it is not flagged
+`Built`, and `ParticleEmitter.dispose` empties the particle pool while leaving that flag set — so the
+second sprite to recycle a context writes into an emptied pool and throws, from inside a `Signal`
+that catches and logs. In play that was every other plasma bolt invisible and a `console.error` per
+physics step for the rest of its flight.
+
+**The bug is why this was done when it was and not why it was done.** The sphere is a better picture
+and would have been the right answer against a fixed engine; a workaround that restored the sprite
+would have restored a worse one. What the bug did was settle a question that would otherwise have
+been a preference. Recorded that way round on purpose — the port has form for finding an engine
+defect and then dressing the workaround up as a design choice, and this is the opposite case.
+
+What is left behind is `assets/built/fx/plasma_ball.png` and its line in `convert-fx.ts`, now
+referenced by nothing. Kept rather than deleted: it is a converted Q3 sprite, it is cheap, and
+`CG_PlasmaTrail` is a thing this port has not ported yet.
