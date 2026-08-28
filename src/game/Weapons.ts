@@ -47,7 +47,32 @@ export interface WeaponStats {
 }
 
 export function weaponStats(id: WeaponId): WeaponStats {
-    return balance.weapons[id] as WeaponStats;
+    const stats = balance.weapons[id] as WeaponStats | undefined;
+
+    /*
+     Unreachable by way of `isWeaponId`, and loud for anything that got here
+     without it. The alternative is this signature lying: `undefined` reads as a
+     `WeaponStats`, travels as far as `stats.hitscan` in `fire`, and reports a
+     shot that went wrong rather than a weapon that has no numbers.
+    */
+    if (stats === undefined) throw new Error(`no balance entry for weapon "${id}"`);
+
+    return stats;
+}
+
+/**
+ * Whether `tag` names a weapon this port fires.
+ *
+ * `bg_itemlist` is the wider list, and deliberately so: OA ships a
+ * `weapon_nailgun` and a `weapon_grapplinghook` that `balance.weapons` has no
+ * entry for, because there is nothing in the sources for `extract-balance.mjs`
+ * to read -- `fire_nail` draws a fresh random speed for every nail, and the hook
+ * is not a damage weapon at all. Maps place them regardless (`am_thornish` has
+ * two nailguns), so this is the crossing an item tag, a saved setting or any
+ * other outside string has to make before it can be a `WeaponId`.
+ */
+export function isWeaponId(tag: string): tag is WeaponId {
+    return Object.hasOwn(balance.weapons, tag);
 }
 
 /** Anything a shot can hit and hurt. */

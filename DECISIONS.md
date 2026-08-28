@@ -5015,3 +5015,52 @@ has to be checked against the renderer that is actually running, and the rendere
 running here is Brick4 on every map with a bake. The material was verified end to end and the
 *scene* was not, because this app runs in a hidden tab where compositing is dead and screenshots
 fail. Reading a material back proves plumbing; it cannot prove a surface is visible.
+
+### D-114: `bg_itemlist` is wider than the weapon table, and the crossing between them is a function
+
+Firing on `am_thornish` could end the frame with `TypeError: Cannot read properties of undefined
+(reading 'hitscan')` inside `WeaponSystem.fire`. The weapon in hand was `WP_NAILGUN`, picked up
+thirty seconds earlier, and `balance.weapons` has no nailgun.
+
+**Two lists, treated as one.** `WeaponId` is `keyof typeof balance.weapons` — eleven weapons, each
+with a fire rate and a damage figure extracted from the OA sources. `balance.items` is
+`bg_itemlist`, and it holds *thirteen* `IT_WEAPON` entries: the eleven, plus `weapon_nailgun` and
+`weapon_grapplinghook`. Item tags are strings from a map's entity lump, so the two sets met at a
+cast — `player.selectWeapon(event.selectWeapon as typeof player.weapon)` in `PickupSystem` — and a
+cast is an assertion that nothing checks. `am_thornish` places two nailguns; walking over one
+autoswitched to it, `weaponStats` returned `undefined` while promising a `WeaponStats`, and the next
+click dereferenced it.
+
+**The two missing weapons are missing on purpose.** `extract-balance.mjs` reads numbers rather than
+transcribing them, and there are no numbers to read for either. `fire_nail` draws a fresh random
+speed per nail — `scale = 555 + random() * 1800` — and fires fifteen of them, which is neither the
+single-projectile shape `projectile()` extracts nor a thing a `speed` field can hold. The grappling
+hook has no damage, no splash and no fire rate worth the name; it is a movement device wearing a
+weapon's slot. Giving either one invented numbers to keep a table square is the failure mode this
+port has avoided everywhere else.
+
+**So the fix is the crossing, not the table.** Three changes, one job each:
+
+- `isWeaponId(tag)` is the only sanctioned way for an outside string to become a `WeaponId`, and it
+  asks the same table the type is derived from.
+- `PickupEvent.selectWeapon` is now `WeaponId | null` instead of `string | null`, which it can only
+  promise because `give` narrows through `isWeaponId`. The cast in `PickupSystem` is gone, and
+  nothing replaced it.
+- `weaponStats` throws on an id it has no entry for, naming the weapon. It should now be
+  unreachable; if some later path gets past the guard, the failure says which weapon has no numbers
+  instead of reporting a shot that went wrong three frames later.
+
+**What the player sees.** The nailgun is still picked up, still owned, still counted — `Pickup_Weapon`
+runs as it always did, and the HUD is already total over an id it does not know. What it will not do
+is end up in your hands. Q3 has no weapon it cannot hold and therefore has no rule to be faithful
+to here; between "cannot hold it" and "crashes when fired", the choice makes itself.
+
+The alternative considered and rejected was dropping the entity at spawn, so the map has no nailgun
+at all. It is tidier for exactly one frame and worse afterwards: `ItemSystem.spawn` already treats a
+missing pickup as a thing a level designer would notice (that is why an item that falls out of the
+world is dropped and *logged*), bots would stop routing to a pad that visibly has something on it,
+and the port would be editing the map rather than admitting a gap in itself.
+
+Pinned by `test/items.test.ts`: the nailgun specifically, and then the rule over the whole item
+table — every `IT_WEAPON` that can be autoswitched to must answer `weaponStats` — so a weapon
+arriving in a future extraction fails in the suite rather than mid-match.

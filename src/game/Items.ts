@@ -32,6 +32,7 @@
 
 import balance from './balance.generated.json' with { type: 'json' };
 import { CONTENTS } from '../q3/cm/ClipMap.ts';
+import { isWeaponId, type WeaponId } from './Weapons.ts';
 
 /* ---- constants from g_items.c / bg_public.h ---- */
 
@@ -169,8 +170,15 @@ export interface PickupEvent {
     readonly item: ItemInstance;
     /** What actually went in: `50 Armor`, `Rocket Launcher`. */
     readonly label: string;
-    /** True when a weapon pickup should change the held weapon. */
-    readonly selectWeapon: string | null;
+    /**
+     * The weapon the pickup should put in the player's hands, or null.
+     *
+     * A `WeaponId` rather than the item's `giTag`, because the two lists are not
+     * the same one -- see `isWeaponId`. A weapon this port has no numbers for is
+     * still picked up and still owned; what it cannot do is become the weapon
+     * being held, which is the one thing that needs a fire rate.
+     */
+    readonly selectWeapon: WeaponId | null;
 }
 
 /** The subset of a trace backend `ItemSystem` needs, so it can take either one. */
@@ -385,7 +393,7 @@ export function respawnSeconds(def: ItemDef): number {
 /** The `Pickup_*` family, collapsed into one switch. */
 function give(item: ItemInstance, inv: Inventory): PickupEvent {
     const def = item.def;
-    let selectWeapon: string | null = null;
+    let selectWeapon: WeaponId | null = null;
 
     switch (def.type) {
         case 'IT_ARMOR': {
@@ -407,8 +415,15 @@ function give(item: ItemInstance, inv: Inventory): PickupEvent {
              `CG_ItemPickup`: autoswitch is on by default and deliberately
              excludes the machinegun, so picking up ammo for the weapon you
              already start with does not yank you off a railgun.
+
+             And never to a weapon outside `balance.weapons`, which is not a Q3
+             rule but a consequence of this port implementing eleven of OA's
+             thirteen weapon pickups: a nailgun in the hands has no fire rate to
+             count down and no damage to deal, and every read of its stats is a
+             read of `undefined`. Q3 has no such weapon and so has nothing to say
+             about this case.
             */
-            if (def.tag !== 'WP_MACHINEGUN') selectWeapon = def.tag;
+            if (def.tag !== 'WP_MACHINEGUN' && isWeaponId(def.tag)) selectWeapon = def.tag;
             break;
         }
 

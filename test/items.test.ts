@@ -32,6 +32,8 @@ import {
     ITEM_RADIUS,
     type ItemDef,
 } from '../src/game/Items.ts';
+import { isWeaponId, weaponStats } from '../src/game/Weapons.ts';
+import balance from '../src/game/balance.generated.json' with { type: 'json' };
 import { BspFile } from '../src/q3/bsp/BspFile.ts';
 import { ClipMap } from '../src/q3/cm/ClipMap.ts';
 import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
@@ -176,6 +178,48 @@ describe('pickup', () => {
 
         const machinegun = oneItem('weapon_machinegun').update(0.1, [0, 0, 0], inv, true);
         expect(machinegun[0]!.selectWeapon).toBe(null);
+    });
+
+    it('never autoswitches to a weapon outside the balance table', () => {
+        const inv = newInventory();
+
+        /*
+         `am_thornish` places two nailguns, and the nailgun is one of the two
+         `IT_WEAPON` tags with no `balance.weapons` entry. Autoswitching to one
+         put an id with no stats in `player.weapon`, and the next shot read
+         `hitscan` off `undefined` inside `WeaponSystem.fire`.
+        */
+        const nailgun = oneItem('weapon_nailgun').update(0.1, [0, 0, 0], inv, true);
+
+        expect(nailgun[0]!.label).toBe('Nailgun');
+        expect(nailgun[0]!.selectWeapon).toBe(null);
+
+        // Picked up all the same: `Pickup_Weapon` gives it, and the ammo with it.
+        expect(inv.weapons.has('WP_NAILGUN')).toBe(true);
+        expect(inv.ammo['WP_NAILGUN']).toBe(10);
+    });
+
+    it('offers no pickup the weapon table cannot answer for', () => {
+        /*
+         The rule rather than the two instances of it: any `IT_WEAPON` this port
+         can be switched to must have stats, so a future weapon arriving in the
+         item table fails here rather than in the middle of a match.
+        */
+        const weapons = (balance.items as readonly ItemDef[]).filter(
+            (item) => item.type === 'IT_WEAPON'
+        );
+        expect(weapons.length).toBeGreaterThan(11);
+
+        for (const item of weapons) {
+            const inv = newInventory();
+            const [event] = oneItem(item.classname).update(0.1, [0, 0, 0], inv, true);
+
+            const selected = event?.selectWeapon ?? null;
+            if (selected === null) continue;
+
+            expect(isWeaponId(selected), `${item.classname} is selectable`).toBe(true);
+            expect(weaponStats(selected).fireRateMs).toBeGreaterThan(0);
+        }
     });
 
     it('does not pick up while dead', () => {

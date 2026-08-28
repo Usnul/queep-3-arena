@@ -253,7 +253,7 @@ export class PickupSystem extends System<never> {
             // `Touch_Item` plays the pickup sound to the picker only, dry.
             this.audio.playLocal(`item/${event.item.def.classname}`);
             if (event.selectWeapon !== null) {
-                player.selectWeapon(event.selectWeapon as typeof player.weapon);
+                player.selectWeapon(event.selectWeapon);
             }
         }
 
