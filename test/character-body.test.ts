@@ -271,3 +271,65 @@ describe('a character body', () => {
         expect(solid).toBeLessThan(through - 20);
     });
 });
+
+/*
+ * `PM_CheckDuck` asks the broadphase "does my standing box fit here", and since
+ * phase 9 the broadphase contains the asker. Unfiltered, the test finds the
+ * body the character is wearing -- the same box, in the same place -- and
+ * answers "no headroom" every frame for ever: press crouch once and you never
+ * stand up again, which is what shipped.
+ *
+ * Written as two cases because the filter has to remove exactly one body and no
+ * more. A filter that answered "clear" unconditionally would fix the bug and
+ * lose `MASK_PLAYERSOLID`.
+ */
+describe('standing up out of a crouch', () => {
+    /** A character with a body, dropped at a spawn and left to come to rest. */
+    async function grounded(): Promise<{
+        physics: HeadlessPhysics;
+        bodies: CharacterBodies;
+        who: Character;
+    }> {
+        const physics = await HeadlessPhysics.create(cm);
+        const bodies = new CharacterBodies({ system: physics.system, ecd: physics.ecd }, physics.ecd);
+        const who = character(physics, bodies, spawnAt(0));
+
+        run(physics, [who], bodies, 250, () => command());
+        expect(who.state.grounded, 'the character never landed').toBe(true);
+
+        return { physics, bodies, who };
+    }
+
+    it('is not blocked by the body the character is wearing', async () => {
+        const { physics, bodies, who } = await grounded();
+
+        run(physics, [who], bodies, 30, () => command({ crouch: true }));
+        expect(who.state.ducked, 'crouch did not take').toBe(true);
+
+        run(physics, [who], bodies, 30, () => command());
+        expect(who.state.ducked, 'released crouch and stayed down').toBe(false);
+        expect(who.state.viewheight).toBe(26);
+    });
+
+    it('is still blocked by another character overhead', async () => {
+        const { physics, bodies, who } = await grounded();
+
+        /*
+         A second body 45 units above this one's feet: inside the standing box,
+         which reaches 56, and clear of the crouched box, which stops at 40. So
+         the crouch is unobstructed and only standing back up is refused.
+        */
+        character(physics, bodies, [
+            who.state.origin[0]!,
+            who.state.origin[1]!,
+            who.state.origin[2]! + 45,
+        ]);
+        bodies.sync();
+
+        run(physics, [who], bodies, 30, () => command({ crouch: true }));
+        expect(who.state.ducked).toBe(true);
+
+        run(physics, [who], bodies, 30, () => command());
+        expect(who.state.ducked, 'stood up through another player').toBe(true);
+    });
+});

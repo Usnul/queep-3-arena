@@ -478,6 +478,16 @@ export class MeepMove {
      * with the taller box rather than Q3's upward trace -- same question, and
      * the mover's own recover pass would push the player out of a ceiling
      * anyway if this got it wrong.
+     *
+     * **The overlap has to be filtered**, and forgetting that is why crouch was
+     * a one-way door for the whole of phase 9: since characters got bodies, the
+     * standing box the headroom test asks about is the same box the asker is
+     * wearing, in the same place. Unfiltered, the test finds the character
+     * itself and answers "no headroom" on every frame for ever -- press ctrl
+     * once and you never stand up again. `moveFilter` is what the sweeps in
+     * `resolve` already use for exactly this, and it keeps the rest of the
+     * answer honest: another player over your head still pins you down, which
+     * is what `MASK_PLAYERSOLID` does in Q3.
      */
     private duck(state: MoveState, cmd: MoveCommand): void {
         if (cmd.crouch) {
@@ -490,9 +500,12 @@ export class MeepMove {
         this.toMeep(state.origin, this.meepPosition);
         const blocked = (this.mover.physicsSystem as {
             overlap(
-                s: unknown, p: unknown, r: unknown, out: Uint32Array, off: number
+                s: unknown, p: unknown, r: unknown, out: Uint32Array, off: number,
+                filter?: (entity: number, collider: unknown) => boolean
             ): number;
-        }).overlap(this.standShape, this.meepPosition, NO_ROTATION, SCRATCH_OVERLAP, 0) > 0;
+        }).overlap(
+            this.standShape, this.meepPosition, NO_ROTATION, SCRATCH_OVERLAP, 0, this.filter
+        ) > 0;
 
         if (!blocked) {
             state.ducked = false;
