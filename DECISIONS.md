@@ -5118,7 +5118,7 @@ by both paths, so the player's plasma gun and a bot's cannot be different colour
 | --- | --- |
 | `color` | `CG_RegisterWeapon`'s `flashDlightColor`, transcribed. Yellow for the three weapons firing the same round, blue for the plasma and lightning family, two distinct oranges for the launchers, `1, 0.7, 1` for the BFG. |
 | `reachQ3` | the radius `trap_R_AddLightToScene` is given: 300 for the impulse flash every weapon gets, 150 for the three Q3 lights *continuously* while firing. |
-| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 800 to the BFG's 6,000. |
+| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 560 to the BFG's 4,200. |
 
 Two things are deliberately absent from that table.
 
@@ -5145,5 +5145,13 @@ the suite rather than putting the light back in the middle of the screen.
 
 **What still needs eyes.** Everything above is plumbing and arithmetic, which is all this port can
 self-verify -- the preview browser runs the app in a hidden tab where nothing composites (D-077,
-D-113). Whether 1,800 lumens of yellow at 9.4 m reads as a machinegun is a judgement about a picture,
+D-113). Whether 1,260 lumens of yellow at 9.4 m reads as a machinegun is a judgement about a picture,
 and the lumens column is the one to turn if it does not.
+
+**And it was turned, once, by 30%.** The first set -- 800 to 6,000 -- was too bright in play, and
+uniformly so rather than weapon by weapon, which is the outcome that argues the column was scaled
+wrong and not authored wrong. So the whole of it came down by the same factor and the reach did not
+move: the ratios between the weapons are the part that was right, and a per-weapon correction would
+have thrown them away to fix a single number. This is the entry recording that the dial exists and
+where it has been set, which is the only thing a decision record can usefully say about a judgement
+made by eye.

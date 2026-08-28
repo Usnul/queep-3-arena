@@ -57,7 +57,7 @@ export const MUZZLE_FLASH_SECONDS = 0.05;
  * Reached by a weapon this table has not been told about -- which is a weapon
  * `balance.weapons` has just grown, since the eleven it has are all below.
  */
-const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens: 2500 };
+const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens: 1750 };
 
 /**
  * Per weapon, and two of the three columns are Q3's own numbers.
@@ -76,7 +76,10 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  *   its reach differs. Photometric units make "physically plausible" and "reads
  *   well" different questions (GAP-011), and this column is the second one --
  *   scaled to the muzzle blast the weapon looks like it should have, against the
- *   explosion's 12,000 lm as the bright end of the scale.
+ *   explosion's 12,000 lm as the bright end of the scale. The whole column came
+ *   down 30% after the first set was seen in play: too hot, and uniformly so,
+ *   which is what makes it one number rather than eleven. The ratios between the
+ *   weapons survived that and are the part worth keeping.
  *
  * What is **not** here is a source radius, which is the one an area light wants
  * and the one this table would most like to vary: a shotgun's blast is a
@@ -85,31 +88,31 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  */
 const FLASHES: Readonly<Record<string, MuzzleFlashLight>> = {
     // MAKERGB( 0.6, 0.6, 1.0 ), and lit at 150 while firing rather than pulsed.
-    WP_GAUNTLET: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 800 },
-    WP_LIGHTNING: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 2000 },
+    WP_GAUNTLET: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 560 },
+    WP_LIGHTNING: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 1400 },
 
     // MAKERGB( 1, 1, 0 ): the two weapons firing the same round.
-    WP_MACHINEGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1800 },
-    WP_CHAINGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1800 },
+    WP_MACHINEGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1260 },
+    WP_CHAINGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1260 },
 
     // MAKERGB( 1, 1, 0 ), and the largest muzzle blast in the game.
-    WP_SHOTGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 4500 },
+    WP_SHOTGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 3150 },
 
     // MAKERGB( 1, 0.70, 0 ).
-    WP_GRENADE_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 2600 },
-    WP_PROX_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 2600 },
+    WP_GRENADE_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 1820 },
+    WP_PROX_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 1820 },
 
     // MAKERGB( 1, 0.75f, 0 ).
-    WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 3500 },
+    WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 2450 },
 
     // MAKERGB( 0.6, 0.6, 1.0 ), but pulsed like the rest.
-    WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 2200 },
+    WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 1540 },
 
     // MAKERGB( 1, 0.5f, 0 ).
-    WP_RAILGUN: { color: [1, 0.5, 0], reachQ3: 300, lumens: 3000 },
+    WP_RAILGUN: { color: [1, 0.5, 0], reachQ3: 300, lumens: 2100 },
 
     // MAKERGB( 1, 0.7f, 1 ), and the brightest thing a player carries.
-    WP_BFG: { color: [1, 0.7, 1], reachQ3: 300, lumens: 6000 },
+    WP_BFG: { color: [1, 0.7, 1], reachQ3: 300, lumens: 4200 },
 };
 
 /** The flash `weapon` throws, or the white default for one with no entry. */
