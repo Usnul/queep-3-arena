@@ -397,7 +397,9 @@ the one every performance number is quoted from — had been running with zero b
 Team Arena map with no `info_player_deathmatch` entity for the spawn filter to find.
 
 What is *not* done is listed per phase in `DECISIONS.md` rather than summarised away: patch
-collision (D-017), capsule traces (D-018), the weapon state machine (D-022), mover crush and
+collision in the *ported* trace (D-017 — the physics backend collides against curved surfaces
+since D-125, `boxTrace` still does not), capsule traces (D-018), the weapon state machine
+(D-022), mover crush and
 shootable doors (D-041), smooth skin weights and character LOD (D-045), the bots' missing half —
 no jumping to reach anything, no aim prediction, no bot-versus-bot target selection (D-055, now
 asserted directly by a test so the claim cannot drift). The lightgrid importer that was on this
@@ -612,7 +614,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_CM_CapsuleTrace` | 1 | cgame | not needed | - | -- | OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018. |
 | `trap_CM_InlineModel` | 5 | cgame | ported | - | `src/q3/cm/ClipMap.ts` | Submodel index into the clipmap; both `boxTrace` and `pointContents` take one. |
 | `trap_CM_LerpTag` | 7 | q3_ui, ui | mapped | glTF node hierarchy + AnimationSystem3 clip player | `tools/convert-characters.ts` | Game-side spelling of the same call. |
-| `trap_CM_LoadMap` | 3 | cgame | ported | - | `src/q3/cm/ClipMap.ts`<br>`src/q3/bsp/BspFile.ts` | cm_load.c ported: planes, nodes, leafs, brushes, brushsides, submodels. Read straight out of the BSP rather than from a converted format, so the runtime, the WASM oracle and the divergence harness all read the same bytes. Patch collision is *not* ported (D-017). |
+| `trap_CM_LoadMap` | 3 | cgame | ported | - | `src/q3/cm/ClipMap.ts`<br>`src/q3/bsp/BspFile.ts` | cm_load.c ported: planes, nodes, leafs, brushes, brushsides, submodels. Read straight out of the BSP rather than from a converted format, so the runtime, the WASM oracle and the divergence harness all read the same bytes. Patch control meshes are loaded and decomposed into convex facets for the physics backend (D-125); `cm_patch.c`'s own grid walk is still *not* ported, so `boxTrace` passes through curves (D-017). |
 | `trap_CM_MarkFragments` | 3 | cgame | not needed | DecalSystem3 (GPU decals) | -- | Q3 clips world triangles on the CPU to build mark polygons. Replaced by meep GPU decals per brief section 2. |
 | `trap_CM_NumInlineModels` | 3 | cgame | ported | - | `src/q3/cm/ClipMap.ts` | As above. |
 | `trap_CM_PointContents` | 5 | cgame | ported | - | `src/q3/cm/trace.ts` | Submodel form of the same call; `pointContents` takes the model index. |

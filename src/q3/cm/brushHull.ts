@@ -53,12 +53,18 @@ const SIDE_ON = 2;
 
 export interface BrushHull {
     /**
-     * Index of the brush this came from, in the clipmap it was built against.
+     * Index of the brush this came from, in the clipmap it was built against,
+     * or `-1` for a hull with no brush behind it.
      *
      * Carried so the contact-plane rule can be answered by the *ported*
      * `CM_TraceThroughBrush` rather than re-derived from `planes`. Re-deriving
      * it is how the physics backend ended up handing pmove the floor's normal
      * for a horizontal move -- see `traceBrushList`.
+     *
+     * `-1` is not "unknown", it is "this volume is not in the brush lump":
+     * a patch facet, per `patchHull.ts`. Those answer the same rule from
+     * `planes` instead, via `traceThroughPlanes`, so a caller must dispatch on
+     * the sign rather than indexing the clipmap with it.
      */
     readonly brush: number;
     /** Flat `(x, y, z)` per vertex, in Q3 coordinates. */
@@ -66,16 +72,30 @@ export interface BrushHull {
     /** Three indices per triangle, wound CCW as seen from outside. */
     readonly indices: Uint32Array;
     readonly contents: number;
+    /**
+     * Surface flags a contact with this hull reports.
+     *
+     * Zero for a brush hull, and deliberately: `CM_TraceThroughBrush` reports
+     * the flags of the *side* the sweep entered through, which it reads from
+     * the clipmap, so a single per-hull value would be the wrong answer for
+     * five of a box's six faces. A patch facet has one shader across the whole
+     * piece, so for those it is the real value and footsteps read it.
+     */
+    readonly surfaceFlags: number;
     /** Axis-aligned bounds, `[minX, minY, minZ, maxX, maxY, maxZ]`. */
     readonly bounds: Float32Array;
     /**
-     * The brush's own planes, four floats each: outward normal then distance,
+     * The hull's own planes, four floats each: outward normal then distance,
      * in Q3 coordinates.
      *
      * Carried alongside the triangles because the *plane set* is what Q3's
      * contact semantics are defined over. meep's narrowphase answers "which
      * body, and how far"; picking *which face* that contact belongs to is a Q3
      * rule, and it needs these. See `PhysicsWorld.trace`.
+     *
+     * Only the planes that contributed a face are here -- a plane clipped away
+     * entirely by the others is not part of the volume and must not be, since
+     * `traceThroughPlanes` reads this as the complete half-space set.
      */
     readonly planes: Float32Array;
 }
@@ -219,16 +239,27 @@ function chopWinding(
 }
 
 /**
- * Build a convex hull for one brush.
+ * Build a convex hull from a set of outward-facing half-spaces.
  *
- * Returns `null` for brushes that produce no usable geometry -- degenerate
- * brushes exist in shipped maps, and one of them should not abort a level load.
+ * The solid is the intersection of "behind every plane", which is what a Q3
+ * brush is and what `patchHull.ts` builds its facets as. Extracted from
+ * `brushToHull` so the two cannot drift: the winding clipper, the weld, the
+ * reversed fan and the degenerate-rejection rule are subtle enough that a
+ * second copy would be a second set of bugs, and the patch facets have to
+ * satisfy `ConvexHullShape3D.from`'s winding contract exactly as brushes do.
+ *
+ * Returns `null` when the planes produce no usable geometry.
+ *
+ * @param input `numPlanes * 4` floats: outward normal then distance.
  */
-export function brushToHull(cm: ClipMap, brushIndex: number): BrushHull | null {
-    const firstSide = cm.brushes[brushIndex * 3]!;
-    const numSides = cm.brushes[brushIndex * 3 + 1]!;
-
-    if (numSides < 4) return null;
+export function hullFromPlanes(
+    input: ArrayLike<number>,
+    numPlanes: number,
+    brush: number,
+    contents: number,
+    surfaceFlags: number
+): BrushHull | null {
+    if (numPlanes < 4) return null;
 
     const vertices: number[] = [];
     const indices: number[] = [];
@@ -249,33 +280,31 @@ export function brushToHull(cm: ClipMap, brushIndex: number): BrushHull | null {
         return vertices.length / 3 - 1;
     };
 
-    for (let s = 0; s < numSides; s++) {
-        const planeIndex = cm.brushSides[(firstSide + s) * 2]!;
-        const p = planeIndex * PLANE_STRIDE;
+    for (let s = 0; s < numPlanes; s++) {
+        const p = s * 4;
 
-        const nx = cm.planes[p]!;
-        const ny = cm.planes[p + 1]!;
-        const nz = cm.planes[p + 2]!;
-        const dist = cm.planes[p + 3]!;
+        const nx = input[p]!;
+        const ny = input[p + 1]!;
+        const nz = input[p + 2]!;
+        const dist = input[p + 3]!;
 
         let winding = baseWinding(nx, ny, nz, dist);
         if (winding.length === 0) continue;
 
-        // Clip against every other side. Brush planes face outwards and the
-        // solid is behind all of them, so each clip keeps the half-space behind
-        // the other plane -- hence the negation.
-        for (let o = 0; o < numSides && winding.length > 0; o++) {
+        // Clip against every other side. The planes face outwards and the solid
+        // is behind all of them, so each clip keeps the half-space behind the
+        // other plane -- hence the negation.
+        for (let o = 0; o < numPlanes && winding.length > 0; o++) {
             if (o === s) continue;
 
-            const op = cm.brushSides[(firstSide + o) * 2]!;
-            const q = op * PLANE_STRIDE;
+            const q = o * 4;
 
             winding = chopWinding(
                 winding,
-                -cm.planes[q]!,
-                -cm.planes[q + 1]!,
-                -cm.planes[q + 2]!,
-                -cm.planes[q + 3]!
+                -input[q]!,
+                -input[q + 1]!,
+                -input[q + 2]!,
+                -input[q + 3]!
             );
         }
 
@@ -329,14 +358,46 @@ export function brushToHull(cm: ClipMap, brushIndex: number): BrushHull | null {
     }
 
     return {
-        brush: brushIndex,
+        brush,
         vertices: new Float32Array(vertices),
         indices: new Uint32Array(indices),
-        contents: cm.brushContents[brushIndex]!,
+        contents,
+        surfaceFlags,
         bounds,
         planes: new Float32Array(planes),
     };
 }
+
+/**
+ * Build a convex hull for one brush.
+ *
+ * Returns `null` for brushes that produce no usable geometry -- degenerate
+ * brushes exist in shipped maps, and one of them should not abort a level load.
+ */
+export function brushToHull(cm: ClipMap, brushIndex: number): BrushHull | null {
+    const firstSide = cm.brushes[brushIndex * 3]!;
+    const numSides = cm.brushes[brushIndex * 3 + 1]!;
+
+    if (numSides < 4) return null;
+
+    const gathered = new Float64Array(numSides * 4);
+
+    for (let s = 0; s < numSides; s++) {
+        const p = cm.brushSides[(firstSide + s) * 2]! * PLANE_STRIDE;
+        gathered[s * 4] = cm.planes[p]!;
+        gathered[s * 4 + 1] = cm.planes[p + 1]!;
+        gathered[s * 4 + 2] = cm.planes[p + 2]!;
+        gathered[s * 4 + 3] = cm.planes[p + 3]!;
+    }
+
+    /*
+     Zero surface flags: the contact-plane rule reports the entered *side*'s
+     flags out of the clipmap, which is per-face and cannot be carried here.
+     See `BrushHull.surfaceFlags`.
+    */
+    return hullFromPlanes(gathered, numSides, brushIndex, cm.brushContents[brushIndex]!, 0);
+}
+
 
 export interface HullSet {
     readonly hulls: readonly BrushHull[];

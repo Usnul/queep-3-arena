@@ -26,7 +26,7 @@
  * divergence that leaves is bounded and is what the differential test measures.
  */
 
-import { BspFile } from '../bsp/BspFile.ts';
+import { BspFile, VERT_STRIDE_F32, VERT_XYZ } from '../bsp/BspFile.ts';
 
 /** `cm_local.h`. Q3 offsets clipped surfaces by 1/8 unit. */
 export const SURFACE_CLIP_EPSILON = 0.125;
@@ -115,11 +115,37 @@ function planeSignbits(x: number, y: number, z: number): number {
 }
 
 /**
+ * One `MST_PATCH` surface's control mesh, kept for collision.
+ *
+ * The control points rather than a tessellation: the grid is small (a 9x3
+ * cylinder is 27 points), tessellating is cheap, and the subdivision a
+ * *collider* wants is not the one the renderer wants -- see `patchHull.ts`.
+ * Storing the curve rather than one sampling of it leaves that choice open.
+ */
+export interface ClipMapPatch {
+    /** Index of the BSP draw surface this came from. */
+    readonly surface: number;
+    /** Control grid dimensions; both odd and at least 3. */
+    readonly width: number;
+    readonly height: number;
+    /** `width * height * 3` floats, row-major, in Q3 coordinates. */
+    readonly control: Float32Array;
+    /** From the surface's shader, as `CMod_LoadPatches` takes them. */
+    readonly contents: number;
+    readonly surfaceFlags: number;
+}
+
+/**
  * The collision data of one BSP.
  *
- * Patch (curved surface) collision is **not** loaded -- see DECISIONS.md D-017.
- * `numPatches` reports how many the map has so callers can tell whether a given
- * level is affected.
+ * Patch (curved surface) collision is loaded as *control meshes* (`patches`);
+ * `patchHull.ts` turns those into convex facets for the physics backend. The
+ * ported `CM_BoxTrace` in `trace.ts` still does not consult them -- that half
+ * is `cm_patch.c` and is still unported. See DECISIONS.md D-017.
+ *
+ * `numPatches` counts the `MST_PATCH` surfaces the map has, which is not
+ * necessarily `patches.length`: a surface with an even or degenerate control
+ * grid is counted and not loaded.
  */
 export class ClipMap {
     readonly name: string;
@@ -173,6 +199,16 @@ export class ClipMap {
 
     /** How many `MST_PATCH` surfaces the map has; see D-017. */
     readonly numPatches: number;
+
+    /**
+     * The ones with a usable control grid, in surface order.
+     *
+     * Surface order matters: a submodel owns a contiguous slice of the surface
+     * lump (`firstSurface`/`numSurfaces`), so a brush entity's patches are
+     * found by filtering on `surface`, the same way its brushes are found by
+     * slicing the brush lump.
+     */
+    readonly patches: readonly ClipMapPatch[];
 
     /** Incremented per trace so a brush in two leafs is only tested once. */
     checkcount = 0;
@@ -274,13 +310,49 @@ export class ClipMap {
             };
         });
 
-        /* ---- patches (counted, not loaded) ---- */
+        /* ---- patches ---- */
 
+        const verts = bsp.drawVertsFloat;
+        const loaded: ClipMapPatch[] = [];
         let patches = 0;
-        for (const s of bsp.surfaces) {
-            if (s.surfaceType === 2 /* MST_PATCH */) patches += 1;
-        }
+
+        bsp.surfaces.forEach((s, index) => {
+            if (s.surfaceType !== 2 /* MST_PATCH */) return;
+            patches += 1;
+
+            /*
+             `tessellatePatch` requires odd dimensions of at least 3, which is
+             what a Bezier control mesh of overlapping 3x3 patches means. q3map2
+             does not emit anything else, but a hand-edited BSP can, and a
+             malformed surface should cost that surface rather than the level.
+            */
+            const w = s.patchWidth;
+            const h = s.patchHeight;
+            if (w < 3 || h < 3 || w % 2 === 0 || h % 2 === 0) return;
+            if (s.numVerts < w * h) return;
+
+            const control = new Float32Array(w * h * 3);
+            for (let k = 0; k < w * h; k++) {
+                const o = (s.firstVert + k) * VERT_STRIDE_F32 + VERT_XYZ;
+                control[k * 3] = verts[o]!;
+                control[k * 3 + 1] = verts[o + 1]!;
+                control[k * 3 + 2] = verts[o + 2]!;
+            }
+
+            const shader = shaders[s.shaderNum];
+
+            loaded.push({
+                surface: index,
+                width: w,
+                height: h,
+                control,
+                contents: shader?.contentFlags ?? 0,
+                surfaceFlags: shader?.surfaceFlags ?? 0,
+            });
+        });
+
         this.numPatches = patches;
+        this.patches = loaded;
     }
 
     /** Plane index of a brush side. */

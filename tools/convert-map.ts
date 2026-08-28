@@ -52,7 +52,7 @@ import {
     type TextureCache,
     writeTexture,
 } from './pipeline/texture-out.ts';
-import { tessellatePatch, type PatchVertex } from './pipeline/patch.ts';
+import { tessellatePatch, type PatchVertex } from '../src/q3/bsp/patch.ts';
 import { UNLIT_LUMINANCE, type ImageBlend, type PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
 import {

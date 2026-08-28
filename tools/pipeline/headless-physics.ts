@@ -54,6 +54,7 @@ import { hullShape } from '../../src/client/hullShape.ts';
 import { PhysicsTrace } from '../../src/client/PhysicsTrace.ts';
 import { layerForContents } from '../../src/client/layers.ts';
 import { buildHulls, type BrushHull } from '../../src/q3/cm/brushHull.ts';
+import { buildPatchHulls } from '../../src/q3/cm/patchHull.ts';
 import { pointContents } from '../../src/q3/cm/trace.ts';
 import type { TraceResult } from '../../src/q3/cm/trace.ts';
 
@@ -73,6 +74,10 @@ type SystemRegistry = { addSystem(system: unknown): Promise<unknown> };
 interface Stats {
     readonly bodies: number;
     readonly skipped: number;
+    /** Convex facets the world's patches decomposed into; see `patchHull.ts`. */
+    readonly facets: number;
+    /** Patch cells that produced no facet, and so are holes in the collision. */
+    readonly patchHoles: number;
     readonly hullMilliseconds: number;
     readonly bodyMilliseconds: number;
 }
@@ -167,6 +172,18 @@ export class HeadlessPhysics {
         */
         const world = cm.models[0]!;
         const set = buildHulls(cm, MASK_PLAYERSOLID, world.firstBrush, world.numBrushes);
+        /*
+         And the patch facets, because `PhysicsWorld` builds them. Leaving them
+         out here is the D-036 failure exactly: the harness would report a
+         divergence measured against a world with fourteen fewer columns in it
+         than the one the browser runs.
+        */
+        const patches = buildPatchHulls(
+            cm,
+            MASK_PLAYERSOLID,
+            world.firstSurface,
+            world.numSurfaces
+        );
 
         const t0 = performance.now();
         let bodies = 0;
@@ -174,17 +191,22 @@ export class HeadlessPhysics {
         for (const hull of set.hulls) {
             if (HeadlessPhysics.addHull(ecd, queries, hull)) bodies += 1;
         }
+        for (const hull of patches.hulls) {
+            if (HeadlessPhysics.addHull(ecd, queries, hull)) bodies += 1;
+        }
 
         return new HeadlessPhysics(cm, entityManager, ecd, system, queries, {
             bodies,
             skipped: set.skipped,
-            hullMilliseconds: set.milliseconds,
+            facets: patches.hulls.length,
+            patchHoles: patches.dropped,
+            hullMilliseconds: set.milliseconds + patches.milliseconds,
             bodyMilliseconds: performance.now() - t0,
         });
     }
 
     /**
-     * One brush -> one static body, as an entity.
+     * One brush or patch facet -> one static body, as an entity.
      *
      * The hull is built around its own centroid and the body is placed there,
      * rather than left in world space with the body at the origin, for the

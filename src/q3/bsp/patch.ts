@@ -24,6 +24,12 @@
  * fraction of a Q3 level's triangles, meep culls and batches them like anything
  * else, and a runtime LOD system would be the port re-implementing renderer
  * machinery the brief rules out.
+ *
+ * Lives under `src/` rather than `tools/` because two callers need it and they
+ * must agree: `tools/convert-map.ts` for the drawn surface, and
+ * `src/q3/cm/patchHull.ts` for the collision facets. A second copy of the
+ * Bezier evaluator is a second surface, and the map would then look like one
+ * shape and collide like another.
  */
 
 /** Vertex attributes carried through tessellation, matching `drawVert_t`. */
@@ -54,11 +60,16 @@ export interface TessellatedPatch {
 }
 
 /**
- * Subdivision level: each 3x3 Bezier patch becomes `LEVEL` x `LEVEL` quads.
+ * Default subdivision level: each 3x3 Bezier patch becomes `LEVEL` x `LEVEL`
+ * quads.
  *
  * Q3's own default (`r_subdivisions 4`) produces comparable density. 8 is one
  * step finer, which costs little offline and removes the visible faceting on the
  * large curved walls that OA maps favour.
+ *
+ * Collision passes its own, coarser level -- it is built at load time rather
+ * than offline, and every facet it emits costs a support-function scan on the
+ * movement hot path. See `patchHull.ts`.
  */
 const LEVEL = 8;
 
@@ -115,20 +126,24 @@ function bezier(out: PatchVertex, p0: PatchVertex, p1: PatchVertex, p2: PatchVer
 export function tessellatePatch(
     control: readonly PatchVertex[],
     patchWidth: number,
-    patchHeight: number
+    patchHeight: number,
+    level: number = LEVEL
 ): TessellatedPatch {
     if (patchWidth < 3 || patchHeight < 3 || patchWidth % 2 === 0 || patchHeight % 2 === 0) {
         throw new Error(
             `patch dimensions must be odd and at least 3, got ${patchWidth}x${patchHeight}`
         );
     }
+    if (!Number.isInteger(level) || level < 1) {
+        throw new Error(`patch subdivision level must be a positive integer, got ${level}`);
+    }
 
     // Each 3x3 sub-patch shares its edge with the next, so a (2n+1)-wide control
-    // grid yields n sub-patches and n*LEVEL + 1 output columns.
+    // grid yields n sub-patches and n*level + 1 output columns.
     const subU = (patchWidth - 1) / 2;
     const subV = (patchHeight - 1) / 2;
-    const outWidth = subU * LEVEL + 1;
-    const outHeight = subV * LEVEL + 1;
+    const outWidth = subU * level + 1;
+    const outHeight = subV * level + 1;
 
     const vertices: PatchVertex[] = new Array(outWidth * outHeight);
     for (let i = 0; i < vertices.length; i++) vertices[i] = blank();
@@ -144,8 +159,8 @@ export function tessellatePatch(
             const baseU = su * 2;
             const baseV = sv * 2;
 
-            for (let j = 0; j <= LEVEL; j++) {
-                const fv = j / LEVEL;
+            for (let j = 0; j <= level; j++) {
+                const fv = j / level;
 
                 // Collapse the 3x3 control grid down the V axis first, giving three
                 // control points for a curve along U.
@@ -153,10 +168,10 @@ export function tessellatePatch(
                 bezier(colB, at(baseU + 1, baseV), at(baseU + 1, baseV + 1), at(baseU + 1, baseV + 2), fv);
                 bezier(colC, at(baseU + 2, baseV), at(baseU + 2, baseV + 1), at(baseU + 2, baseV + 2), fv);
 
-                for (let i = 0; i <= LEVEL; i++) {
-                    const fu = i / LEVEL;
-                    const outCol = su * LEVEL + i;
-                    const outRow = sv * LEVEL + j;
+                for (let i = 0; i <= level; i++) {
+                    const fu = i / level;
+                    const outCol = su * level + i;
+                    const outRow = sv * level + j;
                     bezier(vertices[outRow * outWidth + outCol]!, colA, colB, colC, fu);
                 }
             }

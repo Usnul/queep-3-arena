@@ -176,6 +176,14 @@ export interface OccluderScene {
  * The conversion is `hullShape`, which is also what `PhysicsWorld` builds its
  * bodies from -- so what the bake hears and what the runtime occludes with are
  * the same solids.
+ *
+ * **Brush solids only.** `PhysicsWorld` also builds bodies from patch facets
+ * (`patchHull.ts`) and this does not, so sound passes through a curved wall
+ * that a player cannot. The reason is that this is an *offline* bake whose
+ * output is committed -- `audio-probes.bin` per map -- and including the facets
+ * changes the probes on every map with curves in it. It is a real gap, left
+ * open deliberately rather than by omission, and closing it is a re-bake rather
+ * than a code change.
  */
 export function buildOccluderScene(cm: ClipMap): OccluderScene {
     const t0 = performance.now();

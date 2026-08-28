@@ -33,6 +33,7 @@ import {
     SURFACE_CLIP_EPSILON,
     CONTENTS,
 } from './ClipMap.ts';
+import type { BrushHull } from './brushHull.ts';
 
 /* ------------------------------------------------------------------ *
  * Float32 arithmetic.
@@ -362,9 +363,13 @@ function traceThroughLeaf(cm: ClipMap, leafIndex: number): void {
         if (tw.trace.fraction === 0) return;
     }
 
-    // Patch collision is not ported -- see D-017. On a map with no patches this
-    // loop would do nothing anyway; on one with patches, curved surfaces are
-    // not solid.
+    // Patch collision is not ported here -- see D-017. `cm_patch.c`'s grid walk
+    // is what belongs in this loop, and is still missing, so *this* trace
+    // passes through curved surfaces. The physics backend does not: it collides
+    // against the facets `patchHull.ts` builds, and `traceHullList` below rules
+    // on them with the same per-volume test this loop runs on brushes. So the
+    // gap is now between the two backends rather than between the port and Q3,
+    // and `PmoveHost` picks the physics one whenever it has it.
 }
 
 function testInLeaf(cm: ClipMap, leafIndex: number): void {
@@ -826,6 +831,196 @@ export function traceBrushList(
         if ((cm.brushContents[brushnum]! & tw.contents) === 0) continue;
 
         traceThroughBrush(cm, brushnum);
+        if (tw.trace.fraction === 0) break;
+    }
+
+    finishTrace(out, start, end);
+}
+
+/**
+ * `CM_TraceThroughBrush` against a plane set that is not in the clipmap.
+ *
+ * A patch facet is a convex volume with no brush behind it -- see
+ * `patchHull.ts` -- so the rule that picks its contact plane cannot be reached
+ * by brush index. The arithmetic below is `traceThroughBrush`'s, line for line,
+ * with three substitutions: the planes come from the argument rather than
+ * `cm.planes`, the signbits are computed here rather than looked up, and the
+ * contents and surface flags are the hull's rather than the brush's.
+ *
+ * It is a transcription of a transcription, which is not free, and the
+ * alternative was worse. Leaving patch facets out of the rule entirely is not
+ * "slightly less accurate": a player resting against a column would have the
+ * contact answered by the *floor* they are also touching, the floor does not
+ * block a horizontal move, and the move would be allowed straight into the
+ * column. The facets have to be in the same comparison as the brushes.
+ *
+ * **No bevel planes.** `CM_TraceThroughBrush` expands each plane outward by the
+ * box's extent along that normal, which is exact per plane and too generous
+ * where two of them meet at an angle; q3map2 compensates by giving every brush
+ * six axial sides, and `CM_AddFacetBevels` does the same for patch facets. This
+ * has neither, so a box is stopped slightly early at a facet's edges. Measured
+ * against `oa_dm1`'s brushes with their redundant sides removed -- the same
+ * shortfall -- every one of 58 disagreements in 4,800 sweeps was in this
+ * direction, and none the other. Blocking early is the failure that keeps
+ * players out of walls; the reverse would put them inside one.
+ */
+function traceThroughPlanes(
+    planes: Float32Array,
+    contents: number,
+    surfaceFlags: number
+): void {
+    const numsides = planes.length / PLANE_STRIDE;
+    if (numsides === 0) return;
+
+    let enterFrac = -1.0;
+    let leaveFrac = 1.0;
+    let clipplane = -1;
+    let hasLeadside = false;
+
+    let getout = false;
+    let startout = false;
+
+    const sx = tw.start[0];
+    const sy = tw.start[1];
+    const sz = tw.start[2];
+    const ex = tw.end[0];
+    const ey = tw.end[1];
+    const ez = tw.end[2];
+
+    for (let i = 0; i < numsides; i++) {
+        const p = i * PLANE_STRIDE;
+
+        const nx = planes[p]!;
+        const ny = planes[p + 1]!;
+        const nz = planes[p + 2]!;
+
+        // Adjust the plane distance appropriately for mins/maxs. `SetPlaneSignbits`
+        // is one bit per negative component; the clipmap caches it per plane and
+        // a facet's planes are not in the clipmap, so it is derived here.
+        let signbits = 0;
+        if (nx < 0) signbits |= 1;
+        if (ny < 0) signbits |= 2;
+        if (nz < 0) signbits |= 4;
+        const sb = signbits * 3;
+
+        const dist = f32(
+            planes[p + 3]! - dot3(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz)
+        );
+
+        const d1 = f32(dot3(sx, sy, sz, nx, ny, nz) - dist);
+        const d2 = f32(dot3(ex, ey, ez, nx, ny, nz) - dist);
+
+        if (d2 > 0) getout = true; // endpoint is not in solid
+        if (d1 > 0) startout = true;
+
+        // Completely in front of face -- no intersection with the entire volume.
+        if (d1 > 0 && (d2 >= SURFACE_CLIP_EPSILON || d2 >= d1)) return;
+
+        // Doesn't cross the plane -- the plane isn't relevant.
+        if (d1 <= 0 && d2 <= 0) continue;
+
+        if (d1 > d2) {
+            // enter
+            let f = f32(f32(d1 - SURFACE_CLIP_EPSILON) / f32(d1 - d2));
+            if (f < 0) f = 0;
+            if (f > enterFrac) {
+                enterFrac = f;
+                clipplane = p;
+                hasLeadside = true;
+            }
+        } else {
+            // leave
+            let f = f32(f32(d1 + SURFACE_CLIP_EPSILON) / f32(d1 - d2));
+            if (f > 1) f = 1;
+            if (f < leaveFrac) leaveFrac = f;
+        }
+    }
+
+    // All planes checked and the trace was not completely outside the volume.
+    if (!startout) {
+        // Original point was inside.
+        tw.trace.startsolid = true;
+        if (!getout) {
+            tw.trace.allsolid = true;
+            tw.trace.fraction = 0;
+            tw.trace.contents = contents;
+        }
+        return;
+    }
+
+    if (enterFrac < leaveFrac) {
+        if (enterFrac > -1 && enterFrac < tw.trace.fraction) {
+            if (enterFrac < 0) enterFrac = 0;
+            tw.trace.fraction = enterFrac;
+            if (clipplane !== -1) {
+                tw.trace.planeNormal[0] = planes[clipplane]!;
+                tw.trace.planeNormal[1] = planes[clipplane + 1]!;
+                tw.trace.planeNormal[2] = planes[clipplane + 2]!;
+                tw.trace.planeDist = planes[clipplane + 3]!;
+            }
+            if (hasLeadside) {
+                /*
+                 One shader across a whole facet, so unlike a brush there is no
+                 per-side lookup to do -- see `BrushHull.surfaceFlags`. This is
+                 what makes footsteps on a curved floor sound like the curve
+                 rather than like default stone.
+                */
+                tw.trace.surfaceFlags = surfaceFlags;
+            }
+            tw.trace.contents = contents;
+        }
+    }
+}
+
+/**
+ * `CM_TraceThroughBrush` over an explicit list of hulls, brush-backed or not.
+ *
+ * The list form of `traceBrushList`, and the reason it exists is that the two
+ * kinds have to be ruled on *together*. Q3 tests every brush in a leaf and
+ * takes the latest entry plane over the whole set; running the brushes as one
+ * set and the patch facets as another gives two answers and no rule for
+ * choosing between them, which is exactly the tie-breaking-by-arrival-order bug
+ * `gatherHulls` was written to avoid.
+ *
+ * @param hulls hulls to test; duplicates and `undefined` entries are harmless.
+ */
+export function traceHullList(
+    out: TraceResult,
+    cm: ClipMap,
+    hulls: ArrayLike<BrushHull | undefined>,
+    count: number,
+    start: ArrayLike<number>,
+    end: ArrayLike<number>,
+    mins: ArrayLike<number>,
+    maxs: ArrayLike<number>,
+    brushmask: number
+): void {
+    cm.checkcount += 1;
+
+    setupTraceWork(start, end, mins, maxs, brushmask);
+    setupSweepExtents();
+
+    for (let i = 0; i < count; i++) {
+        const hull = hulls[i];
+        if (hull === undefined) continue;
+
+        if ((hull.contents & tw.contents) === 0) continue;
+
+        if (hull.brush >= 0) {
+            if (hull.brush >= cm.numBrushes) continue;
+
+            // The `checkcount` de-duplication the C uses. Facets have no slot in
+            // it, and need none: `traceThroughPlanes` is a pure function of the
+            // sweep and the planes, so testing one twice costs time and changes
+            // nothing.
+            if (cm.brushCheckcount[hull.brush] === cm.checkcount) continue;
+            cm.brushCheckcount[hull.brush] = cm.checkcount;
+
+            traceThroughBrush(cm, hull.brush);
+        } else {
+            traceThroughPlanes(hull.planes, hull.contents, hull.surfaceFlags);
+        }
+
         if (tw.trace.fraction === 0) break;
     }
 

@@ -34,7 +34,7 @@ import { PhysicsSurfacePoint } from '@woosh/meep-engine/src/engine/physics/queri
 import { BoxShape3D } from '@woosh/meep-engine/src/core/geom/3d/shape/BoxShape3D.js';
 
 import { ClipMap, MASK_PLAYERSOLID, SURFACE_CLIP_EPSILON } from '../q3/cm/ClipMap.ts';
-import { traceBrushList, createTrace, type TraceResult } from '../q3/cm/trace.ts';
+import { traceHullList, createTrace, type TraceResult } from '../q3/cm/trace.ts';
 import type { BrushHull } from '../q3/cm/brushHull.ts';
 
 /** Scene units per Q3 unit. */
@@ -88,11 +88,19 @@ export class PhysicsTrace {
     /** Scratch for `overlap_shape`; only the count is used. */
     private readonly overlaps = new Uint32Array(64);
 
-    /** Candidate brush indices handed to the ported per-brush trace. */
-    private readonly brushScratch = new Int32Array(80);
+    /**
+     * Candidate hulls handed to the ported per-brush trace.
+     *
+     * Hulls rather than brush indices, because a patch facet has no index --
+     * see `BrushHull.brush`. Holding the hull also makes `alreadyRuledOn` an
+     * identity test, which is what it always meant: two facets of the same
+     * patch are two different volumes and comparing their `-1`s would call them
+     * the same one.
+     */
+    private readonly hullScratch: (BrushHull | undefined)[] = new Array(80).fill(undefined);
 
-    /** How many of those the last `gatherBrushes` filled. */
-    private brushCount = 0;
+    /** How many of those the last `gatherHulls` filled. */
+    private hullCount = 0;
 
     /** Reused output for that trace. */
     private readonly brushTrace: TraceResult = createTrace();
@@ -194,13 +202,13 @@ export class PhysicsTrace {
         const cm = this.cm;
         if (cm === null) return -1;
 
-        const count = this.gatherBrushes(primaryEntity, minsQ3, maxsQ3, sx, sy, sz, gatherNeighbours);
+        const count = this.gatherHulls(primaryEntity, minsQ3, maxsQ3, sx, sy, sz, gatherNeighbours);
         if (count === 0) return -1;
 
-        traceBrushList(
+        traceHullList(
             this.brushTrace,
             cm,
-            this.brushScratch,
+            this.hullScratch,
             count,
             startQ3,
             endQ3,
@@ -244,16 +252,17 @@ export class PhysicsTrace {
     }
 
     /**
-     * The brushes a sweep from this position could touch.
+     * The hulls a sweep from this position could touch -- brushes and patch
+     * facets alike.
      *
      * `CM_TraceThroughLeaf` tests every brush in the leaf. `shape_cast` reports
      * one body, so the neighbours come from `overlap_shape` and the whole set
      * goes through the same comparison -- otherwise a tie at a corner is broken
      * by whichever body meep reached first, which is not Q3's rule.
      *
-     * @returns how many entries of `brushScratch` are valid.
+     * @returns how many entries of `hullScratch` are valid.
      */
-    private gatherBrushes(
+    private gatherHulls(
         primaryEntity: number,
         minsQ3: ArrayLike<number>,
         maxsQ3: ArrayLike<number>,
@@ -265,7 +274,7 @@ export class PhysicsTrace {
         let count = 0;
 
         const primary = this.hullByEntity.get(primaryEntity);
-        if (primary !== undefined) this.brushScratch[count++] = primary.brush;
+        if (primary !== undefined) this.hullScratch[count++] = primary;
 
         if (gatherNeighbours) {
             const found = overlap_shape(
@@ -280,17 +289,17 @@ export class PhysicsTrace {
             for (let i = 0; i < found && i < this.overlaps.length; i++) {
                 const hull = this.hullByBody.get(this.overlaps[i]!);
                 if (hull === undefined) continue;
-                if (count >= this.brushScratch.length) break;
-                this.brushScratch[count++] = hull.brush;
+                if (count >= this.hullScratch.length) break;
+                this.hullScratch[count++] = hull;
             }
         }
 
-        this.brushCount = count;
+        this.hullCount = count;
         return count;
     }
 
     /**
-     * Did the last `traceBrushList` already rule on the brush behind this body?
+     * Did the last `traceHullList` already rule on the volume behind this body?
      *
      * `shape_cast` reports the nearest body; Q3 rules per brush over a whole
      * set. When Q3 has said a set does not block and `shape_cast` then names a
@@ -302,8 +311,8 @@ export class PhysicsTrace {
         const hull = this.hullByEntity.get(entity);
         if (hull === undefined) return false;
 
-        for (let i = 0; i < this.brushCount; i++) {
-            if (this.brushScratch[i] === hull.brush) return true;
+        for (let i = 0; i < this.hullCount; i++) {
+            if (this.hullScratch[i] === hull) return true;
         }
 
         return false;
@@ -420,11 +429,11 @@ export class PhysicsTrace {
              approximated, over the brushes `overlap_shape` finds.
             */
             const cm = this.cm;
-            const count = this.gatherBrushes(-1, minsQ3, maxsQ3, sx, sy, sz, true);
+            const count = this.gatherHulls(-1, minsQ3, maxsQ3, sx, sy, sz, true);
 
             if (cm !== null && count > 0) {
-                traceBrushList(
-                    this.brushTrace, cm, this.brushScratch, count,
+                traceHullList(
+                    this.brushTrace, cm, this.hullScratch, count,
                     startQ3, startQ3, minsQ3, maxsQ3, MASK_PLAYERSOLID
                 );
 

@@ -714,10 +714,23 @@ async function main(): Promise<void> {
             physicsWorld.system.interpolationLog = interpolation.log;
 
             console.log(
-                `[queep] physics: ${physicsWorld.stats.brushes} brushes -> ` +
-                `${physicsWorld.stats.bodies} static bodies ` +
+                `[queep] physics: ${physicsWorld.stats.brushes} brushes` +
+                (physicsWorld.stats.patches > 0
+                    ? ` + ${physicsWorld.stats.patches} patches ` +
+                      `(${physicsWorld.stats.facets} facets)`
+                    : '') +
+                ` -> ${physicsWorld.stats.bodies} static bodies ` +
                 `(${physicsWorld.stats.hullMilliseconds.toFixed(0)} ms hulls, ` +
                 `${physicsWorld.stats.bodyMilliseconds.toFixed(0)} ms bodies)` +
+                /*
+                 Zero on every map in the set. A patch cell that produced no
+                 facet is a piece of curved surface a player walks through, and
+                 it is the one number here that means something is wrong.
+                */
+                (physicsWorld.stats.patchHoles > 0
+                    ? `\n  WARNING: ${physicsWorld.stats.patchHoles} patch cells produced ` +
+                      'no facet -- curved surfaces have holes, see D-125'
+                    : '') +
                 /*
                  Zero means no acoustic system asked for them, which is the only
                  way to tell "the simulation is off" from "it is on and every
@@ -1065,8 +1078,17 @@ async function main(): Promise<void> {
     console.log(
         `[queep] ${mapName}: ${loaded.bundle.stats['triangles']} tris, ` +
         `${loaded.bundle.lights.length} lights, ${clipMap.numBrushes} brushes` +
+        /*
+         This used to warn that curved surfaces were not solid. They are, on the
+         physics backend, as the facets D-125 builds -- so the note is now about
+         which trace you selected, since `?trace=clipmap` still walks through
+         them.
+        */
         (clipMap.numPatches > 0
-            ? ` (WARNING: ${clipMap.numPatches} patches -- curved surfaces are not solid, see D-017)`
+            ? `, ${clipMap.numPatches} patches` +
+              (useClipmapTrace()
+                  ? ' (WARNING: ?trace=clipmap passes through curved surfaces, see D-017)'
+                  : '')
             : ''),
         loaded.timings
     );

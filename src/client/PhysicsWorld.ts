@@ -15,6 +15,12 @@
  * are Q3's exactly; what changes is that queries against them are meep's
  * narrowphase rather than a ported `cm_trace`.
  *
+ * Curved surfaces are not in the brush lump and come from `patchHull.ts`, which
+ * decomposes each patch into convex facets and hands them over as the same kind
+ * of body. That conversion is *not* lossless -- a curve becomes a fixed number
+ * of flat facets, as it does in `cm_patch.c` -- and it is why the body count on
+ * a patch-heavy map is several times the brush count.
+ *
  * This module also provides the `pm->trace` implementation `bg_pmove` calls,
  * built on `shape_cast`. That is the seam: pmove's algorithm is untouched --
  * the acceleration, the plane-clipping, the step logic, all of which is where
@@ -36,6 +42,7 @@ import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ec
 
 import { ClipMap, MASK_PLAYERSOLID } from '../q3/cm/ClipMap.ts';
 import { buildHulls, type BrushHull } from '../q3/cm/brushHull.ts';
+import { buildPatchHulls } from '../q3/cm/patchHull.ts';
 import type { TraceResult } from '../q3/cm/trace.ts';
 import { addAcousticBody } from './Acoustics.ts';
 import { hullShape } from './hullShape.ts';
@@ -72,6 +79,20 @@ type ColliderWithShape = { shape: unknown; friction: number; restitution: number
 
 export interface PhysicsWorldStats {
     readonly brushes: number;
+    /** `MST_PATCH` surfaces the map has, whether or not they became facets. */
+    readonly patches: number;
+    /** Convex facets the patches decomposed into; see `patchHull.ts`. */
+    readonly facets: number;
+    /**
+     * Patch cells that produced no facet, and so are holes in the collision.
+     *
+     * Zero on every map in the set. It is reported rather than asserted because
+     * the decomposition is geometric and a map this port has never seen is
+     * allowed to be strange -- but a non-zero number here means a player can
+     * walk through part of a curved surface, and that is worth seeing in the
+     * load stats rather than discovering in a match.
+     */
+    readonly patchHoles: number;
     readonly bodies: number;
     /**
      * How many of those bodies also block sound.
@@ -100,6 +121,9 @@ export class PhysicsWorld {
     /** Populated by `build`; zeroed until then. */
     stats: PhysicsWorldStats = {
         brushes: 0,
+        patches: 0,
+        facets: 0,
+        patchHoles: 0,
         bodies: 0,
         occluders: 0,
         skipped: 0,
@@ -202,9 +226,18 @@ export class PhysicsWorld {
         if (submodel === undefined) return 0;
 
         const set = buildHulls(cm, MASK_PLAYERSOLID, submodel.firstBrush, submodel.numBrushes);
+        const patches = buildPatchHulls(
+            cm,
+            MASK_PLAYERSOLID,
+            submodel.firstSurface,
+            submodel.numSurfaces
+        );
 
         let built = 0;
         for (const hull of set.hulls) {
+            if (this.addStaticHull(ecd, hull) !== null) built += 1;
+        }
+        for (const hull of patches.hulls) {
             if (this.addStaticHull(ecd, hull) !== null) built += 1;
         }
         return built;
@@ -225,19 +258,39 @@ export class PhysicsWorld {
         const world = cm.models[0]!;
         const set = buildHulls(cm, MASK_PLAYERSOLID, world.firstBrush, world.numBrushes);
 
+        /*
+         And the curved surfaces, which are not in the brush lump at all. A Q3
+         patch is solid in Q3 and was not solid here: on `am_thornish` that was
+         fourteen round columns a player walked straight through. See
+         `patchHull.ts` for why they arrive as many convex facets rather than
+         one shape each.
+        */
+        const patches = buildPatchHulls(
+            cm,
+            MASK_PLAYERSOLID,
+            world.firstSurface,
+            world.numSurfaces
+        );
+
         const t0 = performance.now();
         let bodies = 0;
 
         for (const hull of set.hulls) {
             if (this.addStaticHull(ecd, hull)) bodies += 1;
         }
+        for (const hull of patches.hulls) {
+            if (this.addStaticHull(ecd, hull)) bodies += 1;
+        }
 
         this.stats = {
             brushes: cm.numBrushes,
+            patches: cm.numPatches,
+            facets: patches.hulls.length,
+            patchHoles: patches.dropped,
             bodies,
             occluders: this.occluders,
             skipped: set.skipped,
-            hullMilliseconds: set.milliseconds,
+            hullMilliseconds: set.milliseconds + patches.milliseconds,
             bodyMilliseconds: performance.now() - t0,
         };
 
@@ -272,11 +325,26 @@ export class PhysicsWorld {
         if (submodel === undefined) return null;
 
         const set = buildHulls(cm, MASK_PLAYERSOLID, submodel.firstBrush, submodel.numBrushes);
-        if (set.hulls.length === 0) return null;
+        /*
+         A mover's curved trim moves with it. The facets are built in the
+         submodel's authored position and carried by the same transform as its
+         brushes, so a curved door closes as one piece.
+        */
+        const patches = buildPatchHulls(
+            cm,
+            MASK_PLAYERSOLID,
+            submodel.firstSurface,
+            submodel.numSurfaces
+        );
+        if (set.hulls.length === 0 && patches.hulls.length === 0) return null;
 
         const transforms: Transform[] = [];
 
         for (const hull of set.hulls) {
+            const transform = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
+            if (transform !== null) transforms.push(transform);
+        }
+        for (const hull of patches.hulls) {
             const transform = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
             if (transform !== null) transforms.push(transform);
         }

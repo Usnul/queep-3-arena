@@ -247,6 +247,9 @@ plane winding would surface as a physics bug that looks like a rendering bug.
 
 ### D-017: Patch (curved surface) collision is not ported yet
 
+**Superseded in part by D-125** — curved surfaces are solid on the physics backend now. The
+ported `boxTrace` still does not see them, so the rest of this entry stands for that path.
+
 `cm_patch.c` is 1,763 lines that turn `MST_PATCH` surfaces into collision hulls. It is deferred,
 and the deferral is contained rather than hidden:
 
@@ -256,8 +259,9 @@ and the deferral is contained rather than hidden:
   so the gap cannot mask a divergence in what *is* ported. `oa_dm1`, `aggressor`, `oa_dm2`,
   `q3dm6ish` and `islanddm` are the five it uses, spanning 449 to 9,384 brushes.
 
-Consequence while it is missing: on a patch-bearing map, curved surfaces are not solid. That is
-a real gap and it is why the deferral is recorded here rather than treated as done.
+Consequence while it is missing: on a patch-bearing map, curved surfaces are not solid to
+`boxTrace`. That is a real gap and it is why the deferral is recorded here rather than treated
+as done.
 
 ### D-018: Capsule tracing is not ported
 
@@ -2246,6 +2250,10 @@ construction (529-820 static bodies), mover kinematic bodies, navigation graph, 
 and audio all initialise. Three numbers confirm findings that until now were only measured
 headlessly: `oa_dm5` reports **0 lights over 107,414 triangles** (Q-006), `am_thornish` reports
 **520 patches not solid** (D-017), and `oa_dm7` rejects two `item_health` as spawned in a solid.
+
+> Since superseded for the middle number: D-125 makes those 520 patches solid on the physics
+> backend, as 5,937 convex facets, and the body count on that map goes from 756 to 6,693.
+> `?trace=clipmap` still passes through them, which is the half of D-017 that remains.
 
 **Not verified: a single simulated frame.** meep's `Ticker` bootstraps its loop with one
 `requestAnimationFrame` and suspends outright if `document.visibilityState` is `hidden` at
@@ -5597,3 +5605,64 @@ deliberate: the simulation reports every ray it traced and has no opinion about 
 Bots get trails too, from `CalcMuzzlePoint`, because `roster.ts` passes no barrel offset — a bot has
 no weapon model to read one off. Their shots therefore leave their eyes rather than a gun, which is
 the same trade D-116 already recorded for their projectiles.
+
+### D-125: a patch becomes many convex facets, because the query layer collides against convex hulls
+
+Reported: `am_thornish`'s round columns are not colliders. They are not brushes — they are 520
+`MST_PATCH` surfaces, and D-017 left those out of the collision entirely. Measured before the
+fix: of the map's 18 round columns, a player box swept along the axis passed straight through
+14, and `pointContents` at the centre of one returned `BOTCLIP|TRANSLUCENT` — a bot-navigation
+hint the mapper wrapped around the column, in a 6-sided box, with no player-solid brush anywhere
+near it. Nothing was broken in the brush path: all 756 of the map's player-solid brushes convert
+to hulls with zero skipped. The columns were simply never offered to it.
+
+**The obvious fix is wrong, and fails silently.** meep has `MeshShape3D`, which takes an
+arbitrary triangle mesh, so the cheap answer is one mesh per tessellated patch. Two things in
+meep's own source rule it out:
+
+- `shape_cast` — the query behind `pm->trace` — runs GJK against the shape's support function,
+  and `MeshShape3D.support` returns the deepest *tet-mesh vertex*, which is the **convex hull**
+  of the mesh. Its docblock says so. A column's hull is a cylinder, which is right by accident;
+  an arch's hull is the archway filled in, which turns a corridor into a wall on a map that
+  loads without a warning.
+- `MeshShape3D.prototype.is_convex === false`, and `shape_cast` routes non-convex targets off
+  its tangency path onto the unconditional "solid, blocked at `t = 0`" one. Its comment for that
+  path describes the failure it produces: a character flush against a wall falls through the
+  floor.
+
+So the pieces have to be convex, which is what `cm_patch.c` does as well. `patchHull.ts`
+tessellates the patch at its own subdivision level (4, against the renderer's 8, and against
+Q3's own adaptive grid which is coarser than either), then keeps a rectangular block of the grid
+whole for as long as it is convex *as seen from the drawn side* and splits it when it is not.
+One facet per tessellated quad is the obvious decomposition and is unaffordable: `am_thornish`
+would go from 756 static bodies to about 23,000. Block merging gives 5,937, built in 92 ms with
+a further 131 ms to make bodies, and 1,000 traces against the result take 20 ms against 14 ms on
+a patch-free map.
+
+**A facet is a plane set, and that is what makes it fit.** Each block contributes its cell
+planes, a border plane per boundary edge, and one closing plane behind, and `hullFromPlanes` —
+`brushToHull`'s winding clipper, extracted — turns those into a hull. So a facet satisfies
+`ConvexHullShape3D.from`'s outward-CCW contract by construction rather than by a parallel
+argument, and it arrives at `PhysicsTrace` carrying the plane set Q3's contact rule is defined
+over. Every candidate plane's distance is the block's *support* in that direction, so a block
+that is convex only to within the tolerance yields a facet a hair too big rather than one a
+player falls through.
+
+**The contact rule had to grow a second case.** `CM_TraceThroughBrush` is reached by brush
+index, and a facet has none. Leaving facets out of it is not "slightly less accurate": a player
+resting against a column would have the contact answered by the floor they are also touching,
+the floor does not block a horizontal move, and pmove would be told the move is clear — into the
+column. So `traceThroughPlanes` transcribes the same arithmetic over a supplied plane set,
+`traceHullList` runs brushes and facets through one comparison, and `PhysicsTrace` gathers hulls
+rather than indices. That also fixed `alreadyRuledOn`, which compared brush numbers and would
+have called every facet on the map the same volume.
+
+What is *not* covered, deliberately:
+
+- **`boxTrace` still passes through patches.** The clipmap path is the differential test's
+  control and is a transcription of `cm_trace.c`; teaching it patches means porting
+  `cm_patch.c`, not extending this. `PmoveHost` uses the physics backend whenever it has one.
+- **Sound still passes through them.** `Acoustics.buildOccluderScene` is an offline bake whose
+  output is committed per map, so including facets is a re-bake rather than a code change.
+- **The inside of a column is not solid**, and should not be: Q3's `CM_PointContents` consults
+  brushes only, and what stops a player there is the surface.
