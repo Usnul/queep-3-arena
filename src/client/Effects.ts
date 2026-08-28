@@ -28,6 +28,9 @@ import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Ligh
 import { Decal } from '@woosh/meep-engine/src/engine/graphics/ecs/decal/v2/Decal.js';
 import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
 import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js';
+import Trail3D from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/Trail3D.js';
+import { make_gradient_stroke } from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/make_gradient_stroke.js';
+import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
 import { applyMuzzleFlash, MUZZLE_FLASH_SECONDS } from './muzzleFlash.ts';
@@ -156,6 +159,97 @@ const ENERGY_FADE_SECONDS = 3;
 const ENERGY_FADE_START = 450;
 
 /**
+ * One weapon's shot trail: the line a hitscan weapon leaves from barrel to hit.
+ *
+ * Per weapon rather than per shot, and keyed the same way the mark table and the
+ * ammo table are keyed -- by `WP_*` -- because that is the only thing a shot
+ * varies by. A weapon with no entry draws no trail, which is a real answer and
+ * two weapons give it.
+ */
+interface HitscanTrail {
+    /** Packed `0xRRGGBB`, which is what `make_gradient_stroke` takes. */
+    readonly color: number;
+    /** Tube diameter, in Q3 units. */
+    readonly widthQ3: number;
+    /** Seconds from full strength to gone. */
+    readonly seconds: number;
+    /**
+     * How much of its life each end is born having already lived, in [0, 1].
+     *
+     * This is the whole of the shape: the simulator fades a knot as it nears
+     * `maxAge`, so an end seeded older thins out first. `from` older than `to`
+     * retracts the line towards the target and reads as a shot going away from
+     * you; equal ends fade the whole beam at once, which is what
+     * `CG_RailTrail`'s `LE_FADE_RGB` does.
+     */
+    readonly ageFrom: number;
+    readonly ageTo: number;
+}
+
+/**
+ * What each hitscan weapon draws between the barrel and what it hit.
+ *
+ * **Q3 does not have one of these**, and the difference is worth stating before
+ * the numbers are read as ported. The C draws three unrelated things:
+ * `CG_Tracer` for bullets, `CG_RailTrail` for the railgun and a per-frame
+ * `RT_LIGHTNING` beam for the lightning gun, and only the middle one is a line
+ * from the shot's start to its end that fades. So the *table* is this port's --
+ * one mechanism where Q3 has three -- and the numbers in it are the C's wherever
+ * the C has one.
+ *
+ * Widths are Q3's own, as diameters. The renderer's rail cvars are half-extents:
+ * `DoRailCore` extrudes `+/-spanWidth`, so `r_railCoreWidth` 6 is a 12-unit beam
+ * and `RB_SurfaceLightningBolt`'s hard-coded 8 is a 16-unit one, and
+ * `cg_tracerWidth` 1 is a 2-unit dash.
+ *
+ * The two absences are the interesting rows:
+ *
+ * - **The shotgun**, because `CG_ShotgunPellet` does not call `CG_Bullet` and so
+ *   never reaches `CG_Tracer`. Eleven pellets per shot would be eleven lines out
+ *   of one barrel, which is a cage rather than a shot, and Q3 evidently thought
+ *   so too.
+ * - **The gauntlet**, which has a 32-unit reach and no beam of any kind. A trail
+ *   the length of your own arm is not a thing anyone would see.
+ */
+const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
+    /*
+     `CG_Tracer`, and the divergence is the shape rather than the size: Q3 draws
+     a 100-unit dash somewhere along the path for one frame, at
+     `cg_tracerChance` 0.4, and this draws the whole line and fades it. What that
+     buys is a shot you can follow back to whoever fired it, which a one-frame
+     dash at four in ten cannot do; what it costs is that a machinegun is a
+     visible stream rather than an occasional spark. Hence the shortest life in
+     the table and a nearly-dead source end -- at 60 ms a burst reads as a
+     flicker down the line of fire.
+    */
+    WP_MACHINEGUN: { color: 0xffe9b0, widthQ3: 2, seconds: 0.06, ageFrom: 0.75, ageTo: 0 },
+    WP_CHAINGUN: { color: 0xffe9b0, widthQ3: 2, seconds: 0.06, ageFrom: 0.75, ageTo: 0 },
+
+    /*
+     `CG_RailTrail`: `cg_railTrailTime` is 600 ms and the beam fades as one --
+     `LE_FADE_RGB` over the whole local entity -- so both ends are born new.
+
+     The colour is the one thing here that cannot be ported. Q3 takes it from the
+     shooter's `ci->color1` at 0.75, and this port has no player colours; a
+     railgun is blue-white in every screenshot of the game, so that is what it
+     is, and it is a constant where Q3 has a per-player value.
+    */
+    WP_RAILGUN: { color: 0x9fd8ff, widthQ3: 12, seconds: 0.6, ageFrom: 0, ageTo: 0 },
+
+    /*
+     The lightning gun is a beam Q3 re-adds every frame for as long as the trigger
+     is down, not a trail that decays -- there is no lifetime in the C to port,
+     because the bolt exists exactly while it is being fired. This port fires it
+     as discrete shots (see `muzzleFlash.ts`), so the beam becomes a very short
+     trail instead: 50 ms is one shot at the lightning gun's own 50 ms fire rate,
+     which makes a held trigger a continuous bolt and a tap a flicker. That is
+     the same picture by a different mechanism, and it is the reason this row
+     exists rather than a `Trail3D` that is kept alive and moved.
+    */
+    WP_LIGHTNING: { color: 0xa8b6ff, widthQ3: 16, seconds: 0.05, ageFrom: 0, ageTo: 0 },
+};
+
+/**
  * `CG_MissileHitWall`'s `switch (weapon)`, which is the only place Q3 says what
  * an impact looks like.
  *
@@ -274,6 +368,7 @@ export class Effects {
         if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
         if (!ecd.isComponentTypeRegistered(Light)) ecd.registerComponentType(Light);
         if (!ecd.isComponentTypeRegistered(Decal)) ecd.registerComponentType(Decal);
+        if (!ecd.isComponentTypeRegistered(Trail3D)) ecd.registerComponentType(Trail3D);
         if (!ecd.isComponentTypeRegistered(ParticleEmitter)) {
             ecd.registerComponentType(ParticleEmitter);
         }
@@ -526,6 +621,79 @@ export class Effects {
             Math.random() * TAU,
             mark.energy === true
         );
+    }
+
+    /**
+     * The line a hitscan shot leaves behind it, from the barrel to what it hit.
+     *
+     * A `Trail3D` seeded as a *stroke* rather than a wake: `make_gradient_stroke`
+     * lays the whole tube down between two world points at birth, which is what a
+     * beam is -- a projectile that arrives in the frame it left. The alternative
+     * the component also offers, a head dragged behind a moving entity, has
+     * nothing to drag with at 8192 units per instant.
+     *
+     * `startQ3` is the **barrel**, not the traced shot's origin, and the two are
+     * different on purpose. D-116 fixed the ray at `CalcMuzzlePoint` because a
+     * hitscan shot has to go exactly where the crosshair is; a line drawn from
+     * that point starts fourteen units in front of your eye, in mid-air, which is
+     * the complaint D-116 fixed for projectiles. So the shot is traced from the
+     * muzzle and the trail is drawn from the gun, and they differ by the length
+     * of the weapon. Q3 takes the same liberty in the other direction --
+     * `CG_RailTrail` opens with `start[2] -= 4` to move the beam off the ray
+     * because it reads better there.
+     *
+     * Nothing is drawn for a weapon the table has no row for, which is the
+     * shotgun and the gauntlet. See {@link HITSCAN_TRAILS}.
+     */
+    hitscanTrail(
+        weapon: string,
+        startQ3: ArrayLike<number>,
+        endQ3: ArrayLike<number>
+    ): void {
+        const spec = HITSCAN_TRAILS[weapon];
+        if (spec === undefined) return;
+
+        const [ax, ay, az] = toMeep(startQ3);
+        const [bx, by, bz] = toMeep(endQ3);
+
+        /*
+         `seed_trail_stroke` asserts on a zero-length stroke, and a shot can
+         genuinely produce one: a gauntlet-range hit, or a railgun fired into a
+         wall you are already touching. Refusing it here is the difference
+         between no trail and a thrown assertion mid-match.
+        */
+        if (Math.hypot(bx - ax, by - ay, bz - az) < 1e-4) return;
+
+        const trail = make_gradient_stroke({
+            from: new Vector3(ax, ay, az),
+            to: new Vector3(bx, by, bz),
+            color: spec.color,
+            thickness: spec.widthQ3 * WORLD_SCALE,
+            duration: spec.seconds,
+            age_from: spec.ageFrom,
+            age_to: spec.ageTo,
+            /*
+             Required by the helper and ignored by the renderer: `Trail3DSystem3`
+             draws the dynamic path, which has one pipeline and one vertex layout
+             -- position and colour -- and says so in its own docblock. The
+             tracer sprite is named because it is what Q3 draws this with and
+             what a textured backend would want; nothing here reads it.
+            */
+            texture: '/assets/built/fx/tracer.png',
+        });
+
+        const transform = new Transform();
+        // The knots are already in world space. The transform is what the system
+        // links on, and putting it at the source keeps the entity's own position
+        // somewhere meaningful rather than at the world origin.
+        transform.position.set(ax, ay, az);
+
+        const entity = new Entity();
+        entity.add(transform).add(trail).build(this.ecd);
+
+        // The stroke is invisible once every knot has reached `maxAge`; nothing
+        // in the trail system removes the entity, so this is what ends it.
+        this.expire(entity.id, spec.seconds);
     }
 
     /** A bullet strike: a small spark burst. The mark is `impactMark`'s. */

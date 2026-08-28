@@ -172,6 +172,30 @@ export interface WeaponEvents {
         weapon: WeaponId
     ): void;
     /**
+     * One hitscan ray, from where the gun is to where the shot stopped.
+     *
+     * Raised for **every** ray, which is what separates it from
+     * `bulletImpact`: a shot that hit a player leaves no mark, and a shot that
+     * hit nothing at all does not reach an impact of any kind, and both of them
+     * still came out of a barrel and still went somewhere. A trail drawn off the
+     * impact event would be a trail that vanishes exactly when you shoot someone.
+     *
+     * `startQ3` is the **barrel**, and is not where the ray was traced from.
+     * D-116 fixed the ray at `CalcMuzzlePoint` because a hitscan shot has to go
+     * exactly where the crosshair is, and a line drawn from that point starts in
+     * mid-air fourteen units in front of the eye. So the two differ by the length
+     * of the weapon, deliberately, and this is the only place that difference
+     * exists.
+     *
+     * One per pellet, so a shotgun raises eleven. The presentation is what
+     * decides that the shotgun draws none of them.
+     */
+    hitscanTrail(
+        startQ3: ArrayLike<number>,
+        endQ3: ArrayLike<number>,
+        weapon: WeaponId
+    ): void;
+    /**
      * `normalQ3` is the surface the missile struck, for the scorch mark.
      *
      * **Absent where there is no surface** -- a rocket that hit a player in
@@ -307,6 +331,8 @@ const t_up = vec3();
 const t_end = vec3();
 const t_dir = vec3();
 const t_muzzle = vec3();
+/** Where a hitscan shot stopped, written by  and read by . */
+const t_hit = vec3();
 const t_barrel = vec3();
 const trace = createTrace();
 
@@ -407,9 +433,23 @@ export class WeaponSystem {
         const spread = stats.spread ?? 0;
         const seedRef = { value: seed >>> 0 };
 
-        // Projectiles do not start at `t_muzzle`; hitscan does. Computed once
-        // rather than per nail, because it is the same point for all fifteen.
-        const origin = stats.hitscan === true ? null : this.projectileOrigin(eyeQ3, barrelQ3);
+        /*
+         The end of the gun, once per trigger pull rather than once per pellet,
+         because it is the same point for all eleven of them and for all fifteen
+         nails. Two things read it and they read it differently:
+
+         - a **projectile** is *born* here, which is D-116, and needs the
+           reachability trace that method does so it is not born inside a wall;
+         - a **hitscan trail** is *drawn* from here while its ray is still traced
+           from `t_muzzle`, because D-116 also fixed that ray on the aim so the
+           shot goes where the dot is.
+
+         So it is computed for both paths now, where it used to be the projectile
+         branch's alone. A trail that started at the traced origin would start
+         fourteen units in front of the eye, in mid-air -- exactly the complaint
+         D-116 was written to fix, and worse for a line than for a point.
+        */
+        const origin = this.projectileOrigin(eyeQ3, barrelQ3);
 
         for (let i = 0; i < shots; i++) {
             copy(t_dir, t_forward);
@@ -435,6 +475,15 @@ export class WeaponSystem {
                 vectorMA(t_end, t_muzzle, range, t_dir);
 
                 this.hitscanShot(weapon, t_muzzle, t_end, stats.damage, ownerId);
+
+                /*
+                 After the shot rather than before it, because `t_hit` is where
+                 the ray stopped and only `hitscanShot` knows that -- the world,
+                 a player, or nothing at all and the full range. Raised for every
+                 ray including the ones that hit somebody, which is the whole
+                 reason this is not folded into `bulletImpact`.
+                */
+                this.events.hitscanTrail(origin, t_hit, weapon);
                 continue;
             }
 
@@ -566,6 +615,20 @@ export class WeaponSystem {
                 }
             }
         }
+
+        /*
+         Where the shot stopped, whatever stopped it -- which is the one thing
+         every branch below needs and none of them used to compute. The trail is
+         drawn to it, and it has three sources: a client the broadphase found, a
+         surface the clipmap found, or nothing at all, in which case the shot
+         reached the end of its range and the line runs the whole way.
+
+         `bestFraction` is already the nearest of the three by construction, so
+         this is one lerp rather than a branch.
+        */
+        t_hit[0] = start[0]! + (end[0]! - start[0]!) * bestFraction;
+        t_hit[1] = start[1]! + (end[1]! - start[1]!) * bestFraction;
+        t_hit[2] = start[2]! + (end[2]! - start[2]!) * bestFraction;
 
         if (bestTarget !== null) {
             this.damage(bestTarget, damage);

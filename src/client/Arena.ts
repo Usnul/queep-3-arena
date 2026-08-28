@@ -329,6 +329,23 @@ export class Arena implements WeaponEvents {
         this.audio?.play('impact/bullet', originQ3);
     }
 
+    /**
+     * The line from the barrel to whatever the shot stopped on.
+     *
+     * Straight through to `Effects`, which owns the per-weapon table and draws
+     * nothing for the two weapons that have no row. No sound: Q3 plays a
+     * `tracerSound` at the dash's midpoint, and this port draws a trail for every
+     * shot where Q3 drew a dash for four in ten -- one sound per machinegun round
+     * from a point in mid-air is not what that was.
+     */
+    hitscanTrail(
+        startQ3: ArrayLike<number>,
+        endQ3: ArrayLike<number>,
+        weapon: WeaponId
+    ): void {
+        this.effects.hitscanTrail(weapon, startQ3, endQ3);
+    }
+
     explosion(
         originQ3: ArrayLike<number>,
         radiusQ3: number,

@@ -86,8 +86,22 @@ class Board implements WeaponEvents {
     spawned: { projectile: Projectile; entity: number }[] = [];
     gone = 0;
 
+    trails: { from: Vec3; to: Vec3; weapon: WeaponId }[] = [];
+
     muzzleFlash(): void {}
     bulletImpact(): void {}
+
+    hitscanTrail(
+        startQ3: ArrayLike<number>,
+        endQ3: ArrayLike<number>,
+        weapon: WeaponId
+    ): void {
+        this.trails.push({
+            from: vec3(startQ3[0]!, startQ3[1]!, startQ3[2]!),
+            to: vec3(endQ3[0]!, endQ3[1]!, endQ3[2]!),
+            weapon,
+        });
+    }
 
     explosion(
         originQ3: ArrayLike<number>,
@@ -634,5 +648,153 @@ describe('the nailgun', () => {
         // ninth, because a Q3 player knows the wheel by muscle memory.
         expect(WEAPON_ORDER[0]).toBe('WP_GAUNTLET');
         expect(WEAPON_ORDER[8]).toBe('WP_BFG');
+    });
+});
+
+/*
+ * The trail event, which is the simulation's half of a shot trail.
+ *
+ * It exists separately from `bulletImpact` because a trail has to be drawn for
+ * rays that raise no impact at all: one that hit a player leaves no mark, and one
+ * that hit nothing never reaches an impact of any kind. Both still came out of a
+ * barrel and both still went somewhere. See D-124.
+ */
+describe('a hitscan shot reports where it went', () => {
+    /** The railgun's barrel, from `first-person.test.ts`: forward, right, up. */
+    const RAIL_BARREL = [14.91 + 6.16, 5.83, -7.8 + 2.76] as const;
+
+    it('raises one trail per ray, from the barrel it was handed', async () => {
+        const r = await rig();
+
+        const eye: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_RAILGUN', eye, vec3(0, 0, 0), 999, 1, RAIL_BARREL);
+
+        expect(r.board.trails.length, 'one railgun shot, one trail').toBe(1);
+
+        const { from, weapon } = r.board.trails[0]!;
+        expect(weapon).toBe('WP_RAILGUN');
+
+        /*
+         The barrel, not `CalcMuzzlePoint`. Angles of zero, so Q3's axes are
+         forward +x, right -y, up +z -- and the offset is (forward, right, up).
+        */
+        expect(from[0]!, 'down the barrel').toBeCloseTo(eye[0]! + RAIL_BARREL[0], 3);
+        expect(from[1]!, 'and out of its right-hand side').toBeCloseTo(
+            eye[1]! - RAIL_BARREL[1],
+            3
+        );
+        expect(from[2]!, 'below the crosshair').toBeCloseTo(eye[2]! + RAIL_BARREL[2], 3);
+    });
+
+    it('ends the trail on the wall the ray actually stopped at', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(spawn[0]!, spawn[1]!, spawn[2]! + 40);
+
+        // The same shot `stops at a wall, on the wall` fires: straight down +x
+        // from a spawn with something in the way.
+        const far: Vec3 = vec3(from[0]! + 8192, from[1]!, from[2]!);
+        const reference = createTrace();
+        boxTrace(reference, cm, from, far, vec3(), vec3(), MASK_SHOT);
+
+        expect(reference.fraction, 'nothing to hit along +x from this spawn').toBeLessThan(1);
+
+        r.weapons.fire('WP_RAILGUN', from, vec3(0, 0, 0), 999, 1);
+
+        expect(r.board.trails.length).toBe(1);
+
+        /*
+         Against the ported `cm_trace`'s own endpoint. The ray is traced from
+         `CalcMuzzlePoint` and this reference from the eye, so they differ by the
+         fourteen units of muzzle offset along a shot that is travelling down +x
+         -- which changes where it *starts* and not where it *stops*.
+        */
+        const to = r.board.trails[0]!.to;
+        expect(to[0]!).toBeCloseTo(reference.endpos[0]!, 1);
+        expect(to[1]!).toBeCloseTo(reference.endpos[1]!, 1);
+        expect(to[2]!).toBeCloseTo(reference.endpos[2]!, 1);
+    });
+
+    it('reports a trail for a shot that hit a player, where there is no impact', async () => {
+        const r = await rig();
+
+        const centre: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        const from: Vec3 = vec3(centre[0]! - 120, centre[1]!, centre[2]!);
+
+        const target = dummy(7, vec3(centre[0]!, centre[1]!, centre[2]!));
+        r.weapons.targets.push(target);
+        const slot = r.bodies.create(7);
+        slot.track(() => target.origin);
+        r.bodies.sync();
+
+        r.weapons.fire('WP_RAILGUN', from, aim(from, centre), 999, 1);
+
+        expect(r.board.hits.length, 'the shot did not hit the target').toBeGreaterThan(0);
+
+        /*
+         The point of the event. `bulletImpact` is not raised for a shot that
+         stopped on a person -- Q3 draws no mark on flesh -- so a trail hung off
+         that event would vanish exactly when you hit someone.
+        */
+        expect(r.board.trails.length, 'a shot that hit a player left no trail').toBe(1);
+
+        const to = r.board.trails[0]!.to;
+        const reached = Math.hypot(to[0]! - from[0]!, to[1]! - from[1]!, to[2]! - from[2]!);
+
+        // It stops at the target rather than running on to the railgun's range.
+        expect(reached).toBeLessThan(130);
+        expect(reached).toBeGreaterThan(80);
+    });
+
+    it('runs the full range for a shot that hit nothing at all', async () => {
+        const r = await rig();
+
+        // Straight up out of the open spawn: the lightning gun's own 768 range,
+        // and nothing above to stop it.
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_LIGHTNING', from, vec3(-90, 0, 0), 999, 1);
+
+        expect(r.board.trails.length).toBe(1);
+
+        const { from: start, to } = r.board.trails[0]!;
+        const reached = Math.hypot(
+            to[0]! - start[0]!,
+            to[1]! - start[1]!,
+            to[2]! - start[2]!
+        );
+
+        /*
+         Either the ceiling stopped it or it ran the whole 768. Both are correct
+         and which one depends on the map, so what is asserted is that the trail
+         has a real length rather than collapsing to the muzzle -- the failure
+         mode if `t_hit` were left unwritten when nothing was hit.
+        */
+        expect(reached, 'the trail collapsed to a point').toBeGreaterThan(16);
+        expect(reached).toBeLessThanOrEqual(768 + 16);
+    });
+
+    it('raises one per pellet, and lets the presentation drop them', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_SHOTGUN', from, vec3(0, 0, 0), 999, 1);
+
+        /*
+         `DEFAULT_SHOTGUN_COUNT` rays, `DEFAULT_SHOTGUN_COUNT` events. The
+         simulation reports every ray it traced and has no opinion about what is
+         drawn; that the shotgun draws none of them is `Effects`' decision and is
+         tested there.
+        */
+        expect(r.board.trails.length).toBe(weaponStats('WP_SHOTGUN').pellets);
+        expect(r.board.trails.every((t) => t.weapon === 'WP_SHOTGUN')).toBe(true);
+    });
+
+    it('raises none at all for a projectile weapon', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_ROCKET_LAUNCHER', from, vec3(0, 0, 0), 999, 1);
+
+        expect(r.board.trails).toEqual([]);
     });
 });

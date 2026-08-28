@@ -73,6 +73,7 @@ class Board implements WeaponEvents {
 
     muzzleFlash(): void {}
     bulletImpact(): void {}
+    hitscanTrail(): void {}
     explosion(): void {
         this.explosions += 1;
     }

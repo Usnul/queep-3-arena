@@ -18,6 +18,7 @@ import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSys
 import { DecalSystem3 } from '@woosh/meep-engine/src/engine/graphics3/DecalSystem3.js';
 import { ParticleEmitterSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticleEmitterSystem3.js';
 import { SpriteSystemPE } from '@woosh/meep-engine/src/engine/graphics/ecs/sprite/SpriteSystemPE.js';
+import { Trail3DSystem3 } from '@woosh/meep-engine/src/engine/graphics3/Trail3DSystem3.js';
 import { TransformAttachmentSystem } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachmentSystem.js';
 import { MeshSystem3 } from '@woosh/meep-engine/src/engine/graphics3/MeshSystem3.js';
 import { AnimationSystem3 } from '@woosh/meep-engine/src/engine/graphics3/AnimationSystem3.js';
@@ -246,6 +247,19 @@ async function main(): Promise<void> {
      `ParticleEmitterSystem3` above it and nothing else.
     */
     await em.addSystem(new SpriteSystemPE());
+
+    /*
+     Shot trails, which in this port is the line a hitscan weapon leaves between
+     the barrel and what it hit. `Trail3D` is a tube of knots that age out, and
+     `make_gradient_stroke` seeds the whole tube at birth rather than dragging a
+     head behind an entity -- a beam has no travel to lay itself down with. See
+     `Effects.hitscanTrail`.
+
+     This system is self-contained: it registers its own render extension in
+     `startup` and draws on Shade's dynamic-geometry path, the same one the
+     particles take.
+    */
+    await em.addSystem(new Trail3DSystem3(graphics));
 
     /*
      The spatial hierarchy, and the missile models are what want it.

@@ -5530,3 +5530,70 @@ Two deliberate differences from the C, both recorded rather than hidden:
 The 2048 cap stays, as a backstop rather than as the mechanism: what retires a mark is now its life,
 and the cap is what stops a pathological second — fifteen nails and eleven shotgun pellets at once —
 from running the count away before that life expires.
+
+### D-124: one shot trail where Q3 has three unrelated effects, and the ray it is drawn along is not the ray that was traced
+
+A hitscan weapon left nothing behind it. The ask was a line from the barrel to the hit that fades,
+configured per weapon, with a short life — and the useful thing to say first is that **Q3 has no such
+thing to port**, so what follows is which parts are the C's and which are this port's.
+
+**What the C actually draws.** Three effects that have nothing to do with each other:
+
+- `CG_Tracer`, for bullets. A **100-unit dash** starting at least 50 units out along the path,
+  drawn for one frame, at `cg_tracerChance` 0.4, and skipped entirely for shots under 100 units.
+  It is not a line from the shot's start to its end and it does not fade — it flickers.
+- `CG_RailTrail`, for the railgun. A `LE_FADE_RGB` local entity from start to end over
+  `cg_railTrailTime` 600 ms, in the shooter's own `color1`. This one *is* the thing asked for.
+- `RT_LIGHTNING`, for the lightning gun: a beam re-added every frame for as long as the trigger is
+  down. There is no lifetime in it to port, because the bolt exists exactly while it is being fired.
+- And nothing at all for the shotgun or the gauntlet. `CG_ShotgunPellet` never calls `CG_Bullet`, so
+  a pellet never reaches `CG_Tracer`; eleven lines out of one barrel is a cage rather than a shot,
+  and Q3 evidently thought so too.
+
+So the mechanism is one `Trail3D` stroke for all of them, and `HITSCAN_TRAILS` is the table that
+makes them differ. Every number in it that the C has is the C's: `cg_railTrailTime`'s 600 ms, and
+widths taken as diameters because the renderer's rail cvars are half-extents — `DoRailCore` extrudes
+`±spanWidth`, so `r_railCoreWidth` 6 is a 12-unit beam, `RB_SurfaceLightningBolt`'s hard-coded 8 is
+a 16-unit one, and `cg_tracerWidth` 1 is a 2-unit dash. What is this port's is stated where it is
+written: the bullet's 60 ms life and the lightning gun's 50, the railgun's colour (Q3 takes it from
+the shooter's `ci->color1` and this port has no player colours), and the decision to draw the whole
+line for a bullet where Q3 draws a dash four times in ten. That last one buys a shot you can follow
+back to whoever fired it, and costs a machinegun reading as a stream rather than an occasional
+spark; the 60 ms is what keeps that a flicker.
+
+**A stroke, not a wake.** `Trail3D` offers both and they are different components of the same
+mechanism: `seed_trail_tube` collapses the knots onto a head and lets the entity's travel draw the
+shape, while `seed_trail_stroke` gives the tube its whole shape at birth and only ages it. A beam
+has no travel to lay itself down with — it arrives in the frame it left — so `make_gradient_stroke`
+is the constructor, and `Trail3DFlags.Spawning` has to be off or the per-frame update drags the head
+onto the entity and grows a tail towards it.
+
+The gradient is the per-weapon shape and is the reason `ageFrom`/`ageTo` are in the table rather than
+being one constant: an end seeded older fades first, so a bullet's source end starts three quarters
+of the way through its life and the line retracts towards the target, which reads as a shot going
+away from you. A rail beam is seeded new at both ends and fades as one, which is what `LE_FADE_RGB`
+does to a whole local entity at once.
+
+**The trail is drawn from the barrel; the ray was traced from the muzzle.** D-116 fixed hitscan at
+`CalcMuzzlePoint` on the grounds that "a hitscan weapon is the one place in this game where the shot
+has to go exactly where the dot is", and that stands — nothing here moves a ray. But a line drawn
+from that point starts fourteen units in front of your eye, in mid-air, which is precisely the
+complaint D-116 fixed for projectiles and is worse for a line than for a point. So `fire` now
+computes the barrel for both paths: a projectile is *born* there, and a trail is *drawn* from there
+while its ray keeps starting at the muzzle. Q3 takes the same liberty in the other direction —
+`CG_RailTrail` opens with `start[2] -= 4` to move the beam off the ray because it reads better.
+
+**Why a new event rather than an argument on `bulletImpact`.** A trail has to exist for rays that
+raise no impact: one that stopped on a player leaves no mark (Q3 marks walls and never marks people,
+D-117), and one that hit nothing at all never reaches an impact of any kind. A trail hung off the
+impact event would vanish exactly when you shoot someone. `hitscanTrail` is therefore raised for
+every ray, which also meant `hitscanShot` had to compute where the shot stopped in all three cases
+rather than only in the one that leaves a mark — one lerp along `bestFraction`, which was already
+the nearest of the three by construction.
+
+One per pellet, so a shotgun raises eleven and the presentation drops all of them. That split is
+deliberate: the simulation reports every ray it traced and has no opinion about what is drawn.
+
+Bots get trails too, from `CalcMuzzlePoint`, because `roster.ts` passes no barrel offset — a bot has
+no weapon model to read one off. Their shots therefore leave their eyes rather than a gun, which is
+the same trade D-116 already recorded for their projectiles.

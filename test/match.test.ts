@@ -143,6 +143,7 @@ function arena(mapName: string, usePhysics: boolean) {
 class Scoreboard implements WeaponEvents {
     shots = 0;
     impacts = 0;
+    trails = 0;
     explosions = 0;
     damage = 0;
     kills = 0;
@@ -153,6 +154,9 @@ class Scoreboard implements WeaponEvents {
     }
     bulletImpact(): void {
         this.impacts += 1;
+    }
+    hitscanTrail(): void {
+        this.trails += 1;
     }
     explosion(): void {
         this.explosions += 1;

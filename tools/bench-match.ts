@@ -63,6 +63,7 @@ class Counters implements WeaponEvents {
 
     muzzleFlash(): void { this.shots += 1; }
     bulletImpact(): void { this.impacts += 1; }
+    hitscanTrail(): void {}
     explosion(): void { this.explosions += 1; }
     hit(_t: Damageable, damage: number): void { this.damage += damage; }
     projectileSpawned(): void { this.projectiles += 1; }

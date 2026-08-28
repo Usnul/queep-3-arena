@@ -36,6 +36,8 @@ import sharp from 'sharp';
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import { Decal } from '@woosh/meep-engine/src/engine/graphics/ecs/decal/v2/Decal.js';
+import Trail3D from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/Trail3D.js';
+import { TUBE_ATTRIBUTE_ADDRESS_AGE } from '@woosh/meep-engine/src/engine/graphics/trail/tube/tube_attributes_spec.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 
@@ -1000,5 +1002,164 @@ describe("the gun and the footfall read one counter", () => {
         // per step, against the 48 the distance reconstruction assumed.
         expect(RUN_MS_PER_STRIDE).toBe(320);
         expect((320 * RUN_MS_PER_STRIDE) / 1000).toBeCloseTo(102.4, 6);
+    });
+});
+
+/*
+ * The line a hitscan weapon leaves between the barrel and what it hit.
+ *
+ * Q3 has no single thing this ports: the C draws `CG_Tracer` for bullets,
+ * `CG_RailTrail` for the railgun and a per-frame `RT_LIGHTNING` beam for the
+ * lightning gun, and only the middle one is a fading line from a shot's start to
+ * its end. So the *mechanism* is this port's -- one `Trail3D` stroke where Q3 has
+ * three unrelated effects -- and every number in the table is the C's wherever the
+ * C has one. See D-124.
+ */
+describe('a hitscan shot leaves a trail', () => {
+    /** Every `Trail3D` in a dataset, with the transform it was built on. */
+    type TrailRecord = { readonly trail: Trail3D; readonly transform: Transform };
+
+    function trailsIn(ecd: EntityComponentDataset): TrailRecord[] {
+        const found: TrailRecord[] = [];
+
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (trail: Trail3D, transform: Transform) => void
+        ) => void;
+
+        traverse([Trail3D, Transform], (trail, transform) => {
+            found.push({ trail, transform });
+        });
+
+        return found;
+    }
+
+    /** A knot's world position, as `[x, y, z]`. */
+    function knot(trail: Trail3D, index: number): [number, number, number] {
+        const out = [0, 0, 0];
+        trail.tube!.getKnotPosition(out, index);
+        return [out[0]!, out[1]!, out[2]!];
+    }
+
+    it('runs from the barrel to the hit, in metres and meep axes', () => {
+        const ecd = newDataset();
+
+        // Q3 (x, y, z) -> meep (x, z, -y), scaled. 320 units apart on Q3's +x.
+        new Effects(ecd).hitscanTrail('WP_RAILGUN', [0, 0, 64], [320, 0, 64]);
+
+        const trails = trailsIn(ecd);
+        expect(trails.length).toBe(1);
+
+        const from = knot(trails[0]!.trail, 0);
+        const to = knot(trails[0]!.trail, 1);
+
+        expect(from[0]).toBeCloseTo(0, 6);
+        expect(from[1]).toBeCloseTo(64 * WORLD_SCALE, 6);
+        expect(to[0]).toBeCloseTo(320 * WORLD_SCALE, 6);
+        expect(to[1]).toBeCloseTo(64 * WORLD_SCALE, 6);
+
+        // 320 Q3 units is ten metres, whichever end you measure from.
+        const length = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+        expect(length).toBeCloseTo(10, 6);
+    });
+
+    /**
+     * The table, transcribed from the C rather than read back from `Effects`.
+     *
+     * Widths are diameters: the renderer's rail cvars are half-extents, because
+     * `DoRailCore` extrudes `+/-spanWidth`. `r_railCoreWidth` is 6, so a rail
+     * beam is 12 units across; `RB_SurfaceLightningBolt` passes a hard-coded 8,
+     * so a bolt is 16; `cg_tracerWidth` is 1, so a tracer is 2.
+     */
+    const TRAILS: readonly [string, number, number][] = [
+        // weapon, diameter in Q3 units, seconds
+        ['WP_MACHINEGUN', 2, 0.06],
+        ['WP_CHAINGUN', 2, 0.06],
+        ['WP_RAILGUN', 12, 0.6], // `cg_railTrailTime` is 600 ms.
+        ['WP_LIGHTNING', 16, 0.05],
+    ];
+
+    it("carries each weapon's own width and lifetime", () => {
+        for (const [weapon, widthQ3, seconds] of TRAILS) {
+            const ecd = newDataset();
+            new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [512, 0, 0]);
+
+            const trails = trailsIn(ecd);
+            expect(trails.length, `${weapon} drew nothing`).toBe(1);
+            expect(trails[0]!.trail.width, `${weapon} width`).toBeCloseTo(
+                widthQ3 * WORLD_SCALE,
+                6
+            );
+            expect(trails[0]!.trail.maxAge, `${weapon} lifetime`).toBeCloseTo(seconds, 6);
+        }
+    });
+
+    /*
+     The two weapons that draw nothing, and both are the C's answer rather than
+     an omission. `CG_ShotgunPellet` never calls `CG_Bullet`, so a pellet never
+     reaches `CG_Tracer` -- eleven lines out of one barrel is a cage, not a shot.
+     The gauntlet has a 32-unit reach and no beam of any kind.
+    */
+    it('draws nothing for the shotgun or the gauntlet', () => {
+        for (const weapon of ['WP_SHOTGUN', 'WP_GAUNTLET']) {
+            const ecd = newDataset();
+            new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [512, 0, 0]);
+
+            expect(trailsIn(ecd).length, `${weapon} drew a trail`).toBe(0);
+        }
+    });
+
+    /*
+     `seed_trail_stroke` asserts on two coincident ends, and a shot can produce
+     them: a hit at point-blank range against a wall you are already touching.
+     Refusing it here is the difference between no trail and a thrown assertion
+     in the middle of a match.
+    */
+    it('refuses a zero-length stroke rather than asserting inside the engine', () => {
+        const ecd = newDataset();
+
+        expect(() => {
+            new Effects(ecd).hitscanTrail('WP_RAILGUN', [10, 20, 30], [10, 20, 30]);
+        }).not.toThrow();
+
+        expect(trailsIn(ecd).length).toBe(0);
+    });
+
+    it('is gone once it has faded, so a firefight does not accumulate beams', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd);
+
+        for (let i = 0; i < 20; i++) {
+            effects.hitscanTrail('WP_MACHINEGUN', [0, i * 8, 0], [512, i * 8, 0]);
+        }
+
+        expect(trailsIn(ecd).length).toBe(20);
+
+        // A machinegun trail lives 60 ms; one frame past that and the entities
+        // are gone, because nothing in the trail system removes them.
+        effects.update(0.06);
+        expect(trailsIn(ecd).length, 'the trails outlived their own fade').toBe(0);
+    });
+
+    /*
+     The gradient is the whole of the shape, and it is per weapon. A bullet's
+     source end is seeded most of the way through its life so the line retracts
+     towards the target -- a shot going away from you -- while a rail beam fades
+     as one, which is what `CG_RailTrail`'s `LE_FADE_RGB` does to the whole local
+     entity at once.
+    */
+    it('retracts a bullet towards its target and fades a rail beam whole', () => {
+        const age = (weapon: string, index: number): number => {
+            const ecd = newDataset();
+            new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [512, 0, 0]);
+            const trail = trailsIn(ecd)[0]!.trail;
+            return trail.tube!.getKnotAttribute_Scalar(index, TUBE_ATTRIBUTE_ADDRESS_AGE);
+        };
+
+        expect(age('WP_MACHINEGUN', 0), 'the bullet source end is born new').toBeGreaterThan(0);
+        expect(age('WP_MACHINEGUN', 1), 'the bullet target end is born aged').toBeCloseTo(0, 6);
+
+        expect(age('WP_RAILGUN', 0)).toBeCloseTo(0, 6);
+        expect(age('WP_RAILGUN', 1)).toBeCloseTo(0, 6);
     });
 });
