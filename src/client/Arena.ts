@@ -251,6 +251,12 @@ export class Arena implements WeaponEvents {
 
         this.weapons.update(deltaSeconds);
         this.effects.update(deltaSeconds);
+        /*
+         `CG_Missile`'s `RotateAroundDirection`: every missile in the air rolls
+         about its own line of flight. After `weapons.update`, so a missile that
+         left the world this step is not rolled on its way out.
+        */
+        this.missileView?.update(deltaSeconds);
         this.followMissiles();
 
         for (const target of this.targets) {

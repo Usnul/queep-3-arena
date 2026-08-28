@@ -404,3 +404,92 @@ describe('the engine systems the missile models need', () => {
         ).toBe(true);
     });
 });
+
+/*
+ * The spin, which `CG_Missile` applies to every missile it draws and the first
+ * version of this file left out.
+ *
+ * The reasoning for leaving it out -- "a barrel roll on a shape that is very
+ * nearly a surface of revolution" -- was true of the rocket and the nail, and
+ * false of the grenade and the prox mine, which are a 14.6 x 10.9 x 5.9 slab and
+ * a 23.8-wide drum. Those are the two that came back reported. See D-122.
+ */
+describe('a missile in flight', () => {
+    /** `RotateAroundDirection(ent.axis, cg.time / 4)`: a quarter degree per ms. */
+    const SPIN_DEGREES_PER_SECOND = 250;
+
+    function flying(weapon: string): {
+        view: MissileView;
+        ecd: EntityComponentDataset;
+        aimOf: () => [number, number, number];
+        rollOf: () => [number, number, number];
+    } {
+        const ecd = newDataset();
+        const view = new MissileView(ecd, realLibrary());
+
+        const body = new Entity().add(new Transform());
+        body.build(ecd);
+
+        // Q3 +x, which is meep +x.
+        view.spawn(1, body.id, weapon, [900, 0, 0]);
+
+        const attachment = componentsIn<TransformAttachment>(ecd, TransformAttachment)[0]![1];
+
+        const axis = (column: 0 | 1): [number, number, number] => {
+            const r = attachment.transform.rotation;
+            const { x, y, z, w } = r;
+            return column === 0
+                ? [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)]
+                : [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];
+        };
+
+        return { view, ecd, aimOf: () => axis(0), rollOf: () => axis(1) };
+    }
+
+    it('rolls about its own line of flight, at CG_Missile\'s rate', () => {
+        const f = flying('WP_GRENADE_LAUNCHER');
+
+        const before = f.rollOf();
+
+        // A quarter turn takes 360/4/250 of a second at Q3's rate.
+        const quarter = 90 / SPIN_DEGREES_PER_SECOND;
+        f.view.update(quarter);
+
+        const after = f.rollOf();
+
+        const dot = before[0] * after[0] + before[1] * after[1] + before[2] * after[2];
+        expect(Math.acos(Math.max(-1, Math.min(1, dot))) * (180 / Math.PI)).toBeCloseTo(90, 1);
+    });
+
+    it('never moves where it points, however long it has been spinning', () => {
+        for (const weapon of ['WP_GRENADE_LAUNCHER', 'WP_PROX_LAUNCHER', 'WP_ROCKET_LAUNCHER']) {
+            const f = flying(weapon);
+
+            const aim = f.aimOf();
+            expect(aim[0], `${weapon} does not start aimed`).toBeCloseTo(1, 6);
+
+            /*
+             Ten seconds at 60 Hz, which is Q3's whole missile lifetime. The roll
+             is composed on the *right* of the aim, about the model's own +X --
+             the axis the aim already put on the flight direction -- so this can
+             only fail if that composition is the wrong way round, which is
+             exactly the mistake that would look fine for one frame.
+            */
+            for (let i = 0; i < 600; i++) f.view.update(1 / 60);
+
+            const later = f.aimOf();
+            expect(later[0], `${weapon} drifted off its flight`).toBeCloseTo(1, 6);
+            expect(later[1]).toBeCloseTo(0, 6);
+            expect(later[2]).toBeCloseTo(0, 6);
+        }
+    });
+
+    it('costs nothing when nothing is in the air', () => {
+        const ecd = newDataset();
+        const view = new MissileView(ecd, realLibrary());
+
+        expect(() => {
+            view.update(1 / 60);
+        }).not.toThrow();
+    });
+});

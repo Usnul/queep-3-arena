@@ -55,15 +55,26 @@
  * is the *simpler* of the two paths rather than a special case that costs
  * something.
  *
- * # What is not ported
+ * # The spin, which was left out once and should not have been
  *
- * `RotateAroundDirection(ent.axis, cg.time / 4)`, the spin Q3 gives a missile
- * about its own line of flight. It is a rotation per missile per frame, and the
- * transform it would be written into is the one `InterpolationSystem` rewrites
- * between steps -- so it is not free the way the orientation is, and what it
- * buys is a barrel roll on a rocket that is very nearly a surface of revolution.
- * The orientation itself is ported and is the part that reads: a nail flying
- * sideways is obvious, and Q3 sets `ent.axis[0]` from the velocity for that.
+ * `CG_Missile` is two lines of orientation and this is the second:
+ * `VectorNormalize2(s1->pos.trDelta, ent.axis[0])` aims the model down its line
+ * of flight, and `RotateAroundDirection(ent.axis, cg.time / 4)` rolls it about
+ * that line at 250 degrees a second.
+ *
+ * The first version of this file ported the aim and skipped the roll, on the
+ * reasoning that it buys "a barrel roll on a shape that is very nearly a surface
+ * of revolution". That is true of the rocket and true of the nail, and it is
+ * false of the two missiles it is least true of: `grenade1.md3` is a 14.6 x 10.9
+ * x 5.9 slab and `proxmine.md3` is a 23.8-wide drum on a vertical axis. Held at
+ * one fixed roll for a whole flight, both read as an object presented flat to
+ * you rather than one thrown at you -- and those are exactly the two weapons
+ * that came back reported. Q3 spins them because the artwork needs it.
+ *
+ * The roll is applied to the *local* rotation of each mesh, about the model's
+ * own +X, which is by construction the axis the aim already put on the flight
+ * direction -- so it can never disturb the aim. It costs one quaternion multiply
+ * per drawn surface per fixed step.
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
@@ -80,6 +91,8 @@ import { MODEL_TO_VIEW } from './ViewWeapon.ts';
 
 /** Scene metres per Q3 unit. */
 const WORLD_SCALE = 1 / 32;
+
+const DEG_TO_RAD = Math.PI / 180;
 
 /**
  * `ent.radius = 16` from `CG_Missile`'s plasma branch, as a diameter in metres.
@@ -107,6 +120,7 @@ export interface MissileSink {
         velocityQ3: ArrayLike<number>
     ): void;
     despawn(projectileId: number): void;
+    update(deltaSeconds: number): void;
 }
 
 interface EcsDataset {
@@ -117,7 +131,32 @@ interface EcsDataset {
     removeEntity(entity: number): void;
 }
 
-const scratchRotation = new Quaternion();
+const scratchRoll = new Quaternion();
+
+/**
+ * `RotateAroundDirection(ent.axis, cg.time / 4)`, in degrees per second.
+ *
+ * `cg.time` is milliseconds, so a quarter of it per millisecond is 250 degrees a
+ * second -- a brisk tumble, and the number is Q3's rather than a rate chosen to
+ * look right.
+ */
+const SPIN_DEGREES_PER_SECOND = 250;
+
+/** What is drawing one missile, and the base rotation the spin is applied to. */
+interface Drawn {
+    /** One per surface of the model. */
+    readonly entities: number[];
+    /** Parallel to `entities`; the attachment whose local rotation is written. */
+    readonly attachments: TransformAttachment[];
+    /**
+     * The aim, without the roll.
+     *
+     * Kept rather than recovered from the current rotation, because recovering
+     * it means dividing out the roll and a quaternion that has been multiplied
+     * once a frame for ten seconds is not the one it started as.
+     */
+    readonly aim: Quaternion;
+}
 
 /**
  * The rotation that points a converted model's own forward along `dirMeep`.
@@ -164,8 +203,17 @@ export class MissileView implements MissileSink {
     private readonly ecd: EcsDataset;
     private readonly library: ModelLibrary;
 
-    /** Projectile id -> the mesh entities drawing it. Empty for the plasma gun. */
-    private readonly drawn = new Map<number, number[]>();
+    /** Projectile id -> what is drawing it. Absent for the plasma gun's sprite. */
+    private readonly drawn = new Map<number, Drawn>();
+
+    /**
+     * `cg.time`, in seconds, and the only state the spin needs.
+     *
+     * Q3 rolls every missile by `cg.time / 4` degrees -- a function of the
+     * *clock* rather than of the missile's own age, so every missile in the air
+     * shares a phase and none of them has to remember one.
+     */
+    private timeSeconds = 0;
 
     /**
      * `WP_*` ids that flew with nothing drawn for them.
@@ -230,9 +278,11 @@ export class MissileView implements MissileSink {
             return;
         }
 
-        orientAlong(dirToMeep(velocityQ3), scratchRotation);
+        const aim = new Quaternion();
+        orientAlong(dirToMeep(velocityQ3), aim);
 
         const entities: number[] = [];
+        const attachments: TransformAttachment[] = [];
 
         for (const geometry of components) {
             /*
@@ -256,16 +306,47 @@ export class MissileView implements MissileSink {
              because nothing currently spins a missile. Composed as `parent x
              local`, this is right whether or not that stays true.
             */
-            attachment.transform.rotation.copy(scratchRotation);
+            attachment.transform.rotation.copy(aim);
             attachment.transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
 
             const builder = new Entity();
             builder.add(new Transform()).add(geometry).add(attachment).build(this.ecd as never);
 
             entities.push(builder.id);
+            attachments.push(attachment);
         }
 
-        this.drawn.set(projectileId, entities);
+        this.drawn.set(projectileId, { entities, attachments, aim });
+    }
+
+    /**
+     * Roll every drawn missile about its own line of flight. Once per step.
+     *
+     * `RotateAroundDirection(ent.axis, cg.time / 4)`, which `CG_Missile` applies
+     * to every missile it draws that is not `TR_STATIONARY` -- and everything
+     * this port fires is `TR_LINEAR`.
+     *
+     * Written to the *local* rotation, about the model's own +X. That axis is
+     * the one {@link orientAlong} already put on the flight direction, so
+     * composing the roll on the right of the aim spins the model without ever
+     * moving where it points; and writing it locally leaves the body's own
+     * transform to the solver. `TransformAttachmentSystem` subscribes to the
+     * attachment's transform as well as the parent's, so this is picked up
+     * without anything having to be told.
+     */
+    update(deltaSeconds: number): void {
+        this.timeSeconds += deltaSeconds;
+
+        if (this.drawn.size === 0) return;
+
+        const radians = ((this.timeSeconds * SPIN_DEGREES_PER_SECOND) % 360) * DEG_TO_RAD;
+        scratchRoll._fromAxisAngle(1, 0, 0, radians);
+
+        for (const drawn of this.drawn.values()) {
+            for (const attachment of drawn.attachments) {
+                attachment.transform.rotation.multiplyQuaternions(drawn.aim, scratchRoll);
+            }
+        }
     }
 
     /**
@@ -277,12 +358,12 @@ export class MissileView implements MissileSink {
      * every rocket fired leaves a rocket hanging in the air where it exploded.
      */
     despawn(projectileId: number): void {
-        const entities = this.drawn.get(projectileId);
-        if (entities === undefined) return;
+        const drawn = this.drawn.get(projectileId);
+        if (drawn === undefined) return;
 
         this.drawn.delete(projectileId);
 
-        for (const entity of entities) {
+        for (const entity of drawn.entities) {
             if (this.ecd.entityExists(entity)) this.ecd.removeEntity(entity);
         }
     }
