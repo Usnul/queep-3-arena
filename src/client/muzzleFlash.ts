@@ -104,6 +104,13 @@ const FLASHES: Readonly<Record<string, MuzzleFlashLight>> = {
 
     // MAKERGB( 1, 0.75f, 0 ).
     WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 2450 },
+    /*
+     Also `MAKERGB( 1, 0.75f, 0 )`, and brighter than the machinegun it sits
+     between because `Weapon_Nailgun_Fire` is fifteen `fire_nail`s at once and Q3
+     draws one flash for the lot. A second of nailgun is one flash a second and a
+     second of chaingun is thirty-three, so the two are not comparable per shot.
+    */
+    WP_NAILGUN: { color: [1, 0.75, 0], reachQ3: 300, lumens: 2100 },
 
     // MAKERGB( 0.6, 0.6, 1.0 ), but pulsed like the rest.
     WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 1540 },

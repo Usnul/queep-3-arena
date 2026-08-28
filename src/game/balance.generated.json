@@ -812,6 +812,14 @@
    "splashDamage": 100,
    "splashRadius": 150,
    "speed": 700
+  },
+  "WP_NAILGUN": {
+   "fireRateMs": 1000,
+   "damage": 20,
+   "pellets": 15,
+   "spread": 500,
+   "speed": 555,
+   "speedRandom": 1800
   }
  },
  "respawn": {

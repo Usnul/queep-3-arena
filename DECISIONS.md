@@ -5366,3 +5366,58 @@ Two new materials came with the models and are classified in `material-classific
 against what is already there that takes no alpha from anywhere at all, so there is nothing the image
 could have been authored with. It draws as a solid emissive patch on the mine's casing, which is
 close enough to the lit panel the multiply was for.
+
+### D-119: the nailgun's numbers were in the C all along, in a shape the extractor could not read
+
+D-114 recorded that `bg_itemlist` has thirteen `IT_WEAPON` entries and `balance.weapons` has eleven,
+and chose "cannot hold it" over "crashes when fired" for the two that were missing. That was the
+right call for the bug in front of it and it left a weapon on the floor of `am_thornish` that could
+be walked over, counted in the inventory, and never once held — which is what "the nailgun does not
+draw in first person" is, from the player's side.
+
+**The claim that there were no numbers to read was wrong about the nailgun.** Every one of them is
+in the sources:
+
+| | | |
+|---|---|---|
+| damage 20 | `bolt->damage = 20` | `fire_nail` |
+| 15 per shot | `NUM_NAILSHOTS` | `g_weapon.c` |
+| spread 500 | `NAILGUN_SPREAD` | `g_missile.c` |
+| speed 555 + random()×1800 | `scale = 555 + random() * 1800` | `fire_nail` |
+| 1000 ms | `addTime` | `PM_Weapon` |
+
+What was true is that `projectile()` — the helper that lifts a missile weapon's four numbers — could
+not read them. Three of its regexes look for `bolt->splashDamage` and `bolt->splashRadius`, and a
+nail is a dart that does not explode, so it *throws* rather than returning a wrong answer. The
+fourth looks for a literal in `VectorScale(dir, N, ...)`, and the nailgun's is a variable holding a
+fresh draw. So the honest statement is not "there are no numbers", it is "this helper cannot read
+this weapon", and the fix is a per-weapon extraction beside the helper rather than a helper that
+guesses.
+
+**Two things in `WeaponSystem.fire` had to stop being hitscan-only.** The pellet count and the
+spread cone were read inside the `if (stats.hitscan)` arm, because the only weapon that fired more
+than one of anything was the shotgun. `Weapon_Nailgun_Fire` is a `for` loop of fifteen `fire_nail`
+calls, each a *projectile* with its own draw from the cone, so both moved out and the loop now
+covers both paths. `stats.speedRandom` is the nailgun's alone and is zero elsewhere, so the
+per-projectile speed draw collapses to the constant and no other weapon changes.
+
+The speed draw is inside the loop rather than outside it, and that is the point of the weapon: the
+nailgun is the only thing in Q3 whose projectiles travel at different speeds, and it is what turns a
+burst into a spray that stretches out along its own axis instead of a rigid wall. `SnapVector` is
+kept for the same reason it exists — a nail travelling at a speed the C would never have produced is
+a difference nothing downstream can put back.
+
+**And the wheel could not reach three weapons, which is the same symptom from a different cause.**
+`WEAPON_ORDER` in `PlayerController` was nine names written out by hand, stopping at `WP_BFG` —
+where the *original* Quake III's list stops. `weapon_t` has four more, and `am_thornish` places three
+of them: the nailgun, the prox launcher and the chaingun. Picking one up autoswitched to it, as
+`Pickup_Weapon` does, and then nothing could switch back to it — so the second time you held a
+chaingun was never. It is now `weaponOrder` (extracted from `bg_public.h`) filtered by `isWeaponId`,
+which leaves out exactly the grappling hook: not a damage weapon, no numbers in `g_weapon.c` to read,
+and nothing here to fire. The number row still stops at nine, because Team Arena added
+`weapon 10`..`weapon 13` as console commands and bound none of them; inventing a key would be
+inventing a binding rather than porting one.
+
+`items.test.ts`'s "never autoswitches to a weapon outside the balance table" now uses the grappling
+hook, which is the only remaining instance of the rule D-114 wrote — a guard with no live example is
+not a test.

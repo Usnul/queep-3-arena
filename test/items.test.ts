@@ -184,17 +184,39 @@ describe('pickup', () => {
         const inv = newInventory();
 
         /*
-         `am_thornish` places two nailguns, and the nailgun is one of the two
-         `IT_WEAPON` tags with no `balance.weapons` entry. Autoswitching to one
-         put an id with no stats in `player.weapon`, and the next shot read
-         `hitscan` off `undefined` inside `WeaponSystem.fire`.
+         The grappling hook, which is now the *only* `IT_WEAPON` tag with no
+         `balance.weapons` entry. It is not a damage weapon -- no fire rate worth
+         the name, no damage, no splash -- so there is nothing in `g_weapon.c`
+         for `extract-balance.mjs` to read and nothing for `WeaponSystem.fire` to
+         do with it; it is a movement device wearing a weapon's slot.
+
+         This case used to be the nailgun, which had no entry for a different
+         reason and does now: its numbers were in the C all along in a shape
+         `projectile()` could not read, and D-119 is that extraction. What
+         survives is the rule, and it needs a live instance to be a test.
+        */
+        const hook = oneItem('weapon_grapplinghook').update(0.1, [0, 0, 0], inv, true);
+
+        expect(hook[0]!.selectWeapon).toBe(null);
+
+        // Picked up all the same: `Pickup_Weapon` gives it, and the ammo with it.
+        expect(inv.weapons.has('WP_GRAPPLING_HOOK')).toBe(true);
+    });
+
+    it('autoswitches to the nailgun, now that there is a nailgun to switch to', () => {
+        const inv = newInventory();
+
+        /*
+         `am_thornish` places two of them, and walking over one used to leave you
+         holding whatever you had -- the pickup was refused a switch because
+         `balance.weapons` had no nailgun. The visible symptom was that the
+         weapon never appeared in your hands, which is what it was reported as.
         */
         const nailgun = oneItem('weapon_nailgun').update(0.1, [0, 0, 0], inv, true);
 
         expect(nailgun[0]!.label).toBe('Nailgun');
-        expect(nailgun[0]!.selectWeapon).toBe(null);
+        expect(nailgun[0]!.selectWeapon).toBe('WP_NAILGUN');
 
-        // Picked up all the same: `Pickup_Weapon` gives it, and the ammo with it.
         expect(inv.weapons.has('WP_NAILGUN')).toBe(true);
         expect(inv.ammo['WP_NAILGUN']).toBe(10);
     });

@@ -43,12 +43,14 @@ import { DamageQueries } from '../src/client/DamageQueries.ts';
 import {
     MASK_SHOT,
     WeaponSystem,
+    weaponStats,
     type Damageable,
     type Projectile,
     type WeaponEvents,
     type WeaponId,
 } from '../src/game/Weapons.ts';
 import { vec3, type Vec3 } from '../src/q3/math.ts';
+import { WEAPON_ORDER } from '../src/client/PlayerController.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
 
@@ -491,5 +493,146 @@ describe('a missile', () => {
             r.physics.ecd.entityExists(entity),
             'the missile left the game and its body stayed in the broadphase'
         ).toBe(false);
+    });
+});
+
+/*
+ * The nailgun, which is fifteen missiles per trigger pull.
+ *
+ * It had no `balance.weapons` entry at all until now, so it could be picked up
+ * and never held -- and the visible symptom of that was the one that got
+ * reported: the weapon never appears in your hands. The numbers were in the C
+ * the whole time in a shape `projectile()` could not read (no splash, and a
+ * speed that is a fresh draw per nail rather than a literal). See D-119.
+ *
+ * Every expectation below is transcribed from `fire_nail`,
+ * `Weapon_Nailgun_Fire` and `PM_Weapon` rather than read from the generated
+ * table, because the generated table is what is under test.
+ */
+describe('the nailgun', () => {
+    /** `#define NUM_NAILSHOTS 15` in g_weapon.c. */
+    const NUM_NAILSHOTS = 15;
+    /** `scale = 555 + random() * 1800` in fire_nail. */
+    const SPEED_MIN = 555;
+    const SPEED_MAX = 555 + 1800;
+
+    it("carries fire_nail's own numbers, extracted rather than invented", () => {
+        const stats = weaponStats('WP_NAILGUN');
+
+        expect(stats.hitscan, 'a nail is a missile, not a trace').not.toBe(true);
+        expect(stats.damage, 'bolt->damage = 20').toBe(20);
+        expect(stats.pellets, 'NUM_NAILSHOTS').toBe(NUM_NAILSHOTS);
+        expect(stats.spread, 'NAILGUN_SPREAD').toBe(500);
+        expect(stats.speed, 'the 555 in `555 + random() * 1800`').toBe(SPEED_MIN);
+        expect(stats.speedRandom, 'the 1800 in it').toBe(SPEED_MAX - SPEED_MIN);
+        expect(stats.fireRateMs, "PM_Weapon's addTime for WP_NAILGUN").toBe(1000);
+
+        /*
+         And no splash, which is the half that made `projectile()` throw rather
+         than return a wrong answer. A nail is a dart.
+        */
+        expect(stats.splashDamage ?? 0).toBe(0);
+        expect(stats.splashRadius ?? 0).toBe(0);
+    });
+
+    it('fires fifteen nails from one trigger pull', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_NAILGUN', from, vec3(0, 0, 0), 999, 1);
+
+        expect(r.board.spawned.length).toBe(NUM_NAILSHOTS);
+        expect(r.missiles.inFlight).toBe(NUM_NAILSHOTS);
+
+        // One flash for the burst, as `Weapon_Nailgun_Fire` raises one event.
+        expect(r.board.spawned.every((s) => s.entity >= 0)).toBe(true);
+    });
+
+    it('draws a fresh speed for every nail, inside the range fire_nail draws from', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_NAILGUN', from, vec3(0, 0, 0), 12345, 1);
+
+        const speeds = r.board.spawned.map((s) =>
+            Math.hypot(...(s.projectile.velocity as unknown as number[]))
+        );
+
+        for (const speed of speeds) {
+            // A unit of slack each way for `SnapVector`, which rounds each
+            // component and so moves the magnitude by up to about 0.9.
+            expect(speed).toBeGreaterThanOrEqual(SPEED_MIN - 1);
+            expect(speed).toBeLessThanOrEqual(SPEED_MAX + 1);
+        }
+
+        /*
+         The property, not just the range: the nailgun is the only weapon in Q3
+         whose projectiles travel at different speeds, and it is what turns a
+         burst into a spray that stretches along its own axis rather than a rigid
+         wall of nails. A single averaged speed would pass every bound above.
+        */
+        const spread = Math.max(...speeds) - Math.min(...speeds);
+        expect(spread, 'every nail left at the same speed').toBeGreaterThan(300);
+    });
+
+    it('snaps each velocity to whole units, as SnapVector does', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_NAILGUN', from, vec3(15, 40, 0), 7, 1);
+
+        for (const { projectile } of r.board.spawned) {
+            for (const axis of projectile.velocity as unknown as number[]) {
+                expect(Number.isInteger(axis), `${axis} is not a whole unit`).toBe(true);
+            }
+        }
+    });
+
+    it('lays the burst out in a cone rather than a line', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(openSpawn[0]!, openSpawn[1]!, openSpawn[2]! + 40);
+        r.weapons.fire('WP_NAILGUN', from, vec3(0, 0, 0), 99, 1);
+
+        const directions = r.board.spawned.map(({ projectile }) => {
+            const v = projectile.velocity as unknown as number[];
+            const l = Math.hypot(v[0]!, v[1]!, v[2]!);
+            return [v[0]! / l, v[1]! / l, v[2]! / l];
+        });
+
+        // Fired down +x with no pitch or yaw, so the axis is +x and the cone is
+        // whatever `NAILGUN_SPREAD` opens it to.
+        const offAxis = directions.map((d) => Math.hypot(d[1]!, d[2]!));
+
+        expect(Math.max(...offAxis), 'the nails all flew down the same line').toBeGreaterThan(0);
+        expect(
+            Math.max(...offAxis),
+            'the cone is wider than NAILGUN_SPREAD can open it'
+        ).toBeLessThan(0.2);
+
+        // Every nail still goes forwards; a spread that wraps is a spread bug.
+        for (const d of directions) expect(d[0]!).toBeGreaterThan(0.9);
+    });
+
+    it('is a weapon the wheel can reach, which is what made it invisible', () => {
+        /*
+         `weapon_t` order, filtered to what this port can fire. The nailgun, the
+         prox launcher and the chaingun are all after `WP_BFG` -- which is where
+         the hand-written list used to stop -- and `am_thornish` places all three
+         on the floor. Picking one up autoswitched to it and then there was no way
+         back to it, by key or by wheel, which reads exactly like a weapon that
+         does not draw.
+        */
+        expect(WEAPON_ORDER).toContain('WP_NAILGUN');
+        expect(WEAPON_ORDER).toContain('WP_PROX_LAUNCHER');
+        expect(WEAPON_ORDER).toContain('WP_CHAINGUN');
+
+        // And the one weapon in `weapon_t` this port genuinely cannot fire.
+        expect(WEAPON_ORDER).not.toContain('WP_GRAPPLING_HOOK');
+
+        // Q3's own order, not a re-sorted one: the gauntlet leads and the BFG is
+        // ninth, because a Q3 player knows the wheel by muscle memory.
+        expect(WEAPON_ORDER[0]).toBe('WP_GAUNTLET');
+        expect(WEAPON_ORDER[8]).toBe('WP_BFG');
     });
 });

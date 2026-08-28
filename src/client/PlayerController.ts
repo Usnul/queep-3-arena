@@ -41,7 +41,12 @@ import {
     type PlayerState,
 } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
-import { weaponStats, type WeaponId } from '../game/Weapons.ts';
+import {
+    isWeaponId,
+    weaponStats,
+    WEAPON_ORDER as Q3_WEAPON_ORDER,
+    type WeaponId,
+} from '../game/Weapons.ts';
 import { newInventory, type Inventory } from '../game/Items.ts';
 import { PlayerMovement, type MoverHost } from './MeepMove.ts';
 import {
@@ -150,24 +155,35 @@ const RUN_MOVESPEED = 127;
 const WALK_MOVESPEED = 64;
 
 /**
- * Weapon select, matching Q3's number-row bindings.
+ * What the mouse wheel cycles: `weapon_t`, filtered to what this port can fire.
  *
- * The order is `weapon_t`'s, which is also the order the mouse wheel cycles --
- * gauntlet first, then up through the list. It is not the order of increasing
- * power, and Q3 players know it by muscle memory, so it is kept.
+ * It used to be nine names written out here, and it stopped at `WP_BFG` --
+ * which is where Q3's list stops being the *original* game's. `weapon_t` has
+ * four more after it, and three of them are weapons `am_thornish` places on the
+ * floor: the nailgun, the prox launcher and the chaingun. Picking one up
+ * autoswitched to it, as `Pickup_Weapon` does, and then there was no way back to
+ * it -- not a key, not the wheel -- so the second time you held a chaingun was
+ * never. That reads exactly like "this weapon does not draw in first person",
+ * which is how it was reported.
+ *
+ * Derived from the extracted enum rather than retyped, and filtered by
+ * `isWeaponId` rather than by a list: a weapon reaches this only if
+ * `balance.weapons` has numbers for it, which is the same crossing D-114 built
+ * and the same one `give` uses. That leaves exactly the grappling hook out,
+ * which is not a damage weapon and has nothing here to fire.
  */
-const WEAPON_ORDER: readonly WeaponId[] = [
-    'WP_GAUNTLET',
-    'WP_MACHINEGUN',
-    'WP_SHOTGUN',
-    'WP_GRENADE_LAUNCHER',
-    'WP_ROCKET_LAUNCHER',
-    'WP_LIGHTNING',
-    'WP_RAILGUN',
-    'WP_PLASMAGUN',
-    'WP_BFG',
-];
+export const WEAPON_ORDER: readonly WeaponId[] = Q3_WEAPON_ORDER.filter(isWeaponId);
 
+/**
+ * The number row, which is Q3's own default binds and stops at nine.
+ *
+ * `weapon 1` through `weapon 9`, and nothing past them: Team Arena added
+ * `weapon 10`..`weapon 13` as console commands and bound none of them, so the
+ * four weapons after the BFG have never had a key in any shipping Quake III.
+ * Inventing one here would be inventing a binding rather than porting one, and
+ * the wheel already reaches them -- see {@link WEAPON_ORDER}, which is where the
+ * fix for "I could not get back to the chaingun" actually lives.
+ */
 const KEY_WEAPON: ReadonlyMap<string, WeaponId> = new Map([
     ['1', 'WP_GAUNTLET'],
     ['2', 'WP_MACHINEGUN'],

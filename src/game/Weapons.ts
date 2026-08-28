@@ -41,7 +41,23 @@ export interface WeaponStats {
     readonly splashDamage?: number;
     readonly splashRadius?: number;
     readonly speed?: number;
+    /**
+     * The `random() * N` added to {@link speed}, per projectile. The nailgun's.
+     *
+     * `fire_nail` is `scale = 555 + random() * 1800`, drawn fresh for every one
+     * of the fifteen nails a shot fires, and it is the only weapon in Q3 whose
+     * projectiles do not all travel at the same speed. Absent everywhere else,
+     * where the draw collapses to {@link speed} and nothing changes.
+     */
+    readonly speedRandom?: number;
     readonly spread?: number;
+    /**
+     * How many things leave the barrel per shot.
+     *
+     * `DEFAULT_SHOTGUN_COUNT` for the shotgun and `NUM_NAILSHOTS` for the
+     * nailgun -- one of each kind, which is why this is not called `pellets`
+     * anywhere the projectile path can see it.
+     */
     readonly pellets?: number;
     readonly range?: number;
 }
@@ -266,9 +282,23 @@ export interface Projectile {
  * different distribution is a different weapon. Seeded per shot, as the C does.
  */
 function crandom(seedRef: { value: number }): number {
-    // `Q_random`: (rand() & 0xffff) / 0x10000, with Q3's own LCG.
+    return random(seedRef) * 2 - 1;
+}
+
+/**
+ * `Q_random` -- the 0..1 half of the same generator, and the one the C names.
+ *
+ * `crandom` is defined in `q_shared.h` as `(2.0 * (random() - 0.5))`, so this is
+ * the primitive and that is the wrapper; it was written the other way round here
+ * because spread was the only thing that needed either. `fire_nail` wants the
+ * plain one -- `scale = 555 + random() * 1800` -- and drawing it as
+ * `(crandom() + 1) / 2` would be the same number by a route that stops looking
+ * like the line it came from.
+ */
+function random(seedRef: { value: number }): number {
+    // `(rand() & 0xffff) / 0x10000`, with Q3's own LCG.
     seedRef.value = (1664525 * seedRef.value + 1013904223) >>> 0;
-    return ((seedRef.value >>> 16) & 0xffff) / 0x10000 * 2 - 1;
+    return (((seedRef.value >>> 16) & 0xffff) / 0x10000);
 }
 
 const t_forward = vec3();
@@ -363,59 +393,100 @@ export class WeaponSystem {
 
         this.events.muzzleFlash(t_muzzle, weapon, ownerId);
 
-        if (stats.hitscan === true) {
-            const pellets = stats.pellets ?? 1;
-            const spread = stats.spread ?? 0;
-            const seedRef = { value: seed >>> 0 };
+        /*
+         How many things leave the barrel, and how wide the cone is.
 
-            for (let i = 0; i < pellets; i++) {
-                copy(t_dir, t_forward);
+         Both used to be read only on the hitscan side, because the only weapon
+         that fired more than one of anything was the shotgun. `Weapon_Nailgun_Fire`
+         is a `for` loop of `NUM_NAILSHOTS` calls to `fire_nail`, each one a
+         *projectile* with its own draw from `NAILGUN_SPREAD` -- so the count and
+         the cone are properties of a shot rather than of a hitscan, and they are
+         read once here for both paths.
+        */
+        const shots = stats.pellets ?? 1;
+        const spread = stats.spread ?? 0;
+        const seedRef = { value: seed >>> 0 };
 
-                if (spread > 0) {
-                    // `Bullet_Fire`: r and u are scaled by spread/16384 of the
-                    // right and up vectors at 8192 units.
-                    const r = crandom(seedRef) * spread * 16;
-                    const u = crandom(seedRef) * spread * 16;
+        // Projectiles do not start at `t_muzzle`; hitscan does. Computed once
+        // rather than per nail, because it is the same point for all fifteen.
+        const origin = stats.hitscan === true ? null : this.projectileOrigin(eyeQ3, barrelQ3);
 
-                    vectorMA(t_end, t_muzzle, 8192 * 16, t_forward);
-                    vectorMA(t_end, t_end, r, t_right);
-                    vectorMA(t_end, t_end, u, t_up);
+        for (let i = 0; i < shots; i++) {
+            copy(t_dir, t_forward);
 
-                    t_dir[0] = t_end[0]! - t_muzzle[0]!;
-                    t_dir[1] = t_end[1]! - t_muzzle[1]!;
-                    t_dir[2] = t_end[2]! - t_muzzle[2]!;
-                    normalize(t_dir);
-                }
+            if (spread > 0) {
+                // `Bullet_Fire` and `fire_nail` alike: r and u are scaled by
+                // spread/16384 of the right and up vectors at 8192 units.
+                const r = crandom(seedRef) * spread * 16;
+                const u = crandom(seedRef) * spread * 16;
 
+                vectorMA(t_end, t_muzzle, 8192 * 16, t_forward);
+                vectorMA(t_end, t_end, r, t_right);
+                vectorMA(t_end, t_end, u, t_up);
+
+                t_dir[0] = t_end[0]! - t_muzzle[0]!;
+                t_dir[1] = t_end[1]! - t_muzzle[1]!;
+                t_dir[2] = t_end[2]! - t_muzzle[2]!;
+                normalize(t_dir);
+            }
+
+            if (stats.hitscan === true) {
                 const range = stats.range ?? 8192;
                 vectorMA(t_end, t_muzzle, range, t_dir);
 
                 this.hitscanShot(weapon, t_muzzle, t_end, stats.damage, ownerId);
+                continue;
             }
 
-            return;
+            /*
+             `fire_nail`'s `scale = 555 + random() * 1800`, drawn per nail, which
+             is why the speed is read inside the loop and not outside it. It is
+             the one weapon in the game whose projectiles do not all travel at
+             the same speed, and it is what makes a burst of nails a moving
+             *spray* rather than a rigid wall -- the fast ones arrive first and
+             the cone stretches out along its own axis. A single averaged speed
+             would look like a shotgun that had been slowed down.
+
+             `speedRandom` is zero for everything else, so the draw collapses to
+             the constant and no other weapon changes.
+            */
+            const base = stats.speed ?? 900;
+            const scale =
+                stats.speedRandom === undefined || stats.speedRandom === 0
+                    ? base
+                    : base + random(seedRef) * stats.speedRandom;
+
+            const projectile: Projectile = {
+                id: this.nextProjectileId++,
+                weapon,
+                origin: vec3(origin![0]!, origin![1]!, origin![2]!),
+                /*
+                 `SnapVector`, which `fire_nail` applies and the other missiles
+                 do not need because their speeds are already integers along an
+                 already-snapped direction. Q3 rounds a `trDelta` to whole units
+                 so that it survives the network's own quantisation; here it is
+                 kept because the alternative is a nail that travels at a speed
+                 the C would never have produced, which is a difference nothing
+                 downstream can put back.
+                */
+                velocity: vec3(
+                    Math.round(t_dir[0]! * scale),
+                    Math.round(t_dir[1]! * scale),
+                    Math.round(t_dir[2]! * scale)
+                ),
+                // `G_FreeEntity` at 10 seconds, as `fire_rocket` sets -- and as
+                // `fire_nail` sets, with the same `level.time + 10000`.
+                life: 10,
+                ownerId,
+            };
+
+            this.projectiles.push(projectile);
+            this.missiles?.launch(projectile);
+            this.events.projectileSpawned(
+                projectile,
+                this.missiles?.entityOf(projectile.id) ?? -1
+            );
         }
-
-        // Projectile, and the one thing that does not start at `t_muzzle`.
-        const origin = this.projectileOrigin(eyeQ3, barrelQ3);
-
-        const projectile: Projectile = {
-            id: this.nextProjectileId++,
-            weapon,
-            origin,
-            velocity: vec3(
-                t_forward[0]! * (stats.speed ?? 900),
-                t_forward[1]! * (stats.speed ?? 900),
-                t_forward[2]! * (stats.speed ?? 900)
-            ),
-            // `G_FreeEntity` at 10 seconds, as `fire_rocket` sets.
-            life: 10,
-            ownerId,
-        };
-
-        this.projectiles.push(projectile);
-        this.missiles?.launch(projectile);
-        this.events.projectileSpawned(projectile, this.missiles?.entityOf(projectile.id) ?? -1);
     }
 
     /**

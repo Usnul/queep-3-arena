@@ -412,6 +412,41 @@ function extractWeapons() {
             fireRateMs: fireRate('WP_PROX_LAUNCHER'),
             ...projectile(missile, 'fire_prox'),
         },
+        /*
+         Not `projectile(missile, 'fire_nail')`, and the differences are the whole
+         reason this weapon had no entry at all until now.
+
+         `fire_nail` sets `bolt->damage` and stops: no `splashDamage`, no
+         `splashRadius` -- a nail is a dart and does not explode -- so three of
+         that helper's four regexes have nothing to match and it throws. The
+         fourth would fail too, because the speed is not a literal:
+         `VectorScale(dir, scale, ...)` with `scale = 555 + random() * 1800`, a
+         fresh draw per nail.
+
+         The numbers are all in the C regardless, and every one of them is read
+         here rather than chosen: the base and the range out of that assignment,
+         the count out of `NUM_NAILSHOTS`, the cone out of `NAILGUN_SPREAD`. What
+         was true before was that `projectile()` could not read them, which is a
+         statement about the helper. See D-119.
+        */
+        WP_NAILGUN: {
+            fireRateMs: fireRate('WP_NAILGUN'),
+            damage: fromFunction(missile, 'fire_nail', /bolt->damage = (\d+)/, 'nail damage'),
+            pellets: define(weapon, 'NUM_NAILSHOTS', 'g_weapon.c'),
+            spread: define(missile, 'NAILGUN_SPREAD', 'g_missile.c'),
+            speed: fromFunction(
+                missile, 'fire_nail', /scale = (\d+) \+ random\(\)/, 'nail speed'
+            ),
+            /*
+             The `random() * 1800` half. Named for what it is rather than folded
+             into a min and a max, because the C is `base + random() * range` and
+             a reader checking this against `fire_nail` should find both of its
+             numbers where the C put them.
+            */
+            speedRandom: fromFunction(
+                missile, 'fire_nail', /scale = \d+ \+ random\(\) \* (\d+)/, 'nail speed range'
+            ),
+        },
     };
 }
 
