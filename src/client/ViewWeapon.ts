@@ -201,6 +201,11 @@ export function weaponSway(
  * that wrong puts the gun in the other hand, which is a mistake that looks
  * plausible.
  *
+ * The candidates are tried in `CG_RegisterWeapon`'s own order -- this weapon's
+ * hands model, then the shotgun's -- and a candidate whose tag is not *in front
+ * of the eye* is skipped rather than used, which is the one rule here the C does
+ * not have and the chaingun is why. See the note at the check.
+ *
  * Q3 units. Null when neither the weapon's own hands model nor the shotgun's is
  * in the bundle, which means the pipeline has not been run.
  */
@@ -219,6 +224,31 @@ export function handOffset(
     for (const path of candidates) {
         const tag = library.definition(path)?.tags.find((t) => t.name === TAG_WEAPON);
         if (tag === undefined) continue;
+
+        /*
+         A hands model whose tag puts the gun *behind the eye* is a hands model
+         this cannot use, and is refused the same way one that does not load is.
+
+         `CG_RegisterWeapon` falls back to the shotgun's when
+         `trap_R_RegisterModel` returns nothing, which covers a file that is
+         missing and not a file that is wrong. OpenArena's
+         `vulcan_hand.md3` is the second thing: its `tag_weapon` is
+         `(-4.68, -0.66, -9.23)` on every one of its eleven frames -- 4.7 units
+         **backwards**, 9.2 down and 0.7 to the right, where the other twelve
+         weapons are 5.7 to 11.9 units *forward* and 5.8 to 7.1 to the right. The
+         vulcan mesh is 19 units long about a centre 1.6 behind its own origin,
+         so the whole chaingun ended up behind the near plane and below the
+         frustum. It was built, it was linked, `drawnWeapon` reported it, and
+         nothing was on screen -- which is exactly how it was reported.
+         See D-121.
+
+         The test is `forward > 0` and not a tolerance, because it is not a
+         judgement about how far forward a gun should be: a weapon held behind
+         your own eye is not a pose, and every plausible authoring mistake that
+         produces one lands on the wrong side of zero. Eleven of the twelve are
+         nowhere near it.
+        */
+        if (tag.origin[0]! <= 0) continue;
 
         return [-tag.origin[2]!, tag.origin[1]!, tag.origin[0]!];
     }

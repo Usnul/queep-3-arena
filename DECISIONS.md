@@ -5425,3 +5425,108 @@ against the ported `cm_trace`'s plane normal for the same shot and requires bett
 Numbered 120 rather than 116, which is where it was written: two sessions took the same next
 number on the same afternoon and D-116 went to the barrel offset, which six code comments now
 name. Renumbering the one nothing points at is the cheaper of the two corrections.
+
+### D-121: OpenArena's `vulcan_hand.md3` holds the chaingun behind your eye, and a hands model that cannot be used is one that did not load
+
+The chaingun was picked up, selected, built, linked and reported by `drawnWeapon`, and there was
+nothing on screen. D-119 had just made two other weapons reachable and this one came back anyway,
+which is what made it worth measuring rather than guessing at.
+
+**The tag is the whole of it.** `CG_AddViewWeapon` draws a hands model at the view origin and hangs
+the weapon off its `tag_weapon`, so that tag *is* where a first-person weapon sits. Measured across
+all thirteen, from the bundle:
+
+| weapon | forward | right | down |
+|---|---|---|---|
+| machinegun, shotgun and the seven that fall back to it | 6.16 | 5.83 | 7.80 |
+| rocket launcher, prox launcher | 11.92 | 5.78 | 11.78 |
+| BFG | 5.70 | 7.09 | 13.22 |
+| **chaingun** | **-4.68** | **0.66** | **9.23** |
+
+Twelve of thirteen are 5.7 to 11.9 units in front of the eye and 5.8 to 7.1 to the right of it. The
+chaingun is 4.7 units *behind* it and barely off centre, and it is the same on all eleven frames of
+`vulcan_hand.md3` — so this is not a frame-selection artefact, it is what OpenArena shipped. The
+vulcan mesh is 19 units long about a centre 1.6 units behind its own origin, which puts the whole
+gun behind the near plane and 9 units below a frustum whose half-extent at that range is about 2.
+It was drawn correctly, at a place no camera can see.
+
+**`CG_RegisterWeapon` has the right rule and asks the wrong question.** It falls back to
+`shotgun_hand.md3` when `trap_R_RegisterModel` returns nothing — which covers a hands model that is
+*missing* and not one that is *wrong*, and OpenArena ships this file, so the C uses it and Team
+Arena's chaingun presumably looks like this in OpenArena too. `handOffset` now asks the question the
+fallback was written for: a hands model whose `tag_weapon` is not in front of the eye is one this
+cannot use, and it is skipped exactly as an absent one is.
+
+The test is `forward > 0` and deliberately not a tolerance. It is not a judgement about how far
+forward a gun should be — a weapon held behind your own eye is not a pose at all, every plausible
+authoring mistake that produces one lands on the wrong side of zero, and the twelve that pass are
+nowhere near it. `first-person.test.ts` pins both halves: the vulcan tag is still the broken one
+(so the case has not silently stopped existing), and every weapon comes out in front of the eye and
+in the right hand.
+
+### D-122: the missile spin is not decoration, and skipping it was wrong for exactly the two models it was wrong for
+
+D-118 ported `CG_Missile`'s aim — `VectorNormalize2(s1->pos.trDelta, ent.axis[0])` — and left out
+its second line, `RotateAroundDirection(ent.axis, cg.time / 4)`, on this reasoning: it "buys a
+barrel roll on a rocket that is very nearly a surface of revolution". The grenade launcher and the
+prox launcher came back reported as launching "sort of sideways".
+
+The reasoning was true of the two missiles it was written about and false of the two it was not.
+`rocket.md3` and `nail.md3` are long and near enough axially symmetric, so a fixed roll is
+invisible on them. `grenade1.md3` is a 14.6 x 10.9 x 5.9 slab and `proxmine.md3` is a 23.8-wide drum
+on a vertical axis: held at one roll for a whole flight, both present a flat face to you and read as
+an object turned side-on rather than one thrown at you. Q3 spins them because the artwork needs it,
+and the two weapons that came back are precisely the two the argument for skipping it did not cover.
+
+What was measured before changing anything, because "sideways" has more than one cause and the aim
+was the obvious suspect: fired down Q3 +x, a grenade's velocity is `(700, 0, 0)` exactly, and its
+drawn model's world frame is the identity — model +X on the flight, +Y on world up, +Z on world
+right. The aim was already exact for every projectile weapon; the roll was the only part of
+`CG_Missile` missing.
+
+The roll is applied to each mesh's *local* rotation, composed on the right of the aim, about the
+model's own +X — which is by construction the axis the aim put on the flight direction, so it cannot
+move where the missile points. Composing it on the left would, and that is a mistake that looks
+correct for one frame; `missile-view.test.ts` runs ten seconds of it at 60 Hz and requires the aim
+to hold to six places. The rate is Q3's `cg.time / 4` degrees, which is 250 a second.
+
+### D-123: a mark stamped at a third of full strength over four metres of wall is a mark nobody sees
+
+Rocket and grenade hits were reported as leaving no decal, after D-117 and D-120 had between them
+made every mark reach the wall correctly oriented. They did reach it. In a live match on `oa_dm1`
+the dataset held 114 bullet marks, 40 plasma marks and 8 burn marks, every one of them positioned on
+the surface with its outward normal pointing off it and its texture loaded.
+
+**The burn mark was 27% grey spread over four metres.** `CG_ImpactMark`'s radius for a rocket is 64,
+which this port turns into a decal box 128 units — four metres — across. `mark_burn`'s own peak
+coverage is 197/255, and D-117 stamped it at alpha 0.35. The product is a barely-there smudge the
+size of a doorway, which is exactly what "I still cannot see it" describes.
+
+The 0.35 was not arbitrary and its docblock said so: `CG_MissileHitWall` passes `1,1,1,1` and lets
+`CG_AddMarks` fade the mark out over its life, and this port had no fade — decals were retired
+oldest-first at a cap of 2048, so every mark sat at full strength until it vanished, and a wall that
+had taken a magazine at alpha 1 would be black. The fraction was standing in for a fade that had not
+been ported, and it stood in badly.
+
+So the fade is ported and the fraction is gone. `MARK_TOTAL_TIME` is 10 seconds and `MARK_FADE_TIME`
+is the last 1 of them; the energy mark — `alphaFade`, which is the railgun's and the plasma gun's —
+gets `CG_AddMarks`' own second ramp, `450 - 450 * (age / 3000)` clamped at 255, so it holds full
+strength for 1.13 seconds and is off the wall at 3. Measured in the running game: stamped at 1.0,
+plasma at 0.47 at 2.2 s while the burn beside it is still 1.0, both burn and bullet at 0.4 at 9.6 s,
+and nothing at 10.2.
+
+Two deliberate differences from the C, both recorded rather than hidden:
+
+- **Everything fades its alpha; Q3 fades most marks' colour.** `CG_AddMarks` only alpha-fades the
+  energy mark and drives every other mark's RGB toward black — which, under the
+  `blendfunc GL_ZERO GL_ONE_MINUS_SRC_COLOR` those marks are drawn with, *is* fading out.
+  `convert-fx.ts` already converts them to black-with-coverage, so one alpha ramp is the same
+  picture and the only thing left to vary is how long it takes.
+- **A mark is freed when it reaches zero, not when its ten seconds are up.** The C frees on the
+  timer alone and lets an energy mark sit at zero alpha for the seven seconds between its own curve
+  and the common one, which costs nothing there because a mark poly that draws nothing is skipped.
+  Here it is a decal box the composite still walks, and invisible and gone are the same picture.
+
+The 2048 cap stays, as a backstop rather than as the mechanism: what retires a mark is now its life,
+and the cap is what stops a pathological second — fifteen nails and eleven shotgun pellets at once —
+from running the count away before that life expires.

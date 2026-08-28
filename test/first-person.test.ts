@@ -342,6 +342,87 @@ describe('an impact mark is a projector aimed into the surface', () => {
             expect(mark.decal.color.a).toBeGreaterThan(0);
         }
     });
+
+    /*
+     `CG_AddMarks`, which is the other half of `CG_ImpactMark` and was missing.
+
+     A mark used to be stamped at a fraction of full strength -- 0.35 for a burn,
+     0.6 for a bullet -- to stand in for a fade this port did not have, because
+     nothing ever took a mark off a wall. It stood in badly: a rocket's scorch is
+     radius 64, which is a four-metre box, and 0.35 of a texture whose own peak
+     coverage is 197/255 is a 27% grey over four metres. It was drawn, it was
+     oriented right, and it was reported as absent. See D-123.
+    */
+    it("stamps at CG_ImpactMark's own full strength", () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd);
+
+        for (const weapon of ['WP_ROCKET_LAUNCHER', 'WP_MACHINEGUN', 'WP_LIGHTNING']) {
+            effects.impactMark(weapon, [0, 0, 0], [0, 0, 1]);
+        }
+
+        // `CG_MissileHitWall` passes `1,1,1,1` for every weapon it names.
+        for (const mark of decalsIn(ecd)) expect(mark.decal.color.a).toBe(1);
+    });
+
+    it('fades a mark out over the last second of its ten, then frees it', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd);
+
+        effects.impactMark('WP_ROCKET_LAUNCHER', [0, 0, 0], [0, 0, 1]);
+
+        const alphaAt = (seconds: number): number | null => {
+            effects.update(seconds);
+            const marks = decalsIn(ecd);
+            return marks.length === 0 ? null : marks[0]!.decal.color.a;
+        };
+
+        // `MARK_TOTAL_TIME` is 10 s and `MARK_FADE_TIME` the last 1 s of it, so
+        // a mark is at full strength for nine.
+        expect(alphaAt(5)).toBe(1);
+        expect(alphaAt(4)).toBe(1);
+
+        // Half way through the fade.
+        expect(alphaAt(0.5)).toBeCloseTo(0.5, 2);
+
+        // And gone, entity and all.
+        expect(alphaAt(1), 'the mark outlived MARK_TOTAL_TIME').toBeNull();
+    });
+
+    it('takes the plasma scorch off in three seconds, on the energy curve', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd);
+
+        // `alphaFade` is `mark == energyMarkShader` in the C, which is the
+        // railgun's and the plasma gun's and nothing else's.
+        effects.impactMark('WP_PLASMAGUN', [0, 0, 0], [0, 0, 1]);
+        effects.impactMark('WP_MACHINEGUN', [50, 0, 0], [0, 0, 1]);
+
+        const byTexture = (): Record<string, number> => {
+            const out: Record<string, number> = {};
+            for (const m of decalsIn(ecd)) {
+                out[m.decal.uri.includes('plasma') ? 'energy' : 'ordinary'] = m.decal.color.a;
+            }
+            return out;
+        };
+
+        /*
+         `fade = 450 - 450 * (age / 3000)`, clamped at 255: full strength until
+         450 comes down through 255, which is 1.13 s, then linear to nothing at
+         three. One second in it is 300/255, still above 1.
+        */
+        effects.update(1);
+        expect(byTexture().energy).toBe(1);
+
+        // Two seconds: 450 - 450*(2/3) = 150, so 150/255.
+        effects.update(1);
+        expect(byTexture().energy).toBeCloseTo(150 / 255, 2);
+
+        // Three: gone, while the bullet mark beside it is untouched at nine.
+        effects.update(1.01);
+        expect(byTexture().energy, 'the plasma scorch outlived its own curve').toBeUndefined();
+        expect(byTexture().ordinary, 'the bullet mark faded on the wrong curve').toBe(1);
+    });
 });
 
 function marksOf(ecd: EntityComponentDataset): Transform {
@@ -547,6 +628,62 @@ describe('every weapon can be drawn in the player\'s hands', () => {
         // The railgun ships no `railgun_hand.md3`; the C answers that with the
         // shotgun's, and the shotgun's is the machinegun's to the digit.
         expect(handOffset(library, 'WP_RAILGUN')).toEqual(handOffset(library, 'WP_SHOTGUN'));
+    });
+
+    /*
+     The chaingun, and the reason `handOffset` has a rule `CG_RegisterWeapon`
+     does not.
+
+     OpenArena ships a `vulcan_hand.md3`, so the C's "did the model load" test
+     passes and the C uses its tag. That tag is `(-4.68, -0.66, -9.23)` on every
+     one of its eleven frames: 4.7 units *behind* the eye. The vulcan mesh is 19
+     units long about a centre 1.6 behind its own origin, so the whole chaingun
+     sat behind the near plane and below the frustum -- built, linked, reported
+     by `drawnWeapon`, and not on screen. See D-121.
+    */
+    it('refuses a hands tag that puts the gun behind the eye', () => {
+        const library = modelLibrary();
+
+        const raw = library
+            .definition('models/weapons/vulcan/vulcan_hand.md3')!
+            .tags.find((t) => t.name === 'tag_weapon')!;
+
+        expect(raw.origin[0], 'the vulcan tag stopped being the broken one').toBeLessThan(0);
+
+        // So the chaingun takes the shotgun's, as a weapon with no hands model
+        // at all would.
+        expect(handOffset(library, 'WP_CHAINGUN')).toEqual(handOffset(library, 'WP_SHOTGUN'));
+    });
+
+    it('leaves every other weapon on its own hands model', () => {
+        const library = modelLibrary();
+        const shotgun = handOffset(library, 'WP_SHOTGUN')!;
+
+        /*
+         The rule is a data check and it must not be catching anything else. Of
+         the thirteen, four have hands models of their own that survive it -- the
+         machinegun, the shotgun, the rocket launcher and the BFG, plus the prox
+         launcher which shares the rocket launcher's -- and the rest legitimately
+         fall back because OpenArena ships them none.
+        */
+        const own = WEAPON_TAGS.filter(
+            (tag) => JSON.stringify(handOffset(library, tag)) !== JSON.stringify(shotgun)
+        );
+
+        expect(own.sort()).toEqual(
+            ['WP_BFG', 'WP_PROX_LAUNCHER', 'WP_ROCKET_LAUNCHER'].sort()
+        );
+    });
+
+    it('puts every weapon in front of the eye and to the right of it', () => {
+        const library = modelLibrary();
+
+        for (const tag of WEAPON_TAGS) {
+            const [left, , forward] = handOffset(library, tag)!;
+
+            expect(forward, `${tag} is held behind the eye`).toBeGreaterThan(0);
+            expect(-left, `${tag} is held in the left hand`).toBeGreaterThan(0);
+        }
     });
 });
 

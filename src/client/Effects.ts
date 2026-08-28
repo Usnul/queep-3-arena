@@ -60,6 +60,18 @@ interface Expiry {
     at: number;
 }
 
+/** One impact mark on a wall, while it is still on it. */
+interface LiveDecal {
+    readonly entity: number;
+    readonly decal: Decal;
+    /** When it landed, on `Effects`' own clock. */
+    readonly at: number;
+    /** Whether it is on the energy mark's faster curve. */
+    readonly energy: boolean;
+    /** Last alpha written, so a mark at full strength is not rewritten. */
+    alpha: number;
+}
+
 /**
  * `BlendingType` from meep. Additive for fire and sparks, normal for smoke.
  * Re-declared rather than imported because the enum lives three directories
@@ -99,18 +111,49 @@ interface ImpactMark {
     /** `CG_ImpactMark`'s `radius`, in Q3 units. */
     readonly radiusQ3: number;
     /**
-     * How dark the stamp lands, which is this port's number and not Q3's.
+     * Whether this is `cgs.media.energyMarkShader`, which fades on its own curve.
      *
-     * `CG_MissileHitWall` passes `1,1,1,1` and lets `CG_AddMarks` fade the mark
-     * out over its 10-second life. These decals do not fade -- they are retired
-     * oldest-first at a cap of 2048, so every one of them is at full strength
-     * until it disappears -- and a wall that has taken a magazine at alpha 1 is
-     * black. The alpha is therefore standing in for the fade, and the values are
-     * graded by how much of a mark the weapon should leave rather than being one
-     * constant: a rocket scorch reads at a distance and a nail hole should not.
+     * `CG_AddMarks` singles the plasma scorch out twice: `alphaFade` is
+     * `mark == energyMarkShader`, and it gets an extra ramp -- `450 - 450 *
+     * (age / 3000)` -- that takes it off the wall in three seconds instead of
+     * ten. Everything else fades its *colour* toward black, which under
+     * `blendfunc GL_ZERO GL_ONE_MINUS_SRC_COLOR` is the same thing as fading
+     * out: this port converts those marks to black-with-coverage, so both cases
+     * are one alpha ramp here and the only difference left is how long it takes.
      */
-    readonly alpha: number;
+    readonly energy?: boolean;
 }
+
+/**
+ * `MARK_TOTAL_TIME`, in seconds. A mark is gone ten seconds after it lands.
+ *
+ * This is the number that lets the alpha be Q3's. The marks used to be stamped
+ * at a fraction of full strength -- 0.35 for a burn, 0.6 for a bullet -- because
+ * nothing ever removed them: they were retired oldest-first at a cap of 2048, so
+ * a wall took every mark it was ever given at full darkness and stayed that way.
+ * The fraction was standing in for a fade that had not been ported.
+ *
+ * It stood in badly, and that is what brought this back: a rocket's scorch is
+ * `CG_ImpactMark`'s radius 64, which is a **4-metre** box, and 0.35 of a texture
+ * whose own peak coverage is 197/255 is a 27% grey smeared over four metres of
+ * wall. It was drawn, it was oriented correctly, and it was not visible. Q3
+ * stamps `1,1,1,1` and takes the mark away afterwards, and doing both is both
+ * more faithful and the thing that makes a rocket hit leave a mark you can see.
+ */
+const MARK_TOTAL_SECONDS = 10;
+
+/** `MARK_FADE_TIME`: the last second of that life is a linear fade to nothing. */
+const MARK_FADE_SECONDS = 1;
+
+/**
+ * The energy mark's own ramp: `fade = 450 - 450 * (age / 3000)`, clamped at 255.
+ *
+ * So a plasma scorch sits at full strength for the 1.13 seconds it takes 450 to
+ * come down to 255, then fades to nothing at three seconds. Written as the C's
+ * two constants rather than as the 1.13 they imply.
+ */
+const ENERGY_FADE_SECONDS = 3;
+const ENERGY_FADE_START = 450;
 
 /**
  * `CG_MissileHitWall`'s `switch (weapon)`, which is the only place Q3 says what
@@ -125,22 +168,22 @@ interface ImpactMark {
  * is the wider of the two lists (see `isWeaponId`).
  */
 const MISSILE_MARKS: Readonly<Record<string, ImpactMark>> = {
-    WP_MACHINEGUN: { texture: 'mark_bullet', radiusQ3: 8, alpha: 0.6 },
-    WP_CHAINGUN: { texture: 'mark_bullet', radiusQ3: 8, alpha: 0.6 },
+    WP_MACHINEGUN: { texture: 'mark_bullet', radiusQ3: 8 },
+    WP_CHAINGUN: { texture: 'mark_bullet', radiusQ3: 8 },
     // Q3's shotgun mark is a quarter the machinegun's, because there are eleven
     // of them per shot and a full-size stamp each would black out the wall.
-    WP_SHOTGUN: { texture: 'mark_bullet', radiusQ3: 4, alpha: 0.6 },
+    WP_SHOTGUN: { texture: 'mark_bullet', radiusQ3: 4 },
 
-    WP_GRENADE_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64, alpha: 0.35 },
-    WP_ROCKET_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64, alpha: 0.35 },
-    WP_PROX_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64, alpha: 0.35 },
-    WP_BFG: { texture: 'mark_burn', radiusQ3: 32, alpha: 0.35 },
+    WP_GRENADE_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64 },
+    WP_ROCKET_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64 },
+    WP_PROX_LAUNCHER: { texture: 'mark_burn', radiusQ3: 64 },
+    WP_BFG: { texture: 'mark_burn', radiusQ3: 32 },
 
-    WP_RAILGUN: { texture: 'mark_plasma', radiusQ3: 24, alpha: 0.7 },
-    WP_PLASMAGUN: { texture: 'mark_plasma', radiusQ3: 16, alpha: 0.7 },
+    WP_RAILGUN: { texture: 'mark_plasma', radiusQ3: 24, energy: true },
+    WP_PLASMAGUN: { texture: 'mark_plasma', radiusQ3: 16, energy: true },
 
-    WP_LIGHTNING: { texture: 'mark_hole', radiusQ3: 12, alpha: 0.5 },
-    WP_NAILGUN: { texture: 'mark_hole', radiusQ3: 12, alpha: 0.5 },
+    WP_LIGHTNING: { texture: 'mark_hole', radiusQ3: 12 },
+    WP_NAILGUN: { texture: 'mark_hole', radiusQ3: 12 },
 };
 
 /**
@@ -153,7 +196,7 @@ const MISSILE_MARKS: Readonly<Record<string, ImpactMark>> = {
  * arrives next, which is the reason to write the fallback down rather than to
  * throw.
  */
-const DEFAULT_MARK: ImpactMark = { texture: 'mark_hole', radiusQ3: 12, alpha: 0.5 };
+const DEFAULT_MARK: ImpactMark = { texture: 'mark_hole', radiusQ3: 12 };
 
 /**
  * A unit vector perpendicular to `n`, rotated `roll` radians about it.
@@ -203,14 +246,15 @@ export class Effects {
     private now = 0;
 
     /** Live decal count, so the oldest can be retired before the cap is hit. */
-    private readonly decals: number[] = [];
+    private readonly decals: LiveDecal[] = [];
 
     /**
-     * Cap on simultaneous decals.
+     * Cap on simultaneous decals, and a backstop rather than the mechanism.
      *
      * meep advertises 1,000,000 GPU decals and this port has no reason to doubt
-     * it, but a deathmatch that never retires marks accumulates them without
-     * bound. 2048 is roughly ten minutes of continuous machinegun fire.
+     * it. What retires a mark now is `CG_AddMarks`' own ten-second life; the cap
+     * is what stops a pathological second -- fifteen nails and eleven shotgun
+     * pellets at a time -- from running the count away before that expires.
      */
     private readonly maxDecals = 2048;
 
@@ -248,6 +292,73 @@ export class Effects {
                 this.ecd.removeEntity(e.entity);
             }
         }
+
+        this.fadeMarks();
+    }
+
+    /**
+     * `CG_AddMarks`: age every mark, fade the ones that are on their way out,
+     * and free the ones whose ten seconds are up.
+     *
+     * The list is in landing order, so the expired marks are a prefix of it and
+     * removing them is a shift rather than a scan. The fade only writes an alpha
+     * that has actually changed -- a mark spends most of its life at full
+     * strength, and `Decal.color` is an observed vector whose setter dispatches
+     * a change signal to the decal system.
+     */
+    private fadeMarks(): void {
+        let kept = 0;
+
+        for (const live of this.decals) {
+            const age = this.now - live.at;
+
+            /*
+             Two ramps, both `CG_AddMarks`', and the smaller wins. The energy one
+             starts above 1 and is therefore no fade at all until it comes down
+             through it, which is the `if (fade < 255)` in the C.
+            */
+            let alpha = 1;
+
+            if (live.energy) {
+                alpha = Math.min(
+                    alpha,
+                    (ENERGY_FADE_START - ENERGY_FADE_START * (age / ENERGY_FADE_SECONDS)) / 255
+                );
+            }
+
+            const remaining = MARK_TOTAL_SECONDS - age;
+            if (remaining < MARK_FADE_SECONDS) {
+                alpha = Math.min(alpha, remaining / MARK_FADE_SECONDS);
+            }
+
+            /*
+             Freed the moment it reaches zero, rather than at `MARK_TOTAL_TIME`
+             for everything. The C frees on the timer alone and lets an energy
+             mark sit at zero alpha for the seven seconds between its own curve
+             and the common one -- which costs nothing there, because a mark poly
+             that draws nothing is a poly it skips. Here it is a decal box the
+             composite still walks, and "invisible" and "gone" are the same
+             picture, so this takes the cheaper of two identical answers.
+
+             Not a prefix: an energy mark landing after an ordinary one expires
+             before it, so the survivors are compacted rather than shifted.
+            */
+            if (alpha <= 0) {
+                if (this.ecd.entityExists(live.entity)) this.ecd.removeEntity(live.entity);
+                continue;
+            }
+
+            // A hundredth of an alpha step is below what an 8-bit channel can
+            // hold, so this is "changed" rather than "not exactly equal".
+            if (Math.abs(alpha - live.alpha) >= 0.01) {
+                live.alpha = alpha;
+                live.decal.color.set(1, 1, 1, alpha);
+            }
+
+            this.decals[kept++] = live;
+        }
+
+        this.decals.length = kept;
     }
 
     private expire(entity: number, afterSeconds: number): void {
@@ -409,8 +520,11 @@ export class Effects {
             normalQ3,
             mark.radiusQ3,
             mark.texture,
-            mark.alpha,
-            Math.random() * TAU
+            // `CG_MissileHitWall` passes `1,1,1,1` and lets `CG_AddMarks` take it
+            // away again; both halves of that are ported now.
+            1,
+            Math.random() * TAU,
+            mark.energy === true
         );
     }
 
@@ -488,7 +602,9 @@ export class Effects {
         radiusQ3: number,
         texture: string,
         alpha: number,
-        rollRadians: number
+        rollRadians: number,
+        /** On `energyMarkShader`'s faster curve. See {@link ImpactMark.energy}. */
+        energy = false
     ): void {
         const n = dirToMeep(normalQ3);
         const len = Math.hypot(n[0], n[1], n[2]);
@@ -530,12 +646,12 @@ export class Effects {
         const entity = new Entity();
         entity.add(transform).add(decal).build(this.ecd);
 
-        this.decals.push(entity.id);
+        this.decals.push({ entity: entity.id, decal, at: this.now, energy, alpha });
 
         while (this.decals.length > this.maxDecals) {
             const oldest = this.decals.shift();
-            if (oldest !== undefined && this.ecd.entityExists(oldest)) {
-                this.ecd.removeEntity(oldest);
+            if (oldest !== undefined && this.ecd.entityExists(oldest.entity)) {
+                this.ecd.removeEntity(oldest.entity);
             }
         }
     }
