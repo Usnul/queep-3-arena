@@ -333,7 +333,8 @@ class Rig {
         const step = this.footsteps.update(
             this.player.ps.bobCycle,
             this.player.onGround,
-            this.player.ducked
+            this.player.ducked,
+            this.player.walking
         );
         if (step !== null) this.steps.push(step);
 
@@ -709,6 +710,133 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> readouts [%s]', (solv
         rig.run(120);
 
         expect(rig.steps.filter((s) => s === 'land').length, 'landings from one jump').toBe(1);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * +speed, which is the shift key
+ * ------------------------------------------------------------------ */
+
+/*
+ Shift was bound to crouch here, alongside ctrl and c, and Q3 does not do that:
+ `cl_run` is on by default, so `+speed` is the *walk* modifier. It is one number
+ in `CL_KeyMove` -- the command is filled with 64 rather than 127 -- and three
+ consequences the player actually notices: about half the pace, a slower bob,
+ and no footfall to be heard by.
+
+ Asserted on both solvers, because the walk arrives at each of them differently:
+ the ported path reads `BUTTON_WALKING` in `PM_Footsteps`, and the shipping path
+ maintains the same cycle itself in `updateBobCycle`. A walk that is quiet on one
+ and audible on the other is exactly the kind of split D-082 was.
+*/
+describe.each<Solver>(['meep', 'q3'])('PlayerController -> walking [%s]', (solver) => {
+    /**
+     * Hold forward down an open heading, walking or running.
+     *
+     * One rig at a time, and never two alive at once: pointer lock is a single
+     * global here exactly as it is in a browser, so activating a second rig
+     * deactivates the first -- which reads as a player who does not move, and
+     * cost this test its first draft.
+     */
+    function forward(walk: boolean): Rig {
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+        rig.face(openHeading('oa_dm1'));
+
+        rig.devices.hold('w');
+        if (walk) rig.devices.hold('shift');
+
+        return rig;
+    }
+
+    /** Total advance of `ps.bobCycle` over `frames`, wraps included. */
+    function bobAdvance(rig: Rig, frames: number): number {
+        let total = 0;
+        let previous = rig.player.ps.bobCycle;
+
+        for (let i = 0; i < frames; i++) {
+            rig.frame();
+            const now = rig.player.ps.bobCycle;
+            total += (now - previous + 256) & 255;
+            previous = now;
+        }
+
+        return total;
+    }
+
+    it('walks at about half the pace, and does not crouch', () => {
+        const running = forward(false);
+        running.run(125);
+        const runSpeed = running.player.speed;
+
+        const walking = forward(true);
+        walking.run(125);
+
+        expect(runSpeed, 'a run is still a run').toBeGreaterThan(200);
+
+        /*
+         `PM_CmdScale` turns a 64-magnitude command into `ps.speed * 64/127`,
+         which is 161 u/s. The band is wide because this is measured through a
+         level -- the exact number is pinned on the motor, in meepmove.test.ts.
+        */
+        expect(walking.player.speed, 'walk speed').toBeGreaterThan(320 * 0.4);
+        expect(walking.player.speed, 'walk speed').toBeLessThan(320 * 0.6);
+
+        // And shift is not crouch: it was, and that is the binding this replaces.
+        expect(walking.player.walking).toBe(true);
+        expect(walking.player.ducked, 'shift ducked the player').toBe(false);
+        expect(walking.player.ps.viewheight).toBe(C.DEFAULT_VIEWHEIGHT);
+        expect(walking.player.maxs[2], 'the box shortened for a walk').toBe(STAND_MAXS[2]);
+
+        // ...and ctrl still is, on the same rig, so neither key took the other's job.
+        walking.devices.hold('ctrl');
+        walking.run(30);
+        expect(walking.player.ducked, 'ctrl stopped crouching').toBe(true);
+    });
+
+    it('gives the pace back when shift comes up', () => {
+        /*
+         The failure this port has already shipped once: a held modifier that
+         never lets go, because the state it sets is latched somewhere instead
+         of rebuilt from the key. `buttons` is zeroed and refilled every frame,
+         and this is what says so from outside.
+        */
+        const rig = forward(true);
+        rig.run(125);
+
+        expect(rig.player.walking).toBe(true);
+        const walked = rig.player.speed;
+
+        rig.devices.hold('shift', false);
+        rig.run(125);
+
+        expect(rig.player.walking, 'still walking with shift released').toBe(false);
+        expect(rig.player.speed, 'the pace never came back').toBeGreaterThan(walked * 1.5);
+    });
+
+    it('crosses the floor without being heard', () => {
+        const running = forward(false);
+        const ranBob = bobAdvance(running, 125);
+        const ranSteps = running.steps.filter((s) => s === 'step').length;
+
+        const walking = forward(true);
+        const walkedBob = bobAdvance(walking, 125);
+
+        expect(
+            walking.player.speed, 'must be moving for the silence to mean anything'
+        ).toBeGreaterThan(100);
+
+        expect(ranSteps, 'a run is audible').toBeGreaterThanOrEqual(2);
+        expect(walking.steps.filter((s) => s === 'step').length, 'a walk was heard')
+            .toBe(0);
+
+        /*
+         Silent, not frozen: `bobmove` drops from 0.4 to 0.3 and the gun keeps
+         swaying to it. A cycle that stopped would be silent too, and would be a
+         different bug -- the weapon sway reads the same counter.
+        */
+        expect(walkedBob, 'the bob cycle stopped for a walk').toBeGreaterThan(0);
+        expect(walkedBob, 'a walk bobbed as fast as a run').toBeLessThan(ranBob);
     });
 });
 

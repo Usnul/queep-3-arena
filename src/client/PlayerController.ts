@@ -62,10 +62,11 @@ const WORLD_SCALE = 1 / 32;
 
 /**
  * `PM_Footsteps`' cycle rates, per millisecond, with Q3's own comments on them:
- * "faster speeds bob faster" and "ducked characters bob much faster". There is a
- * third, 0.3 for `BUTTON_WALKING`, and nothing in this port binds a walk key.
+ * "faster speeds bob faster", "walking bobs slow" and "ducked characters bob
+ * much faster". All three are bound now -- shift is `+speed`.
  */
 const BOBMOVE_RUN = 0.4;
+const BOBMOVE_WALK = 0.3;
 const BOBMOVE_DUCKED = 0.5;
 
 /**
@@ -120,7 +121,33 @@ const KEY_BACK = ['s', 'down_arrow'];
 const KEY_LEFT = ['a', 'left_arrow'];
 const KEY_RIGHT = ['d', 'right_arrow'];
 const KEY_JUMP = ['space'];
-const KEY_CROUCH = ['ctrl', 'c', 'shift'];
+const KEY_CROUCH = ['ctrl', 'c'];
+/*
+ `+speed`, and shift held it here for one release because crouch had it. Q3's
+ shift does not crouch: `cl_run` is on by default, so holding it *walks* -- half
+ speed, a slower bob and silent feet. It is a modifier over the whole command
+ rather than a key of its own, which is why it is `CL_KeyMove`'s `movespeed` and
+ not another `moves` term. See `WALK_MOVESPEED`.
+*/
+const KEY_WALK = ['shift'];
+
+/**
+ * `CL_KeyMove`'s two `movespeed` values.
+ *
+ * Q3 does not have a walk *state*: it fills the command with a shorter vector
+ * and lets `PM_CmdScale` do the rest, which is `speed * max / (127 * total)` --
+ * so a 64-magnitude command asks for 64/127 of `ps.speed`, about 161 u/s, and
+ * every other term (friction, air control, the duck clamp) keeps working
+ * against it unchanged. Reproducing that as a speed multiplier somewhere in the
+ * motor would be the letter over the spirit, and would need a second copy of
+ * the rule that stops diagonals being faster.
+ *
+ * `BUTTON_WALKING` rides along because it is what the *presentation* reads:
+ * `PM_Footsteps` slows the bob and plays no footfall from it, and the ported
+ * path picks that up for free.
+ */
+const RUN_MOVESPEED = 127;
+const WALK_MOVESPEED = 64;
 
 /**
  * Weapon select, matching Q3's number-row bindings.
@@ -525,12 +552,25 @@ export class PlayerController {
         this.crouching = this.active && this.has(KEY_CROUCH);
 
         if (this.active && !this.dead) {
+            /*
+             `CL_KeyMove`, which scales the whole command rather than any one
+             axis: "the walking flag is to keep animations consistent even
+             during acceleration and deceleration".
+            */
+            const walking = this.has(KEY_WALK);
+            const movespeed = walking ? WALK_MOVESPEED : RUN_MOVESPEED;
+
+            // Rebuilt from the key every frame, off a `buttons` this method
+            // zeroed above. A modifier that latches is the bug this port has
+            // already shipped once, in the crouch that could not be released.
+            if (walking) cmd.buttons |= C.BUTTON_WALKING;
+
             cmd.moves[FORWARDMOVE] =
-                (this.has(KEY_FORWARD) ? 127 : 0) + (this.has(KEY_BACK) ? -127 : 0);
+                (this.has(KEY_FORWARD) ? movespeed : 0) + (this.has(KEY_BACK) ? -movespeed : 0);
             cmd.moves[RIGHTMOVE] =
-                (this.has(KEY_RIGHT) ? 127 : 0) + (this.has(KEY_LEFT) ? -127 : 0);
+                (this.has(KEY_RIGHT) ? movespeed : 0) + (this.has(KEY_LEFT) ? -movespeed : 0);
             cmd.moves[UPMOVE] =
-                (this.has(KEY_JUMP) ? 127 : 0) + (this.has(KEY_CROUCH) ? -127 : 0);
+                (this.has(KEY_JUMP) ? movespeed : 0) + (this.has(KEY_CROUCH) ? -movespeed : 0);
         } else {
             cmd.moves[FORWARDMOVE] = 0;
             cmd.moves[RIGHTMOVE] = 0;
@@ -585,9 +625,13 @@ export class PlayerController {
             return;
         }
 
+        // `PM_Footsteps`' order: ducked first, and a ducked walk bobs as a
+        // ducked run does, because Q3 never asks the second question.
         const bobmove = (ps.pm_flags & C.PMF_DUCKED) !== 0
             ? BOBMOVE_DUCKED
-            : BOBMOVE_RUN;
+            : this.walking
+                ? BOBMOVE_WALK
+                : BOBMOVE_RUN;
 
         ps.bobCycle = Math.trunc(ps.bobCycle + bobmove * msec) & 255;
     }
@@ -703,6 +747,18 @@ export class PlayerController {
      */
     get ducked(): boolean {
         return (this.ps.pm_flags & C.PMF_DUCKED) !== 0;
+    }
+
+    /**
+     * `BUTTON_WALKING`: is the player holding `+speed`?
+     *
+     * Read back off the command rather than the key, for the same reason
+     * `moving` is: the command is where "active", "dead" and the key have
+     * already been resolved into one answer, and it is the same answer both
+     * solvers were given.
+     */
+    get walking(): boolean {
+        return (this.pmove.cmd.buttons & C.BUTTON_WALKING) !== 0;
     }
 
     /**

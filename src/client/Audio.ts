@@ -577,9 +577,19 @@ export class Footsteps {
      * @param bobCycle `ps.bobCycle`, maintained by whichever solver is running.
      * @param ducked `PMF_DUCKED`; Q3 advances a ducked player's cycle faster and
      *   plays no footstep from it at all, because a crouched player is sneaking.
+     * @param walking `BUTTON_WALKING`, and the same reasoning: `PM_Footsteps`
+     *   sets `footstep` in its run branch alone, so `+speed` is the other way to
+     *   cross the floor without being heard. Required rather than defaulted --
+     *   a caller that forgets it is a player who cannot sneak, which is silent
+     *   in both senses.
      * @returns `'step'`, `'land'` or `null` for this frame.
      */
-    update(bobCycle: number, onGround: boolean, ducked: boolean): 'step' | 'land' | null {
+    update(
+        bobCycle: number,
+        onGround: boolean,
+        ducked: boolean,
+        walking: boolean
+    ): 'step' | 'land' | null {
         const landed = onGround && !this.wasOnGround;
         this.wasOnGround = onGround;
 
@@ -593,6 +603,6 @@ export class Footsteps {
         // is set across [64, 191], so a change in it is a crossing of 64 or 192.
         if ((((previous + 64) ^ (bobCycle + 64)) & 128) === 0) return null;
 
-        return ducked ? null : 'step';
+        return ducked || walking ? null : 'step';
     }
 }

@@ -190,6 +190,29 @@ describe.each(['oa_dm1', 'aggressor'])('Q3 movement on meep [%s]', (mapName) => 
             return run(move, state, 125, () => make(yaw)).peakSpeed;
         });
 
+    it('walks at 64/127 of a run, which is all Q3 means by +speed', () => {
+        /*
+         `CL_KeyMove` fills the command with 64 instead of 127 and changes
+         nothing else; `PM_CmdScale` -- `speed * max / (127 * total)` -- turns
+         that into 161 u/s. Asserted through the motor rather than against the
+         key binding, because this is the half that has to survive the port:
+         shift only sets a number, and the walk is whatever the scale does with
+         it.
+        */
+        const walk = 320 * (64 / 127);
+        const peaks = peaksByHeading((yaw) => command({ forward: 64, yaw }));
+        const atSpeed = peaks.filter((v) => Math.abs(v - walk) < 320 * 0.01);
+
+        expect(
+            atSpeed.length,
+            `peaks: ${peaks.map((v) => v.toFixed(0)).join(', ')}, wanted ${walk.toFixed(0)}`
+        ).toBeGreaterThanOrEqual(3);
+
+        // Half speed is the point of it: nothing walks at a run's pace, even
+        // downhill, where a run itself is allowed to overshoot.
+        expect(Math.max(...peaks), 'a walk kept up with a run').toBeLessThan(320 * 0.9);
+    });
+
     it('tops out at exactly ps.speed where there is room to run', () => {
         const peaks = peaksByHeading((yaw) => command({ forward: 127, yaw }));
         const atSpeed = peaks.filter((v) => Math.abs(v - 320) < 320 * 0.01);

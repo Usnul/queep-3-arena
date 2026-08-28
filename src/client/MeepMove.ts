@@ -705,6 +705,21 @@ export class PlayerMovement {
         ps.viewheight = this.state.viewheight;
 
         /*
+         `PM_CheckDuck`'s other write, and the same omission as the box below in
+         miniature: this path kept the posture in `MoveState.ducked` and never
+         mirrored it into `pm_flags`, so `PlayerController.ducked` -- the flag,
+         not the key -- was false for a crouching player for the whole of the
+         shipping path's life. Two things read it and both were wrong: a crouched
+         player was audible, where Q3 has crouch as the sneak, and the view bob
+         ran at 0.4 instead of `PM_Footsteps`' 0.5 for a duck.
+
+         Found by asserting it rather than by hearing it: the crouch cases here
+         checked `viewheight` and the box, which this path did write.
+        */
+        if (this.state.ducked) ps.pm_flags |= C.PMF_DUCKED;
+        else ps.pm_flags &= ~C.PMF_DUCKED;
+
+        /*
          `PM_CheckDuck` writes the player's box as well as the view height, and
          the box is not solver state -- it is what the *game* tests the player
          with. `main.ts` builds `playerMins`/`playerMaxs` from it every frame for

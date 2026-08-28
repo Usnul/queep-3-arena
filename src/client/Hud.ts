@@ -241,7 +241,7 @@ export class Hud {
         if (state.mode === 'click-to-play') {
             this.stateModel.set(
                 'click to play  ·  WASD move  ·  space jump  ·  ctrl crouch  ·  ' +
-                'mouse1 fire  ·  1-9 or wheel weapon  ·  esc menu'
+                'shift walk  ·  mouse1 fire  ·  1-9 or wheel weapon  ·  esc menu'
             );
         } else if (state.mode === 'fly') {
             this.stateModel.set(`${state.map}  ·  noclip`);

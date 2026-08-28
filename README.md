@@ -57,9 +57,9 @@ Then re-run the converters. What each channel is worth, and why two of the four 
 are thrown away and replaced by a hand table, is D-092 and D-093.
 
 Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
-to jump, ctrl to crouch, mouse-1 to fire, 1-9 or the wheel to change weapon, **escape for the
-menu**. Input runs on meep's own `engine.devices` rather than DOM listeners — see GAP-017 for why
-that is not optional.
+to jump, ctrl to crouch, shift to walk, mouse-1 to fire, 1-9 or the wheel to change weapon,
+**escape for the menu**. Input runs on meep's own `engine.devices` rather than DOM listeners —
+see GAP-017 for why that is not optional.
 
 ### The menu
 

@@ -171,7 +171,12 @@ export class PlayerSystem extends System<never> {
     private bodySounds(): void {
         const player = this.player;
 
-        const step = this.footsteps.update(player.ps.bobCycle, player.onGround, player.ducked);
+        const step = this.footsteps.update(
+            player.ps.bobCycle,
+            player.onGround,
+            player.ducked,
+            player.walking
+        );
         if (step === 'step') this.audio.play('player/footstep', player.ps.origin);
         else if (step === 'land') this.audio.play('player/land', player.ps.origin);
 

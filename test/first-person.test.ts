@@ -682,7 +682,7 @@ describe("the gun and the footfall read one counter", () => {
         let cycle = 0;
         for (let frame = 0; frame < 60; frame++) {
             cycle = Math.trunc(cycle + 0.4 * 17) & 255;
-            const step = footsteps.update(cycle, true, false);
+            const step = footsteps.update(cycle, true, false, false);
             if (step !== null) events.push(step);
         }
 
@@ -703,21 +703,36 @@ describe("the gun and the footfall read one counter", () => {
         for (let frame = 0; frame < 60; frame++) {
             // `bobmove = 0.5` ducked, so the crossings come *sooner*...
             cycle = Math.trunc(cycle + 0.5 * 17) & 255;
-            if (footsteps.update(cycle, true, true) === 'step') steps += 1;
+            if (footsteps.update(cycle, true, true, false) === 'step') steps += 1;
         }
 
         // ...and none of them is audible. A crouched player is sneaking.
         expect(steps).toBe(0);
     });
 
+    it('plays no footstep while walking, at the slower cycle it walks with', () => {
+        const footsteps = new Footsteps();
+
+        let cycle = 0;
+        let steps = 0;
+        for (let frame = 0; frame < 60; frame++) {
+            // `bobmove = 0.3` walking, so the crossings come later than a run's
+            // -- and the run's three in this second were all audible.
+            cycle = Math.trunc(cycle + 0.3 * 17) & 255;
+            if (footsteps.update(cycle, true, false, true) === 'step') steps += 1;
+        }
+
+        expect(steps, 'shift is +speed, and Q3 walks quietly').toBe(0);
+    });
+
     it('reports a landing once, and not as a footstep', () => {
         const footsteps = new Footsteps();
 
-        expect(footsteps.update(0, true, false)).toBe(null);
-        expect(footsteps.update(0, false, false)).toBe(null);
-        expect(footsteps.update(0, false, false)).toBe(null);
-        expect(footsteps.update(0, true, false)).toBe('land');
-        expect(footsteps.update(0, true, false)).toBe(null);
+        expect(footsteps.update(0, true, false, false)).toBe(null);
+        expect(footsteps.update(0, false, false, false)).toBe(null);
+        expect(footsteps.update(0, false, false, false)).toBe(null);
+        expect(footsteps.update(0, true, false, false)).toBe('land');
+        expect(footsteps.update(0, true, false, false)).toBe(null);
     });
 
     it('agrees with the cadence the stride length implies', () => {
