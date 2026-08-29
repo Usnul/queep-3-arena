@@ -43,6 +43,14 @@
  * `PlayerController`, because the thing that knows a switch happened is the
  * thing that did it; this class reads a flag. See D-137.
  *
+ * **The capture badge is not part of the status bar, and that is why it is not
+ * in `HudState`.** A GPU profile recording is a thing the *application* is
+ * doing, not a thing the player's character has; it has to show in fly mode as
+ * well as in play, and threading it through the two places `HudState` is built
+ * would put a renderer diagnostic in the middle of health, armour and ammo. So
+ * it is a separate element under the same root, written directly by
+ * `setRecording`, and the three-numbers rule above is left alone. See D-145.
+ *
  * The crosshair *is* Q3's, artwork and rules alike: `gfx/2d/crosshair[a-j]` at
  * `cg_crosshairSize`, tinted by `CG_GetColorForHealth` because
  * `cg_crosshairHealth` defaults on, and pulsed for `ITEM_BLOB_TIME` after a
@@ -55,6 +63,7 @@
 
 import ObservedString from '@woosh/meep-engine/src/core/model/ObservedString.js';
 
+import { formatBytes, type RecordingStatus } from './GpuProfile.ts';
 import { EmptyView, LabelView, type View, type ViewWithElement } from './ui/meep.ts';
 import { Gauge } from './ui/Gauge.ts';
 import {
@@ -169,6 +178,13 @@ export class Hud {
     /** What the rack last drew, so an unchanged frame touches no DOM. */
     private rackSignature = '';
 
+    /** The GPU capture badge, top right, and the counter inside it. */
+    private readonly recording: ViewWithElement<HTMLElement>;
+    private readonly recordingCount: ViewWithElement<HTMLElement>;
+
+    /** What the counter last read, so a frame that adds no bytes writes no DOM. */
+    private recordingSignature = '';
+
     /** `cg_crosshairHealth`, which Q3 defaults on. */
     crosshairHealth = true;
 
@@ -241,15 +257,80 @@ export class Hud {
         });
 
         /*
+         The capture badge: a dot, the word, and how much has been recorded.
+
+         `role="status"` so that starting a recording is announced once, and the
+         counter marked `aria-hidden` so that the sixty announcements a second
+         that would otherwise follow are not. The label is a static text node
+         rather than an `ObservedString` because it never changes -- what moves
+         is the count beside it.
+        */
+        const recordingDot = new EmptyView({
+            classList: ['queep-hud__recording-dot'],
+            tag: 'span',
+            attr: { 'aria-hidden': 'true' },
+        });
+
+        const recordingLabel = new EmptyView({
+            classList: ['queep-hud__recording-label'],
+            tag: 'span',
+        });
+        recordingLabel.el.textContent = 'REC';
+
+        this.recordingCount = new EmptyView({
+            classList: ['queep-hud__recording-count'],
+            tag: 'span',
+            attr: { 'aria-hidden': 'true' },
+        });
+
+        this.recording = EmptyView.group(
+            [recordingDot, recordingLabel, this.recordingCount],
+            {
+                classList: ['queep-hud__recording'],
+                tag: 'div',
+                attr: { role: 'status', 'aria-label': 'GPU profile recording' },
+            }
+        );
+
+        this.recording.visible = false;
+
+        /*
          One root, because `link` adds one child to the stack. The crosshair
          cannot live inside `.queep-hud`: that element is anchored to the bottom
          of the screen and is only as tall as its readouts, so a child centred in
-         it would be centred on the status bar.
+         it would be centred on the status bar. The badge is in the same position
+         for the mirror of that reason -- it belongs to the top of the screen,
+         and `.queep-hud` is the bottom of it.
         */
-        this.root = EmptyView.group([crosshairView, readouts], {
+        this.root = EmptyView.group([crosshairView, readouts, this.recording], {
             classList: ['queep-hud-root'],
             tag: 'div',
         });
+    }
+
+    /**
+     * Show or hide the GPU capture badge, and say how much is in the capture.
+     *
+     * Called by `GpuProfile` -- on the key that starts a recording, once per
+     * frame the session commits, and on the key that ends it. `null` is "not
+     * recording", which is the state that hides the badge.
+     */
+    setRecording(status: RecordingStatus | null): void {
+        this.recording.visible = status !== null;
+
+        if (status === null) {
+            // So that the next recording writes its first count rather than
+            // matching the signature the last one left behind.
+            this.recordingSignature = '';
+            return;
+        }
+
+        const text = `${status.frames}f · ${formatBytes(status.bytes)}`;
+
+        if (text === this.recordingSignature) return;
+        this.recordingSignature = text;
+
+        this.recordingCount.el.textContent = text;
     }
 
     /**

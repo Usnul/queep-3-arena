@@ -464,6 +464,87 @@
 }
 
 /* ------------------------------------------------------------------ *
+ * The capture badge
+ * ------------------------------------------------------------------ */
+
+// A GPU profile recording is running. `Hud.setRecording` shows it and writes the
+// count; `GpuProfile` is what decides either.
+//
+// Top right, which is the one corner of the screen this port draws nothing in:
+// the status bar owns both bottom corners and `stats.js` pins its own panel to
+// the top left and is not ours to move.
+//
+// Insets are `$hud-inset-bottom` on both axes rather than the wider
+// `$hud-inset-side`, and that is not an inconsistency: the side inset is wide
+// because the wrap swings a cluster's outer edge forward and a forward edge is a
+// larger edge. Nothing here is wrapped, so nothing here needs the room.
+//
+// A panel rather than bare text, unlike every other readout in this file, for
+// the reason the others are not: those are the game and this is a tool running
+// over the top of it, and it should not read as part of the picture.
+.queep-hud__recording {
+    position: absolute;
+    top: $hud-inset-bottom;
+    right: $hud-inset-bottom;
+
+    display: flex;
+    align-items: center;
+    gap: space(2);
+
+    padding: space(1) space(3);
+
+    border: $border-width solid rgba($color-danger, 0.5);
+    border-radius: $radius-pill;
+    background: rgba($color-void, 0.72);
+
+    font-family: $font-mono;
+    font-size: font-size('micro');
+    letter-spacing: $letter-spacing-wide;
+    font-variant-numeric: tabular-nums;
+
+    @include over-world-text;
+
+    pointer-events: none;
+}
+
+// The one thing on the screen that says "this is live" rather than "this is a
+// number". A pulse and not a blink: a badge that disappears every second reads
+// as a rendering fault on a screen that is already full of movement.
+.queep-hud__recording-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: $radius-pill;
+    background: $color-danger;
+
+    @include motion-safe {
+        animation: queep-recording-pulse 1.6s $easing-standard infinite;
+    }
+}
+
+@keyframes queep-recording-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.25;
+    }
+}
+
+.queep-hud__recording-label {
+    font-weight: $font-weight-bold;
+    color: var(--queep-color-danger, #{$color-danger});
+}
+
+// Frames and bytes. Muted, because the badge's job is to be noticed and the
+// counter's is to be readable once it has been.
+.queep-hud__recording-count {
+    color: var(--queep-color-text-muted, #{$color-text-muted});
+}
+
+/* ------------------------------------------------------------------ *
  * Narrow
  * ------------------------------------------------------------------ */
 

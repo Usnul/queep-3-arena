@@ -4,7 +4,7 @@
 
 import { defineConfig, type Plugin } from 'vite';
 import { createRequire } from 'node:module';
-import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 /**
@@ -335,6 +335,41 @@ function lightmapSink(): Plugin {
  */
 const MEEP_EXTERNAL = [/^@woosh\/meep-engine(\/.*)?$/];
 
+/**
+ * Which meep a GPU capture was recorded against.
+ *
+ * `GPUProfileMeta.engine_version` exists because a timing is meaningless without
+ * the build that produced it, and the engine populates none of its own metadata
+ * -- there is no version constant to import, and meep's `exports` map has no
+ * `./package.json` entry, so nothing in the browser can read one at runtime
+ * either. Resolving it here, once, is what keeps the string in a capture from
+ * drifting away from the package that actually produced it.
+ *
+ * The same two-step as `meepWorkerBundles`: resolve a path the `exports` map
+ * does publish, then walk up out of `build/` to the package root.
+ */
+function meepVersion(): string {
+    const require = createRequire(import.meta.url);
+
+    const root = dirname(
+        dirname(require.resolve('@woosh/meep-engine/build/bundle-worker-terrain.js'))
+    );
+
+    try {
+        const manifest: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+        const version = (manifest as { version?: unknown }).version;
+
+        return typeof version === 'string' ? version : '';
+    } catch {
+        /*
+         An empty string is what `GPUProfileMeta` already defaults the field to,
+         and a capture that cannot name its engine is worth more than a dev
+         server that will not start. Nothing else reads this.
+        */
+        return '';
+    }
+}
+
 export default defineConfig({
     plugins: [
         meepWorkerBundles(),
@@ -342,6 +377,11 @@ export default defineConfig({
         screenshotSink(),
         lightmapSink(),
     ],
+
+    define: {
+        // Read by `main.ts` and written into every GPU capture. See `meepVersion`.
+        __MEEP_VERSION__: JSON.stringify(meepVersion()),
+    },
 
     resolve: {
         alias: {

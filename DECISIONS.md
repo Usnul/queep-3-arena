@@ -6788,3 +6788,120 @@ level of a surface-following hierarchy costs), and `brick4ProbeSpacing` is now i
 would confirm or refute them the next time a map is baked. And nothing here has been listened to or
 looked at: this is about probe positions, spacings and file sizes, not about how the arenas sound or
 how they look.
+
+### D-145: the profiler is a leaf, so the port is the thing that has to reach for it
+
+meep 3.11.0 ships a GPU profiler under `shade/device/timing/profile/` -- a recorder, an `.sgpt`
+container and the codecs for it -- and ships it **deliberately unreachable**. `Renderer` holds a
+nullable `profile_session` field and calls methods on it; it does not import the recorder, and
+neither does anything else in the engine. So the whole profiler -- the write stream, the format
+codecs, the topology extractor -- drops out of any bundle that never mentions it, without a build
+flag, a strip plugin or a dead branch anyone has to keep honest. Two leaf helpers are linked
+unconditionally because `ShadeGPUCommandContext` needs them while encoding, and neither of them
+knows what a capture is.
+
+That is an arrangement, not an accident, and it decides where the wiring goes: **`main.ts` is the
+only file in this port that names `GPUProfileSession`**, because `main.ts` is the composition root
+and importing it there is the deliberate act of pulling the feature in.
+
+**`GpuProfile.ts` imports no meep at all.** The session, the renderer field, the device and the
+download are injected, exactly as `PlayerController` writes meep's input devices out structurally
+rather than importing them, and for the same stated reason. What that buys is `gpu-profile.test.ts`:
+the toggle, the repeat guard, the chord guard, the metadata, the file name, the badge and the
+session lifecycle are all reachable in node, with no GPU and no engine, in a suite whose environment
+is `node` and has to stay that way. The cost is one cast at the seam -- `Renderer.profile_session`
+is declared `GPUProfileSession|null` and that class carries a `#private` field, so it is nominally
+typed and a structural stand-in is not assignable to it. The cast is annotated where it sits.
+
+**One key for both ends.** A recording is a state, and a state with a start key and a stop key is a
+state you can get out of step with -- the failure being a capture nobody stopped, growing at 20 MB a
+minute behind a badge that says so and is not being looked at. T toggles. Two guards on it, and they
+are not symmetric:
+
+- **Key repeat is ignored.** Holding T fires about thirty times a second. Without the guard, holding
+  it starts a capture, stops it on the next repeat, and writes a file to disk on every repeat after
+  that.
+- **Ctrl, Alt and Meta are ignored; Shift is not.** Ctrl+T is a new tab and Cmd+T is the same, and a
+  chord the browser already acts on must not also act here. Shift is Q3's *walk* modifier, held for
+  seconds at a time -- a player who is walking should still be able to start a capture of what they
+  are walking through, and no browser claims Shift+T.
+
+Both the physical key and the letter are accepted (`KeyT` or `t`), because those disagree on a
+layout that is not QWERTY and either reading of "bind it to T" is defensible.
+
+**`WORKLOAD` by default, `?profile=` to change it.** The levels cost about 2 KB a frame at `TIMING`,
+the same again amortised at `STRUCTURE`, ~6 KB at `WORKLOAD` and ~40 KB at `VERBOSE`. `WORKLOAD` is
+where "is this dispatch the right size" becomes an answerable question, which is the question a GPU
+capture is usually taken to answer, and 6 KB a frame is ~20 MB a minute -- affordable for a
+recording somebody is standing over. `VERBOSE` is an order of magnitude past that and is reachable
+rather than default. An unknown value falls back rather than throwing: this is a debug handle on a
+query string, and refusing to boot over a typo in one is a worse failure than recording slightly
+less than was asked for.
+
+**A capture is uncapped, and that is the point.** `frame_limit` defaults to `Infinity`, so the
+interaction is "T on, do the thing, T off" rather than "arm N frames and hope the hitch lands inside
+them". The session warns on its own once it passes its byte budget, and the badge carries the
+running total for the other half of the same problem: a recording nobody can see the size of is a
+recording somebody leaves on.
+
+**The last few frames of every capture are lost, by construction.** `Renderer` commits a frame when
+its *timing readback* lands, which is two or three frames after that frame was submitted, and
+`record_frame` drops anything arriving after `stop()`. The alternative is a `stop()` that does not
+return until the GPU has caught up, which is not what the engine offers and not what a key press
+should do. What this adds is the explanation: stopping within a few frames of starting yields a
+capture with nothing in it, so that case is detected and says so in the console rather than leaving
+somebody to wonder about a 300-byte file. The file is still written -- pressing the key asked for
+one.
+
+**The metadata is this port's job, and it is populated before the stream opens.** `GPUProfileMeta`
+carries the adapter, the device features and the engine version, and the engine populates none of
+it: a pass taking 0.4 ms means nothing until you know which GPU ran it. `start()` writes the
+metadata into the stream and never reads it again, so every field has to be set first -- which is
+the one ordering constraint in this feature, and is asserted directly, against what the session saw
+at `start`, rather than against the object afterwards.
+
+The engine version needed a `define`. meep exports no version constant, and its `exports` map has no
+`./package.json` entry, so nothing in the browser can read one at runtime. `vite.config.ts` resolves
+it the way it already resolves the worker bundles -- through a path the `exports` map does publish,
+then up out of `build/` -- and hands it over as `__MEEP_VERSION__`. `main.ts` reads it through a
+`typeof` guard so the module stays evaluable under `vitest.config.ts`, which carries no defines.
+
+**`timestamp-query` is stated in the capture, not only in the console.** Browsers withhold the
+feature on hardware that is otherwise fine, and Chrome quantizes what it does report to 100 µs
+unless `chrome://flags/#enable-webgpu-developer-features` is set. meep degrades correctly -- the
+query set is never created and the timers go quiet rather than throwing -- so a capture recorded
+without it is a real capture of the frame graph with every span at zero duration. That reads as a
+broken renderer to anyone who was not at the keyboard, and the capture is the artefact that gets
+sent to other people, so the note it carries says which case it is. A device that has not been
+created yet is *not* treated as one that cannot time: warning about missing timings on a machine
+nobody has asked would be a guess presented as a fact.
+
+**The badge is not in `HudState`, and that is the substantive UI decision here.** `Hud`'s own header
+says the status bar is health, armour and ammo and that resisting the urge to add more is part of
+the point. A GPU capture is a thing the *application* is doing, not a thing the player's character
+has; it has to show in fly mode as well as in play, and `HudState` is built in two places. So the
+badge is a separate element under the same root, written directly by `setRecording`, and the
+three-numbers rule is left alone. Top right because it is the one corner this port draws nothing in
+-- the status bar owns both bottom corners and `stats.js` pins itself to the top left and is not
+ours to move. It pulses rather than blinks, because a badge that disappears once a second reads as a
+rendering fault on a screen that is already full of movement, and `role="status"` announces the
+start once while the counter beside it is `aria-hidden` so that the sixty announcements a second
+that would otherwise follow do not happen.
+
+**What was measured.** The full suite passes on 3.11.0 unchanged -- 797 tests across 36 files, plus
+the trap, balance and material matrices -- so the upgrade moved nothing this port depends on.
+`gpu-profile.test.ts` adds 24. End to end in the browser on `oa_dm1`: T starts a running
+`GPUProfileSession` at level 2 bound to `renderer.profile_session`, with the note
+`queep-3-arena · oa_dm1 · WORKLOAD`, `engine_version` 3.11.0, the adapter read back as
+nvidia/lovelace and all seven device features recorded including `timestamp-query`; the badge
+appears at 24px from the top and right of a 1280x720 stack; T again clears the field, hides the
+badge and hands over a 29,922-byte blob typed `application/octet-stream`, beginning `SGPT`, named
+`queep-oa_dm1-20260829-063556.sgpt`, holding 3 frames.
+
+**What is not claimed.** Nobody has opened one of these captures in an inspector -- the inspector
+the format was designed for is a separate application that does not exist in this repository -- so
+what is verified is that a well-formed container with the right header, the right metadata and a
+plausible frame count comes out of the key. Whether the timings inside it are *good* timings is a
+question for the tool that reads them. And the badge's look has not been seen by anyone: the preview
+pane composites nothing, so its geometry and colours are measured from computed styles and its
+appearance still wants a human's eyes.

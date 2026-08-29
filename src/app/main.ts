@@ -76,6 +76,12 @@ import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
 import { CROSSHAIR_DEFAULT, Hud } from '../client/Hud.ts';
 import { NUM_CROSSHAIRS } from '../client/crosshair.ts';
+import { GpuProfile, type ProfileSession } from '../client/GpuProfile.ts';
+import { GPUProfileSession }
+    from '@woosh/meep-engine/src/shade/device/timing/profile/GPUProfileSession.js';
+import { GPUProfileLevel, gpu_profile_level_name }
+    from '@woosh/meep-engine/src/shade/device/timing/profile/GPUProfileLevel.js';
+import { downloadAsFile } from '@woosh/meep-engine/src/core/binary/downloadAsFile.js';
 import { barrelOffset, ViewWeapon } from '../client/ViewWeapon.ts';
 import { MissileView } from '../client/MissileView.ts';
 import { Arena } from '../client/Arena.ts';
@@ -117,6 +123,20 @@ import {
  */
 const REVERB_SEND = 0.35;
 
+/**
+ * The version of meep this was built against, injected by `vite.config.ts`.
+ *
+ * A GPU capture records it, and nothing in the engine can: meep exports no
+ * version constant, and its `exports` map has no `./package.json` entry to read
+ * one out of at runtime. The config resolves it the way it already resolves the
+ * worker bundles and hands it over as a define, so the string in a capture
+ * cannot drift from the package that produced it.
+ *
+ * `typeof` rather than a bare read, because `vitest.config.ts` carries no
+ * defines and this module has to stay evaluable without them.
+ */
+declare const __MEEP_VERSION__: string;
+
 /** Map to load; override with `?map=oa_dm5`. */
 function requestedMap(): string {
     return new URLSearchParams(window.location.search).get('map') ?? 'oa_dm1';
@@ -153,6 +173,42 @@ function requestedCrosshair(): number | null {
 /** `?fly=1` swaps the player for a noclip camera, for inspecting conversions. */
 function flyMode(): boolean {
     return new URLSearchParams(window.location.search).get('fly') === '1';
+}
+
+/** The four `GPUProfileLevel`s, by the name `?profile=` calls each one. */
+const LEVELS: Readonly<Record<string, number>> = {
+    timing: GPUProfileLevel.TIMING,
+    structure: GPUProfileLevel.STRUCTURE,
+    workload: GPUProfileLevel.WORKLOAD,
+    verbose: GPUProfileLevel.VERBOSE,
+};
+
+/**
+ * How much a GPU capture records. `?profile=timing|structure|workload|verbose`.
+ *
+ * `workload` by default, which is where "is this dispatch the right size"
+ * becomes an answerable question and is therefore the first level at which a
+ * capture is worth taking. It costs about 6 KB a frame against `timing`'s 2 --
+ * roughly 20 MB a minute at 60 Hz, for a recording that runs until the key is
+ * pressed again. `verbose` is an order of magnitude past that and is meant for
+ * a specific repro rather than for leaving on, which is why it is reachable and
+ * is not the default.
+ *
+ * An unknown value is the default rather than an error: this is a debug handle
+ * on a query string, and refusing to start the game over a typo in one would be
+ * a worse failure than quietly recording slightly less than was asked for. The
+ * level in force is written into the capture and logged when it ends, so the
+ * typo is visible where it matters.
+ */
+function requestedProfileLevel(): { level: number; name: string } {
+    const raw = new URLSearchParams(window.location.search).get('profile');
+
+    const level =
+        raw === null
+            ? GPUProfileLevel.WORKLOAD
+            : LEVELS[raw.toLowerCase()] ?? GPUProfileLevel.WORKLOAD;
+
+    return { level, name: gpu_profile_level_name(level) };
 }
 
 /**
@@ -618,6 +674,69 @@ async function main(): Promise<void> {
     const hud = new Hud({ crosshair: crosshair ?? CROSSHAIR_DEFAULT });
     hud.link(engine.viewStack);
 
+    /* ---- the GPU profiler ---- */
+
+    /*
+     T starts a Shade GPU capture and T ends it, and ending it downloads the
+     `.sgpt`. Built here, before the fly/play branch, because both branches want
+     it: the noclip camera is how a map is inspected and "why is this room slow"
+     is exactly the question it gets asked.
+
+     This is the one place in the port that names the profiler, which is the
+     arrangement meep built for. Nothing inside the engine imports the recorder
+     -- `Renderer.profile_session` is a nullable field and the null checks around
+     it are the whole integration -- so the profiler reaches a bundle only
+     because these three imports put it there. See D-145.
+    */
+    const profileLevel = requestedProfileLevel();
+
+    const profile = new GpuProfile({
+        /*
+         `Renderer.profile_session` is declared `GPUProfileSession|null`, and that
+         class carries a `#private` field, so it is nominally typed and the
+         structural `ProfileSession` that `GpuProfile` is written against is not
+         assignable to it. The value is a real one -- `createSession` below is the
+         only thing that makes one -- so this is the seam between a module that
+         deliberately does not import meep and a field typed in meep's own terms,
+         and not a type being papered over.
+        */
+        bind: (session) => {
+            graphics.renderer.profile_session = session as GPUProfileSession | null;
+        },
+
+        createSession: ({ level, note }) =>
+            new GPUProfileSession({ level, note }) as unknown as ProfileSession,
+
+        /*
+         `downloadAsFile` defaults to `text/json`, which an `.sgpt` is not. The
+         type reaches the `Blob` and therefore the saved file, and a binary
+         capture labelled as JSON is one a browser may well offer to open in a
+         tab rather than save.
+        */
+        download: (bytes, filename) => downloadAsFile(bytes, filename, 'application/octet-stream'),
+
+        level: profileLevel.level,
+        levelName: profileLevel.name,
+
+        // A thunk: there is no device until the engine has started one, and a
+        // device that is lost is replaced rather than repaired.
+        device: () => (graphics.is_running ? graphics.renderer.device : null),
+
+        badge: hud,
+        label: mapName,
+        engineVersion: typeof __MEEP_VERSION__ === 'string' ? __MEEP_VERSION__ : '',
+    });
+
+    /*
+     On the engine's keyboard device and not on `document`, for the reason every
+     other key in this port is: the canvas and the view stack above it are
+     `pointer-events: none` and the device is what actually receives a key
+     (GAP-017). It also means the menu's own `keydown` guard covers this for
+     free -- a key pressed inside an open menu never reaches the device, so
+     typing in a settings field cannot start a capture.
+    */
+    profile.attach(engine.devices.keyboard);
+
     /* ---- the menu ---- */
 
     /*
@@ -741,7 +860,9 @@ async function main(): Promise<void> {
             })
         );
 
-        expose(engine, { loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera });
+        expose(engine, {
+            loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera, profile,
+        });
     } else {
         const clipmapOnly = useClipmapTrace();
 
@@ -1199,7 +1320,7 @@ async function main(): Promise<void> {
         expose(engine, {
             loaded, clipMap, player, arena, physicsWorld, items, models,
             movers, moversView, characters, audio, mapSound, graph, botRuntime,
-            viewWeapon, hud, menu, settings, camera,
+            viewWeapon, hud, menu, settings, camera, profile,
         });
     }
 
