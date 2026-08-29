@@ -350,6 +350,18 @@ export default defineConfig({
     },
 
     server: {
+        // `.claude/launch.json` declares this port, and the Browser pane opens a
+        // tab at it before the server has said anything; on Vite's default 5173
+        // the tab lands on nothing, or on another project entirely. Declared here
+        // so the two agree.
+        //
+        // Deliberately not `strictPort`: several sessions run against this
+        // worktree at once, and the second one to start should step to 5200 rather
+        // than refuse to boot. When it does, the pane's tab is wrong again and
+        // `preview_logs` has the real port -- that is the cost of sharing a
+        // worktree, and not something a fixed port can fix.
+        port: 5199,
+
         // WebGPU and the SharedArrayBuffer paths meep's workers use both want a
         // cross-origin-isolated context.
         headers: {
