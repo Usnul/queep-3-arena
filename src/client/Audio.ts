@@ -50,32 +50,12 @@ import { AudioEmitter } from '@woosh/meep-engine/src/engine/sound/ecs/audio/Audi
 import { SampleAudioClip } from '@woosh/meep-engine/src/engine/sound/sopra/definition/clip/SampleAudioClip.js';
 import { EventDescription } from '@woosh/meep-engine/src/engine/sound/sopra/definition/EventDescription.js';
 import { buildAttenuationCurve } from '@woosh/meep-engine/src/engine/sound/sopra/util/buildAttenuationCurve.js';
-import { interpolate_irradiance_linear } from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_linear.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 
-const WORLD_SCALE = 1 / 32;
+import { falloffFor, sphericalSpreading } from './falloff.ts';
 
-/**
- * Q3's own falloff bounds, converted -- and `S_SpatializeOrigin` is three lines
- * of arithmetic, so they are exact rather than approximate:
- *
- *     dist -= SOUND_FULLVOLUME;       // 80
- *     if (dist < 0) dist = 0;
- *     dist *= SOUND_ATTENUATE;        // 0.0008
- *     scale = (1.0 - dist) * rscale;
- *
- * So the level is flat inside `SOUND_FULLVOLUME` and then falls **linearly** to
- * zero over the next `1 / SOUND_ATTENUATE` = 1250 units. The far bound is
- * therefore 80 + 1250 = **1330** units, not 1250: the ramp starts where the flat
- * region ends, and this used to subtract the flat region from the range instead
- * of adding it on.
- *
- * Loops use the same bounds, because `S_AddLoopSounds` spatializes through the
- * same `S_SpatializeOrigin` one-shots do.
- */
-const DISTANCE_MIN = 80 * WORLD_SCALE;
-const DISTANCE_MAX = (80 + 1250) * WORLD_SCALE;
+const WORLD_SCALE = 1 / 32;
 
 /**
  * How many looping 3D emitters may sound at once.
@@ -458,39 +438,43 @@ export class AudioBank {
             pitchRandom: routing.loop ? 0 : 0.04,
         });
 
+        /*
+         How far this particular sound carries, which Q3 does not ask and this
+         port has to. `falloff.ts` holds both the source levels and the
+         arithmetic; the conversion to scene metres is here because the bank is
+         the only thing that knows Q3 units are not what the engine measures in.
+        */
+        const falloff = falloffFor(name);
+        const distanceMin = falloff.fullVolumeQ3 * WORLD_SCALE;
+        const distanceMax = falloff.cullQ3 * WORLD_SCALE;
+
         const description = EventDescription.from(name, clip, {
             busId: routing.busId,
             is3D: routing.is3D,
-            distanceMin: DISTANCE_MIN,
-            distanceMax: DISTANCE_MAX,
+            distanceMin,
+            distanceMax,
             /*
-             **Linear, because `S_SpatializeOrigin` is linear.** `scale = 1.0 -
-             (dist - 80) * 0.0008` is a straight line between the two bounds
-             above, and `interpolate_irradiance_linear` over the same pair is
-             that line term for term.
+             **Spherical spreading**, which is the relation the two bounds above
+             were solved from: amplitude as 1/r, intensity as 1/r^2, and
+             `distanceMax` placed where the intensity reaches
+             `CULL_ENERGY_FRACTION`. One law for the shape and for the range,
+             because a range derived from the irradiance relation and a curve
+             that is not it would disagree about where the sound had gone.
 
-             This was Smith, on the stated grounds that Q3's falloff is "1/r-ish"
-             and a straight line is not. Q3's falloff is not 1/r -- the C is
-             quoted at `DISTANCE_MAX` and there is no reciprocal in it -- and the
-             difference was not cosmetic. Measured in the browser off an
-             `AnalyserNode` on the master bus, against the same sample played at
-             the listener:
-
-             | distance | Q3 `S_Base` | Smith | error |
-             |---|---|---|---|
-             | 320 u (10 m) | 0.808 | 0.236 | -10.7 dB |
-             | 640 u (20 m) | 0.552 | 0.080 | -16.8 dB |
-             | 960 u (30 m) | 0.296 | 0.026 | -21.1 dB |
-
-             Which is why a rocket you fired *away from yourself* seemed to
-             detonate silently: the event was raised, the emitter was built and
-             the instance played, at a twentieth of the level the C gives it and
-             directly behind the launch sound in your own ears. Every positioned
-             sound in the game was quiet at range; explosions are simply the ones
-             that are never anywhere else. See D-146.
+             This was `S_SpatializeOrigin`'s straight line, for one commit, and
+             the line does not survive being given a per-sound range. Its shape
+             is set by where it reaches zero, so stretching it to carry an
+             explosion 113 m flattens everything nearer: a detonation 80 m away
+             would arrive at **half amplitude** rather than the -12 dB spherical
+             spreading gives it, and every explosion anywhere in the map would
+             sit near the top of the mix. The straight line is only Q3's answer
+             because Q3 gives everything the same range. See D-148, and
+             `NOMINAL_FULL_VOLUME_Q3` for the measurement showing that a sound at
+             nominal level still tracks that line to within 3 dB over the range
+             the line covers.
             */
             attenuation: routing.is3D
-                ? buildAttenuationCurve(DISTANCE_MIN, DISTANCE_MAX, interpolate_irradiance_linear)
+                ? buildAttenuationCurve(distanceMin, distanceMax, sphericalSpreading)
                 : undefined,
             maxInstances: routing.loop ? LOOP_MAX_INSTANCES : ONE_SHOT_MAX_INSTANCES,
         });

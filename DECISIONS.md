@@ -7058,3 +7058,83 @@ emitter has no particle pool until the render system hands it one, and the pool 
 wrong. Verified in the browser as well, on D-066's rig, with the reporter's own eight-shot repro:
 all eight bursts are raised, the third still carries `(-4.371e-8, 0, -1)` into `Effects`, and the
 console is clean.
+
+### D-148: One range for a footstep and for a warhead, and the formula that separates them
+
+D-146 gave the port `S_SpatializeOrigin`'s line and left the other half of the problem standing.
+Q3 spatializes every sound through one range -- flat inside `SOUND_FULLVOLUME`, gone
+1/`SOUND_ATTENUATE` units later -- and that is not a curve shape, it is a **cull**:
+
+```js
+this.#audible = distance <= description.distanceMax && gain > dB2Volume(virtualThresholdDb);
+```
+
+`LiveEmitterSet` culls loops at the same bound and stops them with a hard cut rather than a fade,
+on the documented assumption that "gain is approximately 0 past `distanceMax`". So the bound is a
+real edge in the world, and one edge for every sound puts a rocket detonating 1400 units away in
+the same bin as a footstep at the same distance: not quiet, absent.
+
+**The propagation is measured and the source level is authored, and the split is the whole design.**
+A point source spreading spherically loses amplitude as 1/r and intensity as 1/r^2, so the distance
+at which a sound reaches a chosen fraction of its full-volume energy is `r0 / sqrt(fraction)` --
+7.071 times the full-volume radius at 2%, which is the middle of the 1-3% band this was specified
+from and is -17 dB in amplitude. That relation is `falloff.ts`'s arithmetic and it is not a
+judgement. Which sound is loud enough to deserve which radius is entirely a judgement, and the two
+honest ways to avoid making it both fail:
+
+- **From the samples.** They do not carry it. Every file in the bank is mastered to about -1 dBFS
+  peak, so `impact/rocket` measures *quieter* than `weapon/WP_LIGHTNING` over the loudest 50 ms
+  (-3.0 against -1.0) and a footstep sits 14 dB below a detonation that is 120 dB below it in the
+  world. Reading a source level out of recording level would rank a zap above a warhead.
+- **From real sound pressure.** Ordnance is about 170 dB at a metre and a footfall about 50. Any
+  mapping of 120 dB of real spread that puts the explosion where it belongs puts the footstep
+  inside a metre of the listener. Game mixes compress that to a couple of dozen dB and always have.
+
+So `SOURCE_LEVEL_DB` is a mix, ordered by the real acoustics and spaced by two facts about the
+content: an arena is about 100 m corner to corner, a detonation has to cross it and a ricochet must
+not. Everything between is placed by which of those it resembles, in 6 dB steps, because +6 dB is a
+doubling of radius and that makes the table readable as distances.
+
+**The straight line did not survive being given a per-sound range, and that is not a reversal of
+D-146 so much as its limit.** A line's shape is set by where it reaches zero, so stretching one to
+carry an explosion 113 m flattens everything nearer it: a detonation 80 m away would arrive at half
+amplitude rather than the -12 dB spherical spreading gives it, and every explosion anywhere in the
+map would sit near the top of the mix. The line is only Q3's answer because Q3 gives everything the
+same range. What replaces it is the same relation the radii were solved from, which is the property
+worth having -- a range derived from the irradiance law and a curve that was not it would disagree
+about where the sound had gone.
+
+`NOMINAL_FULL_VOLUME_Q3` is then chosen so that this is not a rewrite of what anyone hears. At 256
+units a sound with nothing authored about it tracks `S_SpatializeOrigin` to within 3 dB from 320 to
+960 units -- 0.800 against 0.808, 0.400 against 0.552, 0.267 against 0.296 -- and differs only at
+the far end, where Q3's line reaches exactly zero and a real one does not. `falloff.test.ts` holds
+that to 3 dB rather than describing it.
+
+The last fifth of each range is faded into the cull with a smoothstep. Spherical spreading arrives
+at the cull radius at 14.1% of amplitude by construction, and `LiveEmitterSet` cutting a loop dead
+there would be a click rather than a disappearance; the taper makes the engine's own assumption true
+instead of working around it, and costs the tail about 1 dB at four fifths of the range.
+
+**What the radii came out as**, and the two ends are the design:
+
+| sound | level | full volume | cull | |
+|---|---|---|---|---|
+| `impact/rocket`, `impact/prox` | +6 dB | 511 u | 3612 u | 113 m |
+| `weapon/WP_ROCKET_LAUNCHER`, `mover/*`, `missile/*` | +3 dB | 362 u | 2557 u | 80 m |
+| nominal -- most weapons, `player/*`, `world/*` | 0 dB | 256 u | 1810 u | 57 m |
+| `impact/bullet`, `firing/*`, `weapon/WP_GAUNTLET` | -6 dB | 128 u | 907 u | 28 m |
+| `item/hover` | -12 dB | 64 u | 455 u | 14 m |
+
+**Measured in the browser** on `oa_dm1`, driving `entityManager.simulate` on a timer and reading
+peak amplitude off an `AnalyserNode` on the master bus. `impact/rocket` played at a series of
+distances is audible at 3200 units and gone by 3800, against a cull computed at 3612; `impact/bullet`
+is gone by 1000, against 907. End to end, a rocket fired by a bot at the far spawn and detonating
+1687 to 1864 units from the player reads 0.18 to 0.21 at the master bus -- where before this it was
+not attenuated, it was culled, and the number was zero. The descriptions the bank builds were read
+back out of the running engine and carry exactly the radii above.
+
+**What is not claimed.** Nobody has listened to it. The table is a mix and a mix is a judgement made
+with ears; what is verified here is that the arithmetic is the irradiance relation, that the radii
+follow from it, that the engine holds them, and that a sound which used to be culled is now audible
+at the level the formula predicts. Whether +6 dB is the right amount of rocket is the question this
+cannot answer.
