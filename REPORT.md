@@ -1171,9 +1171,17 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   measurement and is recorded as one. The shipped RMS is 62% to 85%, `lightingResidualShipped` in
   each bundle carries it, and the median at a player position falls with it: 14.4 lux to 10.1 on
   `oa_dm1` and 7.4 to 5.2 on `am_thornish`, with two `oa_dm5` pickups crossing under a lux and
-  nothing else in the set going dark. The six `lightmap.svlm` volumes still hold the
-  pre-de-rating bake, so the delivered reduction is short of 30% by whatever the ambient term is
-  worth until they are re-run.
+  nothing else in the set going dark.
+
+  **How much of the indirect term is the fake half, measured.** All six `lightmap.svlm` volumes
+  were re-baked against the new lights, and on two maps the bake was then run twice on one loaded
+  scene — same tree, same probe count, same seed, the de-rating undone on the second — which
+  isolates what the point lights contribute to the bounce from what the sun and the emissive faces
+  contribute. `oa_dm1` comes back at 0.773 and has no sun, so **24% of that map's indirect light
+  is emissive surfaces that were never lights in Quake III**; `oa_dm4`, whose sun is 43 lux, comes
+  back at 0.900. So the delivered change is 30% on the direct term and 10–23% on the indirect,
+  and no single number describes what a given surface shows. The remaining four maps were not
+  measured this way.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.

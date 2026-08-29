@@ -7303,15 +7303,59 @@ against each other through `LOCAL_LIGHT_SCALE`, which makes it the one mechanica
 de-rating landed where this entry says it does — applied before the fit the factor vanishes, applied
 before the faces it cancels out of the ratio.
 
-**What has not been done.** The six `lightmap.svlm` volumes were baked against the *old* lights, so
-the ambient term still carries the brightness this entry removed from the direct term. Re-baking is
-`?bake=lightmap` per map and needs a WebGPU device (ASSETS.md); the machine this was written on has
-none, so the bakes ship stale and knowingly. Until they are re-run the delivered reduction is less
-than 30% by whatever the indirect term is worth in a given room — and the bake is precisely where
-the emissive faces do their double counting, so it is the half of the report that is still
-outstanding.
+**The bake was re-run against the new lights, one map at a time.** `?bake=lightmap` per map, 82 s
+to 6 min each on a 4090. The tree comes from the geometry and the memory budget rather than from
+the lights, so every volume came back the same size with the same probe count and only the payload
+moved — which is what makes the payload readable as a measurement. Word 0 of each 7-word probe is
+the RGBE9995 L0 term, the direction-independent part of the irradiance
+(`chunk_brick4_sh3_color_decode`), and the bake's RNG is `seededRandom(1337 + probe_count)`, so two
+bakes of the same scene are a controlled comparison rather than two samples of a noisy one.
 
-**And nobody has looked at it.** No WebGPU here means no screenshot and no play session: what is
-verified is that the shipped lights are 0.7 of the fitted ones, that nothing else in the bundles
-moved, that the sun did not, and that the maps stay lit where a player stands. Whether 30% is the
-right amount is a judgement about a picture, and this port has not seen the picture.
+| map | probes | summed L0, new volume vs the one it replaced |
+|---|---:|---:|
+| `oa_dm1` | 32,074 | 0.795 |
+| `oa_dm4` | 26,678 | 0.900 |
+| `oa_dm5` | 32,286 | 0.791 |
+| `oa_dm7` | 83,490 | 0.812 |
+| `aggressor` | 50,644 | 0.875 |
+| `am_thornish` | 49,924 | 0.981 |
+
+**Those are asset-level numbers and not a decomposition**, which is worth saying because they look
+like one. The volumes they replace were baked at D-107 and `scene.json` has moved twice since —
+D-113's glass, and this entry — so the column above is "what this commit does to the file", not
+"what the de-rating does to the bounce".
+
+**The decomposition needs both bakes on one scene, and that was done for two maps.** Load the map,
+bake it, undo the de-rating on the lights the baker reads, bake it again: same tree, same probe
+count, same seed, same materials, back to back, nothing different but the intensities. The bounce
+is linear in its emitters, so `A / B = 1 - 0.3x` gives `x`, the share of the baked indirect the
+map's own point lights are responsible for.
+
+| map | sun | A / B | point lights | everything else |
+|---|---|---:|---:|---:|
+| `oa_dm1` | none | 0.773 | 76% | 24% |
+| `oa_dm4` | 43.1 lux | 0.900 | 33% | 67% |
+
+`oa_dm1` has no sun, so its 24% is the emissive faces alone: **a quarter of that map's indirect
+light comes from surfaces that were never lights in Quake III**, and it is the quarter this entry
+deliberately does not touch. `oa_dm4`'s remainder is mostly its sun, which is bright and excluded
+by design. The other four maps were not measured this way and the range between these two is wide,
+so no number is claimed for them.
+
+The practical consequence is that the delivered change is not 30% anywhere: the direct term falls
+by exactly that, the indirect by 10% on `oa_dm4` and 23% on `oa_dm1`, and what a surface shows is
+whatever mixture of the two it stands in.
+
+**And it has been looked at.** The Browser pane composites now — it did not when
+`verifying-in-the-preview-browser` was written, and that stale note is why the first version of
+this entry said no one could see the result. `oa_dm1` and `aggressor` were compared at a fixed
+camera by swapping the old volume back in and scaling the lights by `1 / 0.7` in the page: the old
+state is visibly flatter and paler, walls lifted toward a uniform tone with the recesses filled in,
+and the new state holds contrast and reads as rooms with light in them rather than rooms full of
+light. That is the improvement that was asked for.
+
+What is *not* fixed is the fixtures themselves. A `q3map_surfacelight` face still blows to white
+with a bloom halo around it, because `emissiveLuminance` is the leg that keeps its whole flux. If
+"the lights are too bright" turns out to mean those, the lever is D-093's luminance and not this
+constant — and cutting both is the thing this entry argues against, so it would want its own
+reasoning.
