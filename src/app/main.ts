@@ -91,7 +91,7 @@ import { CameraLens } from '../client/lens.ts';
 import { audioPage, type MasterHost, type MixerHost } from '../client/ui/audio.ts';
 import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
 import { buildRoster } from './roster.ts';
-import { CharacterBodies } from '../client/CharacterBody.ts';
+import { CHARACTER_HEIGHT, CharacterBodies } from '../client/CharacterBody.ts';
 import {
     BotSystem,
     CharacterBodySystem,
@@ -1274,6 +1274,27 @@ async function runLightMapBake(
     try {
         const bake = await bakeVolumetricLightMap(graphics, scene);
 
+        /*
+         The grade the bake reached, against the grade this port asks a baked
+         volume for -- half a character, so that a tunnel is lit differently
+         from the hall it opens onto. The two come apart *silently*:
+         `LIGHTMAP_CELL_SIZE` is a stopping rule whose result is quantised to
+         `E / 3^n`, and a level `LIGHTMAP_MEMORY_BUDGET` cannot finish is purged
+         whole rather than left patchy -- so a map can come out three times
+         coarser than the cell size asked for, with a valid file and a lit level
+         to show for it. `am_thornish` is that map. Nothing downstream can tell
+         a coarse bake from a room that really is lit that flatly, which is why
+         it is said here.
+        */
+        if (bake.probeSpacing > CHARACTER_HEIGHT / 2) {
+            console.warn(
+                `[queep] ${mapName}'s lightmap probes are ${bake.probeSpacing.toFixed(2)} m ` +
+                `apart -- coarser than half a character (${(CHARACTER_HEIGHT / 2).toFixed(2)} m). ` +
+                'The next grade down is 3x finer per axis and all-or-nothing; ' +
+                'raise LIGHTMAP_MEMORY_BUDGET to buy it, or accept this one.'
+            );
+        }
+
         const written = await postBake(mapName, bake.bytes);
 
         if (!live) {
@@ -1313,7 +1334,8 @@ async function runLightMapBake(
         graphics.renderer.feature_ssr_enabled = false;
 
         console.log(
-            `[queep] baked ${mapName}: ${bake.probes.toLocaleString()} probes, ` +
+            `[queep] baked ${mapName}: ${bake.probes.toLocaleString()} probes ` +
+            `${bake.probeSpacing.toFixed(2)} m apart, ` +
             `${(bake.bytes.byteLength / (1024 * 1024)).toFixed(2)} MB in ` +
             `${(bake.milliseconds / 1000).toFixed(0)} s -> ${written}`
         );

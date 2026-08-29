@@ -49,16 +49,49 @@ import { fetchOptionalBinary } from './optionalAsset.ts';
 export const PROBE_FILE = 'audio-probes.bin';
 
 /**
- * Probe spacing hint, in scene metres.
+ * Probe spacing hint, in scene metres -- the closest two probes are placed in
+ * the initial cover, and the number three other thresholds are scaled from.
  *
- * Four metres is 128 Q3 units, which is half the 256-unit grid Q3 levels are
- * built on: a corridor gets probes along it and an ordinary room gets several,
- * without the bake having to resolve anything finer than the geometry has. The
- * bake refines below this on its own wherever connectivity needs it -- that is
- * what `maxRefineFactor` is for -- so this is the spacing of the *open* case,
- * not a floor on the detailed one.
+ * One metre is 32 Q3 units, a little over half a player's standing height
+ * (`CHARACTER_HEIGHT`, 1.75 m). That is the grade a volume has to be sampled at
+ * before the inside of a tunnel reads differently from the hall it opens onto,
+ * which is the whole reason to measure a room per-position rather than per-map.
+ *
+ * Four metres was the value before this, and it was not merely coarse. What
+ * `bakeProbeField` spends this number on is three things, and only the first is
+ * the spacing:
+ *
+ * - **The claim radius floor.** `probe_place_sdf_cover` hands each probe the
+ *   empty sphere it sits in and clamps that to *at least* this, so at four
+ *   metres a probe standing in a 1.2 m alcove claimed four metres anyway --
+ *   swallowing the alcove, its doorway and the corner beyond into one
+ *   measurement taken at the open end.
+ * - **The candidate floor.** A voxel is only air above `minSpacing / 4` of
+ *   clearance (`clearanceFloor`), so at four metres nothing narrower than 64 Q3
+ *   units was a candidate *at all*. A duct, a vent and a low crawl did not
+ *   sound dead; they were never measured, and took the reverberation of
+ *   whatever open probe happened to be nearest.
+ * - **The SDF grid.** Sampled at `minSpacing / 2` and capped at 256 voxels per
+ *   axis (`RESOLUTION_LIMIT`). One metre touches that cap on `am_thornish`
+ *   alone and on its long axis alone -- 256 voxels where 265 were wanted, so
+ *   0.518 m samples instead of 0.5 -- while the largest of the other five
+ *   reaches 137. Half a metre is where it stops being a rounding error:
+ *   `am_thornish` would want 433 x 264 x 521 and get 256 of each, sampling two
+ *   axes at half the resolution it asked for and saying nothing. That cap, not
+ *   the bake time, is the floor under this constant.
+ *
+ * **The open case tightens too, and by less than it looks.** `sparsenessRatio`
+ * is left at meep's 4, so the cover opens out to 4 m in air rather than the
+ * 16 m it could reach before. That sounds like the expensive half of the change
+ * and is not: raising the ratio back to 16 recovers 6% of the probes on
+ * `oa_dm1` (7,634 to 7,160) and nothing worth having, because a Q3 arena rarely
+ * offers more than a few metres of clearance in the first place. Measured
+ * rather than assumed, and the reason there is no second knob here.
+ *
+ * Refinement may still go below this at a throat -- that is `maxRefineFactor`
+ * -- so it is the floor of the *cover*, not of the field.
  */
-export const PROBE_SPACING = 4;
+export const PROBE_SPACING = 1;
 
 /**
  * Rays cast per probe when measuring its reverberation.

@@ -285,3 +285,16 @@ const SCRATCH_POSE = { x: 0, y: 0, z: 0 };
 /** The standing box, in Q3 units, for callers that need it without the shape. */
 export const CHARACTER_MINS = STAND_MINS;
 export const CHARACTER_MAXS = STAND_MAXS;
+
+/**
+ * How tall a player stands, in scene metres: 56 Q3 units, so 1.75 m.
+ *
+ * Here rather than at either call site because it is the *ruler* the two baked
+ * volumes are sized against -- the acoustic probe field's spacing and the
+ * volumetric lightmap's -- and a length written out twice is a length that can
+ * come to disagree with the box it describes. Both want a grade of about half
+ * of it: a step, a doorway and a crouch are all roughly that, and a volume
+ * sampled coarser than a player is tall cannot tell the inside of a tunnel from
+ * the hall it opens onto. See `PROBE_SPACING` and `LIGHTMAP_CELL_SIZE`.
+ */
+export const CHARACTER_HEIGHT = (STAND_MAXS[2]! - STAND_MINS[2]!) * WORLD_SCALE;

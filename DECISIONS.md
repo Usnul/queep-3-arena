@@ -4320,6 +4320,11 @@ asserted: the bake counts 516 occluders for `oa_dm1` and the browser counts 516;
 | `aggressor` | 820 | 339 | 19.9 KB | 204 s | 0.00–2.89 (0.93) | 4.60 s | 83 |
 | `am_thornish` | 751 | 2,206 | 129.3 KB | 66 s | 0.04–3.00 (1.40) | 8.06 s | 758 |
 
+**Superseded by D-144 for every column of that table.** The spacing hint above is four metres, and
+four metres turned out to exclude rather than merely coarsen: the cover's clearance floor scales
+from it, so nothing narrower than 64 Q3 units received a probe at all. The field is baked at one
+metre now — about half a player — and the numbers here are what it looked like before.
+
 **Corner-leak pathing is off, and the file format is why.** meep's serializer carries probe
 positions, per-band RT60 and per-band arrival direction, and deliberately carries neither the probe
 visibility graph nor the reflector lobes: both are functions of the geometry rather than of the
@@ -4444,8 +4449,10 @@ assigns into the existing component instead, whose `version` is precisely what t
 And `?gi=ibl` was overridden by a bake finishing, so an explicit "show me the environment map" would
 silently stop meaning that.
 
-**What is not claimed.** `LIGHTMAP_MEMORY_BUDGET` is 8 MB rather than the engine's 16 because of one
-map: `am_thornish` does not converge, and at the 32 MB this was first set to it reached 601,000
+**What is not claimed.** (`LIGHTMAP_MEMORY_BUDGET` is 10 MB as of D-144, which also found that the
+cell size below is not the probe spacing it reads as. The reasoning in this paragraph is unchanged
+and the numbers in it still hold: ten buys the same purge eight did.) It is 8 MB rather than the
+engine's 16 because of one map: `am_thornish` does not converge, and at the 32 MB this was first set to it reached 601,000
 probes with a 57-minute bake ahead of it. Eight bounds it at 49,924 and leaves the other five
 untouched -- checked by re-baking `oa_dm7`, the closest to the cap, and getting a byte-identical
 file back. The cell size is meep's own default and was not tuned. And nothing here has been looked
@@ -6655,3 +6662,129 @@ test is the visible half, because a burst of sparks out of a melee weapon is not
 asked for. The list of three lives in `muzzleFlash.ts` beside the colours, and a test reads
 `assets/extracted` and fails if the list and the pk3s disagree -- a hand-written table with nothing
 checking it is a table that goes stale, which is the same failure D-066 had.
+
+### D-144: both baked volumes are sampled against the player, and one of them had never entered a tunnel
+
+A baked volume -- the acoustic probe field, the volumetric lightmap -- exists for exactly one reason:
+to make a place answer differently from the place beside it. So the question either of them has to
+survive is not "how big is the file" but "how small a space can it tell apart", and the ruler for
+that is not the map, it is the player. A Q3 player stands 56 units, which is 1.75 m at
+`WORLD_SCALE`, and a volume sampled coarser than half of that cannot separate the inside of a tunnel
+from the hall it opens onto. That number is now written once, as `CHARACTER_HEIGHT` in
+`CharacterBody.ts`, because it is the ruler both bakes are cut against and a length written out
+twice is a length that comes to disagree with the box it describes.
+
+Measured against it, one of the two was fine and the other was not measuring some rooms at all.
+
+**Four metres of acoustic spacing was not a coarse setting, it was an exclusive one.**
+`bakeProbeField`'s `minSpacing` looks like a spacing and is three thresholds, of which the spacing
+is the least interesting:
+
+- **the claim radius floor.** `probe_place_sdf_cover` gives each probe the empty sphere it stands
+  in, clamped to *at least* `minSpacing`. At four metres a probe in a 1.2 m alcove claimed four
+  metres regardless, swallowing the alcove, its doorway and the corner beyond into one measurement
+  taken at the open end.
+- **the candidate floor.** A voxel counts as air only above `minSpacing / 4` of clearance. At four
+  metres that is a full metre, so **nothing narrower than 64 Q3 units was a candidate at all** -- a
+  duct, a vent and a low crawl did not sound dead, they were never measured, and took the
+  reverberation of whichever open probe happened to be nearest.
+- **the SDF grid**, sampled at `minSpacing / 2` and capped at 256 voxels per axis.
+
+The committed fields showed it. Nearest-neighbour spacing across the six maps ran a **minimum of
+1.47-4.01 m, a mean of 5.74-6.51 and a maximum of 16.60-17.25** -- the minimum sitting exactly on
+the hint on four of the six, which is what a floor looks like from underneath.
+
+One metre is 32 units, 0.57 of a player, and the field it produces is a different object:
+
+| map | probes | file | bake | nearest-neighbour min / mean / max |
+|---|---:|---:|---:|---|
+| `oa_dm5` | 6,258 (was 373) | 366.7 KB (21.9) | 413 s (141) | 1.00 / 1.56 / 4.27 m |
+| `aggressor` | 7,318 (339) | 428.8 KB (19.9) | 254 s (204) | 1.00 / 1.56 / 4.27 |
+| `oa_dm4` | 7,479 (351) | 438.2 KB (20.6) | 262 s (233) | 1.00 / 1.63 / 4.27 |
+| `oa_dm1` | 7,602 (364) | 445.4 KB (21.3) | 377 s (84) | 1.00 / 1.41 / 4.27 |
+| `oa_dm7` | 13,702 (652) | 802.9 KB (38.2) | 419 s (103) | 1.00 / 1.44 / 4.30 |
+| `am_thornish` | 47,410 (2,206) | 2,777.9 KB (129.3) | 766 s (66) | 1.00 / 1.81 / 4.29 |
+
+**What that costs, and what it does not.** The tree of probe files goes from 251 KB to 5.14 MB and
+the full bake from about 14 minutes to about 41. The *runtime* cost is close to nothing:
+`AcousticProbeField` answers the listener through a BVH, so the per-frame nearest-probe query is
+O(log n) and 47,410 probes cost it two more levels of descent than 2,206 did; what grows is the
+load-time BVH build and 2.8 MB of resident field on the largest map.
+
+**Sparseness was left alone, and that was measured rather than assumed.** Dropping `minSpacing` also
+drops the ceiling the cover opens out to, from 16 m to 4. Raising `sparsenessRatio` from meep's 4 to
+16 to hold the old open-air ceiling recovers **6% of the probes on `oa_dm1` -- 7,634 to 7,160** --
+and nothing worth having, because a Q3 arena rarely offers more than a few metres of clearance for
+the sparse case to exploit. So there is no second knob here.
+
+**Half a metre is the floor, and the SDF grid is why.** `build_sdf_grid` caps at 256 voxels per axis
+at `minSpacing / 2`. One metre touches that cap on `am_thornish` alone and on its long axis alone --
+256 where 265 were wanted, so 0.518 m samples instead of 0.5, while the largest of the other five
+reaches 137. At half a metre `am_thornish` would want 433 x 264 x 521, get 256 of each, and sample
+two axes at half the resolution asked for without saying so.
+
+**The 3 s ceiling now reshapes a third to a half of every map, and that is the number to watch.**
+D-106 clamps every band to `PROBE_MAX_RT60` and reports how many probes it caught; at four metres
+that was 17-52% of them. At one metre it is **34% (`oa_dm4`), 38% (`aggressor`), 40% (`oa_dm5`), 43%
+(`oa_dm1`), 45% (`am_thornish`), 57% (`oa_dm7`)**, and the longest band on every map went *up* --
+`oa_dm5` from 3.86 s to 6.31, `am_thornish` from 8.06 to 11.14. That is not a regression and it is
+not a surprise: the probes the change added are the ones in confined, hard-surfaced places, which
+are exactly the places that ring longest. It is left at 3 s, because D-106's two reasons for the
+ceiling -- the main-thread IR synthesis and the legibility of Q3's positional audio -- are unchanged
+by there being more probes under it. But half of `oa_dm7` is now being held down by it, and if any
+map ever sounds flat this is the first place to look, with `Q3_SURFACE`'s absorption as the knob
+that changes the shape rather than the stopping point.
+
+**The lightmap's cell size is not its probe spacing, and reading it as one is wrong by up to three
+times.** `LIGHTMAP_CELL_SIZE = 0.5` looks like "probes half a metre apart" and its docblock said as
+much. `brick4_generate_tree_from_scene` puts one cube over the scene, divides it **three ways per
+axis per level** -- `BRICK4_BRANCH_FACTOR` is 3, not the 4 the "brick4" name suggests, which names
+the 4x4x4 probe grid inside each node -- and refuses a level once its children's probe pitch would
+fall below the cell size. So a node of side S carries probes S/3 apart, the result is quantised to
+`E / 3^n` for the root cube's side E, and it lands anywhere in `[cellSize, 3 x cellSize)`. Derived
+from each map's built geometry, at the 0.5 that D-107 says was never tuned:
+
+| map | root cube | depth | probe spacing |
+|---|---:|---:|---:|
+| `aggressor` | 62.0 m | 3 | 0.77 m (24 units) |
+| `oa_dm7` | 69.5 m | 3 | 0.86 m (27 units) |
+| `oa_dm1` | 77.5 m | 3 | 0.96 m (31 units) |
+| `oa_dm4` | 79.0 m | 3 | 0.98 m (31 units) |
+| `oa_dm5` | 81.0 m | 3 | 1.00 m (32 units) |
+| `am_thornish` | 149.5 m | 3 | **1.85 m (59 units)** |
+
+Five of the six are inside a character and at or under a metre, which is the grade this was supposed
+to be at and a better outcome than an untuned constant deserved. `am_thornish` is a whole character,
+and the cell size is not why.
+
+**Ten megabytes is the ceiling this asset is held to, and it changes no map's output.**
+`LIGHTMAP_MEMORY_BUDGET` moves from 8 MB to 10, and the honest thing to record is that nothing comes
+out different. The reason is `purge_partial_depths`: a depth the budget cannot *finish* is deleted
+whole, because a patchy level breaks the shader's C0 interpolation. So the money only ever buys a
+complete level, and a ceiling that funds 90% of the next one buys exactly nothing while paying the
+tree-building time anyway. Five maps never reach the budget at all -- `oa_dm1` reports `Unexpanded
+nodes: 0` at 1.12 MB. `am_thornish` reaches it, purges its fourth level and lands back at 1.85 m,
+under 8 MB and under 10 alike. The level it wants is 601,000 probes, which is 16 MB of payload
+before a single node, so the ceiling that would buy it is somewhere between about 20 MB and the 32
+that produced it -- twice over the limit either way. Within 10 MB there is no arrangement of the two
+constants that improves any map: lowering the cell size to buy the other five a finer grade needs
+about 10 MB for `oa_dm1` alone and about 25 for `oa_dm7`.
+
+**So the bake now says what grade it reached, instead of implying one.** `brick4ProbeSpacing` walks
+the built tree to its deepest surviving node and reports that node's probe pitch, `main.ts` prints
+it, and it warns when the result is coarser than half a character. That is the one line that would
+have made all of the above visible the first time: a lightmap three times coarser than its cell size
+produces a valid file, a lit level and no complaint, and nothing downstream can tell it from a map
+whose rooms really are lit that flatly. `bake-resolution.test.ts` holds the measurement down --
+including that it finds the *deepest* branch rather than the first, since a purge leaves the tree
+lopsided rather than uniform.
+
+**What is not claimed.** The acoustic numbers are measured; every one of them came out of a bake run
+for this entry. The lightmap numbers are **derived** -- from each map's built geometry and the
+engine's own subdivision rule -- and not from a re-bake, because that bake needs a WebGPU device and
+minutes a map. They are consistent with what D-107 measured (`am_thornish` at 49,924 probes and
+1.73 MB is a depth-3 field; the 601,000 it reached at 32 MB is the depth-4 one, and 12x is what one
+level of a surface-following hierarchy costs), and `brick4ProbeSpacing` is now in the path that
+would confirm or refute them the next time a map is baked. And nothing here has been listened to or
+looked at: this is about probe positions, spacings and file sizes, not about how the arenas sound or
+how they look.

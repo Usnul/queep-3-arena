@@ -45,6 +45,7 @@
 
 import { VolumetricLightMap } from '@woosh/meep-engine/src/engine/graphics3/VolumetricLightMap.js';
 import { BRICK4_PROBE_ENCODED_SIZE } from '@woosh/meep-engine/src/shade/renderer/global_illumination/brick4/BRICK4_PROBE_ENCODED_SIZE.js';
+import { BRICK4_PROBE_RESOLUTION } from '@woosh/meep-engine/src/shade/renderer/global_illumination/brick4/BRICK4_PROBE_RESOLUTION.js';
 import { StaticSceneBVH } from '@woosh/meep-engine/src/shade/renderer/scene/bvh/StaticSceneBVH.js';
 import { brick4_bake_basic } from '@woosh/meep-engine/src/shade/renderer/global_illumination/brick4/gpu/bake/brick4_bake_basic.js';
 import { brick4_generate_tree_from_scene } from '@woosh/meep-engine/src/shade/renderer/global_illumination/brick4/cpu/brick4_generate_tree_from_scene.js';
@@ -57,17 +58,42 @@ import { fetchOptionalBinary } from './optionalAsset.ts';
 export const LIGHTMAP_FILE = 'lightmap.svlm';
 
 /**
- * Voxel cell size for the bake, in scene metres.
+ * Cell size for the bake, in scene metres -- a floor under how fine the
+ * hierarchy may go, and deliberately not the spacing the probes come out at.
  *
- * Half a metre is 16 Q3 units, which is a quarter of the 64-unit step every Q3
- * level is dimensioned on -- fine enough that a doorway is several cells across
- * and a corridor is not one cell wide. It is also `brick4_bake_for_scene`'s own
- * default, and the hierarchy is sparse, so this sets the *finest* level rather
- * than a uniform grid: open air costs nothing to leave empty.
+ * `brick4_generate_tree_from_scene` covers the scene with one cube, divides it
+ * three ways per axis per level (`BRICK4_BRANCH_FACTOR`), and gives every node
+ * a 4x4x4 probe grid. So a node of side S carries probes S/3 apart, and this
+ * number decides only *when to stop*: a level is refused once its children's
+ * probe spacing would fall below it. The spacing that results is therefore
+ * quantised to `E / 3^n` for the root cube's side E, and lands somewhere in
+ * `[cellSize, 3 x cellSize)` rather than on the cell size itself. Reading this
+ * constant as "the probe spacing" is wrong by up to a factor of three, which is
+ * the whole reason {@link brick4ProbeSpacing} exists and the bake reports it.
  *
- * The bake clamps it down further for a small scene (to at most a thirty-second
- * of the largest dimension) and the memory ceiling below can force it coarser,
- * so it is a request rather than a guarantee.
+ * **Half a metre is the value that puts every map inside one character.** A Q3
+ * player stands 56 units tall -- `STAND_MAXS[2] - STAND_MINS[2]`, 1.75 m at
+ * `WORLD_SCALE` -- and an ambient term wants to change over about half of that
+ * if a doorway is to be lit differently from the room behind it. Where the six
+ * maps actually land, from each one's built geometry:
+ *
+ * | map | root cube | depth | probe spacing |
+ * |---|---:|---:|---:|
+ * | `aggressor` | 62.0 m | 3 | 0.77 m (24 units) |
+ * | `oa_dm7` | 69.5 m | 3 | 0.86 m (27 units) |
+ * | `oa_dm1` | 77.5 m | 3 | 0.96 m (31 units) |
+ * | `oa_dm4` | 79.0 m | 3 | 0.98 m (31 units) |
+ * | `oa_dm5` | 81.0 m | 3 | 1.00 m (32 units) |
+ * | `am_thornish` | 149.5 m | 3 | **1.85 m (59 units)** |
+ *
+ * Five of the six are at or inside half a character. `am_thornish` is not, and
+ * the cell size is not why -- it asks for depth 4 and 0.62 m and cannot pay for
+ * it. See {@link LIGHTMAP_MEMORY_BUDGET}.
+ *
+ * Lowering this to buy the five a finer grade does not work either: the next
+ * level down is 3x finer in each axis, which is roughly 9x the probes -- 0.32 m
+ * on `oa_dm1` for about 10 MB, and `oa_dm7` for about 25 MB. Within the budget
+ * this is the finest grade there is.
  */
 export const LIGHTMAP_CELL_SIZE = 0.5;
 
@@ -75,13 +101,17 @@ export const LIGHTMAP_CELL_SIZE = 0.5;
  * Ceiling on the baked structure, in bytes.
  *
  * `brick4_generate_tree_from_scene` expands the nodes that gain the most and
- * stops when its estimate reaches this, so it is a budget rather than a limit
- * that can be exceeded: a bigger one buys finer subdivision where the geometry
- * is dense, and costs bake time in proportion.
+ * stops when its estimate reaches this. It is not a budget that buys detail in
+ * proportion to itself, which is the thing to know before turning it:
+ * `purge_partial_depths` throws away *every* node of a depth the budget could
+ * not finish, because a patchy level breaks the shader's interpolation. So the
+ * money only ever buys a whole level. A ceiling that funds 90% of the next one
+ * buys exactly nothing and pays the tree-building time anyway.
  *
- * **Eight megabytes because it has to bind on exactly one map.** Five of the six
- * converge on their own well under it -- `oa_dm1` reports `Unexpanded nodes: 0`
- * at 1.12 MB -- so the budget never comes into their bakes at all:
+ * **Ten megabytes is the stated ceiling for the asset, and it changes no map's
+ * output.** Five of the six converge on their own well under it -- `oa_dm1`
+ * reports `Unexpanded nodes: 0` at 1.12 MB -- so the budget never comes into
+ * their bakes at all:
  *
  * | map | baked | bake |
  * |---|---:|---:|
@@ -91,18 +121,24 @@ export const LIGHTMAP_CELL_SIZE = 0.5;
  * | `aggressor` | 1.75 MB | ~3 min |
  * | `oa_dm7` | 2.90 MB (83,490 probes) | 5 min |
  *
- * `am_thornish` is the sixth and does not converge anywhere near them. At the
- * 32 MB this was first set to it reached **601,000 probes with a 57-minute bake
- * ahead of it**; at 8 MB it is 49,924 probes, 1.73 MB and six minutes -- in
- * line with the rest, on the map that is several times their size. It was not
- * getting a better lightmap for the other 551,000 probes, it was getting a
- * near-uniform cell size it has no use for.
+ * `am_thornish` is the sixth and is the only map the ceiling is ever asked
+ * about. It wants a fourth level -- 0.62 m probes, which is the grade this port
+ * is after -- and that level is all-or-nothing at **601,000 probes and a
+ * 57-minute bake**, which is what it reached at the 32 MB this was first set
+ * to. Those probes are 16 MB of payload before a single node, so the ceiling
+ * that would buy them is somewhere between about 20 MB and the 32 that produced
+ * them -- twice over the limit this asset is held to either way. Eight bought
+ * the purge instead: depth 3, 49,924 probes, 1.73 MB. Ten buys the same purge,
+ * so `am_thornish` stays at 1.85 m probes, a whole character rather than half
+ * of one.
  *
- * Eight is the number that leaves the other five untouched, which is checked
- * rather than assumed: re-baking `oa_dm7`, the closest to the cap, returned a
- * byte-identical file.
+ * That is the trade this constant records: within 10 MB, five maps at 0.77-1.00
+ * m and the sixth at 1.85 m. Raising it to 10 from 8 is headroom and an
+ * intention, not a change of output; the five are unaffected either way, which
+ * is checked rather than assumed -- re-baking `oa_dm7`, the closest to the cap,
+ * returned a byte-identical file at 8 MB after 32.
  */
-export const LIGHTMAP_MEMORY_BUDGET = 8 * 1024 * 1024;
+export const LIGHTMAP_MEMORY_BUDGET = 10 * 1024 * 1024;
 
 /** The part of `EntityComponentDataset` this file uses. */
 interface EcsDataset {
@@ -160,10 +196,59 @@ export function attachVolumetricLightMap(ecd: EcsDataset, map: VolumetricLightMa
     return entity.id;
 }
 
+/** The part of `Brick4IntermediateNode` {@link brick4ProbeSpacing} walks. */
+interface Brick4TreeNode {
+    readonly bounds: { readonly x0: number; readonly x1: number };
+    readonly depth: number;
+    /** Absent on a leaf, and sparse: an unexpanded slot is `undefined`. */
+    readonly children?: ArrayLike<Brick4TreeNode | undefined>;
+}
+
+/**
+ * The finest probe spacing a built tree actually holds, in scene metres.
+ *
+ * Measured off the hierarchy rather than derived from
+ * {@link LIGHTMAP_CELL_SIZE}, because those are not the same number and the
+ * gap between them is where the quiet failures are. The cell size is a
+ * stopping rule and the spacing it yields is quantised to `E / 3^n`; on top of
+ * that, `purge_partial_depths` deletes the whole deepest level after the fact
+ * when {@link LIGHTMAP_MEMORY_BUDGET} could not finish it. A bake that came
+ * out three times coarser than intended produces a valid file, a lit level and
+ * no complaint -- `am_thornish` is exactly that map -- so the bake reports the
+ * grade it reached rather than the one it asked for.
+ *
+ * A node of side S carries a `BRICK4_PROBE_RESOLUTION`-cubed probe grid spanning
+ * it corner to corner, so its probes sit S/3 apart; the deepest surviving node
+ * is the finest grade anywhere in the map.
+ */
+export function brick4ProbeSpacing(root: Brick4TreeNode): number {
+    let deepest = root;
+
+    const stack: Brick4TreeNode[] = [root];
+
+    while (stack.length > 0) {
+        const node = stack.pop()!;
+
+        if (node.depth > deepest.depth) deepest = node;
+
+        const children = node.children;
+        if (children === undefined) continue;
+
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            if (child !== undefined) stack.push(child);
+        }
+    }
+
+    return (deepest.bounds.x1 - deepest.bounds.x0) / (BRICK4_PROBE_RESOLUTION - 1);
+}
+
 export interface LightMapBake {
     readonly bytes: ArrayBuffer;
     readonly probes: number;
     readonly milliseconds: number;
+    /** What {@link brick4ProbeSpacing} measured on the tree that was baked. */
+    readonly probeSpacing: number;
 }
 
 /** The parts of `GraphicsEngine3` and `Renderer` the bake reaches for. */
@@ -228,6 +313,7 @@ export async function bakeVolumetricLightMap(
         bytes,
         probes: probeData.length / BRICK4_PROBE_ENCODED_SIZE,
         milliseconds: performance.now() - t0,
+        probeSpacing: brick4ProbeSpacing(tree as Brick4TreeNode),
     };
 }
 
