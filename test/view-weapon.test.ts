@@ -550,6 +550,20 @@ describe('a weapon that is two models is drawn as two models', () => {
                 .toBeCloseTo(90, 3);
         });
 
+        /*
+         Deceleration is read as two equal windows of the same coast, and the
+         first draft of this test did not do that. It compared the first 100 ms
+         after release against the 90 degrees a *held* trigger turns and asserted
+         "less than 90" -- true by six parts in a hundred million million,
+         because `angle(delta) = A + 0.95d - d^2/2000` is still doing 0.95
+         degrees a millisecond as it leaves the latch. It passed on quaternion
+         round-off rather than on the barrel slowing, and would have gone on
+         passing with the coast arm deleted.
+
+         Two windows of 100 ms, 800 ms apart, is the honest reading: 90 degrees
+         in the first and 10 in the last, a factor of nine, and nothing at all
+         once `COAST_TIME` is up.
+        */
         it('coasts down when the trigger comes up rather than stopping dead', () => {
             const ecd = newDataset();
             const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
@@ -558,24 +572,26 @@ describe('a weapon that is two models is drawn as two models', () => {
                 view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET', true, true));
             }
 
-            // Let go, then sample the first tenth of a second against the last.
-            view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
-            const released = rollDegrees(ecd);
+            /** Advance `n` frames of 10 ms with the trigger up, and read the roll. */
+            const coast = (n: number): number => {
+                for (let i = 0; i < n; i++) {
+                    view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
+                }
+                return rollDegrees(ecd);
+            };
 
-            for (let i = 0; i < 10; i++) view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
-            const justAfter = rollDegrees(ecd);
+            const released = coast(1);
+            const early = turned(released, coast(10)); //    0 -> 100 ms
+            const at800 = coast(70); //                    100 -> 800 ms
+            const late = turned(at800, coast(10)); //       800 -> 900 ms
 
-            // A second later it must have stopped moving entirely.
-            for (let i = 0; i < 120; i++) view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
-            const settled = rollDegrees(ecd);
+            expect(early, 'the barrel stopped dead instead of coasting').toBeCloseTo(90, 3);
+            expect(late, 'the barrel never slowed down').toBeLessThan(early / 4);
+            expect(late, 'and it went backwards instead').toBeGreaterThan(0);
 
-            for (let i = 0; i < 30; i++) view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
-
-            const early = turned(released, justAfter);
-
-            expect(early, 'the barrel stopped dead instead of coasting').toBeGreaterThan(5);
-            expect(early, 'the barrel did not slow down at all').toBeLessThan(90);
-            expect(turned(settled, rollDegrees(ecd)), 'it never came to rest').toBeCloseTo(0, 4);
+            // Past `COAST_TIME` it is stopped, and stays stopped.
+            const settled = coast(20);
+            expect(turned(settled, coast(50)), 'it never came to rest').toBeCloseTo(0, 6);
         });
 
         it('keeps the latch on the player, so switching weapons does not reset it', () => {

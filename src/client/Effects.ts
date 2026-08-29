@@ -26,6 +26,7 @@
  * | {@link Effects.impactMark} | `CG_MissileHitWall`'s mark table, `CG_ImpactMark`, `CG_AddMarks` | the table, the radii and both fade curves are the C's |
  * | {@link Effects.explosion} | `CG_MissileHitWall`'s `CG_MakeExplosion` half | timing only; the fireball is particles where Q3 has a sprite model |
  * | {@link Effects.muzzleFlash} | `CG_RegisterWeapon`'s `flashDlightColor` | colour and reach are the C's, brightness is not (see `muzzleFlash.ts`) |
+ * | {@link Effects.muzzleFlashParticles} | `weaponInfo->flashModel` on `tag_flash` | particles where Q3 has a sprite model; gated on `hasFlashModel` as the C is |
  * | {@link Effects.hitscanTrail} | **three** unrelated things -- see {@link HITSCAN_TRAILS} | one mechanism where Q3 has three; numbers are the C's where the C has any |
  *
  * Everything is created in **meep space**: metres, Y up. Callers hand in Q3

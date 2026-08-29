@@ -630,7 +630,7 @@ export class ViewWeapon implements MuzzleFlashSink {
             // `flash` itself.
             if (this.pendingBurst) {
                 this.pendingBurst = false;
-                this.burstFlash();
+                this.burstFlash(state.weapon);
             }
         } else {
             this.douseFlash();
@@ -768,8 +768,16 @@ export class ViewWeapon implements MuzzleFlashSink {
      * written this frame, and the direction from `scratchRotation`, which is the
      * gun's own pose -- a converted model points +x down its length, which is
      * the whole of what `MODEL_TO_VIEW` is about.
+     *
+     * `weapon` is the one being *drawn this frame*, not `currentName`, which is
+     * still last frame's until `update` finishes. They differ only when the
+     * player switches weapons inside the sixteen milliseconds between the shot
+     * and the frame that spends it -- and in that case the muzzle this is about
+     * to measure belongs to the new gun, so the colour should too. Q3 lands the
+     * same way: `CG_AddPlayerWeapon` draws whatever is in hand against
+     * `cent->muzzleFlashTime`, which does not remember what fired.
      */
-    private burstFlash(): void {
+    private burstFlash(weapon: string): void {
         if (this.particles === null) return;
 
         scratchForward.set(1, 0, 0).applyQuaternion(scratchRotation);
@@ -781,7 +789,7 @@ export class ViewWeapon implements MuzzleFlashSink {
                 this.flashTransform.position.z,
             ],
             [scratchForward.x, scratchForward.y, scratchForward.z],
-            this.currentName
+            weapon
         );
     }
 
