@@ -107,6 +107,29 @@ function ratio(a: Agreement): number {
 */
 const THRESHOLD = 0.95;
 
+/** The same bar applied to one model at a time. See the per-model test. */
+const PER_MODEL_THRESHOLD = 0.9;
+
+/*
+ Models whose geometry does not admit an orientation at all, named rather than
+ absorbed into a looser threshold.
+
+ `teleporter.md3`'s `t_center` is a four-pointed star built from zero-thickness
+ fins: 16 distinct positions, 36 triangles, and 12 edges carrying three or four
+ faces each where the spikes meet the middle. A fin has no outward side, so
+ there is no assignment of front and back for the flood fill to find and no
+ normal for a shared vertex that agrees with every face on it. 8 of its 36
+ triangles disagree in the source and would disagree under any repair;
+ `mesh-normals.ts` declines the surface for exactly that reason, because the
+ alternative is picking a side arbitrarily so a metric reads 100%.
+
+ `teleport_center` is not `cull none`, so Q3 draws it single-sided too and shows
+ the same artefact. Content, not a port bug -- the same call D-060 made for
+ `skelebot`. It is listed here so that if it ever gets *worse* the exemption has
+ to be re-argued rather than silently covering it.
+*/
+const UNORIENTABLE: readonly string[] = ['models/powerups/holdable/teleporter.md3'];
+
 const MAPS = ['oa_dm1', 'oa_dm4', 'oa_dm5', 'oa_dm7', 'aggressor', 'am_thornish'];
 
 describe.each(MAPS)('converted map winding [%s]', (name) => {
@@ -215,6 +238,93 @@ describe('converted prop bundle winding', () => {
             ratio(total),
             `${total.agree} agree, ${total.disagree} disagree`
         ).toBeGreaterThan(THRESHOLD);
+    });
+
+    /*
+     And again per model, because the aggregate above cannot see one bad one.
+
+     `nailgun.md3` scored 0.746 on its own while the bundle scored 0.9755 and
+     this file passed: 87 well-made models outvoted it, and a weapon you carry
+     in first person shaded inside-out went unnoticed until someone looked at it
+     (D-140). An average over a bundle is the wrong denominator for a defect
+     that lives in one asset.
+
+     The per-model bar is deliberately lower than the bundle's. A 22-triangle gib
+     has no room for the slivers the threshold is there to absorb -- one
+     disagreeing triangle is 4.5% of it -- so 0.90 is where a real defect starts
+     for the smallest models here, and the repaired surfaces all sit at 0.99+.
+    */
+    it.skipIf(!built)('faces the way its vertex normals say, per model', () => {
+        const bundle = JSON.parse(readFileSync(join(dir, 'models.json'), 'utf8')) as {
+            vertexBytes: number;
+            indexBytes: number;
+            vertexStride: number;
+            models: {
+                name: string;
+                meshes: { vertexOffset: number; vertexCount: number; indexOffset: number; indexCount: number }[];
+            }[];
+        };
+
+        const bin = readFileSync(join(dir, 'models.bin'));
+        const buffer = bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength);
+
+        const vertices = new Float32Array(buffer, 0, bundle.vertexBytes / 4);
+        const indices = new Uint32Array(buffer, bundle.vertexBytes, bundle.indexBytes / 4);
+        const stride = bundle.vertexStride;
+
+        const worst: { name: string; ratio: number; agree: number; disagree: number }[] = [];
+
+        for (const model of bundle.models) {
+            let total: Agreement = { agree: 0, disagree: 0, degenerate: 0 };
+
+            for (const mesh of model.meshes) {
+                const positions = new Float32Array(mesh.vertexCount * 3);
+                const normals = new Float32Array(mesh.vertexCount * 3);
+
+                for (let i = 0; i < mesh.vertexCount; i++) {
+                    const o = (mesh.vertexOffset + i) * stride;
+                    positions[i * 3] = vertices[o]!;
+                    positions[i * 3 + 1] = vertices[o + 1]!;
+                    positions[i * 3 + 2] = vertices[o + 2]!;
+                    normals[i * 3] = vertices[o + 3]!;
+                    normals[i * 3 + 1] = vertices[o + 4]!;
+                    normals[i * 3 + 2] = vertices[o + 5]!;
+                }
+
+                const slice = indices.subarray(mesh.indexOffset, mesh.indexOffset + mesh.indexCount);
+                const a = agreement(positions, normals, slice);
+
+                total = {
+                    agree: total.agree + a.agree,
+                    disagree: total.disagree + a.disagree,
+                    degenerate: total.degenerate + a.degenerate,
+                };
+            }
+
+            if (UNORIENTABLE.includes(model.name)) {
+                // Still pinned, just at the level the source actually reaches:
+                // an exemption that tolerates any number is not an assertion.
+                expect(ratio(total), model.name).toBeGreaterThan(0.8);
+                continue;
+            }
+
+            if (ratio(total) < PER_MODEL_THRESHOLD) {
+                worst.push({
+                    name: model.name,
+                    ratio: ratio(total),
+                    agree: total.agree,
+                    disagree: total.disagree,
+                });
+            }
+        }
+
+        expect(bundle.models.length).toBeGreaterThan(50);
+        expect(
+            worst,
+            worst
+                .map((w) => `${w.name}: ${w.agree} agree, ${w.disagree} disagree (${w.ratio.toFixed(3)})`)
+                .join('\n')
+        ).toEqual([]);
     });
 });
 

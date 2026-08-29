@@ -4564,6 +4564,9 @@
   "triangles": 19119,
   "materials": 104,
   "texturesWritten": 169,
-  "untexturedSurfaces": 1
+  "untexturedSurfaces": 1,
+  "repairedSurfaces": 5,
+  "reorientedTriangles": 57,
+  "rewrittenNormals": 1414
  }
 }

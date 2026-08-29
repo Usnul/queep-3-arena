@@ -50,6 +50,11 @@ import {
     type TextureCache,
     writeTexture,
 } from './pipeline/texture-out.ts';
+import {
+    agreementRatio,
+    repairSurface,
+    windingAgreement,
+} from './pipeline/mesh-normals.ts';
 import type { PbrMaterial } from './pipeline/shader-to-pbr.ts';
 import type {
     BundleMaterial,
@@ -82,7 +87,30 @@ interface Accum {
     readonly indices: number[];
     vertexCursor: number;
     indexCursor: number;
+    /** What `repairSurface` had to do, for the stats block and the log. */
+    readonly repairs: SurfaceRepair[];
 }
+
+interface SurfaceRepair {
+    readonly model: string;
+    readonly surface: string;
+    readonly reoriented: number;
+    readonly rewritten: number;
+    readonly beforeRatio: number;
+    readonly afterRatio: number;
+}
+
+/**
+ * Below this share of triangles agreeing with their own normals, a surface is
+ * re-derived from its geometry rather than trusted.
+ *
+ * Same number as `winding.test.ts`'s threshold, and for the same reason: Q3
+ * content genuinely contains near-degenerate triangles that disagree with any
+ * winding, so a few percent is authorship noise rather than a defect. Past that
+ * it is a defect -- 25% of `nailgun.md3` disagrees, and the well-made models in
+ * the same bundle sit at zero (D-140).
+ */
+const REPAIR_THRESHOLD = 0.95;
 
 interface BalanceItem {
     readonly type: string;
@@ -226,11 +254,46 @@ function toBundleMaterial(
 
 function appendSurface(
     accum: Accum,
+    modelPath: string,
     surface: Md3Surface,
     materialIndex: number
 ): BundleMesh {
     const positions = surface.positions[0]!;
-    const normals = surface.normals[0]!;
+
+    /*
+     A surface is normally taken exactly as authored -- that is the whole point
+     of converting rather than remodelling, and 118 of this bundle's 123
+     surfaces come through untouched. The exceptions are the handful of Team
+     Arena weapons whose MD3s ship normals that do not describe their own
+     geometry; `mesh-normals.ts` has the measurements and the argument (D-140).
+
+     Still in MD3 axes and MD3 winding here. The axis map and the reversal below
+     both apply to the repaired arrays exactly as they applied to the source.
+    */
+    let normals = surface.normals[0]!;
+    let indices: ArrayLike<number> = surface.indices;
+
+    const scored = windingAgreement(positions, normals, indices, 'clockwise');
+    if (agreementRatio(scored) < REPAIR_THRESHOLD) {
+        const repair = repairSurface(positions, normals, indices, 'clockwise');
+
+        // Only if it actually helped. A surface can be broken in a way this does
+        // not model, and shipping a worse mesh to satisfy a threshold would be
+        // exactly the pinning-broken-behaviour mistake.
+        if (agreementRatio(repair.after) > agreementRatio(repair.before)) {
+            normals = repair.normals;
+            indices = repair.indices;
+
+            accum.repairs.push({
+                model: modelPath,
+                surface: surface.name,
+                reoriented: repair.reoriented,
+                rewritten: repair.rewritten,
+                beforeRatio: agreementRatio(repair.before),
+                afterRatio: agreementRatio(repair.after),
+            });
+        }
+    }
 
     const vertexOffset = accum.vertexCursor;
     const indexOffset = accum.indexCursor;
@@ -258,19 +321,19 @@ function appendSurface(
     // Reversed: MD3 winds clockwise from the front, glTF counter-clockwise.
     // Measured at 0 of 204 agreeing on `rocketl.md3`. Same convention as the
     // BSP and as `brushHull.ts`.
-    for (let i = 0; i + 2 < surface.indices.length; i += 3) {
-        accum.indices.push(surface.indices[i]!, surface.indices[i + 2]!, surface.indices[i + 1]!);
+    for (let i = 0; i + 2 < indices.length; i += 3) {
+        accum.indices.push(indices[i]!, indices[i + 2]!, indices[i + 1]!);
     }
 
     accum.vertexCursor += surface.numVerts;
-    accum.indexCursor += surface.indices.length;
+    accum.indexCursor += indices.length;
 
     return {
         material: materialIndex,
         vertexOffset,
         vertexCount: surface.numVerts,
         indexOffset,
-        indexCount: surface.indices.length,
+        indexCount: indices.length,
     };
 }
 
@@ -299,7 +362,7 @@ async function convertModels(): Promise<void> {
         ]),
     ].sort();
 
-    const accum: Accum = { vertices: [], indices: [], vertexCursor: 0, indexCursor: 0 };
+    const accum: Accum = { vertices: [], indices: [], vertexCursor: 0, indexCursor: 0, repairs: [] };
 
     const materials: BundleMaterial[] = [];
     const materialByShader = new Map<string, number>();
@@ -430,7 +493,7 @@ async function convertModels(): Promise<void> {
                 materialByShader.set(shaderName, materialIndex);
             }
 
-            meshes.push(appendSurface(accum, surface, materialIndex));
+            meshes.push(appendSurface(accum, virtualPath, surface, materialIndex));
         }
 
         const frame = md3.frames[0];
@@ -482,6 +545,9 @@ async function convertModels(): Promise<void> {
             materials: materials.length,
             texturesWritten: textureCounts(textureCache).written,
             untexturedSurfaces,
+            repairedSurfaces: accum.repairs.length,
+            reorientedTriangles: accum.repairs.reduce((n, r) => n + r.reoriented, 0),
+            rewrittenNormals: accum.repairs.reduce((n, r) => n + r.rewritten, 0),
         },
     };
 
@@ -495,6 +561,18 @@ async function convertModels(): Promise<void> {
         (hands.fallbacks.length > 0
             ? `\n  no hands model, using the shotgun's tag_weapon (as the C does): ` +
               hands.fallbacks.join(', ')
+            : '') +
+        (accum.repairs.length > 0
+            ? `\n  normals re-derived (source disagrees with its own geometry):\n` +
+              accum.repairs
+                  .map(
+                      (r) =>
+                          `    ${r.model} [${r.surface}] ` +
+                          `${(r.beforeRatio * 100).toFixed(1)}% -> ` +
+                          `${(r.afterRatio * 100).toFixed(1)}% agreeing, ` +
+                          `${r.reoriented} triangles turned, ${r.rewritten} normals rewritten`
+                  )
+                  .join('\n')
             : '')
     );
 }

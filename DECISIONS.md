@@ -6226,3 +6226,109 @@ only, and `WeaponSystem.damage` raises it with zero for a fully-absorbed hit -- 
 the kick along with the damage. Recorded rather than papered over; the fix is a second field on the
 event.
 
+
+---
+
+### D-140: the nailgun's normals do not describe the nailgun, and the bundle average could not see it
+
+Reported: the nailgun looks wrong, as if its normals were bad. They are. It is the worst-shaded
+model in the pack and the source file is why.
+
+The check is D-060's, which needs no oracle: a triangle's edge cross product must point the way the
+normals at its corners point. D-060 pointed it at whole bundles to catch a converter that reversed
+nothing. Pointed at one model at a time, the same arithmetic ranks the 82 models in the prop bundle
+and puts the nailgun at the bottom by a distance:
+
+| model | mean dot | triangles disagreeing |
+|---|---|---|
+| `weapons/nailgun/nailgun.md3` | 0.253 | 198 / 775 (25.5%) |
+| `ammo/hook/hook.md3` | 0.274 | 31 / 112 |
+| `weapons2/grapple/grapple.md3` | 0.315 | 49 / 256 |
+| *median model* | 0.891 | — |
+| `weapons2/rocketl/rocketl.md3` | 0.878 | 0 / 204 |
+
+**It is not the converter.** Re-read with an independent MD3 decoder and compared against the built
+bundle: positions match to **0.0**, normals under `(x, y, z) -> (x, z, -y)` to **2.9e-08**, and all
+775 triangles come out reversed as `(a, c, b)`. The obvious alternative story -- that some exporters
+swap the lat/lng bytes in MD3's packed normal, and this file is one of them -- is measurably wrong:
+the swapped decode scores *worse* on the nailgun (0.174 against 0.168 on one surface, 0.078 against
+0.431 on the other) and wrecks `rocketl` and `shotgun`, which are clean. The standard decode is
+right. The bytes are bad.
+
+**Two different defects, one per surface, which is why the repair does two things.**
+
+- `nailgun.002` (525 triangles) is **not consistently orientable**: 122 edges have both their
+  triangles walking them the same way round. No assignment of front and back satisfies that mesh,
+  so it is broken *winding*. Flood-filling the best available orientation does not rescue the
+  normals either -- 199 of 525 still face into the surface afterwards.
+- `nailgun` (250 triangles) winds cleanly -- zero minority triangles, zero non-orientable edges --
+  and still has 33 triangles whose normals face inward, every one of them in a single flat cap at
+  x in [8.34, 8.45]. Broken *normals*, and turning triangles would only move the problem.
+
+So `tools/pipeline/mesh-normals.ts` orients first and re-derives second, and it does neither on
+faith. A surface is measured, repaired only below 0.95 agreement, and the repair is **kept only if
+it scores better than the source**. 118 of the bundle's 123 surfaces are not touched at all, and
+84 of 88 models come out of the rebuild byte-identical to the previous bundle.
+
+| surface | agreeing before | after | turned | normals rewritten |
+|---|---|---|---|---|
+| `nailgun.md3` [`nailgun.002`] | 68.6% | 100.0% | 57 | 681 |
+| `nailgun.md3` [`nailgun`] | 86.8% | 100.0% | 0 | 346 |
+| `grapple.md3` [`hookgun`] | 80.9% | 100.0% | 0 | 247 |
+| `hook.md3` [`hook`] | 72.3% | 100.0% | 0 | 128 |
+| `machinegun.md3` [`Cube.002`] | 50.0% | 100.0% | 0 | 12 |
+
+The bundle goes from 0.9755 to 0.9905 agreeing; the nailgun alone from 0.746 to 0.997.
+
+**Turning a component the right way round needs its evidence ranked, and I got the order wrong
+first.** The flood fill makes a component self-consistent but its absolute sign depends on which
+triangle it started from, so something has to decide which way is out. The first version voted with
+the source normals every time, which is defensible on the nailgun -- where the winding contradicts
+itself and the normals are all there is -- and wrong the moment the winding is coherent.
+`machinegun.md3`'s `Cube.002` is the case that showed it: two flat hexagonal barrel caps, and on the
+rear one the *winding* is right and the *normals* are uniformly backwards. Voting with the normals
+turned a correct cap around to face into the gun. Nothing was measurably worse -- the surface still
+scored 100% agreeing, because flipping both together satisfies the metric perfectly -- which is
+precisely why it is worth writing down. So the evidence is now ranked: a **closed** component is
+settled by its signed volume, which no authoring can argue with; an **open but self-consistent** one
+keeps the source winding, because that is the artist's own answer; only a component whose fill hit
+**conflicts** falls back to the normals vote. The rear cap now keeps its winding and has its normals
+rewritten to match, going from 0.06 to 0.998 on how much its normals point away from the barrel.
+
+**One model is exempted by name rather than repaired.** `teleporter.md3`'s `t_center` is a
+four-pointed star of zero-thickness fins: 16 distinct positions, 36 triangles, and 12 edges carrying
+three or four faces each where the spikes meet the middle. A fin has no outward side, so there is no
+orientation to find and no normal for a shared vertex that agrees with every face on it. 8 of its 36
+triangles disagree in the source and would disagree under any repair. The first version of the
+tiebreak "fixed" it to 100% by picking a side arbitrarily; the corrected one declines the surface,
+which is the honest answer. `teleport_center` is not `cull none`, so Q3 draws it single-sided and
+shows the same artefact -- content, the same call D-060 made for `skelebot`. It is named in
+`winding.test.ts` and still pinned at its actual 0.84, because an exemption that tolerates any number
+is not an assertion.
+
+**What it does not do is invent smoothing.** MD3 carries smoothing groups as *vertex splits* -- one
+position under several indices, each with its own normal -- and that authorship is the one thing in
+these files worth keeping. A vertex is seeded from the faces that name it, and only then merged with
+faces that share its position across a 60-degree crease, which re-joins a UV seam without softening
+a chamfer. 60 degrees because these are chamfered boxes and 8- to 12-sided cylinders: a cylinder
+that coarse turns 30 to 45 degrees a facet and must stay smooth, and the chamfers that read as edges
+are all past 60.
+
+**The test could not have caught this, and that is the more useful half.** `winding.test.ts` summed
+the whole prop bundle into one ratio: **0.9755**, against a 0.95 threshold, green. The nailgun alone
+was 0.746. Eighty-seven well-made models outvoted it, and a weapon you hold in first person shaded
+inside-out survived every run. An average over a bundle is the wrong denominator for a defect that
+lives in one asset. The file now asserts **per model** as well, at 0.90 -- lower than the bundle's
+bar, because a 22-triangle gib has no room to absorb the slivers the threshold exists for, where one
+bad triangle is already 4.5% of it. Run against the pre-fix bundle the new assertion fails and names
+four models; the old one still passes beside it, which is the whole point. It also caught the
+teleporter regression above, which is the first thing it did after being written.
+
+Two things this deliberately leaves alone. The per-model bar does not catch `machinegun.md3`, whose
+one bad surface is 12 triangles out of 259 -- the converter's per-surface gate does, and that is the
+right division of labour: the gate is fine-grained because it can afford to be, the test is
+per-model because that is the unit a defect is reported in. And characters still go through
+`convert-characters.ts` untouched, because D-060 already decided that question for them: `skelebot`'s
+mixed winding is content Q3 renders with the same artefacts, and the character test asserts the
+converter's invariant rather than the content's. Moving them is a separate argument with a separate
+measurement, and nobody has reported a character looking wrong.
