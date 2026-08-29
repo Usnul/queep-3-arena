@@ -1162,6 +1162,18 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   this same least squares rather than getting a per-map divisor. All six maps now land between
   52% and 79% RMS, and `am_thornish` delivers 7.1 lux at player height against the 7.7 the grid
   baked.
+
+  **And then the port stopped agreeing with the bake on purpose (D-150).** Fitting the point
+  lights to q3map2's field makes them stand in for the whole of Q3's lighting — direct and
+  bounced, in a renderer that had no emissive term at all — and this port then adds the fixture's
+  glowing face (D-093) and a brick4 bounce that traces both (D-107) on top of them. Every local
+  light therefore ships at 70% of what the fit sized it to, which is a judgement rather than a
+  measurement and is recorded as one. The shipped RMS is 62% to 85%, `lightingResidualShipped` in
+  each bundle carries it, and the median at a player position falls with it: 14.4 lux to 10.1 on
+  `oa_dm1` and 7.4 to 5.2 on `am_thornish`, with two `oa_dm5` pickups crossing under a lux and
+  nothing else in the set going dark. The six `lightmap.svlm` volumes still hold the
+  pre-de-rating bake, so the delivered reduction is short of 30% by whatever the ambient term is
+  worth until they are re-run.
 - **Severity:** major for anyone bringing in content from another engine. Every level format
   that predates real-time GI — Quake, Source, Unreal up to about 3, and most mobile pipelines
   today — ships baked lighting, and none of it can be brought in.

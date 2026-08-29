@@ -41,6 +41,7 @@ import { impactSound } from '../src/client/impactSound.ts';
 import { itemByClassname, weaponItemByTag } from '../src/game/Items.ts';
 import balance from '../src/game/balance.generated.json' with { type: 'json' };
 import { GRID_SOURCE_RADIUS, SOURCE_EXTENT_FLOOR } from '../tools/pipeline/lightgrid.ts';
+import { LOCAL_LIGHT_SCALE } from '../tools/convert-map.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
 
@@ -335,20 +336,71 @@ describe('the reconstructed lighting solution', () => {
          `am_thornish` sat at 2,312% RMS, `oa_dm4` and `aggressor` at around
          250%. All six now land between 52% and 79%.
 
-         The bound is 120% rather than 80% for this suite's usual reason -- a
+         **Read off the shipped lights, not off the fit.** They stopped being
+         the same set at D-150: the port de-rates every local light by
+         `LOCAL_LIGHT_SCALE` after the fit has run, because a Q3 emissive
+         surface reaches meep's picture as a glowing face and a baked bounce as
+         well as as a point light. So the fitted residual is no longer a
+         statement about anything in the bundle, and this asserts the one that
+         is -- `shipped`, which is 62% to 85% against the fit's own 52% to 79%.
+
+         The bound is 120% rather than 90% for this suite's usual reason -- a
          guard at the current value fails on noise. It is still far under where
          four of the six were, which is what makes it worth having.
         */
         const s = scene(name);
+        const shipped = s.stats.lightingResidualShipped;
         const after = s.stats.lightingResidualAfter;
         const before = s.stats.lightingResidualBefore;
 
-        expect(after, `${name} recorded no residual against the lightgrid`).toBeTypeOf('number');
+        expect(shipped, `${name} recorded no residual against the lightgrid`).toBeTypeOf('number');
         expect(
-            after!,
-            `RMS ${((after ?? 0) * 100).toFixed(0)}% of mean target ` +
-            `(shader route alone: ${((before ?? 0) * 100).toFixed(0)}%)`
+            shipped!,
+            `RMS ${((shipped ?? 0) * 100).toFixed(0)}% of mean target ` +
+            `(the fit's own: ${((after ?? 0) * 100).toFixed(0)}%, ` +
+            `shader route alone: ${((before ?? 0) * 100).toFixed(0)}%)`
         ).toBeLessThan(1.2);
+
+        /*
+         And the de-rating can only have moved it one way. The fit solves for
+         the output that best matches the baked field and the bundle then ships
+         70% of it, so on a convex least squares over a fixed geometry the
+         shipped field is the worse match by construction -- measured, all six
+         move by 4 to 10 points.
+
+         The two ways this can fail are both worth stopping for. Either
+         something other than `LOCAL_LIGHT_SCALE` changed the lights after they
+         were measured, and the pair of numbers has stopped describing what it
+         says it describes; or the fit is systematically over-delivering and a
+         blanket 30% cut is closer to the bake than its own answer was, which is
+         a finding about the fit and not about this constant. Neither is a
+         result to pass silently.
+        */
+        expect(
+            shipped!,
+            `${name} ships a solution that agrees with the bake better than the ` +
+            `one that was fitted to it`
+        ).toBeGreaterThan(after!);
+    });
+
+    it.each(MAPS)('carries the de-rating the converter applies today [%s]', (name) => {
+        /*
+         `assets/built/` is committed, so a bundle can be older than the code
+         that writes it. Nothing else in a scene file moves when
+         `LOCAL_LIGHT_SCALE` does -- the lights are just dimmer, and dimmer is
+         what the whole tree looks like anyway -- so a stale bundle would
+         otherwise present as the port having quietly kept the old brightness on
+         some maps and not others.
+
+         The value itself is pinned rather than only compared, because 70% is
+         the *request* (D-150) and not an artefact: a change to it is a change
+         to how the game looks and belongs in a diff that says so.
+        */
+        expect(LOCAL_LIGHT_SCALE).toBeCloseTo(0.7, 10);
+        expect(
+            scene(name).stats.localLightScale,
+            `${name} was built at a different de-rating than the converter applies`
+        ).toBeCloseTo(LOCAL_LIGHT_SCALE, 10);
     });
 
     it.each(MAPS)('keeps a light inside the room it lights [%s]', (name) => {

@@ -58,8 +58,10 @@ import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
 import {
     fitGridLights,
     luma,
+    residualOf,
     sitesFromGrid,
     LUX_PER_BYTE,
+    type GridSite,
     type SceneLight,
 } from './pipeline/lightgrid.ts';
 import { ClipMap, MASK_SOLID, SURF } from '../src/q3/cm/ClipMap.ts';
@@ -112,6 +114,80 @@ const WORLD_SCALE = 1 / 32;
  * sealed voids, which are real samples of nothing.
  */
 const GRID_MIN_BYTES = 8;
+
+/**
+ * What a map's local lights ship at, against what the lighting solution sized
+ * them to.
+ *
+ * A Q3 emissive surface is not a light. It is a bright texture:
+ * `q3map_surfacelight` told the *compiler* to radiate from that face, and the
+ * runtime then drew the face itself as an unlit image, with no emissive term
+ * anywhere in the renderer. The port turns that one directive into two things
+ * that both reach the picture -- the fixture's own glowing face (D-093) and the
+ * point lights reconstructed from the same surfaces (D-078, D-105) -- and then
+ * meep counts the pair again in a way Q3 never did:
+ *
+ * - `material.emissive` is added straight into the shading result, so the face
+ *   is bright on its own -- `chunk_shade_standard_material_direct.js`;
+ * - the brick4 bake traces the loaded scene several bounces deep, and its path
+ *   tracer accumulates `shading_material.emissive` at every hit as well as
+ *   sampling the scene's lights (`chunk_render_trace_path.js`), so the glowing
+ *   face and the point light in front of it both land in the probe -- which
+ *   every shading point then samples as its ambient term (D-107).
+ *
+ * The lights were fitted against q3map2's lightgrid, and that field is the
+ * whole of Q3's lighting -- direct and bounced, in a renderer with no emissive
+ * term and no GI at runtime. Delivering it with point lights and *then* adding
+ * a glowing face and a baked bounce on top of them puts more light in the room
+ * than the field ever claimed was there, which is what the maps look like.
+ *
+ * So the local lights ship at 70% of what the fit sized them to. It is a fixed
+ * fraction rather than a derived one, and it is a judgement: how much of a
+ * fixture's emission comes back through the face and the bounce depends on the
+ * room it is in, so there is no single number that is *correct* here, only one
+ * that is close over six maps.
+ *
+ * Three things it deliberately does not do.
+ *
+ * **It is applied after the fit, not before.** `fitGridLights` solves for the
+ * output that best matches the baked field; handing it lights already cut by
+ * 30% just means it sizes them back up, or fills the hole it opened with
+ * lights of its own, and the shipped picture is unchanged. The reduction only
+ * survives if nothing measures against the bake afterwards -- which is why
+ * `lightingResidualShipped` exists to record what it costs.
+ *
+ * **It does not touch the emissive faces.** They are derived from the same
+ * flux, so scaling before that derivation would dim them by 30% too. The face
+ * is the leg that was *already* being counted: trimming it as well would keep
+ * the double count in exactly the proportion it is in now and make every light
+ * fixture in the game dimmer than the mapper drew it. The two views of one
+ * emission (D-093) are now a view of the emission and a view of the emission
+ * minus what the face and the bounce contribute, which is the honest statement
+ * of what this is -- and the invariant is still mechanical, so
+ * `materials.test.ts` still checks the pair against each other, through this
+ * constant.
+ *
+ * **It does not touch the reach.** `radius` is where the renderer stops
+ * evaluating a light, not the falloff, so leaving it puts the shipped field at
+ * exactly 0.7 of the fitted one everywhere the fitted one was not zero: a
+ * dimming and nothing else. Scaling it by `sqrt(0.7)` would hold the absolute
+ * cutoff lux instead and move where every light stops in by 16%, which is a
+ * change of shape nobody asked for. The discontinuity at the cutoff gets 30%
+ * smaller for free.
+ *
+ * The sun is excluded, and not only because it was asked to be. A directional
+ * light was not reconstructed from a surface and has no face in the scene to be
+ * counted twice with: it stands in for q3map2's sky, and its intensity is read
+ * off the same baked field by a different route entirely.
+ *
+ * The lights fitted to the lightgrid take it as well, and for them it is not a
+ * double-count correction -- they came out of no surface and have no emissive
+ * twin. What it is there is the same statement applied to the same kind of
+ * object: they were fitted to the same field, alongside the surface lights and
+ * against the same targets, and a solution where half the lights carry a
+ * correction and half do not is not one anyone can reason about afterwards.
+ */
+export const LOCAL_LIGHT_SCALE = 0.7;
 
 /** Vertex layout written to geometry.bin, in floats. */
 /*
@@ -884,6 +960,14 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
      */
     let gridLights: SceneLight[] = [];
     let gridFit: { before: number; after: number; sites: number } | null = null;
+    /**
+     * The cells the fit was measured against, or null on a map with no baked
+     * lightgrid.
+     *
+     * Kept past the block below so the *shipped* lights can be measured against
+     * the same targets after `LOCAL_LIGHT_SCALE` has been applied to them.
+     */
+    let gridSites: readonly GridSite[] | null = null;
 
     {
         const grid = readLightGrid(bsp);
@@ -949,6 +1033,7 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
 
             gridLights = fit.lights;
             gridFit = { before: fit.residualBefore, after: fit.residualAfter, sites: fit.sites };
+            gridSites = sites;
 
             /*
              What a sun-facing surface receives, in the same lux the rest of
@@ -1031,6 +1116,33 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
     lights.splice(0, surfaceCount, ...lit);
 
     for (const l of gridLights) lights.push(l);
+
+    /*
+     And the port's own de-rating, last, over every light the map put in the
+     world. See `LOCAL_LIGHT_SCALE`: the emissive faces above are derived from
+     the flux the fit settled on and this is applied after them on purpose, the
+     drop threshold just above is the fit's own statement and is read before it,
+     and `sun` is not in this array.
+    */
+    for (const l of lights) l.lumens *= LOCAL_LIGHT_SCALE;
+
+    /*
+     What the *shipped* lights deliver against the baked field, as against what
+     the fit sized them to deliver.
+
+     The two are the same number until something changes the lights after the
+     fit has run, and `LOCAL_LIGHT_SCALE` is exactly that. Without this the
+     bundle would carry a residual describing a set of lights it does not
+     contain -- and `lightingResidualAfter`'s whole reason for being written
+     down is that a build which quietly stops agreeing with the bake looks
+     identical from every other statistic here.
+
+     Measured over the same cells, with the same function, so the pair is
+     comparable. It also carries the dropped dark fixtures, which the fit's own
+     number does not; they were under a lumen each, so the difference between
+     the two is the de-rating and rounding.
+    */
+    const shippedResidual = gridSites === null ? null : residualOf(gridSites, lights);
 
     /* ---- textures ---- */
 
@@ -1183,23 +1295,41 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
             texturesMissing: textureCounts(written).missing,
             submodels: models.length - 1,
             /*
-             How far the shipped lighting is from the field q3map2 baked, as RMS
+             How far the lighting is from the field q3map2 baked, as RMS
              illuminance error over the fitted cells, relative to their mean
-             target. `Before` is the shader route on its own.
+             target. `Before` is the shader route on its own, `after` is what
+             the fit solved for, and `shipped` is what this bundle's lights
+             actually deliver -- the same set again after the deliberate
+             `LOCAL_LIGHT_SCALE` de-rating, which is why it is the worse of the
+             two on all six maps here. That gap is the price of the correction
+             and not a defect in it.
 
              Written into the bundle rather than only logged because it is the
              one number that says whether this map's lighting is *right*, as
              against merely present, and a build that quietly stops agreeing
              with the bake looks identical from every other statistic here.
-             Absent, rather than zero, on a map with no lightgrid to measure
-             against -- there is a difference between agreeing with the bake and
-             having no bake. See D-105.
+             `Shipped` is here for the same reason one step further out: the
+             port now disagrees with the bake on purpose, and a number for how
+             much is the difference between a stated cost and a drift nobody
+             is measuring. Absent, rather than zero, on a map with no lightgrid
+             to measure against -- there is a difference between agreeing with
+             the bake and having no bake. See D-105 and D-150.
             */
             ...(gridFit === null ? {} : {
                 lightingSites: gridFit.sites,
                 lightingResidualBefore: gridFit.before,
                 lightingResidualAfter: gridFit.after,
+                lightingResidualShipped: shippedResidual ?? 0,
             }),
+            /*
+             The fraction of the fitted output the lights in this bundle carry.
+             Written down because `assets/built/` is committed and this is the
+             one thing about a bundle's lighting that no other statistic here
+             moves with: a tree built before `LOCAL_LIGHT_SCALE` existed, or
+             before it last changed, is otherwise indistinguishable from one
+             built after it.
+            */
+            localLightScale: LOCAL_LIGHT_SCALE,
         },
     };
 
@@ -1220,7 +1350,10 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
         (gridFit !== null
             ? ` (${gridLights.length} fitted and ${surfaceCount - darkened} ` +
               `calibrated against ${gridFit.sites} lightgrid cells, ` +
-              `RMS ${(gridFit.before * 100).toFixed(0)}% -> ${(gridFit.after * 100).toFixed(0)}%` +
+              `RMS ${(gridFit.before * 100).toFixed(0)}% -> ` +
+              `${(gridFit.after * 100).toFixed(0)}%, ` +
+              `${((shippedResidual ?? 0) * 100).toFixed(0)}% shipped ` +
+              `at ${LOCAL_LIGHT_SCALE * 100}%` +
               (darkened > 0 ? `, ${darkened} surface lights dropped as dark` : '') + ')'
             : '') +
         `, ${scene.stats.texturesWritten} textures` +

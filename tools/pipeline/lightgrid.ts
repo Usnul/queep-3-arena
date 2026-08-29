@@ -685,7 +685,7 @@ function referenceLux(
 }
 
 /** RMS illuminance error over the sites, relative to their mean target. */
-function residualOf(sites: readonly GridSite[], lights: readonly SceneLight[]): number {
+export function residualOf(sites: readonly GridSite[], lights: readonly SceneLight[]): number {
     if (sites.length === 0) return 0;
 
     let sumSquares = 0;

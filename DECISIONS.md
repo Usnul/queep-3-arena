@@ -7210,3 +7210,108 @@ from the player reads 0.247 at the master bus, against 0.18 under D-148's 1/r an
 is the engine's own, that the radii follow from the irradiance relation, that the rendered curve is
 an inverse square law to within 1.6 dB over the audible span, and that the engine holds the numbers
 this file computes.
+
+### D-150: A Q3 emissive surface arrives in meep three times, and the light standing in for it is cut by 30%
+
+Reported: most of the lights are too bright, and probably because Q3's emissive surfaces are fake
+and are therefore being counted twice — once in the bake and once in the main render. The fix asked
+for is a fixed 30% reduction on a map's local lights, the sun excluded.
+
+**The premise holds, and it is worse than double.** `q3map_surfacelight` is a directive to the
+*compiler*. Q3's runtime had no emissive term at all: the fixture's face was an ordinary unlit
+texture, and every photon it was supposed to have emitted was already in the lightmaps and the
+lightgrid by the time the game started. This port takes that one directive and produces three
+things that all reach the picture:
+
+- the point lights reconstructed from the emitting surfaces (D-078, D-105);
+- the fixture's own face, as `material.emissive`, which meep adds straight into the shading result
+  — `outgoing_light = reflected_light.diffuse + reflected_light.specular + total_emissive_radiance`,
+  `chunk_shade_standard_material_direct.js:109` (D-093);
+- the brick4 bake, which traces the loaded scene several bounces deep and is the same path tracer:
+  `chunk_render_trace_path.js` accumulates `incoming_throughput * shading_material.emissive` at every
+  hit *and* samples the scene's lights in the same loop, so the glowing face and the point light in
+  front of it both land in the probe. That volume is then the ambient term at every shading point
+  (D-107).
+
+And the point lights were fitted against the lightgrid (D-105), which is q3map2's whole solution:
+direct and bounced, for a renderer with no emissive term and no runtime GI. So the port matches the
+baked field with its point lights and then adds a glowing face and a bounce on top of it. Every
+route is defensible on its own and the sum was never checked against anything.
+
+**`LOCAL_LIGHT_SCALE = 0.7`, applied to every local light after the fit.** It is not derived and
+this entry will not pretend it is: how much of a fixture's emission comes back through its face and
+through the bounce depends on the room, so there is no single correct factor, only a requested one
+that is close over six maps. What *is* derived is where it goes, and three of the four available
+placements are wrong:
+
+- **Before the fit** it does nothing. `fitGridLights` solves for the output that best matches the
+  baked field; hand it lights already cut by 30% and it sizes them back up, or fills the hole with
+  lights of its own. The picture is unchanged and the log still says the fit converged.
+- **Before the emissive faces are derived** it dims them too, because a material's luminance is its
+  lights' flux over its area. That keeps the double count in exactly its current proportion and
+  makes every fixture in the game dimmer than the mapper drew it. The face is the leg that was
+  *already* being counted; it keeps the whole flux.
+- **On the reach as well** — `radius *= sqrt(0.7)`, holding the absolute cutoff lux — moves where
+  every light stops in by 16%. `radius` is a cutoff, not a falloff, so leaving it puts the shipped
+  field at exactly 0.7 of the fitted one everywhere the fitted one was not zero. A dimming and
+  nothing else, which is what was asked for. The discontinuity at the cutoff gets 30% smaller for
+  free.
+
+So it is last: after the fit, after the emissive faces, after the sub-lumen fixtures the fit drove
+to nothing are dropped on the fit's own numbers.
+
+**The sun is excluded, and would have been anyway.** A directional light is not reconstructed from a
+surface and has no face in the scene to be counted twice with — it stands in for q3map2's sky, and
+its intensity is read off the lightgrid by a different route entirely (D-105). Verified per map:
+`sun.intensity` is bit-identical across the change on all five maps that have one.
+
+The lights fitted to the lightgrid take the cut as well, and for them it is *not* a double-count
+correction — they came out of no surface and have no emissive twin. It is the same statement applied
+to the same kind of object: they were fitted to the same field against the same targets in the same
+least squares, and a solution where half the lights carry a correction and half do not is not one
+anyone can reason about later.
+
+**What it does to the six maps.** Illuminance is at spawns and pickups, at eye height, from the
+bundle's own lights — the same arithmetic `loadMap` hands the engine.
+
+| map | fit RMS | shipped RMS | median lux, was | now | under 1 lux, was | now |
+|---|---:|---:|---:|---:|---:|---:|
+| `oa_dm1` | 79% | 83% | 14.4 | 10.1 | 0/39 | 0/39 |
+| `oa_dm4` | 67% | 73% | 25.4 | 17.8 | 0/48 | 0/48 |
+| `oa_dm5` | 65% | 75% | 11.0 | 7.7 | 0/37 | 2/37 |
+| `oa_dm7` | 63% | 69% | 26.1 | 18.3 | 0/80 | 0/80 |
+| `aggressor` | 52% | 62% | 12.3 | 8.6 | 0/38 | 0/38 |
+| `am_thornish` | 78% | 85% | 7.4 | 5.2 | 1/159 | 1/159 |
+
+Nothing went dark: two pickups on `oa_dm5` cross under a lux, out of 401 player positions across the
+set. The rebuild is otherwise byte-for-byte — every texture, every vertex, every material, including
+`emissiveLuminance` — so the whole diff of this change to `assets/built/` is `lights[].lumens`
+multiplied by 0.7 and two new statistics.
+
+**It costs agreement with the bake, which is now written down.** `lightingResidualAfter` was the one
+number saying whether a map's lighting is *right* rather than merely present, and after this it
+describes a set of lights no bundle contains. `lightingResidualShipped` is the same function over
+the same cells with the lights that actually ship, and it is worse on all six by construction —
+that is the price of the correction, stated rather than hidden. `presentation.test.ts` asserts the
+shipped number now, and asserts that it is the worse of the two, because a build where the shipped
+solution agrees with the bake *better* than the fitted one is a build where something other than
+this constant moved the lights after they were measured.
+
+**The pairing D-093 established is now a pairing with a constant in it.** A fixture's face is still
+its flux over its area; its point light is that flux times 0.7. `materials.test.ts` checks the two
+against each other through `LOCAL_LIGHT_SCALE`, which makes it the one mechanical check that the
+de-rating landed where this entry says it does — applied before the fit the factor vanishes, applied
+before the faces it cancels out of the ratio.
+
+**What has not been done.** The six `lightmap.svlm` volumes were baked against the *old* lights, so
+the ambient term still carries the brightness this entry removed from the direct term. Re-baking is
+`?bake=lightmap` per map and needs a WebGPU device (ASSETS.md); the machine this was written on has
+none, so the bakes ship stale and knowingly. Until they are re-run the delivered reduction is less
+than 30% by whatever the indirect term is worth in a given room — and the bake is precisely where
+the emissive faces do their double counting, so it is the half of the report that is still
+outstanding.
+
+**And nobody has looked at it.** No WebGPU here means no screenshot and no play session: what is
+verified is that the shipped lights are 0.7 of the fitted ones, that nothing else in the bundles
+moved, that the sun did not, and that the maps stay lit where a player stands. Whether 30% is the
+right amount is a judgement about a picture, and this port has not seen the picture.

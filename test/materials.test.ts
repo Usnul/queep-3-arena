@@ -47,6 +47,7 @@ import {
 import { ShaderIndex } from '../tools/pipeline/shader-index.ts';
 import { derivedTextureKey, textureKey, texturePathOf } from '../tools/pipeline/texture-out.ts';
 import { classify, inScopeNames, loadSpec } from '../tools/material-matrix.ts';
+import { LOCAL_LIGHT_SCALE } from '../tools/convert-map.ts';
 
 const ROOT = process.cwd();
 const BUILT = join(ROOT, 'assets', 'built');
@@ -1180,6 +1181,16 @@ describe('a light fixture is as bright as the light it emits', () => {
      Which is the stronger form of the same check. The old one could be
      satisfied by any rule that happened to land on an integer multiple; this
      one only by the two actually being derived from each other.
+
+     `LOCAL_LIGHT_SCALE` then breaks the two apart on purpose (D-150). The face
+     is the leg of the double count that was already reaching the picture, so
+     it keeps the whole flux and the point light ships at 70% of it -- which
+     leaves this exactly as strong as it was, one constant longer, because the
+     relation is still an equality nothing but the real derivation satisfies.
+     It is also the only mechanical check that the de-rating went where it was
+     meant to: applied before the fit, the fit sizes the lights back up and the
+     factor here disappears; applied before the faces are derived, it cancels
+     out of this ratio and every fixture in the game dims with it.
     */
     /** Declared emitters seen per map, so the aggregate check below can be sure. */
     const checked = new Map<string, number>();
@@ -1217,12 +1228,17 @@ describe('a light fixture is as bright as the light it emits', () => {
             */
             if (m.emissiveLuminance === UNLIT_LUMINANCE) return;
 
-            const expected = (flux.get(i) ?? 0) / (Math.PI * a);
+            /*
+             The flux the face was derived from, which is the flux in the bundle
+             back at the scale the fit sized it to. See `LOCAL_LIGHT_SCALE`.
+            */
+            const emitted = (flux.get(i) ?? 0) / LOCAL_LIGHT_SCALE;
+            const expected = emitted / (Math.PI * a);
 
             expect(
                 Math.abs(m.emissiveLuminance - expected) / Math.max(expected, 1e-9),
                 `${map}: ${m.name} ships ${m.emissiveLuminance.toFixed(1)} cd/m2, ` +
-                `but its ${(flux.get(i) ?? 0).toFixed(0)} lm over ${a.toFixed(1)} m2 ` +
+                `but its ${emitted.toFixed(0)} lm over ${a.toFixed(1)} m2 ` +
                 `is ${expected.toFixed(1)}`
             ).toBeLessThan(1e-6);
 
