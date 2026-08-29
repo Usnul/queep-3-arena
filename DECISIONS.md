@@ -7138,3 +7138,75 @@ with ears; what is verified here is that the arithmetic is the irradiance relati
 follow from it, that the engine holds them, and that a sound which used to be culled is now audible
 at the level the formula predicts. Whether +6 dB is the right amount of rocket is the question this
 cannot answer.
+
+### D-149: The falloff function was never the port's to choose, and twice it was chosen anyway
+
+Reported, and correctly: the attenuation curve had gone wrong, and the default should be Smith's
+approximation. It should, and this entry exists because two commits in a row moved it away from
+Smith for reasons that do not survive being stated plainly.
+
+**The mistake was picking Q3 as the reference at all.** D-146 replaced
+`interpolate_irradiance_smith` with `interpolate_irradiance_linear` on the grounds that
+`S_SpatializeOrigin` is a straight line and the port's curve should therefore be one. That premise
+is true about the C and irrelevant here: this port does not run Q3's mixer. It runs meep's, over a
+baked acoustic field of 7602 probes on `oa_dm1` alone, with per-source occlusion, transmission and
+a three-band crossover per voice. A port that has gone to that much trouble to be *more* physical
+than 1996 does not then reach for 1996's straight line, which was a straight line because it was
+cheap. D-148 compounded it: having stretched the line per sound and found -- correctly -- that a
+line does not survive that, it replaced the line with a hand-rolled 1/r and a hand-rolled taper,
+which is `interpolate_irradiance_smith` reinvented and done worse, since Smith already reaches zero
+at its bound and needs no taper at all.
+
+Both detours are reverted. The curve is the engine's again and this port has no opinion about it.
+
+**What D-148 got right and keeps** is that the *range* is the game's business: `distanceMax` is a
+hard cull rather than a fade, `LiveEmitterSet` cuts a loop dead at the same bound, and one bound for
+every sound in the game is why a rocket detonating 1400 units away was absent rather than quiet. The
+source levels, the irradiance relation and the derived radii are unchanged.
+
+**What the correction actually changed, beyond restoring Smith.** Handing Smith the radius where
+spherical spreading reaches 2% energy does not produce a sound that is at 2% energy there -- it
+produces silence there, because Smith reaches zero at its bound and passes 2% a third of the way
+along. So the two are no longer the same number:
+
+- `audibleRadiusQ3` is `fullVolume / sqrt(0.02)` = 7.071 times the full-volume radius. This is the
+  physical answer to "how far can this still be heard" and is what `SOURCE_LEVEL_DB` is spaced by.
+- `cullRadiusQ3` is 19.60 times it, which is the range Smith has to be *given* in order to be at
+  2% energy at the audible radius. The factor is solved by bisection against
+  `interpolate_irradiance_smith` itself rather than against a copy of its algebra, so a change to
+  meep's `k` recalibrates every radius in the game instead of quietly decalibrating it.
+
+The payoff is that the rendered curve is now an inverse square law over the whole span anyone can
+hear, which neither of the two detours managed. Measured against `fullVolume / r` for
+`impact/rocket`:
+
+| distance | Smith | 1/r | error |
+|---|---|---|---|
+| 700 u | -2.0 dB | -2.7 dB | +0.8 |
+| 1500 u | -7.8 dB | -9.4 dB | +1.6 |
+| 2500 u | -12.7 dB | -13.8 dB | +1.1 |
+| 3612 u (audible radius) | -17.0 dB | -17.0 dB | 0.0 |
+
+and past the audible radius it rolls off faster than physics over a tail nobody can hear, which is
+the trade a bounded approximation exists to make.
+
+**Delivered levels**, against the single 80..1250 range every sound shared before D-148:
+
+| | 640 u | 1500 u | 3000 u |
+|---|---|---|---|
+| `impact/rocket` | -1.4 dB | -7.8 dB | -14.7 dB |
+| `player/footstep` (nominal) | -6.4 dB | -14.7 dB | -25.1 dB |
+| `impact/bullet` | -12.9 dB | -25.1 dB | culled |
+| *every sound, before* | -21.9 dB | culled | culled |
+
+**Measured in the browser** on `oa_dm1`, driving `entityManager.simulate` on a timer and reading
+peak amplitude off an `AnalyserNode` on the master bus. `impact/rocket` played at 640, 1500, 2500,
+3600 and 5000 units reads 1.12, 0.36, 0.32, 0.19 and 0.07; `impact/bullet` reads 0.28 at 640, 0.018
+at 1500 and nothing at 2500. End to end, a rocket fired from the far spawn and detonating 1687 units
+from the player reads 0.247 at the master bus, against 0.18 under D-148's 1/r and zero before either.
+
+**What is not claimed**, and it is the same caveat D-148 carried: nobody has listened to it. The
+`SOURCE_LEVEL_DB` table is a mix, and a mix is made with ears. What is verified is that the falloff
+is the engine's own, that the radii follow from the irradiance relation, that the rendered curve is
+an inverse square law to within 1.6 dB over the audible span, and that the engine holds the numbers
+this file computes.

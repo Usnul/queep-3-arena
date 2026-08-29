@@ -10,26 +10,33 @@
  *
  * ---
  *
- * Q3 gives every positioned sound one range: flat inside `SOUND_FULLVOLUME` (80
- * units) and linear to nothing 1250 units later. One range for a footstep and
- * for a rocket detonating is not a simplification the port has to keep, and it
- * is wrong in the direction you notice -- a rocket you fired down a hall lands
- * 1400 units away and `EventInstance` drops it outright, because
- * `distanceMax` is a hard cull:
+ * The engine's falloff is `interpolate_irradiance_smith` -- meep's bounded
+ * inverse-square approximation -- and this file does not touch it. What it
+ * supplies is the pair of distances that curve is evaluated over, per sound,
+ * because those are not a shape and they are not one number for the whole game:
+ * `distanceMax` is a hard cull,
  *
  *     this.#audible = distance <= description.distanceMax && gain > ...
  *
- * and `LiveEmitterSet` culls loops at the same bound, with a hard cut rather
- * than a fade, on the documented assumption that "gain is approximately 0 past
- * `distanceMax`". Both of those make the bound a real edge in the world, so it
- * has to be placed for each sound rather than shared. See D-148.
+ * and `LiveEmitterSet` culls loops at the same bound and stops them with a hard
+ * cut rather than a fade. So the bound is a real edge in the world, and a single
+ * edge for every sound puts a rocket detonating 1400 units away in the same bin
+ * as a footstep at the same distance: not quiet, absent.
  *
  * **What is measured and what is authored.** The propagation is measured: a
  * point source spreading spherically loses amplitude as 1/r and intensity as
  * 1/r^2, and {@link cullRadiusQ3} is that relation solved for the distance at
  * which the energy reaches {@link CULL_ENERGY_FRACTION}. The *source level* is
  * authored, and cannot be anything else -- see {@link SOURCE_LEVEL_DB}.
+ *
+ * See D-149, and D-148 for the version of this that also replaced the curve,
+ * which was wrong: this port is not reproducing Q3's mixer, it is running meep's
+ * with a baked acoustic simulation behind it, and the falloff function is the
+ * engine's business rather than the game's.
  */
+
+import { interpolate_irradiance_smith }
+    from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_smith.js';
 
 /**
  * The fraction of a sound's full-volume energy at which it stops being worth a
@@ -47,34 +54,65 @@
 export const CULL_ENERGY_FRACTION = 0.02;
 
 /**
- * Distance multiplier from the full-volume radius to the cull radius.
+ * Distance multiplier from the full-volume radius to the **audible** radius.
  *
  * Spherical spreading: `I(r) / I(r0) = (r0 / r)^2`. Setting that ratio to
  * {@link CULL_ENERGY_FRACTION} and solving gives `r = r0 / sqrt(fraction)`,
- * which is 7.071 at 2%. Every radius in {@link SOURCE_LEVEL_DB} is one number
- * because of this: authoring the full-volume radius authors the cull radius too.
+ * which is 7.071 at 2%. This is the physical answer to "how far away can this
+ * still be heard", and it is the number the whole table is spaced by.
  */
-export const CULL_RADIUS_FACTOR = 1 / Math.sqrt(CULL_ENERGY_FRACTION);
+export const AUDIBLE_RADIUS_FACTOR = 1 / Math.sqrt(CULL_ENERGY_FRACTION);
 
 /**
- * The full-volume radius of a sound with no entry, in Q3 units.
+ * Where along its range `interpolate_irradiance_smith` reaches the cull energy.
  *
- * 256 units is 8 m, against Q3's own `SOUND_FULLVOLUME` of 80, and it is chosen
- * so that spherical spreading from it *reproduces* `S_SpatializeOrigin` over the
- * range `S_SpatializeOrigin` covers rather than replacing it:
+ * Solved against the engine's own function rather than against a copy of its
+ * algebra, so that a change to meep's `k` moves this with it instead of quietly
+ * decalibrating every radius in the game. Bisection, once, at module load.
  *
- * | distance | Q3 `S_Base` | 1/r from 256 u | error |
- * |---|---|---|---|
- * | 160 u | 0.936 | 1.000 (flat) | +0.6 dB |
- * | 320 u | 0.808 | 0.800 | -0.1 dB |
- * | 640 u | 0.552 | 0.400 | -2.8 dB |
- * | 960 u | 0.296 | 0.267 | -0.9 dB |
- * | 1330 u | 0.000 | 0.192 | audible instead of gone |
- *
- * So a sound that says nothing about itself behaves as it did, and the change is
- * confined to the far end, where Q3's straight line reaches exactly zero and a
- * real one does not.
+ * It comes out at 0.326: Smith sheds the first 17 dB inside a third of its
+ * range, which is much steeper than spherical spreading and is the whole reason
+ * {@link cullRadiusQ3} is not simply {@link AUDIBLE_RADIUS_FACTOR}.
  */
+const SMITH_CULL_POSITION = ((): number => {
+    const target = Math.sqrt(CULL_ENERGY_FRACTION);
+
+    let low = 0;
+    let high = 1;
+
+    // Monotone decreasing in v, so 60 halvings put it well past double precision.
+    for (let i = 0; i < 60; i++) {
+        const mid = (low + high) / 2;
+        if (interpolate_irradiance_smith(mid, 0, 1) > target) low = mid;
+        else high = mid;
+    }
+
+    return (low + high) / 2;
+})();
+
+/**
+ * The range `interpolate_irradiance_smith` has to be given so that it reaches
+ * the cull energy at {@link AUDIBLE_RADIUS_FACTOR}.
+ *
+ * This is the number that took two wrong turns to find, and it is where the
+ * engine's curve and the physics are reconciled. Smith is a *bounded* falloff:
+ * it reaches exactly zero at `distanceMax`, which is what lets `LiveEmitterSet`
+ * cut a loop that has left range without a click. The price is that it is not
+ * 1/r -- handed the range where spherical spreading reaches 2% energy, it
+ * arrives there at nothing at all and passes 2% a third of the way along.
+ *
+ * So the range is stretched until the two agree at the one distance that
+ * matters. The result tracks true spherical spreading to within about 1.5 dB
+ * everywhere out to the audible radius -- the rendered sound *is* an inverse
+ * square law over the whole span anyone can hear it -- and then rolls off faster
+ * than physics over a tail nobody can, which is exactly the trade a bounded
+ * approximation exists to make.
+ *
+ * 19.6 at 2%, against 7.071 for the audible radius itself.
+ */
+export const CULL_RADIUS_FACTOR =
+    1 + (AUDIBLE_RADIUS_FACTOR - 1) / SMITH_CULL_POSITION;
+
 export const NOMINAL_FULL_VOLUME_Q3 = 256;
 
 /**
@@ -104,7 +142,7 @@ export const NOMINAL_FULL_VOLUME_Q3 = 256;
  * a name whose family is not listed either gets nominal.
  */
 const SOURCE_LEVEL_DB: Readonly<Record<string, number>> = {
-    /* ---- detonations: the loudest thing in the game and the reason for D-148 ---- */
+    /* ---- detonations: the loudest thing in the game and the reason for D-148 and D-149 ---- */
 
     /*
      +6 dB is a full-volume radius of 512 units and a cull at 3620 -- 113 m,
@@ -194,9 +232,13 @@ export interface Falloff {
     /** `distanceMin`: inside this the level does not fall. Q3 units. */
     readonly fullVolumeQ3: number;
     /**
-     * `distanceMax`: the hard cull, where the energy has reached
-     * {@link CULL_ENERGY_FRACTION}. Q3 units.
+     * How far this can still be heard: where spherical spreading puts it at
+     * {@link CULL_ENERGY_FRACTION}. Q3 units. Reported rather than used -- the
+     * engine is given {@link Falloff.cullQ3} -- and it is what the table is
+     * authored against.
      */
+    readonly audibleQ3: number;
+    /** `distanceMax`: past here nothing is rendered. Q3 units. */
     readonly cullQ3: number;
 }
 
@@ -211,7 +253,25 @@ export function fullVolumeRadiusQ3(levelDb: number): number {
     return NOMINAL_FULL_VOLUME_Q3 * Math.pow(10, levelDb / 20);
 }
 
-/** The distance at which a source at `fullVolumeQ3` reaches the cull energy. */
+/**
+ * How far away this sound can still be heard: the distance at which spherical
+ * spreading puts it at {@link CULL_ENERGY_FRACTION} of its full-volume energy.
+ *
+ * The physical answer, and the one the table is authored against. It is not
+ * `distanceMax` -- see {@link cullRadiusQ3}.
+ */
+export function audibleRadiusQ3(fullVolumeQ3: number): number {
+    return fullVolumeQ3 * AUDIBLE_RADIUS_FACTOR;
+}
+
+/**
+ * `distanceMax`: the range the engine's curve is evaluated over, and the
+ * distance past which nothing is rendered at all.
+ *
+ * Further out than {@link audibleRadiusQ3}, because Smith has to be given room
+ * to still be at the cull energy *at* the audible radius rather than at zero.
+ * See {@link CULL_RADIUS_FACTOR}.
+ */
 export function cullRadiusQ3(fullVolumeQ3: number): number {
     return fullVolumeQ3 * CULL_RADIUS_FACTOR;
 }
@@ -239,47 +299,9 @@ export function sourceLevelDb(name: string): number {
 export function falloffFor(name: string): Falloff {
     const fullVolumeQ3 = fullVolumeRadiusQ3(sourceLevelDb(name));
 
-    return { fullVolumeQ3, cullQ3: cullRadiusQ3(fullVolumeQ3) };
-}
-
-/**
- * Where the taper into the cull begins, as a fraction of the range.
- *
- * `LiveEmitterSet` stops a loop that leaves range with a hard cut rather than a
- * fade, and says why: "already inaudible -- gain approximately 0 past
- * `distanceMax`". Spherical spreading does not do that. It arrives at the cull
- * radius at 14.1% of full amplitude by construction, and a loop crossing that
- * boundary would be cut off mid-sample at -17 dB, which is a click rather than a
- * disappearance.
- *
- * So the last fifth of the range is faded into the bound, which makes the
- * engine's assumption true rather than working around it. It costs the tail
- * about 1 dB at four fifths of the range and nothing before that.
- */
-const TAPER_FROM = 0.8;
-
-/**
- * Spherical spreading, faded into the cull radius: the falloff curve itself.
- *
- * Shaped for `buildAttenuationCurve`, which samples it densely and fits a
- * keyframed curve to the result.
- *
- * @param distance metres, and so are `min` and `max` -- this is called with
- *     scene units, not Q3 units, because it is the engine that evaluates it.
- */
-export function sphericalSpreading(distance: number, min: number, max: number): number {
-    if (distance <= min) return 1;
-    if (distance >= max) return 0;
-
-    // 1/r in amplitude, which is 1/r^2 in intensity: the irradiance relation.
-    const spread = min / distance;
-
-    const taperStart = min + (max - min) * TAPER_FROM;
-    if (distance <= taperStart) return spread;
-
-    // smoothstep, so the fade leaves and arrives with zero slope and the join at
-    // `taperStart` is not a corner.
-    const t = (distance - taperStart) / (max - taperStart);
-
-    return spread * (1 - t * t * (3 - 2 * t));
+    return {
+        fullVolumeQ3,
+        audibleQ3: audibleRadiusQ3(fullVolumeQ3),
+        cullQ3: cullRadiusQ3(fullVolumeQ3),
+    };
 }

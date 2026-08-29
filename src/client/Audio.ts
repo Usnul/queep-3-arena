@@ -50,10 +50,11 @@ import { AudioEmitter } from '@woosh/meep-engine/src/engine/sound/ecs/audio/Audi
 import { SampleAudioClip } from '@woosh/meep-engine/src/engine/sound/sopra/definition/clip/SampleAudioClip.js';
 import { EventDescription } from '@woosh/meep-engine/src/engine/sound/sopra/definition/EventDescription.js';
 import { buildAttenuationCurve } from '@woosh/meep-engine/src/engine/sound/sopra/util/buildAttenuationCurve.js';
+import { interpolate_irradiance_smith } from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_smith.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 
-import { falloffFor, sphericalSpreading } from './falloff.ts';
+import { falloffFor } from './falloff.ts';
 
 const WORLD_SCALE = 1 / 32;
 
@@ -454,27 +455,26 @@ export class AudioBank {
             distanceMin,
             distanceMax,
             /*
-             **Spherical spreading**, which is the relation the two bounds above
-             were solved from: amplitude as 1/r, intensity as 1/r^2, and
-             `distanceMax` placed where the intensity reaches
-             `CULL_ENERGY_FRACTION`. One law for the shape and for the range,
-             because a range derived from the irradiance relation and a curve
-             that is not it would disagree about where the sound had gone.
+             **`interpolate_irradiance_smith`, which is the engine's own bounded
+             inverse-square falloff**, over the pair of distances `falloff.ts`
+             derives for this particular sound. The curve is meep's business and
+             the *range* is the game's: the shape is a physical approximation
+             that already reaches zero at `distanceMax`, which is exactly what
+             `LiveEmitterSet` needs when it cuts a loop that has left range.
 
-             This was `S_SpatializeOrigin`'s straight line, for one commit, and
-             the line does not survive being given a per-sound range. Its shape
-             is set by where it reaches zero, so stretching it to carry an
-             explosion 113 m flattens everything nearer: a detonation 80 m away
-             would arrive at **half amplitude** rather than the -12 dB spherical
-             spreading gives it, and every explosion anywhere in the map would
-             sit near the top of the mix. The straight line is only Q3's answer
-             because Q3 gives everything the same range. See D-148, and
-             `NOMINAL_FULL_VOLUME_Q3` for the measurement showing that a sound at
-             nominal level still tracks that line to within 3 dB over the range
-             the line covers.
+             This has been round the houses twice and both detours are worth
+             naming, because the pull each time was to reproduce Q3. D-146 made
+             it `S_SpatializeOrigin`'s straight line on the grounds that the C is
+             linear, and D-148 replaced that with a hand-rolled 1/r and a taper
+             because a straight line does not survive a per-sound range. Neither
+             should have touched the curve at all: this port does not run Q3's
+             mixer, it runs meep's with a baked acoustic field behind it, and
+             Smith is both the more physical answer and the one that composes
+             with the rest of the engine. What actually needed fixing was the
+             range, which is all `falloff.ts` now does. See D-149.
             */
             attenuation: routing.is3D
-                ? buildAttenuationCurve(distanceMin, distanceMax, sphericalSpreading)
+                ? buildAttenuationCurve(distanceMin, distanceMax, interpolate_irradiance_smith)
                 : undefined,
             maxInstances: routing.loop ? LOOP_MAX_INSTANCES : ONE_SHOT_MAX_INSTANCES,
         });

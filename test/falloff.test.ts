@@ -16,9 +16,9 @@
  *   - the irradiance relation itself, because the cull radius is derived from it
  *     and a radius that is not where the energy criterion says is a number
  *     somebody picked;
- *   - that the curve is continuous and reaches zero at the cull, because
- *     `LiveEmitterSet` cuts a loop dead there and documents the assumption that
- *     it is already inaudible;
+ *   - that the engine's own falloff reaches zero at the radii this file hands
+ *     it, because `LiveEmitterSet` cuts a loop dead at `distanceMax` and
+ *     documents the assumption that it is already inaudible there;
  *   - that every name the bank ships resolves, since the table is keyed by name
  *     with a family fallback and a typo in either is silent.
  */
@@ -28,34 +28,46 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
+    AUDIBLE_RADIUS_FACTOR,
     CULL_ENERGY_FRACTION,
     CULL_RADIUS_FACTOR,
     NOMINAL_FULL_VOLUME_Q3,
-    cullRadiusQ3,
+    audibleRadiusQ3,
     falloffFor,
     fullVolumeRadiusQ3,
     sourceLevelDb,
-    sphericalSpreading,
 } from '../src/client/falloff.ts';
+import { interpolate_irradiance_smith }
+    from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_smith.js';
 
 const BANK = JSON.parse(
     readFileSync(join(process.cwd(), 'assets', 'built', 'sound', 'sounds.json'), 'utf8')
 ) as { sounds: Record<string, string[]> };
 
-/** `S_SpatializeOrigin`'s distance term, for comparison. */
-function q3Gain(distanceQ3: number): number {
-    return Math.max(0, 1 - Math.max(0, distanceQ3 - 80) * 0.0008);
-}
-
 describe('the irradiance relation the radii come from', () => {
-    it('places the cull where the intensity has fallen to the stated fraction', () => {
-        // I(r)/I(r0) = (r0/r)^2. The whole of CULL_RADIUS_FACTOR is this solved
-        // for r, so the check is that the ratio really lands on the fraction.
+    it('places the audible radius where the intensity has fallen to the stated fraction', () => {
+        // I(r)/I(r0) = (r0/r)^2. The whole of AUDIBLE_RADIUS_FACTOR is this
+        // solved for r, so the check is that the ratio lands on the fraction.
         for (const fullVolume of [64, 128, 256, 362, 511]) {
-            const cull = cullRadiusQ3(fullVolume);
-            const intensityRatio = (fullVolume / cull) ** 2;
+            const audible = audibleRadiusQ3(fullVolume);
 
-            expect(intensityRatio).toBeCloseTo(CULL_ENERGY_FRACTION, 10);
+            expect((fullVolume / audible) ** 2).toBeCloseTo(CULL_ENERGY_FRACTION, 10);
+        }
+    });
+
+    it('puts distanceMax beyond the audible radius, because Smith is not 1/r', () => {
+        /*
+         The distinction the second wrong turn missed. Smith reaches zero at
+         `distanceMax`, so handing it the audible radius as its bound would make
+         the sound silent exactly where physics says it is still at -17 dB. The
+         range is stretched until the two agree there instead.
+        */
+        expect(CULL_RADIUS_FACTOR).toBeGreaterThan(AUDIBLE_RADIUS_FACTOR);
+
+        for (const name of ['impact/rocket', 'player/footstep', 'item/hover']) {
+            const f = falloffFor(name);
+            expect(f.cullQ3, name).toBeGreaterThan(f.audibleQ3);
+            expect(f.audibleQ3, name).toBeGreaterThan(f.fullVolumeQ3);
         }
     });
 
@@ -82,85 +94,101 @@ describe('the irradiance relation the radii come from', () => {
         expect(fullVolumeRadiusQ3(6) / NOMINAL_FULL_VOLUME_Q3).toBeCloseTo(1.9953, 4);
     });
 
-    it('reaches the cull radius at the amplitude the fraction implies', () => {
-        const { fullVolumeQ3, cullQ3 } = falloffFor('impact/rocket');
+    it('reaches the audible radius at the amplitude the fraction implies', () => {
+        const { fullVolumeQ3, audibleQ3 } = falloffFor('impact/rocket');
 
-        // Untapered, the curve arrives at sqrt(fraction) -- 14.1% of amplitude,
-        // which is the -17 dB the cull is specified at. The taper below takes it
-        // the rest of the way to zero; this is the physical value it tapers from.
-        expect(fullVolumeQ3 / cullQ3).toBeCloseTo(Math.sqrt(CULL_ENERGY_FRACTION), 10);
+        // sqrt(fraction) is 14.1% of amplitude, which is the -17 dB the audible
+        // radius is specified at.
+        expect(fullVolumeQ3 / audibleQ3).toBeCloseTo(Math.sqrt(CULL_ENERGY_FRACTION), 10);
     });
 });
 
-describe('the falloff curve', () => {
+describe('the engine falloff over the radii this file supplies', () => {
+    /*
+     `interpolate_irradiance_smith` is the curve `Audio.describe` builds with, so
+     it is the one asserted here. The falloff is meep's and is not this file's to
+     choose -- what is checked is that the radii handed to it produce a curve the
+     rest of the engine can rely on.
+    */
     const { fullVolumeQ3: min, cullQ3: max } = falloffFor('impact/rocket');
+    const gain = (r: number): number => interpolate_irradiance_smith(r, min, max);
 
-    it('is flat inside the full-volume radius and gone at the cull', () => {
-        expect(sphericalSpreading(0, min, max)).toBe(1);
-        expect(sphericalSpreading(min, min, max)).toBe(1);
-        expect(sphericalSpreading(max, min, max)).toBe(0);
-        expect(sphericalSpreading(max * 2, min, max)).toBe(0);
+    it('is flat inside the full-volume radius', () => {
+        expect(gain(0)).toBe(1);
+        expect(gain(min / 2)).toBe(1);
+        expect(gain(min)).toBe(1);
     });
 
-    it('is 1/r over the part of the range that is not tapered', () => {
-        for (const r of [1.5, 2, 3, 4].map((k) => min * k)) {
-            expect(sphericalSpreading(r, min, max)).toBeCloseTo(min / r, 10);
+    it('is at the cull energy exactly at the audible radius', () => {
+        // The calibration, end to end: the curve the engine evaluates arrives at
+        // -17 dB precisely where the irradiance relation says the sound has
+        // 2% of its energy left. This is what CULL_RADIUS_FACTOR is solved for.
+        const { audibleQ3 } = falloffFor('impact/rocket');
+
+        expect(gain(audibleQ3)).toBeCloseTo(Math.sqrt(CULL_ENERGY_FRACTION), 6);
+    });
+
+    it('tracks true spherical spreading to within 2 dB over the audible span', () => {
+        /*
+         Smith is a bounded approximation of an inverse square law, and given the
+         range above it behaves as one: over the whole span anyone can hear the
+         sound, the rendered level is 1/r. Past the audible radius it rolls off
+         faster than physics, which is the trade a bounded curve makes and is
+         confined to a tail nobody can hear.
+        */
+        const { fullVolumeQ3, audibleQ3 } = falloffFor('impact/rocket');
+
+        for (let r = fullVolumeQ3; r <= audibleQ3; r += 25) {
+            const errorDb = 20 * Math.log10(gain(r) / (fullVolumeQ3 / r));
+
+            expect(Math.abs(errorDb), `${r.toFixed(0)} u`).toBeLessThan(2);
         }
     });
 
-    it('never rises, and has no step at the cull', () => {
-        // The step is what the taper exists to remove: LiveEmitterSet stops a
-        // loop leaving range with a hard cut, so a curve arriving at 14% would
-        // click. Walk the whole range and hold both properties at once.
+    it('reaches exactly zero at the cull, so the hard cut there is silent', () => {
+        // LiveEmitterSet stops a loop leaving range with a cut rather than a
+        // fade, on the documented assumption that gain is already ~0 past
+        // distanceMax. Smith reaching zero at max is what makes that true, and
+        // is why nothing here needs a taper of its own.
+        expect(gain(max)).toBe(0);
+        expect(gain(max * 2)).toBe(0);
+        expect(gain(max * 0.999)).toBeLessThan(0.001);
+    });
+
+    it('never rises', () => {
         let previous = 1;
-        let largestDrop = 0;
 
         for (let i = 0; i <= 2000; i++) {
-            const r = (max * 1.05 * i) / 2000;
-            const g = sphericalSpreading(r, min, max);
-
+            const g = gain((max * 1.05 * i) / 2000);
             expect(g).toBeLessThanOrEqual(previous + 1e-12);
-            largestDrop = Math.max(largestDrop, previous - g);
             previous = g;
         }
-
-        // 1/2000 of the range cannot cost more than a hair of gain anywhere,
-        // including across the cull itself.
-        expect(largestDrop).toBeLessThan(0.01);
     });
 
-    it('leaves everything before the taper untouched', () => {
-        // The taper is the last fifth; before it the curve is exactly 1/r, so a
-        // sound at three quarters of its range is unaffected by its existence.
-        const r = min + (max - min) * 0.75;
-        expect(sphericalSpreading(r, min, max)).toBeCloseTo(min / r, 10);
-    });
-});
+    it('makes a detonation louder than a nominal sound at every shared distance', () => {
+        // The whole point of a per-sound range: at any given place in the world
+        // the warhead is the louder thing, which one shared range cannot say.
+        const nominal = falloffFor('player/footstep');
 
-describe('a sound at nominal level against S_SpatializeOrigin', () => {
-    /*
-     NOMINAL_FULL_VOLUME_Q3 is chosen to reproduce Q3's line rather than to
-     replace it, so this is the check on that claim: over the range Q3's line
-     covers, a nominal sound stays within 3 dB of it. Q3's own line is not a
-     target beyond that -- it reaches exactly zero at 1330 units, which is the
-     thing D-148 is undoing.
-    */
-    const { fullVolumeQ3: min, cullQ3: max } = falloffFor('player/footstep');
+        for (const r of [400, 700, 1000, 1500, 1800]) {
+            const ordinary = interpolate_irradiance_smith(r, nominal.fullVolumeQ3, nominal.cullQ3);
 
-    it('tracks it to within 3 dB from 320 to 960 units', () => {
-        for (const r of [320, 480, 640, 800, 960]) {
-            const ours = sphericalSpreading(r, min, max);
-            const theirs = q3Gain(r);
-            const errorDb = 20 * Math.log10(ours / theirs);
-
-            expect(Math.abs(errorDb), `${r} u: ${ours.toFixed(3)} vs ${theirs.toFixed(3)}`)
-                .toBeLessThan(3);
+            expect(gain(r), `${r} u`).toBeGreaterThan(ordinary);
         }
     });
 
-    it('is still audible where Q3 has reached exactly zero', () => {
-        expect(q3Gain(1330)).toBe(0);
-        expect(sphericalSpreading(1330, min, max)).toBeGreaterThan(0.1);
+    it('keeps a detonation audible where a nominal sound has been culled', () => {
+        /*
+         The reported fault, as an assertion. A nominal sound is gone at its own
+         cull, and a rocket landing at that distance has to still be a thing you
+         hear -- clear of sopra's -60 dB virtualisation floor by a wide margin,
+         not merely non-zero.
+        */
+        const nominal = falloffFor('player/footstep');
+        const beyond = nominal.cullQ3 + 1;
+
+        expect(interpolate_irradiance_smith(beyond, nominal.fullVolumeQ3, nominal.cullQ3)).toBe(0);
+        expect(20 * Math.log10(gain(beyond))).toBeGreaterThan(-30);
     });
 });
 
@@ -200,11 +228,11 @@ describe('the source level table', () => {
         */
         const arenaQ3 = 100 * 32;
 
-        expect(falloffFor('impact/rocket').cullQ3).toBeGreaterThan(arenaQ3);
-        expect(falloffFor('impact/prox').cullQ3).toBeGreaterThan(arenaQ3);
+        expect(falloffFor('impact/rocket').audibleQ3).toBeGreaterThan(arenaQ3);
+        expect(falloffFor('impact/prox').audibleQ3).toBeGreaterThan(arenaQ3);
 
-        expect(falloffFor('impact/bullet').cullQ3).toBeLessThan(arenaQ3 / 3);
-        expect(falloffFor('item/hover').cullQ3).toBeLessThan(arenaQ3 / 5);
+        expect(falloffFor('impact/bullet').audibleQ3).toBeLessThan(arenaQ3 / 3);
+        expect(falloffFor('item/hover').audibleQ3).toBeLessThan(arenaQ3 / 5);
     });
 
     it('gives every detonation more reach than the gun that launched it', () => {
@@ -215,22 +243,29 @@ describe('the source level table', () => {
             ['impact/rocket', 'weapon/WP_GRENADE_LAUNCHER'],
             ['impact/prox', 'weapon/WP_PROX_LAUNCHER'],
         ] as const) {
-            expect(falloffFor(impact).cullQ3, `${impact} vs ${weapon}`)
-                .toBeGreaterThan(falloffFor(weapon).cullQ3);
+            expect(falloffFor(impact).audibleQ3, `${impact} vs ${weapon}`)
+                .toBeGreaterThan(falloffFor(weapon).audibleQ3);
         }
     });
 
-    it('reaches further than Q3s single range for everything loud, and less for everything small', () => {
-        const q3CullQ3 = 80 + 1250;
+    it('separates loud from quiet around the single range the port used to have', () => {
+        /*
+         Not a claim about Q3 -- the port runs meep's mixer and this file is not
+         trying to be `S_SpatializeOrigin`. 1250 units is simply the one range
+         every sound in the game shared before D-149, so it is the useful place
+         to check that the table actually spreads things out rather than moving
+         them all in one direction.
+        */
+        const previousRangeQ3 = 1250;
 
         for (const loud of ['impact/rocket', 'impact/prox', 'weapon/WP_ROCKET_LAUNCHER',
                             'weapon/WP_RAILGUN', 'mover/door_start']) {
-            expect(falloffFor(loud).cullQ3, loud).toBeGreaterThan(q3CullQ3);
+            expect(falloffFor(loud).audibleQ3, loud).toBeGreaterThan(previousRangeQ3);
         }
 
         for (const small of ['impact/bullet', 'impact/lightning', 'item/hover',
                              'firing/WP_CHAINGUN', 'weapon/WP_GAUNTLET']) {
-            expect(falloffFor(small).cullQ3, small).toBeLessThan(q3CullQ3);
+            expect(falloffFor(small).audibleQ3, small).toBeLessThan(previousRangeQ3);
         }
     });
 });
