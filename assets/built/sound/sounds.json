@@ -31,6 +31,18 @@
   "weapon/WP_BFG": [
    "weapons_bfg_bfg_fire.wav"
   ],
+  "weapon/WP_CHAINGUN": [
+   "weapons_vulcan_vulcanf1b.wav",
+   "weapons_vulcan_vulcanf2b.wav",
+   "weapons_vulcan_vulcanf3b.wav",
+   "weapons_vulcan_vulcanf4b.wav"
+  ],
+  "weapon/WP_NAILGUN": [
+   "weapons_nailgun_wnalfire.wav"
+  ],
+  "weapon/WP_PROX_LAUNCHER": [
+   "weapons_proxmine_wstbfire.wav"
+  ],
   "weapon/empty": [
    "weapons_noammo.wav"
   ],
@@ -48,11 +60,16 @@
   "impact/plasma": [
    "weapons_plasma_plasmx1a.wav"
   ],
-  "impact/grenade": [
-   "weapons_grenade_hgrenb1a.wav"
-  ],
   "impact/lightning": [
-   "weapons_lightning_lg_hit.wav"
+   "weapons_lightning_lg_hit.wav",
+   "weapons_lightning_lg_hit2.wav",
+   "weapons_lightning_lg_hit3.wav"
+  ],
+  "impact/prox": [
+   "weapons_proxmine_wstbexpl.wav"
+  ],
+  "impact/nail": [
+   "weapons_nailgun_wnalimpm.wav"
   ],
   "impact/flesh": [
    "player_gibimp1.wav",
@@ -308,9 +325,9 @@
   "music/sonic3: music/sonic3.ogg"
  ],
  "stats": {
-  "names": 97,
-  "files": 77,
-  "kilobytes": 8168,
+  "names": 101,
+  "files": 86,
+  "kilobytes": 8833,
   "missing": 2,
   "maps": 6,
   "fromMaps": 12

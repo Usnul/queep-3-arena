@@ -37,6 +37,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { impactSound } from '../src/client/impactSound.ts';
 import { itemByClassname, weaponItemByTag } from '../src/game/Items.ts';
 import balance from '../src/game/balance.generated.json' with { type: 'json' };
 import { GRID_SOURCE_RADIUS, SOURCE_EXTENT_FLOOR } from '../tools/pipeline/lightgrid.ts';
@@ -674,7 +675,16 @@ describe('the sound bank covers what the game plays', () => {
         const literal = [...sources.matchAll(/\.(?:play|playLocal|loop)\('([^'$]+)'/g)]
             .map((m) => m[1]!);
 
-        expect(literal.length, 'literal sound names in the shipping code').toBeGreaterThan(8);
+        /*
+         A floor, so that a regex that has stopped matching anything cannot pass
+         this quietly. It was `> 8` and is now `>= 8`, because the two impact
+         names moved out of these call sites and into `impactSound.ts` -- a
+         table, which this scan cannot see and the per-weapon block below checks
+         directly instead. A name that leaves the scan has to arrive somewhere
+         that is checked; these did.
+        */
+        expect(literal.length, 'literal sound names in the shipping code')
+            .toBeGreaterThanOrEqual(8);
 
         for (const name of new Set(literal)) {
             expect(manifest.sounds[name], `${name} is played and not in the bank`).toBeDefined();
@@ -709,11 +719,35 @@ describe('the sound bank covers what the game plays', () => {
             expect(have(family), family).toBe(true);
         }
 
-        // Every weapon the player can hold has a firing sound.
-        for (const weapon of ['WP_GAUNTLET', 'WP_MACHINEGUN', 'WP_SHOTGUN', 'WP_GRENADE_LAUNCHER',
-                              'WP_ROCKET_LAUNCHER', 'WP_LIGHTNING', 'WP_RAILGUN', 'WP_PLASMAGUN',
-                              'WP_BFG']) {
+        /*
+         Every weapon has a firing sound, and the list is **read** rather than
+         written down. It used to name nine weapons; `balance.weapons` has
+         twelve, and the three it did not name -- the chaingun, the nailgun and
+         the prox launcher -- fired in silence, with the test that exists to
+         catch exactly that agreeing with them. `Arena.muzzleFlash` plays
+         `weapon/<id>` for whatever `WeaponSystem` fired, and what it can fire is
+         this table. See D-146.
+        */
+        const weapons = Object.keys(balance.weapons);
+        expect(weapons.length, 'weapons in the balance table').toBeGreaterThanOrEqual(12);
+
+        for (const weapon of weapons) {
             expect(have(`weapon/${weapon}`), `weapon/${weapon}`).toBe(true);
+        }
+
+        /*
+         And an impact sound for every weapon Q3 gives one. `impactSound` is
+         `CG_MissileHitWall`'s `sfx` column, so a null is the C's own silence --
+         the shotgun's eleven pellets and the gauntlet, which never reaches the
+         switch there -- and everything else has to be a name the bank has. This
+         is the check the two hard-coded names it replaced could not fail: they
+         were in the bank by construction, whatever weapon was firing.
+        */
+        for (const weapon of weapons) {
+            const sfx = impactSound(weapon);
+            if (sfx === null) continue;
+
+            expect(have(sfx), `${weapon} impacts with ${sfx}`).toBe(true);
         }
     });
 });

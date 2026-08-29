@@ -40,6 +40,7 @@ import { Effects } from './Effects.ts';
 import type { MuzzleFlashSink } from './ViewWeapon.ts';
 import type { MissileSink } from './MissileView.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
+import { impactSound } from './impactSound.ts';
 import { interpolatedPose } from './interpolation.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
 
@@ -348,7 +349,9 @@ export class Arena implements WeaponEvents {
     ): void {
         this.effects.bulletImpact(originQ3, normalQ3);
         this.effects.impactMark(weapon, originQ3, normalQ3);
-        this.audio?.play('impact/bullet', originQ3);
+
+        const sfx = impactSound(weapon);
+        if (sfx !== null) this.audio?.play(sfx, originQ3);
     }
 
     /**
@@ -385,7 +388,18 @@ export class Arena implements WeaponEvents {
         */
         if (normalQ3 !== undefined) this.effects.impactMark(weapon, originQ3, normalQ3);
 
-        this.audio?.play('impact/rocket', originQ3);
+        /*
+         `CG_MissileHitWall`'s `sfx`, and not a rocket's for all five projectile
+         weapons alike -- which is what this was, and is why a plasma bolt
+         detonated with a rocket's blast. See `impactSound.ts`.
+
+         `CG_MissileHitPlayer` reaches the same switch for the weapons that
+         explode on a body as well as on a wall, so a direct hit sounds like an
+         impact, which is why this is outside the `normalQ3` guard the mark is
+         inside.
+        */
+        const sfx = impactSound(weapon);
+        if (sfx !== null) this.audio?.play(sfx, originQ3);
     }
 
     /**

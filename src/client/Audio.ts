@@ -50,24 +50,32 @@ import { AudioEmitter } from '@woosh/meep-engine/src/engine/sound/ecs/audio/Audi
 import { SampleAudioClip } from '@woosh/meep-engine/src/engine/sound/sopra/definition/clip/SampleAudioClip.js';
 import { EventDescription } from '@woosh/meep-engine/src/engine/sound/sopra/definition/EventDescription.js';
 import { buildAttenuationCurve } from '@woosh/meep-engine/src/engine/sound/sopra/util/buildAttenuationCurve.js';
-import { interpolate_irradiance_smith } from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_smith.js';
+import { interpolate_irradiance_linear } from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_linear.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 
 const WORLD_SCALE = 1 / 32;
 
 /**
- * Q3's own falloff bounds, converted.
+ * Q3's own falloff bounds, converted -- and `S_SpatializeOrigin` is three lines
+ * of arithmetic, so they are exact rather than approximate:
  *
- * `S_Base`'s `SOUND_RANGE_DEFAULT` is 1250 units, which is 39 m at this port's
- * scale, and `SOUND_FULLVOLUME` is 80 units. Those two numbers are why a rocket
- * across a Q3 arena is faintly audible rather than silent, and why standing next
- * to a plasma gun is loud: the level is flat inside 2.5 m and falls away over
- * the next 36. Loops use the same range, because `S_AddLoopSounds` spatializes
- * through the same `S_SpatializeOrigin` one-shots do.
+ *     dist -= SOUND_FULLVOLUME;       // 80
+ *     if (dist < 0) dist = 0;
+ *     dist *= SOUND_ATTENUATE;        // 0.0008
+ *     scale = (1.0 - dist) * rscale;
+ *
+ * So the level is flat inside `SOUND_FULLVOLUME` and then falls **linearly** to
+ * zero over the next `1 / SOUND_ATTENUATE` = 1250 units. The far bound is
+ * therefore 80 + 1250 = **1330** units, not 1250: the ramp starts where the flat
+ * region ends, and this used to subtract the flat region from the range instead
+ * of adding it on.
+ *
+ * Loops use the same bounds, because `S_AddLoopSounds` spatializes through the
+ * same `S_SpatializeOrigin` one-shots do.
  */
 const DISTANCE_MIN = 80 * WORLD_SCALE;
-const DISTANCE_MAX = 1250 * WORLD_SCALE;
+const DISTANCE_MAX = (80 + 1250) * WORLD_SCALE;
 
 /**
  * How many looping 3D emitters may sound at once.
@@ -456,13 +464,33 @@ export class AudioBank {
             distanceMin: DISTANCE_MIN,
             distanceMax: DISTANCE_MAX,
             /*
-             Smith rather than linear: it sheds two thirds of its level inside
-             the first seventh of the range, which is much closer to Q3's own
-             1/r-ish falloff than a straight line, and the curve builder puts
-             its keyframes where that curvature is.
+             **Linear, because `S_SpatializeOrigin` is linear.** `scale = 1.0 -
+             (dist - 80) * 0.0008` is a straight line between the two bounds
+             above, and `interpolate_irradiance_linear` over the same pair is
+             that line term for term.
+
+             This was Smith, on the stated grounds that Q3's falloff is "1/r-ish"
+             and a straight line is not. Q3's falloff is not 1/r -- the C is
+             quoted at `DISTANCE_MAX` and there is no reciprocal in it -- and the
+             difference was not cosmetic. Measured in the browser off an
+             `AnalyserNode` on the master bus, against the same sample played at
+             the listener:
+
+             | distance | Q3 `S_Base` | Smith | error |
+             |---|---|---|---|
+             | 320 u (10 m) | 0.808 | 0.236 | -10.7 dB |
+             | 640 u (20 m) | 0.552 | 0.080 | -16.8 dB |
+             | 960 u (30 m) | 0.296 | 0.026 | -21.1 dB |
+
+             Which is why a rocket you fired *away from yourself* seemed to
+             detonate silently: the event was raised, the emitter was built and
+             the instance played, at a twentieth of the level the C gives it and
+             directly behind the launch sound in your own ears. Every positioned
+             sound in the game was quiet at range; explosions are simply the ones
+             that are never anywhere else. See D-146.
             */
             attenuation: routing.is3D
-                ? buildAttenuationCurve(DISTANCE_MIN, DISTANCE_MAX, interpolate_irradiance_smith, 0.02)
+                ? buildAttenuationCurve(DISTANCE_MIN, DISTANCE_MAX, interpolate_irradiance_linear)
                 : undefined,
             maxInstances: routing.loop ? LOOP_MAX_INSTANCES : ONE_SHOT_MAX_INSTANCES,
         });

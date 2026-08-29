@@ -70,10 +70,41 @@ const SOUNDS: Readonly<Record<string, string | string[]>> = {
     'weapon/WP_RAILGUN': 'sound/weapons/railgun/railgf1a.wav',
     'weapon/WP_PLASMAGUN': 'sound/weapons/plasma/hyprbf1a.wav',
     'weapon/WP_BFG': 'sound/weapons/bfg/bfg_fire.wav',
+    /*
+     The three the mission pack added, and the three this list did not have.
+     `balance.generated.json` carries twelve weapons and `Arena.muzzleFlash`
+     plays `weapon/<id>` for whichever one fired, so a weapon missing from here
+     is a weapon that fires in silence -- which is what the chaingun, the nailgun
+     and the prox launcher did. They are `weaponInfo->flashSound[]` in
+     `CG_RegisterWeapon`'s `#ifdef MISSIONPACK` cases; OpenArena ships all four
+     files of the chaingun's set, so it randomises like the machinegun does.
+     See D-146.
+    */
+    'weapon/WP_CHAINGUN': [
+        'sound/weapons/vulcan/vulcanf1b.wav',
+        'sound/weapons/vulcan/vulcanf2b.wav',
+        'sound/weapons/vulcan/vulcanf3b.wav',
+        'sound/weapons/vulcan/vulcanf4b.wav',
+    ],
+    'weapon/WP_NAILGUN': 'sound/weapons/nailgun/wnalfire.wav',
+    'weapon/WP_PROX_LAUNCHER': 'sound/weapons/proxmine/wstbfire.wav',
     'weapon/empty': 'sound/weapons/noammo.wav',
     'weapon/change': 'sound/weapons/change.wav',
 
-    /* ---- weapons: impact ---- */
+    /*
+     ---- weapons: impact ----
+
+     `CG_MissileHitWall`'s `sfx`, one name per row of `Arena.IMPACT_SOUNDS`. The
+     shotgun and the gauntlet are absent because the C plays nothing for them,
+     not because a file is missing.
+
+     `impact/grenade` used to be here, against `weapons/grenade/hgrenb1a.wav`.
+     That file is `cgs.media.hgrenb1aSound`, which `EV_GRENADE_BOUNCE` plays when
+     a grenade *bounces*; the grenade's detonation is `sfx_rockexp` like the
+     rocket's. Nothing in the port ever named it -- this port detonates a grenade
+     on its first contact, so there is no bounce to play it on -- and a row that
+     reads like an impact and is not is worse than no row.
+    */
     'impact/bullet': [
         'sound/weapons/machinegun/ric1.wav',
         'sound/weapons/machinegun/ric2.wav',
@@ -81,8 +112,20 @@ const SOUNDS: Readonly<Record<string, string | string[]>> = {
     ],
     'impact/rocket': 'sound/weapons/rocket/rocklx1a.wav',
     'impact/plasma': 'sound/weapons/plasma/plasmx1a.wav',
-    'impact/grenade': 'sound/weapons/grenade/hgrenb1a.wav',
-    'impact/lightning': 'sound/weapons/lightning/lg_hit.wav',
+    // `sfx_lghit1/2/3`, and the C picks between all three.
+    'impact/lightning': [
+        'sound/weapons/lightning/lg_hit.wav',
+        'sound/weapons/lightning/lg_hit2.wav',
+        'sound/weapons/lightning/lg_hit3.wav',
+    ],
+    'impact/prox': 'sound/weapons/proxmine/wstbexpl.wav',
+    /*
+     `sfx_nghit` is `weapons/nailgun/wnalimpd.wav`, which OpenArena does not
+     ship; `wnalimpm` -- the metal-surface variant of the same impact -- is what
+     it has, and stands in for every surface. `Arena.IMPACT_SOUNDS` says so at
+     the row that names this.
+    */
+    'impact/nail': 'sound/weapons/nailgun/wnalimpm.wav',
     'impact/flesh': ['sound/player/gibimp1.wav', 'sound/player/gibimp2.wav', 'sound/player/gibimp3.wav'],
 
     /* ---- feedback ---- */

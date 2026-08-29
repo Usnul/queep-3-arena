@@ -6905,3 +6905,77 @@ plausible frame count comes out of the key. Whether the timings inside it are *g
 question for the tool that reads them. And the badge's look has not been seen by anyone: the preview
 pane composites nothing, so its geometry and colours are measured from computed styles and its
 appearance still wants a human's eyes.
+
+### D-146: Two constants where the C has a table, and a falloff that was not Q3's
+
+Reported from play: the rocket launcher's and the grenade launcher's projectiles made no sound when
+they landed, and the chaingun made no sound when it fired. Two separate faults, and the second one
+is the smaller.
+
+**The chaingun, the nailgun and the prox launcher fired in silence.** `Arena.muzzleFlash` plays
+`weapon/<id>` for whatever `WeaponSystem` fired; `balance.generated.json` carries twelve weapons and
+`convert-sounds.ts`'s table named nine. The three missing are the mission pack's, and OpenArena
+ships every file for them -- `vulcanf1b`..`4b`, `wnalfire`, `wstbfire` -- so this was a list that had
+not been extended rather than a sound that could not be found. `presentation.test.ts` had a check
+for exactly this and it passed, because it too named nine weapons, by hand, in a literal. It now
+reads `Object.keys(balance.weapons)`: the thing that decides what can fire is the thing that decides
+what must be audible.
+
+**The impact sounds were two constants where `CG_MissileHitWall` has a table.** `Effects` has read
+that switch's `mark`/`radius` columns per weapon since phase 3. The `sfx` column was
+`impact/bullet` for anything hitscan and `impact/rocket` for anything that exploded. So a railgun
+hit a wall with a machinegun's ricochet, a plasma bolt detonated with a rocket's blast, the shotgun
+fired eleven ricochets per trigger pull where the C fires none at all (`case WP_SHOTGUN` sets
+`sfx = 0`), and `impact/plasma` sat in the bank with nothing in the port naming it. It is one switch
+in the C and it is one table here now, in `client/impactSound.ts` -- a module rather than a constant
+inside `Arena`, for the reason `muzzleFlash.ts` is one: two callers, and a test that wants to check
+it against the sound bank without constructing an arena.
+
+Two rows are substitutions and say so at the row. OpenArena ships no `wvulimpd` for the chaingun, so
+it takes the machinegun's ricochet, which is the ammunition it fires; and no `wnalimpd` for the
+nailgun, though it ships that sound's metal and flesh siblings, so `wnalimpm` stands in for every
+surface. `impact/grenade` left the manifest entirely: it was `weapons/grenade/hgrenb1a.wav`, which
+is `cgs.media.hgrenb1aSound` and belongs to `EV_GRENADE_BOUNCE` -- a grenade's *bounce*, not its
+detonation, which is `sfx_rockexp` like the rocket's. Nothing had ever played it, and a row that
+reads like an impact and is not is worse than no row.
+
+**And the rocket impacts, which were the actual report, were none of the above.** The event was
+raised, the emitter was built, the instance played and its gain was 1. What was wrong was the
+distance curve every positioned sound in the game goes through. `S_SpatializeOrigin` is four lines:
+
+```c
+dist -= SOUND_FULLVOLUME;       // 80
+if (dist < 0) dist = 0;
+dist *= SOUND_ATTENUATE;        // 0.0008
+scale = (1.0 - dist) * rscale;
+```
+
+That is a straight line from 80 units to 80 + 1/0.0008 = 1330. `Audio.ts` cited those two constants
+and then built a Smith irradiance curve from them, on the written grounds that Smith is "much closer
+to Q3's own 1/r-ish falloff than a straight line". Q3's falloff is not 1/r; the C is quoted above and
+there is no reciprocal in it. It also read `SOUND_RANGE_DEFAULT` as the far bound rather than as the
+length of the ramp, so the range ended 80 units early.
+
+Measured in the browser with D-047's instrument -- an `AnalyserNode` on the master bus, the same
+sample played at a series of distances from the listener:
+
+| distance | Q3 `S_Base` | Smith | error |
+|---|---|---|---|
+| 320 u (10 m) | 0.808 | 0.236 | -10.7 dB |
+| 640 u (20 m) | 0.552 | 0.080 | -16.8 dB |
+| 960 u (30 m) | 0.296 | 0.026 | -21.1 dB |
+
+A rocket you fire goes *away from you* and detonates twenty metres off, a twentieth of the level the
+C gives it, directly behind the launch report in your own ears. It is not that explosions were
+special; it is that explosions are the only sounds that are never near you. The curve is
+`interpolate_irradiance_linear` over 80..1330 units now, which is `S_SpatializeOrigin`'s distance
+term term for term. Re-measured after the change, the port tracks the C's line to a constant factor
+across the whole range -- 0.65, 0.66, 0.65, 0.64, 0.62, 0.63 of it at 480 through 1250 units, where
+the constant is the reference point's own panning and the *shape* is what was wrong before.
+
+**What is not claimed.** Nobody has listened to any of this. The browser pane composites nothing and
+runs no `requestAnimationFrame`, so the game was driven by `entityManager.simulate` on a timer --
+D-066's rig -- and every number here is a peak amplitude read off the master bus, not a judgement
+about whether a plasma impact now sounds like a plasma impact. The per-weapon routing is verified as
+routing: firing each of the twelve weapons at a wall produces exactly the name
+`CG_MissileHitWall` chooses for it, and the shotgun and the gauntlet produce none.
