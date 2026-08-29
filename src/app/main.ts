@@ -893,6 +893,15 @@ async function main(): Promise<void> {
         arena.viewWeapon = viewWeapon;
 
         /*
+         And where its particles go. The light is only half of what Q3 draws at
+         `tag_flash` -- `weaponInfo->flashModel` is the other half -- so the gun
+         throws a burst down its own barrel through the same `Effects` the world
+         uses, which is what keeps a plasma flash the same colour whoever fired
+         it. Set here for the same reason the line above is.
+        */
+        viewWeapon.particles = arena.effects;
+
+        /*
          And what comes out of the barrel. `CG_Missile`'s models, off the same
          library, set the same way and for the same reason -- see `MissileView`,
          and D-118 for why a rocket was a box until now.

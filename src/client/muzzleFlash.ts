@@ -128,6 +128,46 @@ export function muzzleFlashLight(weapon: string): MuzzleFlashLight {
 }
 
 /**
+ * The three weapons OpenArena ships no `_flash.md3` for.
+ *
+ * Measured off the pk3s rather than asserted: `muzzle-flash.test.ts`'s check
+ * reads `assets/extracted` and fails if this list and the files disagree, which
+ * is the only thing that keeps a hand-written table honest.
+ */
+const NO_FLASH_MODEL: ReadonlySet<string> = new Set([
+    'WP_GAUNTLET',
+    'WP_GRAPPLING_HOOK',
+    'WP_PROX_LAUNCHER',
+]);
+
+/**
+ * Whether Q3 draws anything visible at this weapon's muzzle.
+ *
+ * `CG_AddPlayerWeapon` builds the flash entity, and then:
+ *
+ * ```c
+ * flash.hModel = weapon->flashModel;
+ * if (!flash.hModel) {
+ *     return;
+ * }
+ * ```
+ *
+ * -- and that `return` is **above** the dlight and above `CG_LightningBolt`, so
+ * a weapon with no flash model gets no flash, no light and no beam. Three of the
+ * thirteen are in that case: the gauntlet, which is a claw; the grapple, which
+ * fires a hook; and OA's prox launcher, whose model carries no tags at all.
+ *
+ * The *light* in this port does not consult this, and that is D-115's standing
+ * divergence rather than an oversight -- a shot with no light at all reads as a
+ * shot that did not happen, and `Effects` has lit every weapon since. What
+ * consults it is the flash's visible half, because a burst of sparks out of a
+ * melee weapon is not a divergence anyone asked for.
+ */
+export function hasFlashModel(weapon: string): boolean {
+    return !NO_FLASH_MODEL.has(weapon);
+}
+
+/**
  * Write `weapon`'s flash onto a point light.
  *
  * Both callers own their light component -- `Effects` builds one per shot and

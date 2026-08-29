@@ -99,8 +99,8 @@ function pose(eye: [number, number, number]): CameraPose {
     return { position: { x: eye[0], y: eye[1], z: eye[2] }, rotation: new Quaternion() };
 }
 
-function held(weapon: string, visible = true): ViewWeaponState {
-    return { weapon, speed: 0, bobCycle: 0, visible };
+function held(weapon: string, visible = true, firing = false): ViewWeaponState {
+    return { weapon, speed: 0, bobCycle: 0, visible, firing };
 }
 
 /** The scene, as positions: one entry per mesh that is actually in it. */
@@ -326,6 +326,9 @@ describe('a weapon that is two models is drawn as two models', () => {
     /** And its basis: forward becomes -z, up becomes +x, right becomes -y. */
     const TAG_ROTATION: [number, number, number, number] = [0.5, 0.5, -0.5, 0.5];
 
+    /** A weapon that is a single model, for the latch test. */
+    const NO_BARREL = 'models/weapons2/shotgun/shotgun.md3';
+
     const BODY_PIECES = 2;
     const BARREL_PIECES = 1;
 
@@ -342,7 +345,7 @@ describe('a weapon that is two models is drawn as two models', () => {
                         ],
                     };
                 }
-                if (name === BARREL) return { tags: [] };
+                if (name === BARREL || name === NO_BARREL) return { tags: [] };
                 return null;
             },
             components(name: string): ShadedGeometry[] | null {
@@ -352,6 +355,7 @@ describe('a weapon that is two models is drawn as two models', () => {
                 if (name === BARREL) {
                     return Array.from({ length: BARREL_PIECES }, () => new ShadedGeometry());
                 }
+                if (name === NO_BARREL) return [new ShadedGeometry()];
                 return null;
             },
         };
@@ -420,7 +424,17 @@ describe('a weapon that is two models is drawn as two models', () => {
         expect(expected, 'a tag at the origin would prove nothing').toBeGreaterThan(0.3);
     });
 
-    it('turns the barrel by the tag basis, not just the gun', () => {
+    /*
+     The tag basis, asserted in the one way the spin cannot disturb.
+
+     A barrel carries two rotations now -- the tag's basis, which aims it, and
+     `CG_MachinegunSpinAngle`'s roll, which turns it about its own length. Roll
+     is a rotation about +x and therefore *fixes* +x, so where the barrel's own
+     forward direction ends up is the tag's contribution and nothing else. The
+     spin gets its own tests below, where it can be read without the basis on
+     top of it.
+    */
+    it('aims the barrel with the tag basis, not just the gun', () => {
         const ecd = newDataset();
         const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
 
@@ -435,10 +449,157 @@ describe('a weapon that is two models is drawn as two models', () => {
         // `CG_PositionRotatedEntityOnTag`: the child's axis is the tag's,
         // multiplied by the parent's.
         const expected = new Quaternion().multiplyQuaternions(body, tag);
-        expect(barrel.angleTo(expected), 'the barrel is not turned by its tag').toBeCloseTo(0, 6);
 
-        // And that is a real turn, not an identity dressed up as one.
-        expect(barrel.angleTo(body), 'the tag basis went missing').toBeGreaterThan(1);
+        const along = (q: Quaternion): Vector3 => new Vector3(1, 0, 0).applyQuaternion(q);
+        const got = along(barrel);
+        const want = along(expected);
+
+        expect(got.x, 'the barrel is not aimed by its tag').toBeCloseTo(want.x, 6);
+        expect(got.y).toBeCloseTo(want.y, 6);
+        expect(got.z).toBeCloseTo(want.z, 6);
+
+        // And that is a real turn, not an identity dressed up as one: the
+        // gauntlet's tag points its blade across the gun, not along it.
+        expect(got.distanceTo(along(body)), 'the tag basis went missing').toBeGreaterThan(1);
+    });
+
+    /*
+     * The spin, which is a latch and not an integration.
+     *
+     * `CG_MachinegunSpinAngle` records when the trigger last changed and what
+     * the angle was then, and derives everything else from the clock. The three
+     * things worth pinning are that a barrel nobody is firing does not move,
+     * that holding the trigger turns it at Q3's rate, and that letting go coasts
+     * it down instead of stopping it dead -- and all three are read off the
+     * drawn transform rather than off the state machine, because a spin the
+     * renderer never applies is not a spin.
+     */
+    describe('the barrel spins while the trigger is held', () => {
+        /** The barrel's roll, in degrees, recovered from the two drawn poses. */
+        function rollDegrees(ecd: EntityComponentDataset): number {
+            const poses = drawnPoses(ecd);
+            const body = poses[0]!.rotation;
+            const barrel = poses[BODY_PIECES]!.rotation;
+
+            // barrel = body * tag * roll, so roll = (body * tag)^-1 * barrel.
+            const aimed = new Quaternion().multiplyQuaternions(
+                body,
+                new Quaternion().set(...TAG_ROTATION)
+            );
+            const roll = new Quaternion()
+                .multiplyQuaternions(aimed.invert(), barrel)
+                .normalize();
+
+            // It must be a turn about the barrel's own length, or it is not a
+            // roll at all -- that is the half of this a magnitude cannot see.
+            const axis = new Vector3();
+            const angle = roll.toAxisAngle(axis);
+            expect(Math.abs(axis.x), 'the barrel is not turning about its own length').toBeCloseTo(
+                1,
+                5
+            );
+
+            const signed = axis.x > 0 ? angle : -angle;
+            return (signed * 180) / Math.PI;
+        }
+
+        /** Difference between two angles in degrees, wrapped into (-180, 180]. */
+        const turned = (from: number, to: number): number => {
+            let d = (to - from) % 360;
+            if (d > 180) d -= 360;
+            if (d <= -180) d += 360;
+            return d;
+        };
+
+        it('does not turn a barrel nobody is firing', () => {
+            const ecd = newDataset();
+            const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+            view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+            const first = rollDegrees(ecd);
+
+            for (let i = 0; i < 60; i++) view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+
+            /*
+             A whole second of standing still. Q3's `centity_t` is memset on map
+             load, so its barrel reaches the coast arm with a delta of minutes
+             and sits at a constant angle from the first frame; a zero-based
+             clock that starts at `barrelTime = 0` instead winds the barrel
+             through 450 degrees over the first second with nobody touching the
+             trigger, which is the one part of this that would be visible and is
+             not in the C. `newBarrelSpin` starts a `COAST_TIME` in the past for
+             exactly this assertion.
+            */
+            expect(turned(first, rollDegrees(ecd)), 'an idle barrel turned').toBeCloseTo(0, 4);
+        });
+
+        it('turns at `SPIN_SPEED` while the trigger is down', () => {
+            const ecd = newDataset();
+            const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+            // Settle first: the latch has to see the trigger go down.
+            view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET', true, true));
+            const before = rollDegrees(ecd);
+
+            // 100 ms of held trigger, which is 90 degrees at 0.9 deg/ms.
+            for (let i = 0; i < 10; i++) {
+                view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET', true, true));
+            }
+
+            expect(turned(before, rollDegrees(ecd)), 'not Q3\'s 0.9 degrees a millisecond')
+                .toBeCloseTo(90, 3);
+        });
+
+        it('coasts down when the trigger comes up rather than stopping dead', () => {
+            const ecd = newDataset();
+            const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+            for (let i = 0; i < 50; i++) {
+                view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET', true, true));
+            }
+
+            // Let go, then sample the first tenth of a second against the last.
+            view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
+            const released = rollDegrees(ecd);
+
+            for (let i = 0; i < 10; i++) view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
+            const justAfter = rollDegrees(ecd);
+
+            // A second later it must have stopped moving entirely.
+            for (let i = 0; i < 120; i++) view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
+            const settled = rollDegrees(ecd);
+
+            for (let i = 0; i < 30; i++) view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET'));
+
+            const early = turned(released, justAfter);
+
+            expect(early, 'the barrel stopped dead instead of coasting').toBeGreaterThan(5);
+            expect(early, 'the barrel did not slow down at all').toBeLessThan(90);
+            expect(turned(settled, rollDegrees(ecd)), 'it never came to rest').toBeCloseTo(0, 4);
+        });
+
+        it('keeps the latch on the player, so switching weapons does not reset it', () => {
+            const ecd = newDataset();
+            const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+            /*
+             `cent->pe` belongs to the entity holding the gun, not to the gun. A
+             latch kept per weapon would find the blade at rest every time you
+             came back to it, and Q3's does not.
+            */
+            for (let i = 0; i < 50; i++) {
+                view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET', true, true));
+            }
+            const spinning = rollDegrees(ecd);
+
+            // Away to a weapon with no barrel at all, and back, still firing.
+            view.update(pose([0, 0, 0]), 0.01, held('WP_SHOTGUN', true, true));
+            view.update(pose([0, 0, 0]), 0.01, held('WP_GAUNTLET', true, true));
+
+            // Two frames of 10 ms at 0.9 deg/ms is 18 degrees, not a reset to
+            // wherever a fresh latch would start.
+            expect(turned(spinning, rollDegrees(ecd)), 'the latch restarted').toBeCloseTo(18, 3);
+        });
     });
 
     it('takes the barrel off screen with the rest of the weapon', () => {

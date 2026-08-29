@@ -32,6 +32,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
@@ -39,12 +41,14 @@ import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
+import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
 
 import { ViewWeapon, type CameraPose, type ViewWeaponState } from '../src/client/ViewWeapon.ts';
 import { Effects } from '../src/client/Effects.ts';
 import { Arena } from '../src/client/Arena.ts';
 import { Shadows } from '../src/client/Shadows.ts';
 import {
+    hasFlashModel,
     MUZZLE_FLASH_SECONDS,
     muzzleFlashLight,
     type MuzzleFlashLight,
@@ -142,12 +146,22 @@ function stubLibrary() {
 }
 
 /** Looking straight down the camera's +Z, from `eye`. */
+/**
+ * A shooter's forward, for the events that now carry one.
+ *
+ * The muzzle flash is directional -- Q3 hangs an oriented `flashModel` on
+ * `tag_flash` and the particles that stand in for it are thrown down the barrel
+ * -- so the event carries `AngleVectors`' forward beside the muzzle. Q3's +x,
+ * which is straight ahead of an unturned player.
+ */
+const FORWARD: readonly [number, number, number] = [1, 0, 0];
+
 function pose(eye: readonly [number, number, number]): CameraPose {
     return { position: { x: eye[0], y: eye[1], z: eye[2] }, rotation: new Quaternion() };
 }
 
-function held(weapon: string, visible = true): ViewWeaponState {
-    return { weapon, speed: 0, bobCycle: 0, visible };
+function held(weapon: string, visible = true, firing = false): ViewWeaponState {
+    return { weapon, speed: 0, bobCycle: 0, visible, firing };
 }
 
 /** A view weapon holding `weapon`, already drawn for one frame. */
@@ -347,7 +361,7 @@ describe('Arena sends a flash to the gun only when the gun is the shooter', () =
 
         // The shot is reported 100 units out along Q3's +X, which is a long way
         // from the eye this view weapon is drawn at.
-        arena.muzzleFlash([100, 0, 0], 'WP_SHOTGUN', 0);
+        arena.muzzleFlash([100, 0, 0], FORWARD, 'WP_SHOTGUN', 0);
         view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
 
         const flash = onlyLight(ecd);
@@ -366,7 +380,7 @@ describe('Arena sends a flash to the gun only when the gun is the shooter', () =
         view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
 
         // 2000+ is a bot, per `roster.ts`.
-        arena.muzzleFlash([64, 0, 32], 'WP_SHOTGUN', 2001);
+        arena.muzzleFlash([64, 0, 32], FORWARD, 'WP_SHOTGUN', 2001);
 
         const flash = onlyLight(ecd);
         // Q3 (x, y, z) -> meep (x, z, -y), in metres.
@@ -384,7 +398,7 @@ describe('Arena sends a flash to the gun only when the gun is the shooter', () =
         arena.viewWeapon = view;
 
         view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
-        arena.muzzleFlash([64, 0, 0], 'WP_GAUNTLET', 0);
+        arena.muzzleFlash([64, 0, 0], FORWARD, 'WP_GAUNTLET', 0);
 
         const flash = onlyLight(ecd);
         expect(flash.x, 'the gauntlet has no flash tag, so the shot lights itself').toBeCloseTo(
@@ -397,7 +411,7 @@ describe('Arena sends a flash to the gun only when the gun is the shooter', () =
         const ecd = newDataset();
         const arena = newArena(ecd);
 
-        arena.muzzleFlash([64, 0, 0], 'WP_SHOTGUN', 0);
+        arena.muzzleFlash([64, 0, 0], FORWARD, 'WP_SHOTGUN', 0);
 
         expect(onlyLight(ecd).x).toBeCloseTo(64 * S, 6);
     });
@@ -473,6 +487,7 @@ describe('every weapon brings its own light', () => {
         const world = newDataset();
         new Effects(world as never, new Shadows(null, 'all')).muzzleFlash(
             [0, 0, 0],
+            FORWARD,
             'WP_PLASMAGUN'
         );
 
@@ -518,5 +533,275 @@ describe('every weapon brings its own light', () => {
         view.flash('WP_SHOTGUN');
         view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
         expect(onlyLight(ecd).light.castShadow.getValue(), 'the menu row took effect').toBe(false);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The visible half
+ * ------------------------------------------------------------------ */
+
+/*
+ * `weaponInfo->flashModel`, as particles.
+ *
+ * The light has been the whole of this port's muzzle flash since D-115, which
+ * lights the room and shows the shooter nothing -- Q3 also hangs a small
+ * additive model on `tag_flash` for the same twenty milliseconds. That is now a
+ * burst on the emitter path, and it has the same two-muzzle problem the light
+ * has: the player's own comes off the gun's `tag_flash` and everyone else's off
+ * `CalcMuzzlePoint`.
+ *
+ * What is worth asserting is the wiring rather than the artwork. A burst raised
+ * at the wrong point, in the wrong direction, or twice per shot is a defect; how
+ * many sparks it throws is a number somebody will tune.
+ */
+describe('a shot throws a burst out of the muzzle', () => {
+    /** Every burst raised, with what it was told. */
+    function recorder(): {
+        calls: { position: number[]; direction: number[]; weapon: string }[];
+        muzzleFlashParticles(
+            position: readonly number[],
+            direction: readonly number[],
+            weapon: string
+        ): void;
+    } {
+        const calls: { position: number[]; direction: number[]; weapon: string }[] = [];
+        return {
+            calls,
+            muzzleFlashParticles(position, direction, weapon): void {
+                calls.push({ position: [...position], direction: [...direction], weapon });
+            },
+        };
+    }
+
+    it('raises one burst per shot, and none for a frame with no shot in it', () => {
+        const { ecd, view } = drawing('WP_SHOTGUN');
+        const particles = recorder();
+        view.particles = particles;
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+        expect(particles.calls.length, 'a burst nobody asked for').toBe(0);
+
+        view.flash('WP_SHOTGUN');
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+        expect(particles.calls.length).toBe(1);
+
+        // The light is still up for the rest of its fifty milliseconds; the
+        // burst is not re-raised behind it.
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+        expect(particles.calls.length, 'the burst repeated while the light lived').toBe(1);
+        expect(view.flashLit, 'the light went out early').toBe(true);
+
+        // Track the dataset is real, so this is the same gun the light is on.
+        expect(litPoints(ecd).length).toBe(1);
+    });
+
+    it('puts the burst on `tag_flash`, exactly where the light is', () => {
+        const { ecd, view } = drawing('WP_SHOTGUN');
+        const particles = recorder();
+        view.particles = particles;
+
+        view.flash('WP_SHOTGUN');
+        view.update(pose([2, 3, 4]), 0.016, held('WP_SHOTGUN'));
+
+        const light = onlyLight(ecd);
+        const [x, y, z] = particles.calls[0]!.position;
+
+        /*
+         The same point, not merely a nearby one. Both come off the gun's own
+         `tag_flash` in the frame that drew it, and the whole reason the burst is
+         raised from `update` rather than from `flash` is that a shot arrives
+         from the simulation, where the only muzzle available is last frame's.
+        */
+        expect(x).toBeCloseTo(light.x, 9);
+        expect(y).toBeCloseTo(light.y, 9);
+        expect(z).toBeCloseTo(light.z, 9);
+    });
+
+    it('throws it down the barrel and not down the view', () => {
+        const { view } = drawing('WP_SHOTGUN');
+        const particles = recorder();
+        view.particles = particles;
+
+        // Face along the camera's own +Z, which is where an unturned view looks.
+        view.flash('WP_SHOTGUN');
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+
+        const d = particles.calls[0]!.direction;
+        expect(Math.hypot(d[0]!, d[1]!, d[2]!), 'not a unit direction').toBeCloseTo(1, 6);
+
+        /*
+         A converted model points +x down its own length and `MODEL_TO_VIEW`
+         turns that onto the camera's forward, so the burst must come out of the
+         *front* of the gun. The sway tilts it by a fraction of a degree; the
+         test is the sign, because the sign is what a wrong quaternion order
+         gets wrong -- and it would come out sideways or backwards, not slightly
+         off.
+        */
+        expect(d[2]!, 'the burst is not going where the gun points').toBeGreaterThan(0.99);
+    });
+
+    it('names the weapon in hand, so the burst is the colour the light is', () => {
+        const { view } = drawing('WP_SHOTGUN');
+        const particles = recorder();
+        view.particles = particles;
+
+        view.flash('WP_SHOTGUN');
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+
+        expect(particles.calls[0]!.weapon).toBe('WP_SHOTGUN');
+    });
+
+    it('drops a burst whose gun left the screen before it could be drawn', () => {
+        const { view } = drawing('WP_SHOTGUN');
+        const particles = recorder();
+        view.particles = particles;
+
+        // Shot and killed inside the same frame boundary.
+        view.flash('WP_SHOTGUN');
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN', false));
+        expect(particles.calls.length, 'a burst at a muzzle that is not there').toBe(0);
+
+        // And it does not turn up late, when the gun comes back.
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+        expect(particles.calls.length).toBe(0);
+    });
+
+    it('draws nothing at all when nothing has handed it an emitter', () => {
+        const { view } = drawing('WP_SHOTGUN');
+
+        // `particles` is null until `main.ts` sets it; a test that only wants
+        // the light half of this class must not have to.
+        view.flash('WP_SHOTGUN');
+        expect(() => view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'))).not.toThrow();
+        expect(view.flashLit, 'and the light still works').toBe(true);
+    });
+});
+
+/*
+ * The other muzzle: a shooter with no gun on screen.
+ *
+ * `Effects.muzzleFlash` raises both halves for them -- the light at
+ * `CalcMuzzlePoint` and the burst at the same point, along the shooter's own
+ * forward -- because a bot firing at you should be visible as more than a
+ * change in the room's lighting.
+ */
+describe('a shooter with no gun on screen still throws a burst', () => {
+    it('raises an emitter beside the light, at the shot origin', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        effects.muzzleFlash([64, 0, 32], [1, 0, 0], 'WP_MACHINEGUN');
+
+        const positions: { x: number; y: number; z: number }[] = [];
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (emitter: unknown, transform: Transform) => void
+        ) => void;
+
+        traverse([ParticleEmitter, Transform], (_emitter, transform) => {
+            positions.push({ x: transform.position.x, y: transform.position.y, z: transform.position.z });
+        });
+
+        expect(positions.length, 'no burst for a shot with no gun on screen').toBe(1);
+        // Q3 (x, y, z) -> meep (x, z, -y), in metres -- the light's own map.
+        expect(positions[0]!.x).toBeCloseTo(64 * S, 6);
+        expect(positions[0]!.y).toBeCloseTo(32 * S, 6);
+        expect(positions[0]!.z).toBeCloseTo(0, 6);
+    });
+
+    it('does not raise one for a shot the gun took', () => {
+        const ecd = newDataset();
+        const view = new ViewWeapon(ecd as never, stubLibrary() as never);
+        const arena = new Arena(ecd as never, {} as never);
+        arena.viewWeapon = view;
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_SHOTGUN'));
+
+        /*
+         Both halves go to the gun or neither does. `Arena` asks the view weapon
+         first and only falls through to the world on a refusal, so a shot the
+         gun accepted must leave no world emitter behind -- otherwise every shot
+         you fire draws two flashes, one of them half a metre in front of your
+         face.
+        */
+        arena.muzzleFlash([100, 0, 0], FORWARD, 'WP_SHOTGUN', 0);
+
+        let emitters = 0;
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (emitter: unknown) => void
+        ) => void;
+        traverse([ParticleEmitter], () => {
+            emitters += 1;
+        });
+
+        expect(emitters, 'the world drew a flash for a shot the gun took').toBe(0);
+    });
+});
+
+/*
+ * Which weapons have anything to show at the muzzle.
+ *
+ * `CG_AddPlayerWeapon` builds the flash entity and then bails on
+ * `if (!flash.hModel) return;`, which is above the dlight and above
+ * `CG_LightningBolt` -- so a weapon with no `_flash.md3` shows nothing at all.
+ * Three of the thirteen are in that case and the burst has to know which,
+ * because sparks out of a gauntlet is a thing somebody would report.
+ */
+describe('only the weapons Q3 has a flash model for throw a burst', () => {
+    /** What `hasFlashModel` claims, checked against the pk3s it came from. */
+    it('names exactly the weapons OpenArena ships no `_flash.md3` for', () => {
+        const weapons = (balance.items as { type: string; tag: string; models: string[] }[])
+            .filter((i) => i.type === 'IT_WEAPON')
+            .map((i) => ({ tag: i.tag, world: i.models[0]!.replace(/\\/g, '/') }));
+
+        expect(weapons.length, 'weapons in the balance table').toBe(13);
+
+        const claimed: string[] = [];
+        const onDisk: string[] = [];
+
+        for (const { tag, world } of weapons) {
+            const flash = join(
+                process.cwd(),
+                'assets',
+                'extracted',
+                `${world.slice(0, -'.md3'.length)}_flash.md3`
+            );
+
+            if (!hasFlashModel(tag)) claimed.push(tag);
+            if (!existsSync(flash)) onDisk.push(tag);
+        }
+
+        expect(claimed.sort(), 'the table and the pk3s disagree').toEqual(onDisk.sort());
+        expect(onDisk.sort()).toEqual(
+            ['WP_GAUNTLET', 'WP_GRAPPLING_HOOK', 'WP_PROX_LAUNCHER'].sort()
+        );
+    });
+
+    it('draws no burst for a weapon with nothing to draw', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        effects.muzzleFlash([64, 0, 0], FORWARD, 'WP_GAUNTLET');
+
+        let emitters = 0;
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (emitter: unknown) => void
+        ) => void;
+        traverse([ParticleEmitter], () => {
+            emitters += 1;
+        });
+
+        expect(emitters, 'the gauntlet threw sparks').toBe(0);
+
+        /*
+         The light is still there, and deliberately. Q3's `return` is above the
+         dlight too, so this is the port's divergence rather than the C's -- a
+         shot with no light at all reads as a shot that did not happen (D-115).
+         Pinned here so that gating the burst is not read as a licence to gate
+         the light without arguing it.
+        */
+        expect(litPoints(ecd).length, 'the gauntlet stopped lighting its own shot').toBe(1);
     });
 });

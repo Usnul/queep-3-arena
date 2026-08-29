@@ -365,6 +365,36 @@ export class PlayerController {
      */
     attacking = false;
 
+    /**
+     * `EF_FIRING`: the trigger is held on a weapon that can answer it.
+     *
+     * A different question from {@link attacking}, and from "a shot was fired".
+     * `g_active.c` sets this flag every frame from
+     *
+     * ```c
+     * !( ps->pm_flags & PMF_RESPAWNED ) && ps->pm_type != PM_INTERMISSION
+     *     && ( client->buttons & BUTTON_ATTACK ) && client->ps.ammo[ps->weapon]
+     * ```
+     *
+     * so it is up for the *whole* time the button is down and not for the
+     * instants a round leaves the barrel -- which is exactly the difference
+     * between a barrel that winds up and one that ticks round once per shot.
+     * The presentation needs it and nothing else does; `fireIfReady` still owns
+     * whether a shot actually happens.
+     *
+     * {@link attacking} already carries `active && !dead`, which is what the two
+     * `pm_` tests amount to here; `active` is repeated below so the getter is
+     * total rather than dependent on where `attacking` happens to be written.
+     * The ammo test is `!== 0` rather than `> 0` because Q3's is a plain C truth
+     * test and the gauntlet's ammo is **-1** -- which is how a weapon with no
+     * ammunition at all still spins its blade.
+     */
+    get firing(): boolean {
+        if (!this.attacking || !this.active) return false;
+
+        return (this.inventory.ammo[this.weapon] ?? 0) !== 0;
+    }
+
     /** Raised when the weapon should fire; the arena wires this to `WeaponSystem`. */
     onFire: ((eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>) => void) | null = null;
 

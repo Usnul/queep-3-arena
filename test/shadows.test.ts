@@ -308,7 +308,7 @@ describe("an effect's own lights", () => {
         const effects = new Effects(ecd, shadows);
 
         effects.explosion([0, 0, 0], 120);
-        effects.muzzleFlash([0, 0, 0], 'WP_MACHINEGUN');
+        effects.muzzleFlash([0, 0, 0], [1, 0, 0], 'WP_MACHINEGUN');
 
         const lights = lightsIn(ecd);
         expect(lights.length).toBe(2);
@@ -339,7 +339,7 @@ describe("an effect's own lights", () => {
         const ecd = newDataset();
         const effects = new Effects(ecd, shadows);
 
-        for (let i = 0; i < 200; i++) effects.muzzleFlash([i, 0, 0], 'WP_MACHINEGUN');
+        for (let i = 0; i < 200; i++) effects.muzzleFlash([i, 0, 0], [1, 0, 0], 'WP_MACHINEGUN');
 
         expect(shadows.followedCount).toBe(0);
     });

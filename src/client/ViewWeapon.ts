@@ -66,7 +66,13 @@ import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 
 import { bobFracSin, bobOddCycle } from './bob.ts';
-import { barrelAttachment, placeOnTag, type TagAttachment } from './barrel.ts';
+import {
+    barrelAttachment,
+    barrelSpinAngle,
+    newBarrelSpin,
+    placeOnTag,
+    type TagAttachment,
+} from './barrel.ts';
 import type { ModelLibrary } from './map/loadModels.ts';
 import { weaponItemByTag } from '../game/Items.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
@@ -95,6 +101,22 @@ interface EcsDataset {
 /** What `Arena` needs of this class, so it can hand a flash to the gun. */
 export interface MuzzleFlashSink {
     flash(weapon: string): boolean;
+}
+
+/**
+ * And what this class needs of `Effects`, to throw a flash out of the barrel.
+ *
+ * Narrow on purpose. `Effects` is the whole presentation bus and this file wants
+ * one of its methods; naming that method is what keeps the dependency from
+ * becoming "the view weapon can do anything the world can do", and is what lets
+ * a test pass in a counter.
+ */
+export interface MuzzleParticleSink {
+    muzzleFlashParticles(
+        positionMeep: readonly number[],
+        directionMeep: readonly number[],
+        weapon: string
+    ): void;
 }
 
 /**
@@ -130,6 +152,15 @@ export interface ViewWeaponState {
     readonly bobCycle: number;
     /** False hides it: no gun for a corpse, and none for the noclip camera. */
     readonly visible: boolean;
+    /**
+     * `EF_FIRING` -- the trigger is *held*, not a shot was fired.
+     *
+     * Only the barrel spin reads it, and it is the whole of what that needs:
+     * `CG_MachinegunSpinAngle` is a two-state latch on this flag. See
+     * `PlayerController.firing` for how the flag is derived, and `barrel.ts` for
+     * what is done with it.
+     */
+    readonly firing: boolean;
 }
 
 /*
@@ -419,6 +450,7 @@ interface DrawnWeapon {
 const scratchPosition = new Vector3();
 const scratchRotation = new Quaternion();
 const scratchFlash = new Vector3();
+const scratchForward = new Vector3();
 
 export class ViewWeapon implements MuzzleFlashSink {
     private readonly ecd: EcsDataset;
@@ -427,6 +459,15 @@ export class ViewWeapon implements MuzzleFlashSink {
     private readonly drawn = new Map<string, DrawnWeapon>();
 
     private timeSeconds = 0;
+
+    /**
+     * `cent->pe`'s barrel latch, and there is one of it.
+     *
+     * Per *player* rather than per weapon, because that is where the C keeps it:
+     * spin up the chaingun, switch to the gauntlet and switch back, and the
+     * barrel is where it would have been. See `barrel.ts`.
+     */
+    private readonly spin = newBarrelSpin();
 
     private current: DrawnWeapon | null = null;
     private currentName = '';
@@ -446,6 +487,32 @@ export class ViewWeapon implements MuzzleFlashSink {
     private readonly flashTransform = new Transform();
     private flashSeconds = 0;
     private lit = false;
+
+    /**
+     * Where the flash's particles go, or null for a session that draws none.
+     *
+     * A property rather than a constructor argument for the same reason
+     * `Arena.viewWeapon` is one: `Effects` belongs to the arena, the arena is
+     * built before the model library has finished becoming meshes, and this
+     * class is built after. `main.ts` ties the two ends together.
+     */
+    particles: MuzzleParticleSink | null = null;
+
+    /**
+     * A shot whose burst has not been emitted yet.
+     *
+     * The burst is raised from `update` and not from {@link flash}, because
+     * `flash` is called by the *simulation* and the only muzzle position
+     * available at that moment is the one the last frame drew. One frame is 16
+     * ms of a 50 ms effect and half a metre at running speed, and the whole
+     * reason this rides the gun is that half a metre is visible.
+     *
+     * A flag rather than a count: two shots between two rendered frames raise
+     * one burst. Q3 collapses them the same way -- `muzzleFlashTime` is a
+     * timestamp, not a queue -- and a chaingun at 30 ms between rounds is the
+     * only weapon that can do it.
+     */
+    private pendingBurst = false;
 
     /** `WP_*` ids whose model or hands tag the bundle does not have. */
     readonly unmodelled: string[] = [];
@@ -499,6 +566,18 @@ export class ViewWeapon implements MuzzleFlashSink {
 
             placeViewWeapon(camera, wanted.offset, sway, scratchPosition, scratchRotation);
 
+            /*
+             Once per frame, whether this weapon has a barrel or not.
+
+             The latch belongs to the player, so it has to keep running while
+             you are holding one of the eight guns that is a single model --
+             otherwise switching to the chaingun mid-burst would find its rotor
+             at rest, and Q3's would not be. Advancing it costs two
+             multiplications on a weapon that will not read the result.
+            */
+            const barrelRoll =
+                barrelSpinAngle(this.spin, this.timeSeconds * 1000, state.firing) * DEG_TO_RAD;
+
             for (let i = 0; i < wanted.transforms.length; i++) {
                 const transform = wanted.transforms[i]!;
                 const attachment = wanted.attachments[i]!;
@@ -525,7 +604,8 @@ export class ViewWeapon implements MuzzleFlashSink {
                     scratchRotation,
                     attachment,
                     transform.position,
-                    transform.rotation
+                    transform.rotation,
+                    barrelRoll
                 );
             }
         }
@@ -544,8 +624,21 @@ export class ViewWeapon implements MuzzleFlashSink {
             // `scratchPosition`/`scratchRotation` are this frame's: they are
             // written exactly when `wanted` is non-null, which is this branch.
             this.lightFlash(wanted.flash);
+
+            // And the particles, once per shot, at the muzzle the light just
+            // moved to -- see `pendingBurst` for why they are not raised from
+            // `flash` itself.
+            if (this.pendingBurst) {
+                this.pendingBurst = false;
+                this.burstFlash();
+            }
         } else {
             this.douseFlash();
+
+            // A shot whose gun left the screen before it could be drawn. Dropped
+            // rather than kept, because the muzzle it would be measured from no
+            // longer exists.
+            this.pendingBurst = false;
         }
 
         if (wanted !== this.current) {
@@ -575,6 +668,7 @@ export class ViewWeapon implements MuzzleFlashSink {
         if (this.current.flash === null) return false;
 
         this.flashSeconds = MUZZLE_FLASH_SECONDS;
+        this.pendingBurst = true;
 
         /*
          Re-pointed per shot rather than per weapon, because the weapon in hand
@@ -667,6 +761,30 @@ export class ViewWeapon implements MuzzleFlashSink {
         this.lit = true;
     }
 
+    /**
+     * Throw this shot's particles out of the barrel, in world space.
+     *
+     * Reads the muzzle from `flashTransform`, which {@link lightFlash} has just
+     * written this frame, and the direction from `scratchRotation`, which is the
+     * gun's own pose -- a converted model points +x down its length, which is
+     * the whole of what `MODEL_TO_VIEW` is about.
+     */
+    private burstFlash(): void {
+        if (this.particles === null) return;
+
+        scratchForward.set(1, 0, 0).applyQuaternion(scratchRotation);
+
+        this.particles.muzzleFlashParticles(
+            [
+                this.flashTransform.position.x,
+                this.flashTransform.position.y,
+                this.flashTransform.position.z,
+            ],
+            [scratchForward.x, scratchForward.y, scratchForward.z],
+            this.currentName
+        );
+    }
+
     /** Take it back out of the scene. Idempotent, and called far more often. */
     private douseFlash(): void {
         if (!this.lit) return;
@@ -687,8 +805,15 @@ export class ViewWeapon implements MuzzleFlashSink {
          `tag_flash`, and unlike the other two it is allowed to be missing. Every
          weapon OA ships carries one except the gauntlet -- which has no muzzle
          to flash -- and the prox launcher, whose model has no tags at all. Both
-         fall back to a light at the shot's own origin, which is roughly where Q3
-         puts the gauntlet's anyway.
+         fall back to a light at the shot's own origin.
+
+         That fallback is a *divergence*, and this used to say it was roughly
+         what Q3 does. It is not: `CG_AddPlayerWeapon` returns on
+         `if (!flash.hModel)` before it reaches the dlight, so Q3 gives these two
+         no muzzle light at all. The port lights them because a shot with no
+         light reads as a shot that did not happen (D-115), and the flash's
+         visible half is gated on the C's own test instead -- see
+         `hasFlashModel`.
         */
         const flash = world === undefined ? null : flashOffset(this.library, world);
 

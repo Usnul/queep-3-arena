@@ -154,8 +154,20 @@ export interface WeaponEvents {
      * fired: the local player has a weapon model on screen with a `tag_flash` on
      * it, and nobody else does. This layer has no opinion on that -- it reports
      * the shot and the shooter, and the presentation decides. See D-115.
+     *
+     * `directionQ3` is the shooter's forward, unit, and is here because a flash
+     * has a direction: Q3 hangs `weaponInfo->flashModel` on `tag_flash`, which
+     * is oriented, and the particles that stand in for it are thrown *down the
+     * barrel*. It is `AngleVectors`' own forward -- already computed one line
+     * above the call, so this costs the event a parameter and nothing else.
+     * Only the presentation reads it.
      */
-    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId, ownerId: number): void;
+    muzzleFlash(
+        originQ3: ArrayLike<number>,
+        directionQ3: ArrayLike<number>,
+        weapon: WeaponId,
+        ownerId: number
+    ): void;
     /**
      * A hitscan shot reached a surface.
      *
@@ -427,7 +439,7 @@ export class WeaponSystem {
         copy(t_muzzle, eyeQ3);
         vectorMA(t_muzzle, t_muzzle, 14, t_forward);
 
-        this.events.muzzleFlash(t_muzzle, weapon, ownerId);
+        this.events.muzzleFlash(t_muzzle, t_forward, weapon, ownerId);
 
         /*
          How many things leave the barrel, and how wide the cone is.

@@ -314,10 +314,22 @@ export class Arena implements WeaponEvents {
      * behind the barrel -- moving it would be a change to what the player hears
      * in exchange for nothing they can hear.
      */
-    muzzleFlash(originQ3: ArrayLike<number>, weapon: WeaponId, ownerId: number): void {
+    muzzleFlash(
+        originQ3: ArrayLike<number>,
+        directionQ3: ArrayLike<number>,
+        weapon: WeaponId,
+        ownerId: number
+    ): void {
         const onTheGun = ownerId === LOCAL_CLIENT && this.viewWeapon?.flash(weapon) === true;
 
-        if (!onTheGun) this.effects.muzzleFlash(originQ3, weapon);
+        /*
+         The particles follow the light, both times. A shot the gun took draws
+         them from `ViewWeapon` on the next frame, at `tag_flash` in world space
+         and pointing down the barrel; every other shot draws them here, at
+         `CalcMuzzlePoint` and along the shooter's own forward. One effect, two
+         muzzles, and the same reason as the light.
+        */
+        if (!onTheGun) this.effects.muzzleFlash(originQ3, directionQ3, weapon);
 
         this.audio?.play(`weapon/${weapon}`, originQ3);
     }

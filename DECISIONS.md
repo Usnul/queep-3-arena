@@ -6529,3 +6529,129 @@ gone and the argument for it is kept in the comment: the star is still zero-thic
 edges carrying three or four faces, Q3 still draws it single-sided and shows the same artefact, and
 if it ever falls below 0.9 the general assertion now catches it, which is what the exemption was for.
 
+### D-142: the barrel spins on a latch, and a zero-based clock is what makes the C's formula wrong
+
+D-141 put the barrel back on the five guns that have one. This turns it, which is the reason Q3
+models it separately in the first place.
+
+`CG_MachinegunSpinAngle` is twenty lines and none of them integrate. It records **when** the trigger
+last changed state and what the angle was at that moment, and derives the current angle from the
+elapsed time on every frame:
+
+```c
+delta = cg.time - cent->pe.barrelTime;
+if ( cent->pe.barrelSpinning ) {
+    angle = cent->pe.barrelAngle + delta * SPIN_SPEED;
+} else {
+    if ( delta > COAST_TIME ) delta = COAST_TIME;
+    speed = 0.5 * ( SPIN_SPEED + (float)( COAST_TIME - delta ) / COAST_TIME );
+    angle = cent->pe.barrelAngle + delta * speed;
+}
+```
+
+So the barrel's position is a pure function of the clock: a frame that takes 200 ms turns it exactly
+as far as twelve frames of 16 ms would, and the spin cannot drift with the frame rate. `SPIN_SPEED`
+is 0.9 **degrees per millisecond** -- two and a half turns a second -- and the port keeps that unit
+rather than converting it, because every other number in the function is scaled against it.
+
+The coast arm is worth reading twice. `speed` is the *average* rate over the whole interval since
+release rather than the instantaneous one, so the angle is quadratic in `delta` and the barrel eases
+to a stop. Its derivative is `0.95 - delta/1000`, which crosses zero at 950 ms and is very slightly
+negative for the last fiftieth of a second -- a quarter of a degree of backwards creep. That is the
+C's and it is left in.
+
+**What is ported and what is not.** `angles[ROLL]` multiplies on the *right* of the tag basis, because
+`CG_PositionRotatedEntityOnTag` composes `entity->axis * lerped.axis * parent->axis` and the roll is
+already sitting in the entity's own axis when it gets there: the barrel turns in its own frame, the
+tag places that frame on the gun, the gun goes where the gun goes. Composing it on the left instead
+swings the barrel *around* the gun, which is a mistake that draws perfectly. The floor pickup does
+**not** spin -- `CG_Item` builds the same barrel with `angles[ROLL] = 0` -- so the roll is an
+argument to `placeOnTag` rather than something it reads.
+
+**The port needed a flag it did not have, and it is not "a shot was fired".** `EF_FIRING` is set in
+`g_active.c` every frame the attack button is down on a weapon with ammunition, so it is up for the
+*whole* time the trigger is held. `ViewWeapon` was only ever told about shots -- `flash()` is called
+per round -- and a barrel driven off that would tick round once per shot instead of winding up.
+`PlayerController` already polled the button into `attacking`; `firing` is that plus Q3's ammo test,
+which is `!== 0` rather than `> 0` because the C's is a plain truth test and the gauntlet's ammo is
+**-1**. That is how a weapon with no ammunition at all still spins its blade.
+
+**The latch belongs to the player, not to the weapon.** `cent->pe` is the entity holding the gun, so
+Q3 keeps spinning it while you are holding one of the eight guns that has no barrel at all. Spin up
+the chaingun, switch to the gauntlet and switch back, and the rotor is where it would have been. One
+`BarrelSpin` on `ViewWeapon`, advanced every frame a weapon is drawn whether that weapon reads it or
+not.
+
+**And the one thing that had to diverge to match.** `centity_t` is memset on map load, so Q3 reaches
+this function with `barrelTime == 0` and `cg.time` at the server's -- a delta of minutes, which the
+coast arm clamps. A Q3 barrel nobody has fired therefore sits at a constant `0 + 1000 * 0.45 = 450`
+degrees from its first frame onwards. Starting a *zero-based* clock at `barrelTime = 0` reproduces
+the formula and not the behaviour: the delta is small and climbing, so the barrel winds itself
+through those 450 degrees over the first second of the map with nobody touching the trigger.
+Measured, before the fix: 15.1 degrees at 16 ms, 90 at 100 ms, 350 at 500 ms, 450 from one second on.
+
+`newBarrelSpin` therefore starts `time` a whole `COAST_TIME` in the past, which lands the first frame
+in the same clamped steady state Q3's first frame lands in. The constant 450-degree offset that
+remains is the C's, and it is invisible on all five barrels for the same reason the spin is cheap to
+draw: every one of them is a body of revolution about the axis it turns on.
+
+**Tested against the drawn transform, not against the state machine.** A spin the renderer never
+applies is not a spin, so `view-weapon.test.ts` recovers the roll from the two entities' poses --
+`(body * tag)^-1 * barrel` -- and asserts that it is a turn about the barrel's own length before
+reading its size. Nine mutations were run against the pair of features in this commit and all nine
+were caught; the four that matter here are the roll being dropped on the way to the renderer, the
+roll composed on the wrong side, `EF_FIRING` ignored, and the latch started at `t = 0`.
+
+### D-143: the muzzle flash is a light and a burst, and three weapons get neither
+
+D-115 gave the muzzle flash a dlight and stopped there. That lights the room and shows the shooter
+nothing: Q3 also hangs `weaponInfo->flashModel` -- a small additive model -- on `tag_flash` for the
+same twenty milliseconds, and none of it was ported.
+
+It is particles here rather than a sprite model, on the emitter path `Effects` already uses for
+sparks, smoke and fireballs. A second one-quad pipeline for one effect would be a pipeline to
+maintain, and the emitter path is what this renderer has. Two layers, in the proportion Q3's own
+flash models have: a bright core on a 30-45 ms life that opens fast and shuts faster, and five
+sparks thrown down the barrel that outlive it slightly.
+
+**Colour is not chosen.** It is `muzzleFlashLight`'s per-weapon `flashDlightColor`, the same table
+the light reads, so a plasma gun's flash and a plasma gun's light cannot end up different colours.
+That is the one-table rule D-115 set, applied to the half of the effect D-115 did not write.
+
+**Two muzzles, the same as the light.** `Arena` already picks between the gun on screen and the
+world; both halves now follow that choice together. A shot the gun took draws its burst from
+`ViewWeapon` at `tag_flash` in world space, pointing down the barrel; every other shot draws it in
+`Effects` at `CalcMuzzlePoint`, along the shooter's own forward. The direction is new on the event --
+`AngleVectors`' forward, already computed one line above the call -- because a flash is oriented and
+a burst that is not is a puff.
+
+**The burst is raised from the frame, not from the shot.** `flash()` is called by the *simulation*,
+where the only muzzle available is the one the last frame drew -- one frame is 16 ms of a 50 ms
+effect and half a metre at running speed, and half a metre is the whole reason this rides the gun
+rather than being left at the shot's origin. So a shot sets a flag and `update` spends it at the
+muzzle it has just placed the light on. A flag rather than a count: two shots between two rendered
+frames raise one burst, which is what Q3 does too -- `muzzleFlashTime` is a timestamp, not a queue --
+and the chaingun at 30 ms between rounds is the only weapon that can manage it.
+
+**Three weapons show nothing, and finding that out corrected a comment.** `CG_AddPlayerWeapon`
+builds the flash entity and then bails:
+
+```c
+flash.hModel = weapon->flashModel;
+if (!flash.hModel) {
+    return;
+}
+```
+
+That `return` is **above** the dlight and above `CG_LightningBolt`. OpenArena ships no `_flash.md3`
+for the gauntlet, the grapple or the prox launcher, so Q3 gives those three no flash, no muzzle light
+and no beam. `ViewWeapon` has said since D-115 that the fallback light for a weapon with no
+`tag_flash` is "roughly where Q3 puts the gauntlet's anyway"; it is not, because Q3 puts the
+gauntlet's nowhere. The comment is corrected.
+
+The *light* still fires for all thirteen, and that stays D-115's call rather than becoming this
+one's: a shot with no light at all reads as a shot that did not happen. What is gated on the C's own
+test is the visible half, because a burst of sparks out of a melee weapon is not a divergence anybody
+asked for. The list of three lives in `muzzleFlash.ts` beside the colours, and a test reads
+`assets/extracted` and fails if the list and the pk3s disagree -- a hand-written table with nothing
+checking it is a table that goes stale, which is the same failure D-066 had.

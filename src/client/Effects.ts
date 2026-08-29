@@ -45,7 +45,12 @@ import { make_gradient_stroke } from '@woosh/meep-engine/src/engine/graphics/ecs
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
-import { applyMuzzleFlash, MUZZLE_FLASH_SECONDS } from './muzzleFlash.ts';
+import {
+    applyMuzzleFlash,
+    hasFlashModel,
+    muzzleFlashLight,
+    MUZZLE_FLASH_SECONDS,
+} from './muzzleFlash.ts';
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -976,7 +981,11 @@ export class Effects {
      * The player's own flash rides the barrel instead -- see `ViewWeapon.flash`
      * and D-115 -- and `Arena` picks between the two.
      */
-    muzzleFlash(originQ3: ArrayLike<number>, weapon: string): void {
+    muzzleFlash(
+        originQ3: ArrayLike<number>,
+        directionQ3: ArrayLike<number>,
+        weapon: string
+    ): void {
         const [x, y, z] = toMeep(originQ3);
 
         const light = new Light();
@@ -988,6 +997,136 @@ export class Effects {
         const entity = new Entity();
         entity.add(transform).add(light).build(this.ecd);
         this.expire(entity.id, MUZZLE_FLASH_SECONDS);
+
+        this.muzzleFlashParticles([x, y, z], dirToMeep(directionQ3), weapon);
+    }
+
+    /**
+     * The flash itself: a puff of burning propellant out of the muzzle.
+     *
+     * `weaponInfo->flashModel` is what Q3 draws here -- a small additive
+     * polygon model hung on `tag_flash` for `MUZZLE_FLASH_TIME` -- and this port
+     * has drawn only the dlight since D-115, which lights the room and shows the
+     * shooter nothing. This is the visible half, as particles rather than as a
+     * sprite model, because the emitter path is what this renderer has and a
+     * second one-quad pipeline for one effect would be a pipeline to maintain.
+     *
+     * Two layers, in the proportion Q3's own flash models have: a bright core
+     * that is gone almost immediately, and a handful of sparks thrown down the
+     * barrel that outlive it slightly.
+     *
+     * **Colour is not chosen here.** It is `muzzleFlashLight`'s per-weapon
+     * `flashDlightColor`, the same table the light reads, so a plasma gun's
+     * flash and a plasma gun's light cannot end up different colours -- which is
+     * exactly the drift D-115's one-table rule exists to prevent.
+     *
+     * **Both lifetimes are under `MUZZLE_FLASH_SECONDS`**, and that is what
+     * makes a world-space burst correct here. The particles are ejecta: they
+     * leave the barrel and stay where they were left, which is right for smoke
+     * and sparks and is the opposite of the argument for the *light*, which is
+     * re-placed every frame because a light standing still is a light the player
+     * walks away from. Over 50 ms at Q3's run speed the muzzle moves 16 units;
+     * the sparks travel further than that in the same time.
+     *
+     * @param positionMeep the muzzle, in scene metres -- `tag_flash` in world
+     *     space for the gun on screen, and `CalcMuzzlePoint` for everyone else.
+     * @param directionMeep unit, down the barrel.
+     */
+    muzzleFlashParticles(
+        positionMeep: readonly number[],
+        directionMeep: readonly number[],
+        weapon: string
+    ): void {
+        /*
+         `if (!flash.hModel) return;` -- three of the thirteen weapons ship no
+         flash model and Q3 draws nothing at their muzzle. See `hasFlashModel`,
+         which is where that list lives and where the argument for the *light*
+         not being gated the same way is written down.
+        */
+        if (!hasFlashModel(weapon)) return;
+
+        const [r, g, b] = muzzleFlashLight(weapon).color;
+
+        const direction = {
+            x: directionMeep[0]!,
+            y: directionMeep[1]!,
+            z: directionMeep[2]!,
+        };
+
+        this.emitter(
+            positionMeep,
+            {
+                blendingMode: BLEND_ADDITIVE,
+                receiveLight: false,
+                depthSort: false,
+                layers: [
+                    /*
+                     The core. One particle, at the muzzle, that flares and dies
+                     -- Q3's flash model is a single billboard and this is the
+                     nearest honest thing. `emissionRate: 0` with an immediate
+                     count is the one-shot idiom the rest of this file uses.
+                    */
+                    {
+                        imageURL: '/assets/built/fx/flare.png',
+                        particleLife: { min: 0.03, max: 0.045 },
+                        particleSize: { min: 0.14, max: 0.2 },
+                        particleRotation: { min: 0, max: TAU },
+                        particleRotationSpeed: { min: 0, max: 0 },
+                        emissionShape: EMISSION_POINT,
+                        emissionFrom: FROM_VOLUME,
+                        emissionRate: 0,
+                        emissionImmediate: 1,
+                        particleSpeed: { min: 0.2, max: 0.6 },
+                        particleVelocityDirection: { direction, angle: 0.2 },
+                        parameterTracks: [
+                            // Opens fast and shuts faster, which is what a flash
+                            // reads as; a symmetric curve reads as a bubble.
+                            track(SCALE, 1, [0, 0.25, 1], [0.55, 1, 0.15]),
+                            track(
+                                COLOR,
+                                4,
+                                [0, 1],
+                                [1, 1, 1, 1, r, g, b, 0]
+                            ),
+                        ],
+                    },
+                    /*
+                     And the sparks. A narrow cone down the barrel rather than a
+                     puff, because a muzzle throws burning grains forwards --
+                     `bulletImpact` uses the same layer shape pointed along a
+                     surface normal instead.
+                    */
+                    {
+                        imageURL: '/assets/built/fx/tracer.png',
+                        particleLife: { min: 0.04, max: 0.09 },
+                        particleSize: { min: 0.015, max: 0.04 },
+                        particleRotation: { min: 0, max: TAU },
+                        particleRotationSpeed: { min: 0, max: 0 },
+                        emissionShape: EMISSION_POINT,
+                        emissionFrom: FROM_VOLUME,
+                        emissionRate: 0,
+                        emissionImmediate: 5,
+                        particleSpeed: { min: 2.5, max: 7 },
+                        particleVelocityDirection: { direction, angle: 0.35 },
+                        parameterTracks: [
+                            track(SCALE, 1, [0, 1], [1, 0.15]),
+                            track(
+                                COLOR,
+                                4,
+                                [0, 1],
+                                [1, 1, 1, 1, r, g, b, 0]
+                            ),
+                        ],
+                    },
+                ],
+            },
+            /*
+             Long enough for the longest particle plus a frame, and no longer.
+             The entity does nothing after that but wait to be swept, and a
+             machinegun makes ten a second.
+            */
+            0.12
+        );
     }
 
     /* ------------------------------------------------------------------ *

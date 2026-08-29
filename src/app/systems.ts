@@ -521,6 +521,9 @@ export class PresentationSystem extends System<never> {
             // No gun for a corpse. Q3 switches to a death camera instead, which
             // this port has no equivalent of.
             visible: !player.dead,
+            // `EF_FIRING`, for the barrel spin: the trigger is held, which is
+            // not the same question as a shot having been fired.
+            firing: player.firing,
         });
 
         // Retire the emitter entities whose one-shot finished last frame.
