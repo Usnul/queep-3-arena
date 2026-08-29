@@ -87,6 +87,7 @@ import { Menu } from '../client/ui/Menu.ts';
 import { Settings, type SettingsStorage } from '../client/ui/Settings.ts';
 import { graphicsPage } from '../client/ui/graphics.ts';
 import { gameplayPage } from '../client/ui/gameplay.ts';
+import { CameraLens } from '../client/lens.ts';
 import { audioPage, type MasterHost, type MixerHost } from '../client/ui/audio.ts';
 import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
 import { buildRoster } from './roster.ts';
@@ -100,6 +101,7 @@ import {
     PlayerSystem,
     PoseRecorderSystem,
     PresentationSystem,
+    ViewSystem,
     WorldEffectSystem,
     interpolatedPose,
 } from './systems.ts';
@@ -583,7 +585,22 @@ async function main(): Promise<void> {
     // Scene is metres (DECISIONS.md D-011). A Q3 arena is ~50 m across.
     camera.clip_near = 0.1;
     camera.clip_far = 600;
-    camera.fov.set(90);
+
+    /*
+     `cg_fov`, and it does not go on the camera directly any more.
+
+     `camera.fov.set(90)` is what this line used to be, and it was drawing the
+     game through the wrong lens: meep's `Camera.fov` is the **vertical** angle
+     and Q3's `cg_fov` is the horizontal one, so on a 16:9 window the port drew
+     121.7 degrees across where Q3 draws 90. Everything in the frame was 60% of
+     its proper size, which is most visible on the one object whose distance the
+     player knows -- the gun in their hands -- and that is how it was reported.
+     `CameraLens` holds the cvar in Q3's units and converts once a frame, because
+     the conversion needs the aspect ratio of the surface being drawn to and only
+     the renderer knows that. See `lens.ts`.
+    */
+    const lens = new CameraLens(camera);
+    lens.apply(graphics.camera.camera);
 
     const transform = new Transform();
     const cameraEntity = new Entity();
@@ -628,7 +645,7 @@ async function main(): Promise<void> {
      declares only the fields assigned through `this` -- cannot see. GAP-034.
     */
     const settings = new Settings([
-        gameplayPage({ camera, hud }),
+        gameplayPage({ camera: lens, hud }),
         graphicsPage({ graphics, frameRateCounter, shadows }),
         audioPage({
             master: sound as unknown as MasterHost | null,
@@ -713,7 +730,16 @@ async function main(): Promise<void> {
         const fly = new FlyCamera(transform, input, engine.devices);
         fly.attach();
 
-        await em.addSystem(new FlySystem({ fly, audio, hud, map: mapName }));
+        await em.addSystem(
+            new FlySystem({
+                fly,
+                audio,
+                hud,
+                map: mapName,
+                lens,
+                surface: graphics.camera.camera,
+            })
+        );
 
         expose(engine, { loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera });
     } else {
@@ -819,6 +845,12 @@ async function main(): Promise<void> {
 
         const arena = new Arena(ecd, clipMap, missiles, shadows, damageQueries);
         arena.audio = audio;
+
+        // `CG_DamageFeedback`. The arena is what sees a shot land on the local
+        // client; the view kick belongs to the camera. See D-138.
+        arena.onLocalDamage = (damage): void => {
+            player.damaged(damage);
+        };
 
         /*
          Items drop to the floor through the same backend movement uses, so a
@@ -1103,10 +1135,26 @@ async function main(): Promise<void> {
         await em.addSystem(
             new PlayerSystem({
                 player,
-                cameraTransform: transform,
                 arena,
                 audio,
                 spawns: botSpawns,
+            })
+        );
+
+        /*
+         The camera, and the one system here that asks the scheduler for a
+         position rather than taking the one component-less systems are given.
+         It declares `Transform` for write so that it sorts ahead of
+         `CameraSystem3`, which only reads it -- see `ViewSystem` for why the
+         camera has to be written at render rate at all, and
+         `test/interpolation.test.ts` for the case that holds the order.
+        */
+        await em.addSystem(
+            new ViewSystem({
+                player,
+                cameraTransform: transform,
+                lens,
+                surface: graphics.camera.camera,
             })
         );
         await em.addSystem(new CombatSystem(arena));

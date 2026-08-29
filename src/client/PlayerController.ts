@@ -32,6 +32,7 @@
  */
 
 import { ClipMap } from '../q3/cm/ClipMap.ts';
+import { angleVectors, vec3, type Vec3 } from '../q3/math.ts';
 import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
 import {
     FORWARDMOVE,
@@ -55,6 +56,14 @@ import {
     type PhysicsTraceBackend,
 } from '../game/PmoveHost.ts';
 import { takePointerLock } from './pointerLock.ts';
+import {
+    DEAD_VIEW_PITCH,
+    DEAD_VIEW_ROLL,
+    firstPersonView,
+    viewPose,
+    ViewKick,
+    type ViewPose,
+} from './viewOffset.ts';
 
 /*
  Re-exported because `main.ts` and `PhysicsWorld` both name it, and moving the
@@ -103,17 +112,37 @@ interface RotationLike {
  * inversion anywhere, and `camera_sync_from_transform` exists in meep to say so.
  */
 export function orientToQ3Angles(viewanglesQ3: ArrayLike<number>, out: RotationLike): void {
-    const pitchRad = (viewanglesQ3[0]! * Math.PI) / 180;
-    const yawRad = (viewanglesQ3[1]! * Math.PI) / 180;
+    /*
+     `AngleVectors` rather than the two lines this used to be, because the third
+     angle now carries something. `CG_OffsetFirstPersonView` rolls the view about
+     its own forward -- the strafe lean, the per-stride sway, the 40 degrees a
+     corpse lies at -- and a rotation built from a world-up basis throws every
+     one of them away silently: the forward is identical, so a test that asserts
+     where the gun points still passes on a camera that never tilts.
 
-    const cp = Math.cos(pitchRad);
+     Up rather than world-up is also *more* correct at roll zero rather than
+     merely equivalent: `_lookRotation` orthonormalises, and Q3's up at any pitch
+     lies in the plane of the forward and the world up, so the basis it lands on
+     is the one this always produced.
+    */
+    angleVectors(viewanglesQ3, t_forward, null, t_up);
 
-    const fx = Math.cos(yawRad) * cp;
-    const fy = Math.sin(yawRad) * cp;
-    const fz = -Math.sin(pitchRad);
-
-    out._lookRotation(fx, fz, -fy, 0, 1, 0);
+    out._lookRotation(
+        t_forward[0]!,
+        t_forward[2]!,
+        -t_forward[1]!,
+        t_up[0]!,
+        t_up[2]!,
+        -t_up[1]!
+    );
 }
+
+/** Scratch for {@link orientToQ3Angles}, which runs once per rendered frame. */
+const t_forward: Vec3 = vec3();
+const t_up: Vec3 = vec3();
+
+/** `cg.refdefViewAngles`: the aim plus the view offsets, built per frame. */
+const scratchAngles: Vec3 = vec3();
 
 /*
  Key names are meep's, from `input/devices/KeyCodes.js`, not DOM `event.code`.
@@ -153,6 +182,36 @@ const KEY_WALK = ['shift'];
  */
 const RUN_MOVESPEED = 127;
 const WALK_MOVESPEED = 64;
+
+/**
+ * `cg_local.h`'s `WEAPON_SELECT_TIME`: how long the weapon rack stays up.
+ *
+ * 1400 ms after the last change, which is Q3's own number and is long enough to
+ * cycle two notches without the readout blinking between them.
+ */
+const WEAPON_SELECT_TIME = 1400;
+
+/**
+ * How much of a one-step rise is a stair rather than a ramp, as a multiple of
+ * the horizontal distance covered in the same step.
+ *
+ * Q3 does not need this: `PM_StepSlideMove` raises `EV_STEP_*` only when the
+ * plain slide was blocked and the step-up rescued it, so walking up an incline
+ * raises no event at all. `KinematicMover` performs the same explicit step-up
+ * and reports nothing about it -- `MoveResult` is `hit`, `landed` and
+ * `landingSpeed` -- so the event has to be inferred from the pose, and the thing
+ * it has to be told apart from is a ramp.
+ *
+ * The steepest surface Q3 will walk up has a normal `z` of 0.7
+ * (`MIN_WALK_NORMAL`), which is a slope of `sqrt(1 - 0.49) / 0.7 = 1.02`: a
+ * player on the limit gains a hair more height than ground. Anything above that
+ * ratio was not walked up, it was stepped onto. The margin is for the ramp whose
+ * last step lands partly on the flat above it.
+ */
+const STAIR_RISE_RATIO = 1.2;
+
+/** `PM_StepSlideMove` ignores a rise below this, and so does the inference. */
+const STAIR_MIN_RISE = 2;
 
 /**
  * What the mouse wheel cycles: `weapon_t`, filtered to what this port can fire.
@@ -319,6 +378,47 @@ export class PlayerController {
     private cooldownMs = 0;
 
     /**
+     * `CG_OffsetFirstPersonView`'s timed offsets, and the events that set them.
+     *
+     * Owned here because every one of its inputs is: the landing speed comes
+     * back from `PlayerMovement.step`, the viewheight change is `PM_CheckDuck`'s,
+     * and the stair rise is this class comparing two steps of `ps.origin`.
+     */
+    private readonly kick = new ViewKick();
+
+    /**
+     * The last two fixed steps' eye poses, newest in `view[1]`.
+     *
+     * The camera is written at *render* rate from a blend of these -- see
+     * {@link writeCamera}. Two of them rather than one because the simulation
+     * advances 60 times a second and the display does not, and a camera that
+     * holds a pose for two frames and then jumps makes everything drawn through
+     * it judder: the fixed step is invisible in a rocket that glides and
+     * extremely visible in the wall behind it.
+     */
+    private readonly view: [ViewPose, ViewPose] = [viewPose(), viewPose()];
+
+    /** `ps.viewheight` at the end of the previous step, for the duck settle. */
+    private previousViewheight = 0;
+
+    /** `ps.origin[2]` at the end of the previous step, for the stair catch-up. */
+    private previousHeight = 0;
+
+    /** Horizontal distance covered by the previous step; see {@link recordView}. */
+    private previousStride = 0;
+
+    /**
+     * `cg.weaponSelectTime`: milliseconds left on the weapon-select readout.
+     *
+     * Q3 draws the rack for `WEAPON_SELECT_TIME` after any weapon change and
+     * hides it again, which is what the HUD reads this for.
+     */
+    private weaponSelectMs = 0;
+
+    /** False until the first step has filled both halves of {@link view}. */
+    private viewSeeded = false;
+
+    /**
      * @param traceBackend `'physics'` runs `pm->trace` on meep's physics
      *   (D-029, the shipping configuration); `'clipmap'` runs the ported
      *   `cm_trace`, which is bit-exact against the C and is what the physics
@@ -425,8 +525,66 @@ export class PlayerController {
         if (!this.inventory.weapons.has(weapon)) return false;
         if ((this.inventory.ammo[weapon] ?? 0) === 0) return false;
 
+        /*
+         `cg.weaponSelectTime = cg.time`, which `CG_DrawWeaponSelect` counts
+         `WEAPON_SELECT_TIME` from. Reset on every successful select, including
+         a re-select of the weapon already in hand -- Q3 does the same, and it is
+         what lets a player tap a key to *look* at the rack.
+        */
+        this.weaponSelectMs = WEAPON_SELECT_TIME;
+
         this.weapon = weapon;
         return true;
+    }
+
+    /**
+     * `CG_DamageFeedback`: throw the head back, because something hurt.
+     *
+     * **Told, not inferred, and the difference is a bug this shipped once.** The
+     * first version of this watched `inventory.health` fall between two steps
+     * and treated any drop as damage. `ClientTimerActions` bleeds one point a
+     * second off health above `maxHealth`, and a Q3 player spawns with 125 --
+     * so every spawn and every respawn was followed by twenty-five seconds of a
+     * once-a-second kick, at the full five degrees, because `CG_DamageFeedback`
+     * clamps *up* to five and one point of bleed is otherwise 0.3. It came back
+     * described as cyclic jerking of the aim that stopped on its own, which is
+     * exactly what it was.
+     *
+     * Q3 does not infer it either: `CG_DamageFeedback` is driven by
+     * `ps->damageEvent`, which `G_Damage` raises and `ClientTimerActions` does
+     * not. So this is called by the two things that actually damage the player
+     * -- `Arena.hit` for a shot and `WorldEffectSystem` for a `trigger_hurt` --
+     * and health that merely goes down is health that merely goes down.
+     *
+     * Presentation only, exactly as the C is: `CG_DamageFeedback` does not apply
+     * the damage, because the server already did. The health is written by the
+     * caller.
+     *
+     * @param damage points of *health* lost. A hit fully absorbed by armour
+     *   arrives as zero and is ignored, where Q3 would still kick for it --
+     *   `EV_DAMAGE` carries `damage_blood + damage_armor` and this port's hit
+     *   event carries only the first. A small loss, and recorded rather than
+     *   papered over.
+     */
+    damaged(damage: number): void {
+        this.kick.damage(damage, this.inventory.health);
+    }
+
+    /**
+     * Is the weapon rack up? `cg.weaponSelectTime` against `WEAPON_SELECT_TIME`.
+     *
+     * A timeout rather than a key-held state because that is what Q3 does and
+     * because the wheel has no "held": the rack appears on a change and leaves
+     * on its own, so a player who is switching can see what they are switching
+     * to and a player who is not gets their screen back.
+     */
+    get weaponSelectVisible(): boolean {
+        return this.weaponSelectMs > 0;
+    }
+
+    /** Owned weapons in `weapon_t` order -- what the rack draws. */
+    get ownedWeapons(): WeaponId[] {
+        return WEAPON_ORDER.filter((w) => this.inventory.weapons.has(w));
     }
 
     /** Mouse wheel, cycling through owned weapons in `weapon_t` order. */
@@ -508,10 +666,13 @@ export class PlayerController {
     }
 
     /**
-     * Advance the simulation by `deltaSeconds` and write the result to a meep
-     * transform.
+     * Advance the simulation by `deltaSeconds`, on the fixed step.
+     *
+     * The camera is **not** written here any more; {@link writeCamera} is a
+     * render-rate call and this only records the pose it blends between. See
+     * that method for why.
      */
-    update(deltaSeconds: number, cameraTransform: TransformLike): void {
+    update(deltaSeconds: number): void {
         /*
          Q3 works in integer milliseconds, so the fractional part of a step is
          carried rather than rounded away. `MoverSystem` has always done this;
@@ -594,9 +755,24 @@ export class PlayerController {
         }
 
         if (this.movement === null) {
+            const wasAirborne = this.ps.groundEntityNum === C.ENTITYNUM_NONE;
+            const fallSpeed = -this.ps.velocity[2]!;
+
             runPmove(this.pmove);
+
+            /*
+             `PM_CrashLand` raises `EV_FALL_*` on the ported path and this class
+             has no event queue to read it from, so the landing is detected the
+             same way it is on the other one -- airborne, then not. Q3's own
+             suppression of the event for a jump does not apply: a jump leaves
+             the ground rather than arriving on it.
+            */
+            if (wasAirborne && this.ps.groundEntityNum !== C.ENTITYNUM_NONE) {
+                this.kick.land(fallSpeed);
+            }
         } else {
-            this.movement.step(this.pmove, this.crouching, deltaSeconds);
+            const move = this.movement.step(this.pmove, this.crouching, deltaSeconds);
+            if (move.landed) this.kick.land(move.landingSpeed);
             /*
              ...and then the one thing `PM_Footsteps` did that the replacement
              does not. Q3's whole gait -- the footstep sounds, the view bob and
@@ -612,7 +788,102 @@ export class PlayerController {
 
         this.fireIfReady(msec);
 
-        this.writeCamera(cameraTransform);
+        this.weaponSelectMs = Math.max(0, this.weaponSelectMs - msec);
+
+        this.recordView(msec);
+    }
+
+    /**
+     * Snapshot the eye for this step, and raise the events the view kicks need.
+     *
+     * The two poses are what {@link writeCamera} blends between. Everything here
+     * is `CG_TransitionPlayerState`'s work -- the two-frame differences Q3's
+     * client takes between snapshots -- done against the previous fixed step
+     * rather than against a server snapshot, because there is no server.
+     */
+    private recordView(msec: number): void {
+        const ps = this.ps;
+
+        this.kick.advance(msec);
+
+        /*
+         Both of these are *differences* against the previous step, and on the
+         first step there is no previous step -- the fields are zero and the
+         differences are therefore the player's whole viewheight and their
+         absolute altitude. Left ungated that is a 26-unit duck settle and a
+         stair dip on the frame the game starts, which reads as the camera
+         falling into the floor at spawn.
+        */
+        if (this.viewSeeded) {
+            // `if ( ps->viewheight != ops->viewheight )`: the crouch settle.
+            this.kick.duck(ps.viewheight - this.previousViewheight);
+
+            /*
+             `EV_STEP_*`, inferred. See `STAIR_RISE_RATIO` for why the horizontal
+             distance is in the test and why it has to be the *previous* step's:
+             the rise being judged happened over the step that has just run, and
+             the stride that produced it is the one measured at the end of the
+             one before.
+
+             `STEPSIZE` is the upper bound and it is not belt-and-braces: Q3
+             cannot step higher than 18 units, so anything above that was not a
+             step at all. It is what keeps a respawn, a teleport and a jump pad
+             -- all of which move `ps.origin` from outside the solver -- from
+             reading as the tallest stair in the game.
+            */
+            const rise = ps.origin[2]! - this.previousHeight;
+
+            if (
+                this.onGround &&
+                rise >= STAIR_MIN_RISE &&
+                rise <= C.STEPSIZE &&
+                rise > this.previousStride * STAIR_RISE_RATIO
+            ) {
+                this.kick.step(rise);
+            }
+        }
+
+        this.previousViewheight = ps.viewheight;
+        this.previousHeight = ps.origin[2]!;
+        this.previousStride = Math.hypot(ps.velocity[0]!, ps.velocity[1]!) * (msec / 1000);
+
+        // Newest last, oldest first, and the pair is reused rather than rotated
+        // so nothing allocates on the fixed step.
+        const previous = this.view[0];
+        const latest = this.view[1];
+
+        previous.eyeQ3[0] = latest.eyeQ3[0]!;
+        previous.eyeQ3[1] = latest.eyeQ3[1]!;
+        previous.eyeQ3[2] = latest.eyeQ3[2]!;
+        previous.pitch = latest.pitch;
+        previous.roll = latest.roll;
+        previous.dead = latest.dead;
+
+        firstPersonView(
+            {
+                originQ3: ps.origin,
+                velocityQ3: ps.velocity,
+                viewanglesQ3: ps.viewangles,
+                viewheight: ps.viewheight,
+                bobCycle: ps.bobCycle,
+                ducked: this.ducked,
+                dead: this.dead,
+            },
+            this.kick,
+            latest
+        );
+
+        if (!this.viewSeeded) {
+            // The first step has no previous pose to blend from, and blending
+            // from the zero one puts the camera at the world origin for a frame.
+            this.viewSeeded = true;
+            previous.eyeQ3[0] = latest.eyeQ3[0]!;
+            previous.eyeQ3[1] = latest.eyeQ3[1]!;
+            previous.eyeQ3[2] = latest.eyeQ3[2]!;
+            previous.pitch = latest.pitch;
+            previous.roll = latest.roll;
+            previous.dead = latest.dead;
+        }
     }
 
     /**
@@ -695,20 +966,71 @@ export class PlayerController {
         this.cooldownMs = weaponStats(this.weapon).fireRateMs;
     }
 
-    /** Q3 (Z-up, units) -> meep (Y-up, metres). The only place this happens. */
-    private writeCamera(t: TransformLike): void {
+    /**
+     * Q3 (Z-up, units) -> meep (Y-up, metres). The only place this happens.
+     *
+     * **Called once per rendered frame, not once per fixed step**, and that is
+     * the fix for the judder that was reported as projectiles moving in jerks.
+     * A missile is a physics body carrying `Interpolated`, so meep blends it
+     * between fixed steps and it glides; the camera was written on the fixed
+     * step and did not, so the *world* advanced in 60 Hz stairs while one bright
+     * object in it moved smoothly. Measured on `am_thornish` at 165 Hz before
+     * the fix: the camera's x held for two or three frames and then jumped
+     * 0.167 m, every time, for ever.
+     *
+     * Two quantities and two treatments, which is the whole design:
+     *
+     * - **The eye position and the view kicks are blended** across the step, at
+     *   `alpha`. They are simulation outputs, they cannot be recomputed at
+     *   render rate without re-running the solver, and being one step behind is
+     *   worth 16 ms of position lag nobody can see.
+     * - **The view angles are read live**, from the same accumulator the mouse
+     *   writes. Blending those would put a frame of lag on *aim*, which in an
+     *   arena shooter is the one thing that must not lag. Q3 does not blend them
+     *   either -- it re-runs the whole prediction every rendered frame -- and
+     *   this is the half of that which is cheap.
+     *
+     * @param alpha `EntityManager.getFixedStepAlpha()`: how far the display is
+     *   into the step that has not run yet. 1 lands exactly on the latest pose.
+     */
+    writeCamera(t: TransformLike, alpha = 1): void {
+        const previous = this.view[0];
+        const latest = this.view[1];
+
+        const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+
+        const x = previous.eyeQ3[0]! + (latest.eyeQ3[0]! - previous.eyeQ3[0]!) * a;
+        const y = previous.eyeQ3[1]! + (latest.eyeQ3[1]! - previous.eyeQ3[1]!) * a;
+        const z = previous.eyeQ3[2]! + (latest.eyeQ3[2]! - previous.eyeQ3[2]!) * a;
+
+        t.position.set(x * WORLD_SCALE, z * WORLD_SCALE, -y * WORLD_SCALE);
+
+        /*
+         `ps.viewangles` is in degrees, Q3 convention: pitch positive is *down*.
+         The offsets `CG_OffsetFirstPersonView` produces are added to it rather
+         than baked into it, because the simulation has to keep aiming down the
+         angles the player asked for -- `WeaponSystem.fire` reads the same array
+         and a rocket that left along the view bob would be a rocket whose
+         accuracy is a function of which foot you were on.
+
+         A dead player's angles are the corpse's outright, not an offset: Q3
+         pins roll to 40 and pitch to -15 and stops adding anything at all.
+        */
         const ps = this.ps;
 
-        const eyeZ = ps.origin[2]! + ps.viewheight;
+        if (latest.dead) {
+            scratchAngles[0] = DEAD_VIEW_PITCH;
+            scratchAngles[1] = ps.viewangles[1]!;
+            scratchAngles[2] = DEAD_VIEW_ROLL;
+        } else {
+            scratchAngles[0] =
+                ps.viewangles[0]! + previous.pitch + (latest.pitch - previous.pitch) * a;
+            scratchAngles[1] = ps.viewangles[1]!;
+            scratchAngles[2] =
+                ps.viewangles[2]! + previous.roll + (latest.roll - previous.roll) * a;
+        }
 
-        t.position.set(
-            ps.origin[0]! * WORLD_SCALE,
-            eyeZ * WORLD_SCALE,
-            -ps.origin[1]! * WORLD_SCALE
-        );
-
-        // `ps.viewangles` is in degrees, Q3 convention: pitch positive is *down*.
-        orientToQ3Angles(ps.viewangles, t.rotation);
+        orientToQ3Angles(scratchAngles, t.rotation);
     }
 
     /**

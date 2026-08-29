@@ -94,6 +94,20 @@
     perspective-origin: 50% 100%;
 }
 
+// The right-hand corner is two rows now: the weapon rack over the ammo cluster.
+// A column rather than a second flex child of `.queep-hud` so the rack is
+// aligned to the ammo it belongs to at any width, and so it is *outside* the
+// wrap -- see `.queep-hud__rack`.
+.queep-hud__corner {
+    display: flex;
+    flex-direction: column;
+    gap: space(2);
+
+    &--right {
+        align-items: flex-end;
+    }
+}
+
 .queep-hud__cluster {
     display: flex;
     align-items: flex-end;
@@ -367,6 +381,89 @@
 }
 
 /* ------------------------------------------------------------------ *
+ * The weapon rack
+ * ------------------------------------------------------------------ */
+
+// `CG_DrawWeaponSelect`, over the ammo readout rather than across the middle of
+// the screen. Up for `WEAPON_SELECT_TIME` after a switch and gone again, so it
+// costs nothing at all for the 99% of a match nobody is switching.
+//
+// Deliberately *not* inside `.queep-hud__cluster`: the clusters are turned under
+// the shared perspective, and a readout you are actively reading should face you
+// square on. It shares the corner and not the curve.
+.queep-hud__rack {
+    display: flex;
+    align-items: center;
+    gap: space(2);
+
+    padding: space(2) space(3);
+    border-radius: $radius-medium;
+    background: rgba($color-void, 0.35);
+
+    // Hidden by default and shown by `is-visible`, which `Hud.updateRack`
+    // toggles. `visibility` as well as `opacity` so a rack that has faded out
+    // cannot be read by a screen reader or picked up by a hit test.
+    opacity: 0;
+    visibility: hidden;
+
+    @include motion-safe {
+        transition: opacity 180ms ease-out, visibility 0s linear 180ms;
+    }
+
+    &.is-visible {
+        opacity: 1;
+        visibility: visible;
+
+        @include motion-safe {
+            // In fast, out slow: the switch is an action and the fade is an
+            // afterthought.
+            transition: opacity 90ms ease-out, visibility 0s;
+        }
+    }
+}
+
+// One weapon. Q3's own 64x64 icon at two thirds of the held weapon's size --
+// smaller because there are up to thirteen of them and the one that matters is
+// still the one in the corner below.
+.queep-hud__rack-slot {
+    flex: 0 0 auto;
+    width: $weapon-icon-size * 0.66;
+    height: $weapon-icon-size * 0.66;
+
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+
+    border-radius: $radius-small;
+    // A box that is always there, so the held weapon's outline does not move
+    // the row when it changes.
+    border: $border-width solid transparent;
+
+    opacity: 0.55;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
+
+    // Owned, loaded, not in hand.
+    &:not(.is-empty) {
+        opacity: 0.8;
+    }
+
+    // `CG_WeaponSelectable` says no, so the rack says no: a weapon you cannot
+    // switch to must not look like one you can.
+    &.is-empty {
+        opacity: 0.28;
+        filter: grayscale(1) drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
+    }
+
+    // What you are holding. Q3 boxes it; so does this, in the ammo colour the
+    // corner below is already using.
+    &.is-held {
+        opacity: 1;
+        border-color: var(--queep-color-ammo, #{$color-ammo});
+        background-color: rgba($color-ammo, 0.14);
+    }
+}
+
+/* ------------------------------------------------------------------ *
  * Narrow
  * ------------------------------------------------------------------ */
 
@@ -387,5 +484,12 @@
     .queep-hud__weapon {
         width: $weapon-icon-size * 0.75;
         height: $weapon-icon-size * 0.75;
+    }
+
+    // Thirteen weapons at two thirds of 48px is 430px of rack, which is most of
+    // a narrow window. The slots give back the same proportion the icon does.
+    .queep-hud__rack-slot {
+        width: $weapon-icon-size * 0.5;
+        height: $weapon-icon-size * 0.5;
     }
 }

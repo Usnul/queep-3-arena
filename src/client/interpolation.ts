@@ -51,9 +51,23 @@ export function interpolatedPose(): Interpolated {
 /**
  * The same, on the *physics* timeline -- for a body the engine itself moves.
  *
- * `PhysicsSystem` is the producer for `INTERPOLATION_SOURCE_LOCAL`, so a missile
- * needs no application code at all to render smoothly: the component is the
- * whole opt-in.
+ * `PhysicsSystem` is the producer for `INTERPOLATION_SOURCE_LOCAL`, so a body
+ * the solver already owns needs no application code at all to render smoothly:
+ * the component is the whole opt-in.
+ *
+ * **A missile does not use this, and the reason is worth knowing before
+ * reaching for it.** The producer records the awake set at the end of
+ * `PhysicsSystem.fixedUpdate`, and game code runs after that -- correctly, since
+ * the sim reads the solved poses. So a body *created* by game code is not in
+ * that step's snapshot, the log holds one of the two ticks a blend needs, and
+ * the entity jumps a whole step and then holds still for another before it
+ * settles into gliding. Anything spawned mid-frame wants
+ * {@link interpolatedPose} instead, whose producer is registered last. See
+ * `Arena.projectileSpawned` and REPORT.md GAP-036.
+ *
+ * Nothing in the port uses this today. It is kept because it is the right
+ * answer for a body that exists before the step that moves it -- a physics prop
+ * placed at load, say -- and because the paragraph above is the finding.
  */
 export function interpolatedBody(): Interpolated {
     const component = new Interpolated();

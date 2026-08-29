@@ -5917,3 +5917,312 @@ not made the port more or less faithful; it has made it a different member of th
 **The alternative was to optimize in the browser and not in the harness**, which would have hidden
 the movement rather than removed it — the browser's trajectories would be the ones nobody measures.
 That is D-036 and D-061's failure, and it is worth more than the tidiness of an unchanged table.
+
+## Phase 10 — the camera, the lens, and the pads that did nothing
+
+Five things were reported together and four of them turned out to be one thing seen from
+different angles: the port had never ported `cg_view.c`. The camera sat where the feet were,
+looked down the raw mouse angles, through a lens set to the wrong axis, and only moved sixty
+times a second. The fifth — jump pads — was two unrelated defects that happened to land on the
+same map.
+
+### D-132: the camera is written once per rendered frame, and `ViewSystem` asks the scheduler to go first
+
+Reported as *"projectiles appear to move with jerks"*, and the projectile was the messenger
+rather than the message.
+
+A missile is a physics body carrying `Interpolated`, so `InterpolationSystem` blends it between
+fixed steps and it glides. The camera was written from `PlayerSystem.fixedUpdate` and did not.
+Measured on `am_thornish` at 165 Hz against a 60 Hz simulation, the rendered camera's `x` went:
+
+```
+0  0.16666  0  0.16667  0  0  0.16667  0  0  0.16667 ...
+```
+
+Two or three frames of nothing and then a jump, forever. Everything drawn through that camera —
+walls, floors, items, bots — stepped at 60 Hz. The one object on screen that did *not* was the
+rocket you were watching, and a smooth object against a stepping world is the most visible form
+of judder there is. Ask anybody to describe it and they describe the rocket.
+
+**The fix is not to stop interpolating the missile.** It is to interpolate the camera, which
+needs two things this port did not have.
+
+**One: the pose has to be recorded, not recomputed.** `PlayerController` keeps the last two
+fixed-step eye poses and `writeCamera(transform, alpha)` blends them. Position and the view
+kicks are blended; **the view angles are read live** from the same accumulator the mouse writes.
+That split is the whole design: a step of positional lag is 16 ms nobody can see, and a step of
+lag on *aim* is the one thing an arena shooter must not have. Q3 does not blend either — it
+re-runs the entire prediction every rendered frame — and this is the half of that which is
+affordable.
+
+**Two: it has to be written before `CameraSystem3` reads it**, or it is a frame late and the
+gun swings across the screen behind the view, which is D-081's first half. Registration order
+cannot settle that: `updateExecutionOrder` sorts by declared component access. So `ViewSystem`
+declares `Camera` and `Transform` for **write**, `CameraSystem3` declares both for read, and a
+writer outranks a reader.
+
+The declaration is honest — the system writes the camera entity's `Transform` and writes
+`Camera.fov` through `CameraLens` — and it also has to be *both*, which took a failing test to
+discover. `computeSystemComponentDependencyGraph` draws an edge from each component a system
+writes to each one it reads, and `scoreSystem` weighs a component by its **incoming** edges.
+Declare `Transform` write and `Camera` read and the only edge runs `Transform → Camera`: the
+component being written ends up with an in-degree of zero, `Write` scores twice zero, and the
+tie falls back to registration order. Writing both puts an edge in each direction and the
+weighting bites. In the shipping application it happened to work anyway, because `PhysicsSystem`
+writes `RigidBody` and reads `Transform` and so lends `Transform` an incoming edge — which is a
+correct arrangement resting on an unrelated system's declaration, and exactly the kind of thing
+that is silent when it stops being true. `test/interpolation.test.ts` builds the two-system rig
+where it does not.
+
+After the change, the same 165 Hz run gives nineteen consecutive frames of `-0.060606`.
+
+**Also fixed here: a missile's first two steps.** A body created by `CombatSystem` is created
+*after* `PhysicsSystem`'s record pass for that step, so the physics timeline had one snapshot
+where a blend needs two, `log.interpolate` fell back to the newer for every alpha, and the
+missile jumped a whole step's travel and then held still for another. Four frames of a rocket
+parked at the muzzle at 165 Hz, and a plasma stream doing it ten times a second. Missiles now
+carry `interpolatedPose()` rather than `interpolatedBody()`: `PoseRecorderSystem` is registered
+last among the simulation systems, so it snapshots the missile on the step it was born on.
+`PhysicsSystem.__interp_restore` does not filter by `sourceId`, so the solver still integrates
+from the authoritative pose rather than from a blend — asserted, because it is the property that
+would rot silently.
+
+### D-133: `G_PickTarget` is a name lookup, and half of `am_thornish`'s jump pads were aimed at a class the port did not know
+
+Reported as *"a few that are supposed to boost the character forward to clear certain gaps ...
+don't seem to work at all, player just walks on them with no effect"*, which is an unusually
+precise bug report: the pad was found, it was touched, and nothing happened.
+
+`am_thornish` has eight `trigger_push` entities. Four target a `target_position`; four target an
+`info_notnull`. The port accepted `misc_teleporter_dest` and `target_position` and nothing else,
+so `aimAtTarget` was handed `null` for half the pads on the map and `pushVelocity` stayed null.
+`MoverSystem` then found the trigger, fired it, and pushed the player by nothing.
+
+Q3 does not have a class list here. `AimAtTarget` calls `G_PickTarget( self->target )`, which
+walks every entity whose `targetname` matches and picks one at random, then reads `s.origin` off
+whatever it got. `info_notnull` exists *for this* — id's own description is "used as a positional
+target for in-game calculation" — and it is what a mapper reaches for when they do not want the
+marker to do anything else. So the test is now Q3's: a point entity with a `targetname` is a
+destination. Brush entities are excluded by the branch above it, because a brush entity's origin
+is the world's rather than its own.
+
+**The corner pads were a different bug with the same symptom, and one that is only half fixed.**
+Three of the four had the right velocity and never fired at all, because the player was standing
+0.12 units above the trigger's top face. Two errors stack under the feet: meep's solver holds a
+character a contact skin clear of what it rests on (Q3 does the same with `SURFACE_CLIP_EPSILON`,
+and it does not matter there because the pad's trigger brush sits *above* the pad rather than
+flush with it), and — the big one — where the floor is a curved surface it is a patch facet, and
+`patchHull.ts` gives a facet `FACET_THICKNESS` of volume on the side its *winding* calls the
+back. `am_thornish`'s pads are capped by a `SURF_NODRAW` collision patch wound to face
+downwards, so the four units of thickness went **up**, and the player stands on the back of the
+slab: four units above the surface the map draws, and above the trigger volume entirely.
+
+**That half is fixed in the facet rather than here, and this entry originally was not.** What was
+written first was a workaround: test a push trigger — and only a push trigger — against a player
+box extended four units downwards, on the reasoning that the collision layer can put the feet up to
+`FACET_THICKNESS` above the authored floor and a jump pad is the one trigger you touch by standing
+on it. It worked, and it was insurance against a number rather than a fix for the thing producing
+it, so the facet was filed as the real problem instead of guessed at.
+
+It was then fixed, in D-139, before either had been committed: the facet is centred on its surface,
+the player rests 0.625 units above the pad instead of four, and that is 3.4 units *inside* the
+trigger. The standoff became inert — measured across all 295 `trigger_push` entities in the map
+set, extending the box down by four units, by one, or not at all changes no answer anywhere — and
+an inert workaround that reaches four units past the player's feet is worth deleting rather than
+keeping. So the only thing this decision ships is `G_PickTarget`, and the corner pads are D-139's.
+
+The sequence is left in rather than tidied away because it is the useful part: the workaround was
+reachable in an afternoon and the fix was not obviously reachable at all, and the argument for
+filing it — Q3's patch facets are zero-thickness and collide from *both* faces, so a mapper has
+never had a reason to wind a collision patch one way rather than the other, and no rule over the
+winding can recover what was never encoded — turned out to be an argument for not using the winding
+at all rather than for leaving it alone.
+
+### D-134: `PM_GroundTrace`'s kickoff test, without which a jump pad delivers 84% of its velocity
+
+Reported as *"the boosters in the corners ... don't boost the player high enough to clear the
+edge of the geometry that the pads are clearly intended for"* — which is the fourth corner pad,
+the one whose trigger is authored a unit higher and which had been firing correctly all along.
+
+`AimAtTarget` solves for a 234-unit rise and hands the player 612 units/s straight up plus 63
+sideways. The player reached 161.
+
+Three lines of `PM_GroundTrace` were missing from `MeepMove` (D-071's path):
+
+```c
+	// check if getting thrown off the ground
+	if ( pm->ps->velocity[2] > 0 && DotProduct( pm->ps->velocity, trace.plane.normal ) > 10 ) {
+		pm->ps->groundEntityNum = ENTITYNUM_NONE;
+		pml.groundPlane = qfalse;
+		pml.walking = qfalse;
+		return;
+	}
+```
+
+`BG_TouchJumpPad` overwrites `ps->velocity` and returns; the player is still flagged as standing
+on the floor. Q3 clears that inside `PM_GroundTrace`, which runs before `PM_WalkMove` and
+therefore before `PM_Friction`; this path went straight into friction as a *walking* player.
+Q3's friction computes its speed from the horizontal pair and then scales **all three**
+components by the result, so 612 came out as 514 — and the apex goes as the square of that.
+0.84² is 0.70, and 234 × 0.70 is 164.
+
+**Nobody noticed for two phases because `PM_CheckJump` clears the ground itself**, so an ordinary
+jump was never affected. Everything that launches a player from *outside* pmove was: jump pads,
+and `G_Damage`'s knockback. The horizontal component is what makes it bite — a purely vertical
+launch takes `PM_Friction`'s `speed < 1` early-out and survives the missing test by accident,
+which is why the regression case in `meepmove.test.ts` carries `am_thornish`'s own 62.8 and not
+a tidy zero.
+
+After the fix the corner pads rise 229 units against the 234 they solve for, the remainder being
+the discrete step and the four units of D-133's slab.
+
+### D-135: `cg_fov` is horizontal, `Camera.fov` is vertical, and the weapon was not what was wrong
+
+Reported as *"the weapons appear too far on screen at the stated default 90 FOV compared to the
+source OpenArena implementation"*.
+
+`main.ts` did `camera.fov.set(90)`. meep documents that field as the vertical angle —
+`PerspectiveCamera`'s own comment is "Vertical FOV angle (Y)", and `projection_infinite_reverse_z`
+divides its cotangent by the aspect ratio — and Q3's `cg_fov` is the horizontal one:
+
+```c
+	x = cg.refdef.width / tan( fov_x / 360 * M_PI );
+	fov_y = atan2( cg.refdef.height, x );
+```
+
+So on a 16:9 window the port drew **121.7 degrees across where Q3 draws 90**, and everything in
+the frame at 60% of its proper size. That is not a subtle difference and it went unreported for
+nine phases, because a level you have never seen at the right size looks like a level. The one
+object whose distance the player *knows* is the gun in their hands: a rocket launcher held twelve
+units from your face is a large object at Q3's lens and a thumbnail in the corner at this one.
+The report was accurate and the weapon was innocent.
+
+`CameraLens` holds the cvar in Q3's units and converts once a frame, because the conversion needs
+the aspect ratio of the surface being drawn to and only the renderer knows that —
+`GraphicsEngine3.render` sets `camera.aspect = renderer.aspect_ratio` on the way past. A window
+that is resized therefore corrects itself with nothing told about it. `gameplayPage` is handed
+the lens instead of the `Camera`, so the menu still offers `cg_fov` and nothing else has to learn
+that meep measures the other axis.
+
+At 4:3 with `cg_fov 90` this is 73.74 degrees, which is Q3's own number.
+
+### D-136: `CG_OffsetFirstPersonView`, which is the difference between a camera and a head
+
+Reported as *"the moment has no camera bob and lean of the source material; camera dynamics are
+an important part of the game feel"*.
+
+The port implemented `CG_CalcViewValues` and none of the seventy lines after it. The eye sat at
+`origin + viewheight` looking down `ps.viewangles`, which is numerically correct movement seen
+through a camera on rails.
+
+Ported whole, from OpenArena's `cg_view.c`: the velocity lean (`cg_runpitch` 0.002, `cg_runroll`
+0.005), the per-stride bob (`cg_bobpitch` and `cg_bobroll` 0.002, tripled while crouched, the
+roll inverting on alternate feet; `cg_bobup` 0.005 clamped to six units), the crouch settle over
+`DUCK_TIME`, the landing dip on `EV_FALL_*`'s own thresholds, the stair catch-up over
+`STEP_TIME`, the damage kick, and the dead view's fixed 40 degrees of roll. `cg.kick_angles` and
+`cg.kick_origin` are **not** ported: they are added by the C and never written anywhere in
+OpenArena's cgame, so they are always zero.
+
+`cg_runroll` is the one a player feels. At Q3's 320 unit/s strafe it is 1.6 degrees of roll, held
+for as long as the key is held. It is the difference between turning and leaning into a turn.
+
+**The reference the report offered was meep's own `FirstPersonPlayerController`, and it was not
+used as one.** That controller is a much larger and better model of the same idea — lean springs
+with half-lives, yaw-rate banking, breath, exertion, stride phase, footfall impact springs — and
+it is a model of a *different game*. Q3's whole camera is five cvars and a sine, and the thing
+being asked for was Q3's feel. What was worth taking from the engine's controller was its
+*shape*: it keeps the pose out of the solver and composes offsets onto it, which is what the
+split between `ViewKick` (state that outlives its frame) and `firstPersonView` (a pure function
+of the player state) is.
+
+Two things had to change around it, and both were latent bugs rather than new work.
+
+**`orientToQ3Angles` threw the roll away.** It built its basis from the forward vector and world
+up, which is correct at roll zero and silently discards every degree of the lean, the sway and
+the corpse's 40. It uses `AngleVectors`' own up now. The tests that assert where the gun points
+passed either way, which is the shape of the problem: a rotation with the right forward and the
+wrong up is not observable through anything that only asks about forward.
+
+**Two of Q3's events do not exist on the shipping movement path.** `MeepMove` reports
+`landingSpeed`, so the fall events are reconstructed from `PM_CrashLand`'s own
+`delta = speed² × 0.0001` thresholds. `KinematicMover` reports nothing at all about a step-up —
+`MoveResult` is `hit`, `landed` and `landingSpeed` — so the stair event is inferred from the
+pose: a rise over two units in one step that is steeper than the steepest walkable slope could
+have produced was a step and not a ramp. Q3 does not need the heuristic, because
+`PM_StepSlideMove` only raises `EV_STEP_*` when the plain slide was blocked and the step-up
+rescued it. This is filed as a gap: a mover that performs an explicit step-up and does not say so
+forces every consumer of "did I just climb a stair" to guess.
+
+### D-137: the weapon rack goes over the ammo, and leaves on Q3's own timer
+
+Asked for: *"when switching weapons, show the available weapon list near to where the ammo is
+currently shown; the UI should disappear after a short while when not in use."*
+
+That is `CG_DrawWeaponSelect` and `WEAPON_SELECT_TIME`, so both are Q3's: the rack appears on any
+successful weapon change and comes down 1400 ms after the last one. Selecting the weapon already
+in hand counts, which is what lets a player tap a key to *look* at the rack — Q3 does the same.
+
+**Q3 draws it centred across the bottom and this does not**, because the reason Q3 centred it is
+gone. Q3's status bar is three numbers along the bottom edge and the middle was free; this port's
+readouts are two wrapped corners (D-118) and the middle already carries the pickup name and the
+match line. Putting the rack directly over the ammo answers "what am I holding, how much is left,
+and what else could I hold" in one place, which is the question a weapon switch is asking. It
+sits *outside* the corner's wrap: the clusters are turned under a shared perspective, and a
+readout you are actively reading should face you square on.
+
+Three states per entry, all three Q3's. The held weapon is boxed in the ammo colour. One you own
+with rounds left is available. One you own with an empty magazine is dimmed and desaturated,
+because `CG_WeaponSelectable` refuses to switch to it — showing it as reachable is a lie the
+player finds out about mid-fight. The gauntlet's ammo is Q3's `-1` and is never empty.
+
+The order is imposed rather than inherited: slots are created as weapons are picked up, so a
+shotgun found after a railgun would sit to the right of it. `PlayerController.ownedWeapons`
+returns `WEAPON_ORDER`'s own sequence and the rack orders its flex children by the index in it.
+
+### D-138: the damage kick is told, not inferred, because health falls for reasons that are not damage
+
+Reported the session it shipped, as *"cyclic jerking of the aim"* on entering a map and sometimes
+after respawning, that stopped by itself after a few seconds and once did so with no input at all.
+
+D-136 wired `CG_DamageFeedback` by watching `inventory.health` between two fixed steps and calling
+any drop damage. `ClientTimerActions` bleeds one point a second off health above `maxHealth`, and
+`ClientSpawn` hands out `MAX_HEALTH * 1.25` -- so the first twenty-five seconds of every life are a
+health value falling once a second for reasons that have nothing to do with being shot.
+
+**And each of those was a full five-degree throw**, which is the part that made it loud rather than
+subtle. `CG_DamageFeedback` clamps its kick to 5..10 degrees:
+
+```c
+	kick = damage * scale;
+	if (kick < 5) kick = 5;
+	if (kick > 10) kick = 10;
+```
+
+One point of bleed at 124 health is `1 * (40/124)` = 0.32, so the *floor* applies and the view got
+the same throw a 12-point hit would produce. Once a second, twenty-five times, every spawn.
+
+Measured before the fix, idling with no input from the moment the map loaded: a `-5` degree pitch
+offset reached every second and decayed to zero over 500 ms, on repeat. After: zero non-zero frames
+across ten seconds of the same idle, and across a respawn.
+
+**Q3 does not infer it either, and that is the actual lesson.** `CG_DamageFeedback` runs off
+`ps->damageEvent`, which `G_Damage` raises and `ClientTimerActions` does not -- the C distinguishes
+"was damaged" from "has less health than it did" because they are different things. So
+`PlayerController.damaged` is now called by the two things that actually damage the player:
+`Arena.hit` for a shot that lands on the local client, and `WorldEffectSystem` for a `trigger_hurt`.
+It is presentation only, exactly as the C is -- `CG_DamageFeedback` does not apply the damage
+because the server already did.
+
+The tempting middle option was to keep the diff and move it onto `roster.ts`'s `playerTarget`
+health accessor, which `WeaponSystem.damage` writes and the bleed does not. That would work today
+and it would work by accident: it depends on which of several writers happens to go through the
+accessor, and `Bots.ts`'s health pickups and `PickupSystem`'s bleed both write `inventory.health`
+directly. It is the same shape of fragility as GAP-037 -- correct because of somebody else's code
+-- and it was declined for the same reason.
+
+**One thing is lost and is worth stating.** Q3's `EV_DAMAGE` carries `damage_blood + damage_armor`,
+so a hit entirely absorbed by armour still kicks. This port's hit event carries the health damage
+only, and `WeaponSystem.damage` raises it with zero for a fully-absorbed hit -- so armour now eats
+the kick along with the damage. Recorded rather than papered over; the fix is a second field on the
+event.
+

@@ -139,10 +139,21 @@ class CameraTransform {
     /** The last `_lookRotation` arguments: forward then up, meep axes. */
     forward: [number, number, number] = [0, 0, 0];
 
+    /**
+     * ...and the up, which carries the roll.
+     *
+     * `_lookRotation` orthonormalises, so the up it is handed is not exactly the
+     * one a quaternion would hand back -- but the component that matters here is
+     * the sideways tilt, and that survives the orthonormalisation because it is
+     * perpendicular to the forward by construction.
+     */
+    up: [number, number, number] = [0, 1, 0];
+
     readonly rotation = {
         owner: this as CameraTransform,
-        _lookRotation(fx: number, fy: number, fz: number, _ux: number, _uy: number, _uz: number): unknown {
+        _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown {
             this.owner.forward = [fx, fy, fz];
+            this.owner.up = [ux, uy, uz];
             return null;
         },
     };
@@ -328,7 +339,10 @@ class Rig {
      *   does after they have moved.
      */
     frame(dt = TICK, movers: readonly Mover[] = []): void {
-        this.player.update(dt, this.camera);
+        this.player.update(dt);
+        // The camera is a render-rate write now; a test frame is one whole step,
+        // so it lands on the newest pose. See `PlayerController.writeCamera`.
+        this.player.writeCamera(this.camera);
 
         const step = this.footsteps.update(
             this.player.ps.bobCycle,
@@ -490,6 +504,174 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         expect(
             Math.hypot(rig.origin[0]! - before[0]!, rig.origin[1]! - before[1]!)
         ).toBeGreaterThan(20);
+    });
+
+    it('blends the eye between the last two steps at the sub-step alpha', () => {
+        /*
+         The camera is written once per *rendered* frame now, not once per fixed
+         step, and this is the property that makes that worth doing: at alpha
+         zero it sits on the previous step and at one on the latest, so a display
+         running faster than the simulation gets a pose per frame instead of the
+         same one two or three times. Before this, everything drawn through the
+         camera stepped at 60 Hz -- which is what was reported as projectiles
+         moving in jerks, the projectile being the one thing on screen that was
+         already smooth.
+        */
+        /*
+         Falling rather than walking, so the motion between the two steps is
+         gravity's and does not depend on which way `oa_dm1`'s first spawn faces
+         or on how far it is from the wall it faces. Lifted well clear of the
+         floor first: a player dropped Q3's own nine units is inside the mover's
+         stick band and is put straight down on the ground, and a camera that is
+         not moving proves nothing about a blend.
+        */
+        const rig = new Rig('oa_dm1', solver);
+        rig.player.ps.origin[2] = rig.player.ps.origin[2]! + 200;
+        rig.run(6);
+
+        rig.player.writeCamera(rig.camera, 0);
+        const start = [rig.camera.position.x, rig.camera.position.y, rig.camera.position.z];
+
+        rig.player.writeCamera(rig.camera, 1);
+        const end = [rig.camera.position.x, rig.camera.position.y, rig.camera.position.z];
+
+        // Read as a distance rather than as one axis: which way yaw zero points
+        // is the map's business, and `oa_dm1`'s first spawn faces a wall.
+        const travel = Math.hypot(end[0]! - start[0]!, end[1]! - start[1]!, end[2]! - start[2]!);
+        expect(travel, 'the player moved between the two steps')
+            .toBeGreaterThan(0.05 * WORLD_SCALE);
+
+        for (const alpha of [0.25, 0.5, 0.75]) {
+            rig.player.writeCamera(rig.camera, alpha);
+
+            expect(rig.camera.position.x).toBeCloseTo(start[0]! + (end[0]! - start[0]!) * alpha, 9);
+            expect(rig.camera.position.y).toBeCloseTo(start[1]! + (end[1]! - start[1]!) * alpha, 9);
+            expect(rig.camera.position.z).toBeCloseTo(start[2]! + (end[2]! - start[2]!) * alpha, 9);
+        }
+    });
+
+    it('does not kick the view on the very first step, or on a respawn', () => {
+        /*
+         Every view kick is a difference against the previous fixed step, and on
+         the first one there is no previous step: the fields start at zero, so
+         an ungated `duck` sees the whole viewheight arrive at once and an
+         ungated stair test sees the player's absolute altitude as a rise. Both
+         land on the frame the game starts, which is not a frame to put a
+         camera kick on.
+
+         A respawn is the same shape arriving later: `PlayerSystem.mortality`
+         writes `ps.origin` from outside the solver, so the height difference
+         across that step is the length of the map. `STEPSIZE` is what rules it
+         out -- Q3 cannot step higher than 18 units, so anything taller was not
+         a step.
+        */
+        const rig = new Rig('oa_dm1', solver);
+
+        rig.frame();
+        rig.player.writeCamera(rig.camera, 1);
+        const ps = rig.player.ps;
+
+        expect(rig.camera.position.y).toBeCloseTo(
+            (ps.origin[2]! + ps.viewheight) * WORLD_SCALE,
+            9
+        );
+
+        // ...and again across a teleport-sized jump in altitude.
+        rig.settle();
+        ps.origin[2] = ps.origin[2]! + 400;
+        rig.frame();
+        rig.player.writeCamera(rig.camera, 1);
+
+        expect(rig.camera.position.y).toBeCloseTo(
+            (rig.player.ps.origin[2]! + rig.player.ps.viewheight) * WORLD_SCALE,
+            6
+        );
+    });
+
+    it('does not kick the view for health that merely drains away', () => {
+        /*
+         `ClientTimerActions` bleeds one point a second off health above
+         `maxHealth`, and `ClientSpawn` hands you 125 -- so the first
+         twenty-five seconds of every life are a health value falling once a
+         second for reasons that have nothing to do with being shot.
+
+         The first version of the view kick watched `inventory.health` fall
+         between two steps and called any drop damage. `CG_DamageFeedback`
+         clamps its kick *up* to five degrees, and one point of bleed is
+         otherwise 0.3, so every one of those twenty-five ticks threw the view
+         a full five degrees. It was reported as cyclic jerking of the aim on
+         spawn that stopped by itself, which is precisely what it was.
+
+         Q3 does not infer it: `CG_DamageFeedback` runs off `ps->damageEvent`,
+         which `G_Damage` raises and `ClientTimerActions` does not.
+        */
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+
+        rig.player.inventory.health = 125;
+        rig.player.writeCamera(rig.camera, 1);
+        const level = [...rig.camera.forward];
+
+        // Every point of the bleed, as `PickupSystem` applies it.
+        for (let i = 0; i < 25; i++) {
+            rig.player.inventory.health -= 1;
+            rig.run(8); // ~64 ms, inside the kick's own 100 ms deflection
+            rig.player.writeCamera(rig.camera, 1);
+
+            expect(rig.camera.forward[1], `bleed ${i + 1} moved the view`)
+                .toBeCloseTo(level[1]!, 9);
+        }
+    });
+
+    it('does kick the view when something actually damages the player', () => {
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+
+        rig.player.writeCamera(rig.camera, 1);
+        const level = [...rig.camera.forward];
+
+        // What `Arena.hit` and `WorldEffectSystem` call. `CG_DamageFeedback`
+        // throws the head back, so the view pitches up.
+        rig.player.damaged(40);
+        rig.run(12); // ~96 ms: the peak of the deflection
+        rig.player.writeCamera(rig.camera, 1);
+
+        expect(rig.camera.forward[1]! - level[1]!).toBeGreaterThan(0.05);
+
+        // ...and it comes back on its own.
+        rig.run(80);
+        rig.player.writeCamera(rig.camera, 1);
+        expect(rig.camera.forward[1]).toBeCloseTo(level[1]!, 6);
+    });
+
+    it('leans into a strafe and stands level again', () => {
+        /*
+         `cg_runroll`, which is the half of `CG_OffsetFirstPersonView` a player
+         feels most. Read off the camera's up vector rather than off the pose,
+         because the rotation is where it can be lost: `orientToQ3Angles` used to
+         build its basis from world-up and threw the roll away silently.
+        */
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+
+        rig.player.writeCamera(rig.camera, 1);
+        const level = rig.camera.up[0];
+
+        rig.devices.hold('d');
+        rig.run(60);
+        rig.player.writeCamera(rig.camera, 1);
+        const right = [...rig.camera.up];
+
+        rig.devices.release();
+        rig.devices.hold('a');
+        rig.run(60);
+        rig.player.writeCamera(rig.camera, 1);
+        const left = [...rig.camera.up];
+
+        // Level to start with, and the two strafes tilt the head opposite ways.
+        expect(level).toBeCloseTo(0, 6);
+        expect(Math.sign(right[2]!)).toBe(-Math.sign(left[2]!));
+        expect(Math.abs(right[2]!)).toBeGreaterThan(0.005);
     });
 
     it('lowers the eye when crouching and raises it again', () => {
@@ -1260,5 +1442,90 @@ describe('the two paths agree on the bookkeeping [oa_dm1]', () => {
         }
 
         expect(meep.shots.length).toBe(q3.shots.length);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The weapon rack, which is `CG_DrawWeaponSelect`'s timer
+ * ------------------------------------------------------------------ */
+
+describe('PlayerController -> the weapon rack', () => {
+    /** Three owned weapons, one of them out of ammunition. */
+    const rigWithRack = (): Rig => {
+        const rig = new Rig('oa_dm1', 'meep').settle();
+        rig.activate();
+
+        rig.player.inventory.weapons.add('WP_SHOTGUN');
+        rig.player.inventory.ammo.WP_SHOTGUN = 10;
+        rig.player.inventory.weapons.add('WP_RAILGUN');
+        rig.player.inventory.ammo.WP_RAILGUN = 0;
+
+        return rig;
+    };
+
+    it('lists what you own in weapon_t order, whatever order you picked it up in', () => {
+        const rig = rigWithRack();
+
+        /*
+         `WEAPON_ORDER`'s own sequence, not the pickup order: the rack is a rack
+         and the gauntlet is always on the left. The railgun was added after the
+         shotgun above and sits after it here because the enum says so.
+        */
+        expect(rig.player.ownedWeapons).toEqual([
+            'WP_GAUNTLET',
+            'WP_MACHINEGUN',
+            'WP_SHOTGUN',
+            'WP_RAILGUN',
+        ]);
+    });
+
+    it('goes up on a switch and comes down on its own', () => {
+        const rig = rigWithRack();
+
+        // `settle` ran 250 frames, which is well past `WEAPON_SELECT_TIME`.
+        expect(rig.player.weaponSelectVisible, 'idle').toBe(false);
+
+        expect(rig.player.selectWeapon('WP_SHOTGUN')).toBe(true);
+        expect(rig.player.weaponSelectVisible, 'just switched').toBe(true);
+
+        // Q3's `WEAPON_SELECT_TIME` is 1400 ms. At 8 ms a frame, 150 frames is
+        // 1200 -- still up -- and 200 is 1600, which is not.
+        rig.run(150);
+        expect(rig.player.weaponSelectVisible, 'after 1200 ms').toBe(true);
+
+        rig.run(50);
+        expect(rig.player.weaponSelectVisible, 'after 1600 ms').toBe(false);
+    });
+
+    it('is put back up by the wheel, which is the other way to switch', () => {
+        const rig = rigWithRack();
+        rig.run(200);
+        expect(rig.player.weaponSelectVisible).toBe(false);
+
+        rig.wheel(1);
+        expect(rig.player.weaponSelectVisible).toBe(true);
+    });
+
+    it('restarts the timer on every switch rather than running from the first', () => {
+        const rig = rigWithRack();
+
+        rig.player.selectWeapon('WP_SHOTGUN');
+        rig.run(150);
+        rig.player.selectWeapon('WP_MACHINEGUN');
+
+        // 1200 ms into the first switch and 0 into the second: a timer that ran
+        // from the first would have 200 ms left, and this has the full 1400.
+        rig.run(150);
+        expect(rig.player.weaponSelectVisible).toBe(true);
+    });
+
+    it('stays down for a switch Q3 refuses -- an empty weapon is not selectable', () => {
+        const rig = rigWithRack();
+        rig.run(200);
+
+        // `CG_WeaponSelectable`: owned, but no rounds.
+        expect(rig.player.selectWeapon('WP_RAILGUN')).toBe(false);
+        expect(rig.player.weapon).toBe('WP_MACHINEGUN');
+        expect(rig.player.weaponSelectVisible).toBe(false);
     });
 });

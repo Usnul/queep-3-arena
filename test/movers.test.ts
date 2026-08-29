@@ -343,3 +343,65 @@ describe('oa_dm7, as converted', () => {
         expect(system.triggers.some((t) => t.kind === 'plat' && t.mover === plat)).toBe(true);
     });
 });
+
+/*
+ * `am_thornish`, whose jump pads were half the bug report.
+ *
+ * Eight `trigger_push` entities: four in the corners aimed at `target_position`
+ * markers, and four in the middle aimed at `info_notnull`s. The second set did
+ * nothing at all, and the reason is a class list where Q3 has a name lookup.
+ */
+describe('am_thornish, whose jump pads were the bug report', () => {
+    function thornish(): MoverSystem {
+        const built = join(process.cwd(), 'assets', 'built', 'am_thornish');
+        const scene = JSON.parse(readFileSync(join(built, 'scene.json'), 'utf8')) as {
+            entities: MoverEntity[];
+            submodels: { minsQ3: number[]; maxsQ3: number[] }[];
+        };
+
+        const system = new MoverSystem(silent());
+        system.spawn(scene.entities, scene.submodels);
+        return system;
+    }
+
+    it('solves all eight pads, including the four aimed at an info_notnull', () => {
+        const pads = thornish().triggers.filter((t) => t.kind === 'push');
+
+        expect(pads).toHaveLength(8);
+
+        /*
+         Four of these target `info_notnull`, which `G_PickTarget` finds because
+         it searches by `targetname` and does not care what class the entity is.
+         The port searched a two-class list instead, so `aimAtTarget` was handed
+         null and `pushVelocity` stayed null: the player walked onto the pad and
+         nothing happened, which is exactly how it was reported.
+        */
+        for (const pad of pads) {
+            expect(pad.pushVelocity, `${pad.target} has no solution`).not.toBeNull();
+        }
+
+        // ...and four of them are the ones that were dead.
+        const viaNotnull = pads.filter((p) => (p.target ?? '').startsWith('info_notnull'));
+        expect(viaNotnull).toHaveLength(4);
+    });
+
+    it('aims each one where AimAtTarget aims it', () => {
+        const system = thornish();
+        const gravity = 800;
+
+        for (const pad of system.triggers.filter((t) => t.kind === 'push')) {
+            const velocity = pad.pushVelocity!;
+            const destination = system.destinations.find((d) => d.targetname === pad.target)!;
+
+            // Integrate the launch forward under Q3's gravity and check it
+            // arrives -- the property `AimAtTarget` exists to guarantee.
+            const time = velocity[2]! / gravity;
+
+            expect(pad.centre[0] + velocity[0]! * time).toBeCloseTo(destination.origin[0], 2);
+            expect(pad.centre[1] + velocity[1]! * time).toBeCloseTo(destination.origin[1], 2);
+            expect(
+                pad.centre[2] + velocity[2]! * time - 0.5 * gravity * time * time
+            ).toBeCloseTo(destination.origin[2], 2);
+        }
+    });
+});

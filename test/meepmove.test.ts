@@ -546,3 +546,118 @@ describe('the bridge maintains what PmoveSingle maintained [oa_dm1]', () => {
         expect(ctx.hosted.ps.viewheight).toBe(C.CROUCH_VIEWHEIGHT);
     });
 });
+
+/**
+ * `PM_GroundTrace`'s kickoff test, which is what a jump pad depends on.
+ *
+ * The rule is three lines of the C and was missing from this path since D-071:
+ * something outside pmove writes an upward `ps->velocity` -- a jump pad, a
+ * knockback -- and the player is still flagged as standing on the floor, so the
+ * next step runs `PM_Friction` as a *walking* player. Q3's friction scales all
+ * three components by one factor, so the launch came out at 84% and the apex,
+ * which goes as the square, at 70%.
+ *
+ * `PM_CheckJump` clears the ground itself, which is why an ordinary jump was
+ * never affected and nothing noticed for two phases.
+ */
+describe('a player thrown off the ground keeps what threw them [oa_dm1]', () => {
+    const { physics, spawns } = world('oa_dm1');
+    const move = new MeepMove(physics);
+
+    /** A player settled on the floor at a spawn point. */
+    function settled(index = 0): MoveState {
+        const spawn = spawns[index]!;
+        const state = createMoveState([spawn[0]!, spawn[1]!, spawn[2]! + 9]);
+        run(move, state, 200, () => command());
+        return state;
+    }
+
+    it('loses nothing at all to friction on the step after a jump pad fires', () => {
+        const state = settled();
+        expect(state.grounded).toBe(true);
+
+        /*
+         `BG_TouchJumpPad` overwrites the velocity outright. The horizontal
+         component is what makes this bite: with `speed` under `pm_stopspeed` the
+         drop is the full `pm_stopspeed * pm_friction * dt`, and the same scale
+         is applied to `velocity[2]`.
+        */
+        state.velocity[0] = 0;
+        state.velocity[1] = -62.8;
+        state.velocity[2] = 611.9;
+
+        move.step(state, command(), TICK);
+
+        // Gravity is the only thing allowed to have touched it.
+        expect(state.velocity[2]!).toBeCloseTo(611.9 - move.gravity * TICK, 3);
+        expect(state.velocity[1]!).toBeCloseTo(-62.8, 3);
+        expect(state.grounded).toBe(false);
+    });
+
+    it('reaches the height the pad solved for, which is what "not high enough" meant', () => {
+        // Spawn 2, which is the only one on this map with room overhead:
+        // `oa_dm1` is a small arena and the others have 63 to 153 units of
+        // headroom, which a jump pad's arc does not fit under.
+        const state = settled(2);
+
+        // `AimAtTarget` for a 150-unit rise: `time = sqrt(150 / 400)`, and the
+        // vertical component is `time * gravity`.
+        const rise = 150;
+        const launch = Math.sqrt(rise / (0.5 * move.gravity)) * move.gravity;
+
+        const from = state.origin[2]!;
+        /*
+         With a horizontal component, which is not decoration: `PM_Friction`
+         computes its speed from the horizontal pair while walking, so a *purely*
+         vertical launch takes the `speed < 1` early-out and survives the missing
+         kickoff test by accident. Every jump pad in the game has one -- Q3 solves
+         for the ground distance to the target as well as the height -- and this
+         is `am_thornish`'s corner pads' own 62.8.
+        */
+        state.velocity[0] = 0;
+        state.velocity[1] = -62.8;
+        state.velocity[2] = launch;
+
+        let apex = from;
+        for (let f = 0; f < 250; f++) {
+            move.step(state, command(), TICK);
+            if (state.origin[2]! > apex) apex = state.origin[2]!;
+        }
+
+        /*
+         Within a couple of units of the solve, which is the discrete step and
+         nothing else. Before the kickoff test the same launch reached 70% of it
+         -- friction takes a fixed fraction of the velocity and the apex goes as
+         its square -- so a pad aimed at a ledge landed the player under it.
+        */
+        expect(apex - from).toBeGreaterThan(rise - 4);
+        expect(apex - from).toBeLessThan(rise + 4);
+    });
+
+    it('still applies friction to a player who is merely standing there', () => {
+        // The rule is `velocity[2] > 0 && dot(velocity, normal) > 10`, so it must
+        // not fire for a walking player -- otherwise nothing ever slows down.
+        const state = settled();
+
+        state.velocity[0] = 300;
+        state.velocity[1] = 0;
+        state.velocity[2] = 0;
+
+        move.step(state, command(), TICK);
+
+        expect(state.grounded).toBe(true);
+        expect(Math.hypot(state.velocity[0]!, state.velocity[1]!)).toBeLessThan(300);
+    });
+
+    it('ignores a nudge below the C-s own ten-unit threshold', () => {
+        const state = settled();
+
+        state.velocity[0] = 0;
+        state.velocity[1] = 0;
+        state.velocity[2] = 5;
+
+        move.step(state, command(), TICK);
+
+        expect(state.grounded).toBe(true);
+    });
+});

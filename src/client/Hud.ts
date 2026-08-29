@@ -27,6 +27,22 @@
  * the phase where the question was whether strafe jumping worked. It is not part
  * of the game and it is not on the screen any more.
  *
+ * **The weapon rack sits over the ammo, and Q3's does not.** `CG_DrawWeaponSelect`
+ * draws the owned weapons as a centred row across the bottom with the selected
+ * one boxed, and centred is where Q3 put it because Q3's status bar is three
+ * numbers along the very bottom edge and the middle was free. Here the middle
+ * already carries the pickup name and the match line, and the ammo is in the
+ * right-hand corner -- so the rack goes directly above the ammunition it is a
+ * rack of, and one place on the screen answers "what am I holding, how much is
+ * left, and what else could I hold". That is the question a weapon switch is
+ * asking. It sits *outside* the corner's turn: the clusters lean away from the
+ * player under the shared perspective, and a readout you are actively reading
+ * should face you square on.
+ *
+ * The rack's timeout is Q3's `WEAPON_SELECT_TIME` and lives on
+ * `PlayerController`, because the thing that knows a switch happened is the
+ * thing that did it; this class reads a flag. See D-137.
+ *
  * The crosshair *is* Q3's, artwork and rules alike: `gfx/2d/crosshair[a-j]` at
  * `cg_crosshairSize`, tinted by `CG_GetColorForHealth` because
  * `cg_crosshairHealth` defaults on, and pulsed for `ITEM_BLOB_TIME` after a
@@ -75,10 +91,19 @@ export interface HudState {
     /** Most recent pickup name, and when it happened, for the fade. */
     readonly pickup: string;
     readonly pickupAgeSeconds: number;
+    /** `cg.weaponSelectTime` is still inside `WEAPON_SELECT_TIME`: show the rack. */
+    readonly weaponSelect: boolean;
+    /** Owned weapons in `weapon_t` order -- what the rack draws. */
+    readonly weapons: readonly string[];
+    /** Rounds per weapon id, so an entry with nothing left can be greyed. */
+    readonly weaponAmmo: Readonly<Record<string, number>>;
 }
 
 /** How long a pickup name stays on screen. `cg_drawStatus`'s is 3 seconds. */
 const PICKUP_SECONDS = 3;
+
+/** What `hud.scss` fades the rack in on. See the header for where it sits. */
+const WEAPON_RACK_MODIFIER = 'is-visible';
 
 /**
  * `cg_crosshairSize`, as a fraction of the viewport height.
@@ -137,6 +162,13 @@ export class Hud {
     /** Last weapon drawn, so the icon is written on a change and not per frame. */
     private weaponId = '';
 
+    /** The rack, and one element per weapon in it, built lazily and reused. */
+    private readonly rack: ViewWithElement<HTMLElement>;
+    private readonly rackSlots = new Map<string, ViewWithElement<HTMLElement>>();
+
+    /** What the rack last drew, so an unchanged frame touches no DOM. */
+    private rackSignature = '';
+
     /** `cg_crosshairHealth`, which Q3 defaults on. */
     crosshairHealth = true;
 
@@ -166,12 +198,29 @@ export class Hud {
             tag: 'div',
         });
 
+        /*
+         The rack sits above the ammo and outside the cluster's own turn: it is
+         a *transient* readout, and hanging it off the same wrapped surface
+         would make it lean away from the player at exactly the moment they are
+         trying to read it. It shares the corner and not the perspective.
+        */
+        this.rack = new EmptyView({
+            classList: ['queep-hud__rack'],
+            tag: 'div',
+            attr: { role: 'list', 'aria-label': 'weapons' },
+        });
+
         const right = EmptyView.group([this.ammo.root, this.weapon], {
             classList: ['queep-hud__cluster', 'queep-hud__cluster--right'],
             tag: 'div',
         });
 
-        this.clusters = [left, right];
+        const rightColumn = EmptyView.group([this.rack, right], {
+            classList: ['queep-hud__corner', 'queep-hud__corner--right'],
+            tag: 'div',
+        });
+
+        this.clusters = [left, rightColumn];
 
         /*
          The middle column faces the player square on, and that is what makes
@@ -186,7 +235,7 @@ export class Hud {
             { classList: ['queep-hud__middle'], tag: 'div' }
         );
 
-        const readouts = EmptyView.group([left, middle, right], {
+        const readouts = EmptyView.group([left, middle, rightColumn], {
             classList: ['queep-hud'],
             tag: 'div',
         });
@@ -241,6 +290,7 @@ export class Hud {
             this.health.set(state.health, state.health <= LOW_HEALTH);
             this.armor.set(state.armor, false);
             this.updateAmmo(state);
+            this.updateRack(state);
         }
 
         if (state.pickup !== '' && state.pickupAgeSeconds < PICKUP_SECONDS) {
@@ -299,6 +349,78 @@ export class Hud {
         this.ammo.visible = !infinite;
 
         if (!infinite) this.ammo.set(state.ammo, ammoIsLow(state.weapon, state.ammo));
+    }
+
+    /**
+     * `CG_DrawWeaponSelect`: the rack of owned weapons, while a switch is recent.
+     *
+     * Three states per entry and all three are Q3's: the one in hand is picked
+     * out, one you own with rounds left is available, and one you own with an
+     * empty magazine is dimmed -- `CG_WeaponSelectable` refuses to switch to it,
+     * so showing it as reachable would be a lie the player finds out about
+     * mid-fight. The gauntlet's ammo is Q3's -1 and is never empty.
+     *
+     * The whole thing is skipped when nothing has changed. A `signature` rather
+     * than a set of dirty flags because there are three independent inputs --
+     * which weapons are owned, which is held, and how much ammunition each has
+     * -- and any of them can move on any frame; one string compare is cheaper
+     * than three and cannot get out of step with itself.
+     */
+    private updateRack(state: HudState): void {
+        const el = this.rack.el;
+
+        el.classList.toggle(WEAPON_RACK_MODIFIER, state.weaponSelect);
+
+        // Nothing to keep in sync while it is off screen, and a player who never
+        // switches never pays for any of this.
+        if (!state.weaponSelect) return;
+
+        const signature = `${state.weapon}|${state.weapons
+            .map((w) => `${w}:${state.weaponAmmo[w] ?? 0}`)
+            .join(',')}`;
+        if (signature === this.rackSignature) return;
+        this.rackSignature = signature;
+
+        for (const [id, slot] of this.rackSlots) {
+            slot.visible = state.weapons.includes(id);
+        }
+
+        for (let i = 0; i < state.weapons.length; i++) {
+            const id = state.weapons[i]!;
+            let slot = this.rackSlots.get(id);
+
+            if (slot === undefined) {
+                const icon = weaponIcon(id);
+
+                slot = new EmptyView({
+                    classList: ['queep-hud__rack-slot'],
+                    tag: 'div',
+                    attr: { role: 'listitem', 'aria-label': weaponLabel(id) },
+                });
+                slot.css({ backgroundImage: icon === null ? 'none' : `url("${icon}")` });
+
+                this.rackSlots.set(id, slot);
+                this.rack.addChild(slot);
+            }
+
+            slot.visible = true;
+
+            /*
+             `weapon_t` order, and it has to be imposed rather than inherited:
+             the slots are appended as weapons are *picked up*, so a shotgun
+             found after a railgun would sit to the right of it. `state.weapons`
+             is already in the enum's order, so the index in it is the order the
+             rack wants -- and Q3 draws the same row in the same order.
+            */
+            slot.el.style.order = String(i);
+
+            const rounds = state.weaponAmmo[id] ?? 0;
+            const empty = !ammoIsInfinite(rounds) && rounds <= 0;
+
+            slot.el.classList.toggle('is-held', id === state.weapon);
+            slot.el.classList.toggle('is-empty', empty);
+            slot.el.setAttribute('aria-current', id === state.weapon ? 'true' : 'false');
+        }
     }
 
     /**

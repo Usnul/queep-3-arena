@@ -348,6 +348,38 @@ the strongest argument in this report for the maintainer's instinct over mine.
     own per-second FPS report goes to `console.warn`, which buried real warnings during the
     diagnosis of item 2.
 
+18. **Three ways for a *correct-looking* application to be silently one frame, one step or one
+    axis wrong — added in phase 10, and it would rank around 3 if the list were re-derived.**
+    Grouped because they were found together, by a player describing three symptoms that all
+    turned out to be the camera, and because they share a shape: every one of them typechecks,
+    runs, produces a plausible picture, and is invisible to any test that reads a final value.
+
+    - **`Camera.fov` is vertical and does not say so** (D-135). Every game field-of-view cvar the
+      author had met is horizontal, so `cg_fov 90` went straight onto the component and the port
+      drew 121.7 degrees across where Q3 draws 90 — everything at 60% of its proper size, for
+      nine phases, on a project whose entire business is comparing pictures. It surfaced as a
+      complaint about the *weapon model*, because the gun is the only object whose distance a
+      player already knows. One line of JSDoc closes it.
+    - **A body created after the physics step blends from one snapshot and freezes for a step**
+      (GAP-036). `__interp_record` walks the awake set at the end of `PhysicsSystem.fixedUpdate`,
+      and game code — which spawns projectiles — correctly runs after it. The log then holds one
+      of the two ticks a blend needs, `InterpolationLog.interpolate` degrades gracefully to the
+      newer one, and the result is a rocket that leaps a whole step out of the barrel and hangs
+      there for another.
+    - **The only lever on execution order is a score that can be zero exactly where it matters**
+      (GAP-037). Declaring a component for `Write` weighs it at twice its *incoming* edge count,
+      and a system that reads one component and writes another gives the written one an in-degree
+      of zero from its own declaration. So "writers go before readers" quietly becomes a tie
+      broken by registration order — and in this application it came out right anyway, because
+      `PhysicsSystem`'s unrelated declaration happened to lend `Transform` the edge. A correct
+      ordering resting on another system's access spec is not one anybody can maintain.
+
+    What made the group findable at all was the fourth symptom in the same report: *projectiles
+    move with jerks*. They did not. They were the only thing on screen that moved smoothly, and
+    they were being watched through a camera that stepped at 60 Hz (D-132). A smooth object
+    against a stepping world is the most legible judder there is, which is why the one part of
+    the frame that was right is the part that got reported.
+
 ### What this port did not use, and why
 
 Two meep subsystems were evaluated and not used, for opposite reasons, and a maintainer reading
@@ -2012,6 +2044,39 @@ That is an accurate description of a component that cannot be used for its state
 - **Evidence:** `node_modules/@woosh/meep-engine/src/engine/sound/SoundEngine.js:48-66,81-87`, `src/engine/sound/SoundEngine.d.ts:6-16`, `src/engine/sound/sopra/SopraEngine.js:126-133`, `src/engine/sound/simulation/render/ProbeReverbRenderer.js`, `src/client/ui/audio.ts`
 
 
+### GAP-035: `KinematicMover` climbs a stair and does not say that it did
+
+- **Needed:** Q3's `EV_STEP_4`..`EV_STEP_16`. `CG_StepOffset` leaves the eye behind the riser and slides it up over 200 ms, which is the difference between walking up a flight of stairs and being teleported up one four times a second. It is one of six offsets in `CG_OffsetFirstPersonView` and it is the one nobody can name and everybody notices.
+- **meep offers:** the step-up itself, and it is good. `KinematicMover._tryStepUp` re-runs the horizontal move from the pre-slide position lifted by `stepHeight`, guards it with a forward clearance cast, commits only when it advances further than the plain slide, and restores the horizontal velocity so the controller does not read back a stall. The port gets Q3's `STEPSIZE` behaviour for one constructor argument.
+- **The gap:** `MoveResult` is `{ hit, grounded, groundNormal }` and `move()` returns nothing else. Whether the explicit step-up ran, and how far it climbed, are local variables. A consumer that needs to know — for camera smoothing, for a footstep variant, for an animation, for a "you climbed something" sound — has to reconstruct it from the pose.
+- **Why reconstruction is not free:** the thing a step has to be told apart from is a ramp, and both are "the origin went up while grounded". Q3 has no such problem: `PM_StepSlideMove` raises the event only when the plain slide was *blocked* and the step-up rescued it, so walking up an incline raises nothing. The port's test is that the rise exceeded what the steepest walkable slope could have produced over the same horizontal distance — `MIN_WALK_NORMAL` is 0.7, so the limiting ratio is 1.02 and the guard is 1.2. That is a heuristic standing in for a boolean the mover already computed and threw away, and it will be wrong at the top of a ramp that meets a flat.
+- **Workaround:** ~10 lines in `PlayerController.recordView`, plus the two constants and the paragraph explaining them. Twenty minutes, most of it deciding what the ramp discriminator should be.
+- **Severity:** minor. The feature works; the consumer guesses.
+- **Suggested fix:** one more field on `MoveResult` — `stepUp: number`, zero when the explicit path did not run. It is already in scope at the call site. `landed`/`landingSpeed` are not on that object either, and the same argument applies to them: a controller that wants Q3's fall events has to diff `grounded` across calls, which this port also does.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/control/first-person/collision/KinematicMover.js:170-183,_tryStepUp`, `src/client/PlayerController.ts` (`recordView`, `STAIR_RISE_RATIO`), `src/client/viewOffset.ts` (`ViewKick.step`)
+
+### GAP-036: a body created after the physics step has no snapshot for the step it was born on, and renders frozen for one
+
+- **Needed:** a projectile that is smooth from the frame it appears. A plasma bolt is fired ten times a second and lives for a few hundred milliseconds; a rocket crosses a room in twenty steps. The first two steps are a large fraction of what anyone sees.
+- **meep offers:** a complete producer/consumer pair. `PhysicsSystem.__interp_record` snapshots every awake `Interpolated` body at the end of its `fixedUpdate` and `InterpolationSystem` blends the last two ticks at the sub-step alpha. For a body that exists before the step, it is exactly right and costs the application nothing.
+- **The gap:** the record pass walks `storage.awake_*`, which is the set of bodies that existed when `PhysicsSystem.fixedUpdate` ran. Game code runs *after* it — that is the correct order, the sim reads the solved poses — so a body spawned by game code is invisible to that tick's record. The log then holds one of the two ticks a blend needs. `InterpolationLog.interpolate` handles the missing half gracefully and correctly (`first = a ? offset_a : offset_b`), which is the right primitive behaviour and produces a bad picture: the entity is drawn at the *newer* tick for the whole of the following frame budget, so it jumps a full step's travel and then holds still for a full step. Measured at 165 Hz, four frames of a rocket parked at the muzzle.
+- **Workaround:** put the missile on the application's own timeline instead. `PoseRecorderSystem` is registered last among the simulation systems and therefore snapshots the spawn pose on the birth tick, and `__interp_restore` does not filter by `sourceId`, so `PhysicsSystem` still restores the authoritative pose before it integrates. One word at the call site, and about an hour to work out which word.
+- **Severity:** minor, and sharp-edged: the failure is invisible in any test that does not sample between fixed steps, and it looks like a rendering problem rather than a bookkeeping one. It was reported by a player as "projectiles move with jerks", alongside a much larger camera problem with the same description.
+- **Suggested fix:** record a body's pose when it links, not only at the end of a step it was awake for. `PhysicsSystem.link` already has the transform and the component; writing that pose into the current tick's page — or, more simply, letting `__interp_record` iterate bodies linked *this* tick as well as awake ones — closes it without any application-side knowledge. Failing that, a sentence in `InterpolationSystem`'s docblock saying that an entity created after the producer's own update will blend from one snapshot for a step would have saved the hour.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js:__interp_record`, `src/engine/interpolation/InterpolationLog.js:511-532`, `src/client/Arena.ts:projectileSpawned`, `test/interpolation.test.ts`
+
+### GAP-037: system ordering is a derived score, and the one lever on it is silently zero-valued for a component nothing else reads
+
+- **Needed:** the camera entity's `Transform` written before `CameraSystem3` copies it onto Shade's camera, so that a pose computed at render rate is the pose the frame is drawn with. A pose written after it is a frame late, which is the first half of D-081 and reads as the gun swinging behind the view.
+- **meep offers:** `updateExecutionOrder`, which sorts by a score derived from each system's declared component access. It is a good design: a system says what it touches and how, and the scheduler works out that writers go before readers without anybody writing an ordering down. `System.components_used` and `ResourceAccessSpecification` are the whole of the vocabulary and they are clear.
+- **The gap is in the arithmetic rather than the design.** `scoreSystem` weighs each referenced component by `attached_edge_count` — the **incoming** edges on the component dependency graph — times 4 for Create, 2 for Write, 1 for Read. `computeSystemComponentDependencyGraph` draws an edge from each component a system *writes* to each one it *reads*, within that one system. So a system that reads `Camera` and writes `Transform` contributes exactly one edge, `Transform → Camera`, and gives `Transform` an in-degree of zero from its own declaration. Twice zero is zero: the `Write` that was supposed to be the lever contributes nothing at all, the score ties with a pure reader's, and `Array.prototype.sort`'s stability hands the decision back to registration order.
+- **What makes it a trap rather than a puzzle:** it depends on *other systems' declarations*. In the shipping application the ordering came out right — `PhysicsSystem` writes `RigidBody` and reads `Transform`, which lends `Transform` the incoming edge this system's own declaration did not — so a correct arrangement was resting on a system it has nothing to do with. It was found by writing the ordering test against a two-system rig, where it ties and fails. The fix is to declare `Camera` for write as well, which is honest (the lens is written through it) and puts an edge in each direction; but "declare one more thing you also write" is not a diagnosis anyone reaches without reading `computeSystemComponentDependencyGraph`.
+- **Workaround:** declare both components for write, and pin the resulting order in a test. Ten minutes to write, an hour to understand.
+- **Severity:** minor, verging on major for the class of bug it produces: an ordering that is right by accident degrades into a one-frame lag, and a one-frame lag on a camera is not something a test that reads final values can see.
+- **Suggested fix:** either score a `Write` by something that cannot be zero — the number of *other* systems referencing the component would do — or expose an explicit ordering constraint (`runs_before` / `runs_after`) for the cases where an application knows something the graph cannot derive. A worked example in the docs of "I need to run before this engine system" would be worth as much as either.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/ecs/EntityManager.js:227-250`, `src/engine/ecs/system/computeSystemComponentDependencyGraph.js`, `src/app/systems.ts` (`ViewSystem.components_used`), `test/interpolation.test.ts`
+
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.
@@ -2193,6 +2258,26 @@ Observations that are not gaps — the facility exists and works — but cost ti
   entirely sensible debug view and it is not a thing a game can put in front of a player. The
   model layer underneath it (`Option`, `OptionGroup`) is good and is what this port used; the
   gap is that the only worked example of using it is the one that cannot ship.
+- **`Camera.fov` is the vertical angle and the field does not say so.** `PerspectiveCamera`'s
+  private `#fov` is documented — "Vertical FOV angle (Y)" — and the ECS component the
+  application actually writes is `fov = new Vector1(45)` with no comment at all, sitting beside
+  `clip_near` and `clip_far`, whose meaning has no axis to get wrong. Every game's field-of-view
+  cvar the port's author had met is horizontal, so `camera.fov.set(90)` for `cg_fov 90` looked
+  finished, and it drew **121.7 degrees across where Q3 draws 90** on a 16:9 window: every object
+  in the frame at 60% of its proper size, for nine phases, on a project whose whole business is
+  comparing a picture against another picture. It was eventually reported as *the weapon model
+  being too far away*, which is what it looks like — the gun is the one object whose distance a
+  player already knows. The cost was not the fix (`2·atan(tan(fov_x/2)/aspect)`, one function)
+  but the nine phases of looking at a wrong picture without seeing it. One line on the component
+  — `/** Vertical field of view, degrees. */` — would have closed it. See D-135.
+- **The aspect ratio is only knowable at render time, which makes an axis conversion a per-frame
+  job rather than a setup one.** `GraphicsEngine3.render` sets `camera.aspect =
+  renderer.aspect_ratio` on the way past, and that is the right place for it — a camera
+  describing a viewport that has since changed shape is the classic stretched frame. The
+  consequence for an application converting a horizontal cvar is that there is no correct moment
+  to do it *except* every frame, reading back the value the renderer last used. That works and is
+  cheap; it is worth a sentence somewhere, because the obvious implementation is to convert once
+  at startup against a window size that has not been measured yet.
 - **`frameThrottle` makes `LabelView` text unverifiable in a hidden tab, which is where automated
   checks run.** Every `LabelView` update goes through `requestAnimationFrame`, so in a
   backgrounded tab the model moves and the DOM does not, indefinitely — the pending flag is set

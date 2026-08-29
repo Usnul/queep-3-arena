@@ -40,7 +40,7 @@ import { Effects } from './Effects.ts';
 import type { MuzzleFlashSink } from './ViewWeapon.ts';
 import type { MissileSink } from './MissileView.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
-import { interpolatedBody } from './interpolation.ts';
+import { interpolatedPose } from './interpolation.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
 
 const WORLD_SCALE = 1 / 32;
@@ -145,6 +145,16 @@ export class Arena implements WeaponEvents {
      * grenade, a plasma bolt, a nail and a BFG shot alike.
      */
     missileView: MissileSink | null = null;
+
+    /**
+     * `EV_DAMAGE` for the local client: how many points of health the player
+     * just lost to something that meant it.
+     *
+     * Set after construction like the three above, because the thing that wants
+     * it is the view and the arena is built before there is one. Null in every
+     * headless caller, where nothing is looking.
+     */
+    onLocalDamage: ((damage: number) => void) | null = null;
 
     /**
      * @param shadows what the effects' own lights ask before they cast. Defaults
@@ -394,6 +404,20 @@ export class Arena implements WeaponEvents {
 
         this.totalDamage += damage;
 
+        /*
+         `EV_DAMAGE` for the person at the keyboard, which is the signal
+         `CG_DamageFeedback` runs on. Raised here rather than derived from the
+         health falling, because health falls for reasons that are not damage --
+         `ClientTimerActions` bleeds a point a second off a freshly spawned
+         player's 125 -- and a view kick per bleed is twenty-five seconds of
+         jerking after every spawn. See `PlayerController.damaged`.
+
+         `WeaponSystem.damage` has already taken the points off by the time this
+         runs, which is what Q3 reads too: the kick scales with the health you
+         are *left* with.
+        */
+        if (target.id === LOCAL_CLIENT) this.onLocalDamage?.(damage);
+
         // `CG_HitSound`: the local, non-positional confirmation tone. It is not
         // a sound in the world -- it is feedback, and Q3 plays it dry.
         this.audio?.playLocal('feedback/hit');
@@ -421,15 +445,33 @@ export class Arena implements WeaponEvents {
     projectileSpawned(projectile: Projectile, entity: number): void {
         if (entity >= 0) {
             /*
-             Blended by `InterpolationSystem` on the physics timeline, for which
-             `PhysicsSystem` is already the producer. A missile crosses a room in
-             a handful of fixed steps, so this is the difference between a rocket
-             and a dotted line of rockets.
+             Blended by `InterpolationSystem`, on the *application* timeline
+             rather than the physics one, and the difference is one fixed step of
+             the missile's life.
+
+             `PhysicsSystem` is a complete producer for its own timeline and this
+             used `interpolatedBody()` to say so. What it cannot record is the
+             tick a missile is *born* on: the physics step runs first in the fixed
+             cycle and `CombatSystem` -- which fires the weapon -- runs after it,
+             so the body does not exist yet when the record pass walks the awake
+             set. The log then has one snapshot rather than two, `log.interpolate`
+             falls back to the newer of the pair for every alpha, and the missile
+             jumps a whole step's travel and then holds still for a whole step
+             before it starts to glide. Measured at 165 Hz: a rocket sat frozen
+             for four frames at the muzzle, and a plasma stream did it 33 units
+             apart, ten times a second.
+
+             `PoseRecorderSystem` is the port's own producer and is registered
+             *last* among the simulation systems, so it snapshots the missile on
+             the step it was created. Physics still restores the authoritative
+             pose at the top of each step -- `__interp_restore` does not filter by
+             `sourceId` -- so the solver still integrates from truth rather than
+             from a blend.
 
              Added before the model, so the model's own `TransformAttachment`
              composes against a transform the interpolation is already writing.
             */
-            this.ecd.addComponentToEntity(entity, interpolatedBody());
+            this.ecd.addComponentToEntity(entity, interpolatedPose());
 
             /*
              `CG_Missile`. Null before the model library has finished loading and

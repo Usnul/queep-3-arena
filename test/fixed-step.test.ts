@@ -155,7 +155,8 @@ async function rig(solver: 'meep' | 'q3' = 'meep'): Promise<{
 
     class Driver extends System<never> {
         override fixedUpdate = (deltaSeconds: number): void => {
-            player.update(deltaSeconds, sink);
+            player.update(deltaSeconds);
+            player.writeCamera(sink);
             stamps.push(player.ps.commandTime);
         };
     }

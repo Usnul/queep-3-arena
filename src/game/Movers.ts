@@ -291,7 +291,33 @@ export class MoverSystem {
             const modelRef = entity['model'];
 
             if (typeof modelRef !== 'string' || !modelRef.startsWith('*')) {
-                if (classname === 'misc_teleporter_dest' || classname === 'target_position') {
+                /*
+                 `G_PickTarget`, which is a name lookup and **not** a class list.
+
+                 This used to accept `misc_teleporter_dest` and `target_position`
+                 and nothing else, and that is a class list where Q3 has a
+                 search: `G_PickTarget` walks every entity whose `targetname`
+                 matches and picks one at random, without ever asking what class
+                 it is. `AimAtTarget` then reads `ent->s.origin` off whatever it
+                 got.
+
+                 The class that gets missed by the list and used by mappers is
+                 `info_notnull`, whose entire purpose is to be a position for
+                 something else to aim at -- id's own description is "used as a
+                 positional target for in-game calculation". On `am_thornish`
+                 four of the eight `trigger_push` entities target one, so
+                 `aimAtTarget` was handed null for half the jump pads on the map
+                 and `pushVelocity` stayed null: the player walked over the pad
+                 and nothing happened at all, which is exactly how it was
+                 reported.
+
+                 So the test is the one Q3 makes -- does it have a name, and is
+                 it a point entity -- rather than a list of the classes that had
+                 come up so far. A brush entity is excluded by the branch above
+                 because its origin is the world's, not its own.
+                */
+                const targetname = str(entity, 'targetname');
+                if (targetname !== null && targetname !== '') {
                     this.destinations.push({
                         origin: [
                             entity._originQ3[0]!,
@@ -299,7 +325,7 @@ export class MoverSystem {
                             entity._originQ3[2]!,
                         ],
                         angle: num(entity, 'angle', 0),
-                        targetname: str(entity, 'targetname') ?? '',
+                        targetname,
                     });
                 }
                 continue;

@@ -31,25 +31,34 @@
  * Two properties of `EntityManager.update` are load-bearing here and worth
  * stating rather than rediscovering:
  *
- * **Every `fixedUpdate` for a step runs before any `update`.** That is what
- * makes writing the camera pose in `PlayerSystem.fixedUpdate` correct:
- * `CameraSystem3` copies the camera entity onto Shade's camera in its own
- * `update`, so it sees this cycle's pose. Under the old arrangement the
- * application's listener ran *after* `entityManager.update` entirely, so the
- * frame was always drawn from the pose written one tick earlier -- the ordering
- * half of D-081, which the view weapon worked around and the camera itself
- * simply wore.
+ * **Every `fixedUpdate` for a step runs before any `update`.** So the whole
+ * simulation for a cycle has run before the first presentation system sees it,
+ * and `ViewSystem` can blend the two steps either side of the display's clock
+ * knowing both are already recorded.
  *
  * **Systems declaring no components tie, and ties keep registration order.**
  * `updateExecutionOrder` scores a system by its declared component access;
- * these declare none, so they all score zero and `Array.prototype.sort`'s
+ * most of these declare none, so they score zero and `Array.prototype.sort`'s
  * stability decides -- which is a specified guarantee, not an accident. The
  * engine's own systems reference components, score above zero, and therefore
  * run first. That is the arrangement these want: `CameraSystem3` before the
- * presentation pass that reads the camera it wrote.
+ * presentation pass that reads the camera.
+ *
+ * **...which is exactly why {@link ViewSystem} does declare some.** The camera
+ * pose has to be written *before* `CameraSystem3` copies it, and the only lever
+ * on that is the score. It declares `Camera` and `Transform` for write,
+ * `CameraSystem3` declares both for read, and a writer outranks a reader --
+ * which needs *both* to be writes for a reason that is entirely in the
+ * scoring's arithmetic and is written out at the declaration. That is the one
+ * place where this port asks the scheduler for an ordering rather than taking
+ * the one it is given, and `test/interpolation.test.ts` holds it to it.
  */
 
 import { System } from '@woosh/meep-engine/src/engine/ecs/System.js';
+import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Camera } from '@woosh/meep-engine/src/engine/graphics/ecs/camera/Camera.js';
+import { ResourceAccessKind } from '@woosh/meep-engine/src/core/model/ResourceAccessKind.js';
+import { ResourceAccessSpecification } from '@woosh/meep-engine/src/core/model/ResourceAccessSpecification.js';
 import {
     INTERPOLATION_KEY_UNSET,
     Interpolated,
@@ -63,6 +72,7 @@ import { Footsteps } from '../client/Audio.ts';
 import type { BotRuntime } from '../client/Bots.ts';
 import type { CharacterBodies } from '../client/CharacterBody.ts';
 import { APP_INTERPOLATION_SOURCE } from '../client/interpolation.ts';
+import type { CameraLens, LensSurface } from '../client/lens.ts';
 import type { Hud } from '../client/Hud.ts';
 import type { ItemsView } from '../client/ItemsView.ts';
 import type { MoversView } from '../client/MoversView.ts';
@@ -81,7 +91,6 @@ import type { WorldEffects } from '../game/WorldEffects.ts';
  */
 export class PlayerSystem extends System<never> {
     private readonly player: PlayerController;
-    private readonly cameraTransform: TransformLike;
     private readonly arena: Arena;
     private readonly audio: AudioBank;
     private readonly spawns: readonly (readonly number[])[];
@@ -94,7 +103,6 @@ export class PlayerSystem extends System<never> {
 
     constructor(options: {
         player: PlayerController;
-        cameraTransform: TransformLike;
         arena: Arena;
         audio: AudioBank;
         spawns: readonly (readonly number[])[];
@@ -102,7 +110,6 @@ export class PlayerSystem extends System<never> {
         super();
 
         this.player = options.player;
-        this.cameraTransform = options.cameraTransform;
         this.arena = options.arena;
         this.audio = options.audio;
         this.spawns = options.spawns;
@@ -112,7 +119,7 @@ export class PlayerSystem extends System<never> {
     override fixedUpdate = (deltaSeconds: number): void => {
         const player = this.player;
 
-        player.update(deltaSeconds, this.cameraTransform);
+        player.update(deltaSeconds);
 
         this.mortality(deltaSeconds);
         this.bodySounds();
@@ -185,6 +192,105 @@ export class PlayerSystem extends System<never> {
             this.audio.playLocal('weapon/change');
         }
     }
+}
+
+/**
+ * The camera, once per **rendered frame**, ahead of the system that reads it.
+ *
+ * This exists because of an ordering fact and a rendering one.
+ *
+ * The rendering one: a fixed-step camera makes the whole world judder. Measured
+ * on `am_thornish` at 165 Hz with the pose written from `PlayerSystem.fixedUpdate`,
+ * the camera's x held for two or three frames and then moved 0.167 m, forever.
+ * Static geometry drawn through that camera steps at 60 Hz; a missile carrying
+ * `Interpolated` does not, because meep blends it -- so the one object on screen
+ * that moved smoothly was the one being watched, against a world that did not.
+ * That is what was reported as "projectiles move with jerks", and the projectile
+ * was the messenger.
+ *
+ * The ordering one: `CameraSystem3` copies the camera entity's `Transform` onto
+ * Shade's camera in its own `update`, so a pose written after it is a frame late
+ * (D-081's first half). It has to be written *before* it, and meep decides that
+ * by declared component access rather than by registration order.
+ * `updateExecutionOrder` scores each referenced component by the incoming edges
+ * on the component dependency graph, times four for Create, two for Write, one
+ * for Read -- so a system that **writes** `Transform` sorts above one that only
+ * reads it, which `CameraSystem3` does. Measured rather than assumed:
+ * `test/interpolation.test.ts` pins the resulting order, and the declaration
+ * here is honest rather than tactical, because writing the camera entity's
+ * transform is exactly what this does.
+ *
+ * `dependencies` stays empty on purpose. Declaring `[Camera, Transform]` would
+ * make the engine link every camera entity through `link`, and the one this
+ * drives is handed over at construction; `components_used` is the half of the
+ * declaration that carries the access, which is the half the scheduler reads.
+ */
+export class ViewSystem extends System<never> {
+    /**
+     * Both for write, and both are written: the camera entity's `Transform` is
+     * the pose, and `Camera.fov` is `cg_fov` through `CameraLens`.
+     *
+     * Declaring the second one matters beyond honesty, and it is worth saying
+     * why because it is not obvious. `computeSystemComponentDependencyGraph`
+     * draws an edge from each component a system *writes* to each one it
+     * *reads*, and `scoreSystem` weighs each referenced component by the
+     * incoming edges on it. A system that reads both components and writes one
+     * contributes an edge in one direction only, so the component it writes can
+     * end up with no incoming edges at all -- and then a `Write` on it scores
+     * exactly what a `Read` does, twice zero being zero, and the tie falls back
+     * to registration order. Writing both puts an edge in each direction, which
+     * gives both components an in-degree and makes the write weighting actually
+     * bite. Found by writing the ordering test against a rig containing only
+     * this system and `CameraSystem3`, where it tied.
+     */
+    override components_used = [
+        ResourceAccessSpecification.from(
+            Camera,
+            ResourceAccessKind.Read | ResourceAccessKind.Write
+        ),
+        ResourceAccessSpecification.from(
+            Transform,
+            ResourceAccessKind.Read | ResourceAccessKind.Write
+        ),
+    ];
+
+    private readonly player: PlayerController;
+    private readonly cameraTransform: TransformLike;
+    private readonly lens: CameraLens;
+    private readonly surface: LensSurface;
+
+    constructor(options: {
+        player: PlayerController;
+        cameraTransform: TransformLike;
+        lens: CameraLens;
+        /** The renderer's own camera, which is where the aspect ratio lives. */
+        surface: LensSurface;
+    }) {
+        super();
+
+        this.player = options.player;
+        this.cameraTransform = options.cameraTransform;
+        this.lens = options.lens;
+        this.surface = options.surface;
+    }
+
+    override update = (): void => {
+        const em = this.entityManager;
+
+        /*
+         The sub-step fraction, which is what turns two recorded poses into a
+         smooth one. Defaulting to 1 rather than 0 matters for the frame before
+         the first step has run: 1 is "show the newest pose", which is what a
+         camera with no history should do.
+        */
+        const alpha = em === null || em === undefined ? 1 : em.getFixedStepAlpha();
+
+        this.player.writeCamera(this.cameraTransform, alpha);
+
+        // `CG_CalcFov`, which needs the aspect of the surface actually drawn to
+        // and therefore cannot be answered once at startup. See `lens.ts`.
+        this.lens.apply(this.surface);
+    };
 }
 
 /** Projectiles, hitscan cooldowns, decay of marks, and target respawn. */
@@ -344,7 +450,12 @@ export class WorldEffectSystem extends System<never> {
 
         this.moversView.update();
 
-        if (world.damage > 0) this.player.inventory.health -= world.damage;
+        if (world.damage > 0) {
+            this.player.inventory.health -= world.damage;
+            // The other half of `EV_DAMAGE`: a `trigger_hurt` kicks the view
+            // the same way a rocket does. See `PlayerController.damaged`.
+            this.player.damaged(world.damage);
+        }
     };
 }
 
@@ -431,6 +542,16 @@ export class PresentationSystem extends System<never> {
             ammo: player.inventory.ammo[player.weapon] ?? 0,
             pickup: this.pickups.pickupLabel,
             pickupAgeSeconds: this.pickups.pickupAgeSeconds,
+            /*
+             `CG_DrawWeaponSelect`: the rack, and the ammo each entry has.
+             Rebuilt per frame rather than pushed on a change, because both the
+             list and the counts move for reasons other than a weapon switch --
+             picking a gun up, firing the one in hand -- and a HUD that is only
+             told about switches shows a stale rack for the 1.4 seconds it is up.
+            */
+            weaponSelect: player.weaponSelectVisible,
+            weapons: player.ownedWeapons,
+            weaponAmmo: player.inventory.ammo,
         });
     };
 }
@@ -450,12 +571,16 @@ export class FlySystem extends System<never> {
     private readonly audio: AudioBank;
     private readonly hud: Hud;
     private readonly map: string;
+    private readonly lens: CameraLens;
+    private readonly surface: LensSurface;
 
     constructor(options: {
         fly: { update(deltaSeconds: number): void };
         audio: AudioBank;
         hud: Hud;
         map: string;
+        lens: CameraLens;
+        surface: LensSurface;
     }) {
         super();
 
@@ -463,6 +588,8 @@ export class FlySystem extends System<never> {
         this.audio = options.audio;
         this.hud = options.hud;
         this.map = options.map;
+        this.lens = options.lens;
+        this.surface = options.surface;
     }
 
     override update = (deltaSeconds: number): void => {
@@ -472,7 +599,11 @@ export class FlySystem extends System<never> {
             mode: 'fly', onGround: false, map: this.map,
             weapon: '', damage: 0, kills: 0, deaths: 0, backend: 'noclip',
             health: 0, armor: 0, ammo: -1, pickup: '', pickupAgeSeconds: 99,
+            weaponSelect: false, weapons: [], weaponAmmo: {},
         });
+
+        // The noclip camera is a camera too, and `cg_fov` is still the lens.
+        this.lens.apply(this.surface);
     };
 }
 

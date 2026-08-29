@@ -195,6 +195,57 @@ function cmdScale(cmd: MoveCommand, speed: number): number {
  * unchanged. `pm_stopspeed` is the floor on `control`, and it is why you stop
  * quickly from a walk and slowly from a sprint.
  */
+/**
+ * `PM_GroundTrace`'s kickoff test: something has thrown you off the floor, so
+ * you are not standing on it any more.
+ *
+ *     if ( pm->ps->velocity[2] > 0 &&
+ *          DotProduct( pm->ps->velocity, trace.plane.normal ) > 10 ) {
+ *         pm->ps->groundEntityNum = ENTITYNUM_NONE;
+ *         pml.groundPlane = qfalse;
+ *         pml.walking = qfalse;
+ *         return;
+ *     }
+ *
+ * Missing from this path since D-071, and it cost every jump pad in the game a
+ * third of its height.
+ *
+ * `PM_CheckJump` clears the ground itself, so a *jump* was never affected and
+ * nothing noticed. Nothing else that launches a player does: `BG_TouchJumpPad`
+ * writes `ps->velocity` and returns, `G_Damage`'s knockback adds to it, and both
+ * of those arrive with the player still flagged as standing on the floor. The
+ * next step then runs `PM_Friction` as a *walking* player, and Q3's friction
+ * scales all three components by one factor -- so a jump pad's 612 units/s came
+ * out as 514, the apex went with the square of that, and a pad aimed at a ledge
+ * 234 units up landed the player 161 up and short of it. Measured on
+ * `am_thornish`'s corner pads, where it reads exactly as "the boosters do not
+ * boost high enough".
+ *
+ * Q3 runs this inside `PM_GroundTrace`, which is called before `PM_WalkMove` and
+ * `PM_AirMove` and therefore before either one's `PM_Friction`. Here the
+ * grounded flag is the mover's, decided by the *previous* step's
+ * `_categorizeGround`, so the test goes at the same point in the sequence: after
+ * the jump check, before friction.
+ *
+ * The dot product is against the ground normal rather than straight up, because
+ * on a slope the two differ and Q3 asks about the surface you are being thrown
+ * off. The `> 10` is the C's and is what stops the ordinary jitter of standing
+ * on a ramp from reading as a launch.
+ */
+function kickOffGround(state: MoveState): void {
+    if (!state.grounded) return;
+    if (state.velocity[2]! <= 0) return;
+
+    const n = state.groundNormal;
+    const along =
+        state.velocity[0]! * n[0]! + state.velocity[1]! * n[1]! + state.velocity[2]! * n[2]!;
+
+    if (along > KICKOFF_SPEED) state.grounded = false;
+}
+
+/** `DotProduct( velocity, plane.normal ) > 10` -- `PM_GroundTrace`'s own number. */
+const KICKOFF_SPEED = 10;
+
 function applyFriction(state: MoveState, dt: number): void {
     const vel = state.velocity;
 
@@ -379,6 +430,9 @@ export class MeepMove {
         this.duck(state, cmd);
 
         const jumped = this.tryJump(state, cmd);
+
+        // `PM_GroundTrace`'s kickoff test, which has to run before friction.
+        kickOffGround(state);
 
         applyFriction(state, dt);
         this.buildWish(state, cmd);
