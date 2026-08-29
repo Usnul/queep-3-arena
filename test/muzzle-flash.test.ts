@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
+import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
@@ -53,6 +54,7 @@ import {
     muzzleFlashLight,
     type MuzzleFlashLight,
 } from '../src/client/muzzleFlash.ts';
+import { angleVectors, vec3 } from '../src/q3/math.ts';
 import balance from '../src/game/balance.generated.json' with { type: 'json' };
 
 /** Scene units per Q3 unit. */
@@ -803,5 +805,184 @@ describe('only the weapons Q3 has a flash model for throw a burst', () => {
          the light without arguing it.
         */
         expect(litPoints(ecd).length, 'the gauntlet stopped lighting its own shot').toBe(1);
+    });
+});
+
+/*
+ * The right angle that made `ParticleEmitterSystem3` throw.
+ *
+ * The burst is a cone, and meep's `ConicRay` builds the rotation that carries
+ * the cone onto its axis as `k = 1 / (1 + dZ)`. That is singular at the south
+ * pole and `ConicRay` knows it -- there is an early return for `(0, 0, -1)`
+ * above the division, and another for `(0, 0, 1)`. Both compare **exactly**,
+ * and `ConicRay.fromJSON` copies the direction it is handed rather than
+ * normalising it, so what reaches the division is the caller's own arithmetic.
+ *
+ * Q3's `AngleVectors` is a float, and a float cosine of ninety degrees is
+ * -4.371e-8 rather than zero, because the angle was rounded before the cosine
+ * was taken. So a shooter facing exactly along +Y produced an axis that was the
+ * south pole to eight digits and not to the early return, `k` came out
+ * `Infinity`, `Infinity * 0` made a NaN, and the throw out of `Vector3.set`
+ * aborted the whole particle system for that frame -- and for every frame after
+ * it, because the emitter throws on its way to the flag that says it is
+ * initialised and so is retried until it is retired.
+ *
+ * The complaint was "several rockets at once", which it was not: one shot at one
+ * yaw, from any weapon whose flash the world draws. See D-147.
+ */
+/** A cone axis, and the sampler that has to be able to rotate onto it. */
+interface Cone {
+    readonly direction: { readonly x: number; readonly y: number; readonly z: number };
+    readonly angle: number;
+    sampleRandomDirection(random: () => number, result: Vector3): void;
+}
+
+/** The one field of an emitter's layer this file reads. See `cones`. */
+interface EmitterLayers {
+    readonly layers: {
+        get(index: number): { readonly particleVelocityDirection: Cone };
+    };
+}
+
+describe('a muzzle pointed exactly along an axis', () => {
+    /**
+     * Layer 0's cone, as the emitter component actually holds it.
+     *
+     * Through a cast, because `layers` carries an `@private` that TypeScript
+     * reads off the JSDoc -- meaning "the emitter owns its layers", not "nobody
+     * may look". The alternative is asserting on the JSON that went in, which
+     * would pin the argument rather than what `ConicRay` will divide by.
+     */
+    function cones(ecd: EntityComponentDataset): { x: number; y: number; z: number }[] {
+        const found: { x: number; y: number; z: number }[] = [];
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (emitter: EmitterLayers) => void
+        ) => void;
+
+        traverse([ParticleEmitter], (emitter) => {
+            const d = emitter.layers.get(0).particleVelocityDirection.direction;
+            found.push({ x: d.x, y: d.y, z: d.z });
+        });
+
+        return found;
+    }
+
+    /** The burst's cone, when exactly one burst was raised. */
+    function onlyCone(ecd: EntityComponentDataset): Cone {
+        const found: Cone[] = [];
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (emitter: EmitterLayers) => void
+        ) => void;
+
+        traverse([ParticleEmitter], (emitter) => {
+            found.push(emitter.layers.get(0).particleVelocityDirection);
+        });
+
+        expect(found.length, 'exactly one burst per shot').toBe(1);
+        return found[0]!;
+    }
+
+    /*
+     Not a hand-written vector: the point is that Q3's own float arithmetic is
+     what produces the awkward one, so the test has to go through it. A literal
+     here would pass forever after somebody changed `angleVectors`.
+    */
+    it('is a float right angle, not an exact one', () => {
+        const forward = vec3();
+        angleVectors([0, 90, 0], forward, null, null);
+
+        expect(forward[1], 'yaw 90 should point along +Y').toBe(1);
+        expect(forward[0], 'a float cos(90) that was exactly zero would hide this').not.toBe(0);
+        expect(Math.abs(forward[0]!)).toBeLessThan(1e-6);
+    });
+
+    it('hands the emitter the pole exactly, so the cone can be rotated onto it', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        const forward = vec3();
+        angleVectors([0, 90, 0], forward, null, null);
+
+        effects.muzzleFlash([64, 0, 32], forward, 'WP_MACHINEGUN');
+
+        const [cone] = cones(ecd);
+        expect(cone, 'no burst was raised at all').toBeDefined();
+
+        // Q3 +Y is meep -Z. Exactly, or `ConicRay` divides by zero.
+        expect(cone!.x).toBe(0);
+        expect(cone!.y).toBe(0);
+        expect(cone!.z).toBe(-1);
+    });
+
+    it('lets the sampler rotate the cone onto it instead of throwing NaN', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        const forward = vec3();
+        angleVectors([0, 90, 0], forward, null, null);
+
+        effects.muzzleFlash([64, 0, 32], forward, 'WP_MACHINEGUN');
+
+        /*
+         `sampleRandomDirection` is where the throw came from, reached from
+         `ParticleEmitter.initialize` once per particle of the immediate
+         emission. Driving it here rather than `initialize` is what makes this a
+         headless test: the emitter has no particle pool until the render system
+         hands it one, and the pool is not what was wrong.
+        */
+        const cone = onlyCone(ecd);
+        const out = new Vector3(0, 0, 0);
+
+        expect(() => cone.sampleRandomDirection(Math.random, out)).not.toThrow();
+
+        const finite = Number.isFinite(out.x) && Number.isFinite(out.y) && Number.isFinite(out.z);
+        expect(finite, 'a NaN got through').toBe(true);
+        expect(Math.hypot(out.x, out.y, out.z), 'not a unit direction').toBeCloseTo(1, 9);
+
+        // And it landed inside the cone it was asked for, around Q3 +Y.
+        expect(Math.acos(-out.z)).toBeLessThanOrEqual(cone.angle + 1e-9);
+    });
+
+    /*
+     And the other pole, which was never broken -- `k = 1/2` there -- but is
+     snapped by the same guard and would be a silent behaviour change if the
+     guard ever got the sign wrong.
+    */
+    it('snaps the north pole too, where the same shot points the other way', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        const forward = vec3();
+        angleVectors([0, 270, 0], forward, null, null);
+
+        effects.muzzleFlash([64, 0, 32], forward, 'WP_MACHINEGUN');
+
+        const [cone] = cones(ecd);
+        expect(cone!.x).toBe(0);
+        expect(cone!.y).toBe(0);
+        expect(cone!.z).toBe(1);
+    });
+
+    /*
+     A direction that is not a pole is left alone apart from being normalised,
+     because snapping a general axis would be a bug of its own.
+    */
+    it('leaves an ordinary direction where it was', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        const forward = vec3();
+        angleVectors([0, 45, 0], forward, null, null);
+
+        effects.muzzleFlash([64, 0, 32], forward, 'WP_MACHINEGUN');
+
+        const [cone] = cones(ecd);
+        const r = Math.SQRT1_2;
+        expect(cone!.x).toBeCloseTo(r, 6);
+        expect(cone!.y).toBeCloseTo(0, 9);
+        expect(cone!.z).toBeCloseTo(-r, 6);
+        expect(Math.hypot(cone!.x, cone!.y, cone!.z), 'not a unit axis').toBeCloseTo(1, 12);
     });
 });

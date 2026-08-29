@@ -6979,3 +6979,82 @@ D-066's rig -- and every number here is a peak amplitude read off the master bus
 about whether a plasma impact now sounds like a plasma impact. The per-weapon routing is verified as
 routing: firing each of the twelve weapons at a wall produces exactly the name
 `CG_MissileHitWall` chooses for it, and the shotgun and the gauntlet produce none.
+
+### D-147: A right angle that a float cannot hold, and a cone that could not be rotated onto it
+
+Reported from play as "several rockets going off together make `ParticleEmitterSystem3` throw", with
+a repro that fires eight of them around a circle and reads five or six of these off the console:
+
+```
+Failed during update of system 'ParticleEmitterSystem3': x must be a valid number, instead was NaN
+```
+
+It is neither several rockets nor rockets. It is **one shot at one yaw**, and the eight-shot repro
+contains exactly one of them -- the third, at ninety degrees. Every other weapon whose flash the
+world draws does the same thing at the same angle; the report reproduced with `AudioBank` stubbed
+out, which was right, and would also have reproduced with the explosion, the smoke and the impact
+mark taken away, which nobody had tried.
+
+**Where the NaN is made.** `Effects.muzzleFlashParticles` throws its sparks in a cone, which meep
+represents as a `ConicRay`: an axis and a half-angle. `sampleRandomDirection` samples the spherical
+cap around +Z and then rotates the sample onto the axis, and it builds that rotation from
+
+```js
+const k = 1 / (1 + dZ);
+const tx = -k * dY;
+```
+
+which is singular at the south pole. `ConicRay` knows that -- there is an early return for
+`(0, 0, -1)` above the division, and another for `(0, 0, 1)`, with a comment naming the singularity.
+Both compare **exactly**, and `ConicRay.fromJSON` copies the direction it is given rather than
+normalising it, so what reaches the division is the caller's own arithmetic, unrounded and
+unrepaired.
+
+**Where the awkward vector comes from.** `angleVectors` is Q3's, which means it is `float`, and it
+rounds the angle before it takes the cosine:
+
+```ts
+let angle = f32(angles[YAW]! * DEG_TO_RAD);
+const cy = f32(Math.cos(angle));
+```
+
+`f32(90 * DEG_TO_RAD)` is `1.5707963705062866`, whose cosine is `-4.371138828673793e-8`. So a
+shooter facing exactly along Q3's +Y hands out a forward of `(-4.371e-8, 1, 0)`, the axis swap makes
+that `(-4.371e-8, 0, -1)`, and that vector is the south pole to eight digits, is a unit vector to
+any tolerance anyone would test with -- meep's own `isNormalized` passes it -- and is not the pole
+the early return is looking for. `k` comes out `Infinity`, `tx` is `Infinity * 0`, and all three
+components of the sample are NaN before `Vector3.set` throws.
+
+**Why it repeats.** The throw happens inside `ParticleEmitter.initialize`, on the way to the flag
+that says the emitter has been initialised. So the emitter never sets it, is retried on the next
+frame, and throws again -- once per frame until `Effects.expire` retires it 120 ms later. That is
+where five or six come from, and it also means the abort is not confined to the bad emitter: the
+`EntityManager` catches per *system*, so the explosions, smoke puffs and trail puffs sitting after it
+in the emitter list lose that frame's simulation step with it, and the pass that retires dead
+particles and repacks the sprite atlas does not run at all.
+
+**The fix is at the call site, in `coneAxis`.** Both of the places this port builds a cone -- the
+muzzle burst and `bulletImpact`'s spark spray -- now normalise in double and then snap an axis that is a pole to the
+pole exactly. `POLE_EPSILON` is `1e-6`, an order of magnitude above the largest residue Q3's float
+trigonometry produces at the four right angles -- `8.742e-8`, at yaw 180 -- and six
+hundred-thousandths of a degree of tilt, which is not a visible change to where sparks go. Snapping is also what the fast
+paths want: an exact pole takes the early return instead of building a rotation at all.
+
+Fixing it in `ConicRay` -- normalising in `fromJSON`, or widening the pole test to an epsilon --
+would be the better place for it and is not this port's file to change. The guard is written so that
+a `ConicRay` which one day normalises its own input makes it redundant rather than wrong.
+
+**`bulletImpact` was exposed to the same thing and had never been seen to fail.** Its axis is a
+surface normal, and a BSP plane that faces exactly along an axis carries exact integers, which take
+the early return. The normals that would have tripped it are the ones off curved surfaces, where
+being a hair off an axis is normal; it goes through `coneAxis` for that reason rather than because
+anybody caught it.
+
+Pinned in `muzzle-flash.test.ts`, which goes through the real `angleVectors` rather than writing
+`-4.371e-8` down -- a literal there would keep passing after somebody changed the arithmetic that
+produces it -- and then drives `sampleRandomDirection` on the cone the emitter component actually
+holds. `initialize` would be the more faithful entry point and cannot be called headless: the
+emitter has no particle pool until the render system hands it one, and the pool was never what was
+wrong. Verified in the browser as well, on D-066's rig, with the reporter's own eight-shot repro:
+all eight bursts are raised, the third still carries `(-4.371e-8, 0, -1)` into `Effects`, and the
+console is clean.

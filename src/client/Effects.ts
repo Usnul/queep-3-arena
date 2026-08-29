@@ -68,6 +68,64 @@ function dirToMeep(q3: ArrayLike<number>): [number, number, number] {
     return [q3[0]!, q3[2]!, -q3[1]!];
 }
 
+/**
+ * Largest off-axis component a Q3 direction may carry and still be a pole.
+ *
+ * `angleVectors` is Q3's, which means every sine and cosine in it is rounded to
+ * `float`, and a `float` cosine of ninety degrees is not zero -- it is
+ * -4.371e-8, because the *angle* was rounded before the cosine was taken. So a
+ * shooter facing exactly along +Y hands out a forward of `(-4.371e-8, 1, 0)`,
+ * which is a unit vector to any tolerance anyone would test with and is not the
+ * axis it is trying to be. Anything below this is that residue and nothing else:
+ * the largest such term across the four right angles is 8.742e-8, at yaw 180,
+ * and 1e-6 of tilt is six hundred-thousandths of a degree.
+ */
+const POLE_EPSILON = 1e-6;
+
+/**
+ * A cone axis meep's `ConicRay` can actually be rotated onto.
+ *
+ * `ConicRay.sampleRandomDirection` samples the cap around +Z and then rotates it
+ * onto the ray, and it builds that rotation as `k = 1 / (1 + dZ)` -- singular at
+ * the antipode, which it knows: both poles are taken by early returns above the
+ * division. Both of those returns are **exact** equality against `(0, 0, ±1)`,
+ * and `ConicRay.fromJSON` copies the direction verbatim rather than normalising
+ * it, so what reaches the division is exactly what the caller wrote down.
+ *
+ * A vector that is the south pole to within a float's idea of a right angle --
+ * {@link POLE_EPSILON}, which is what `angleVectors` produces -- therefore
+ * misses the early return, divides by `1 + -1`, and gets `k = Infinity`. The
+ * next line is `tx = -k * dY` with `dY` exactly zero, so `Infinity * 0` makes
+ * the first NaN and the rotated sample is NaN in all three components. The
+ * throw comes out of `Vector3.set`, aborts `ParticleEmitterSystem3`'s whole
+ * update for that frame, and repeats every frame until the emitter is retired,
+ * because the emitter never reaches the `Initialized` flag it throws on the way
+ * to. See D-147.
+ *
+ * So this normalises in double and then snaps a direction that is a pole to the
+ * pole exactly, which is both what the early return wants and a fast path. A
+ * zero-length direction has no axis to snap to and gets +Z, on the grounds that
+ * the caller has already lost the information and a cone has to point somewhere.
+ */
+function coneAxis(dirMeep: ArrayLike<number>): { x: number; y: number; z: number } {
+    const dx = dirMeep[0]!;
+    const dy = dirMeep[1]!;
+    const dz = dirMeep[2]!;
+
+    const len = Math.hypot(dx, dy, dz);
+    if (!(len > 0)) return { x: 0, y: 0, z: 1 };
+
+    const x = dx / len;
+    const y = dy / len;
+    const z = dz / len;
+
+    if (Math.abs(x) < POLE_EPSILON && Math.abs(y) < POLE_EPSILON) {
+        return { x: 0, y: 0, z: z < 0 ? -1 : 1 };
+    }
+
+    return { x, y, z };
+}
+
 interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
@@ -809,11 +867,7 @@ export class Effects {
                         emissionImmediate: 6,
                         particleSpeed: { min: 1.5, max: 5 },
                         particleVelocityDirection: {
-                            direction: {
-                                x: dirToMeep(normalQ3)[0],
-                                y: dirToMeep(normalQ3)[1],
-                                z: dirToMeep(normalQ3)[2],
-                            },
+                            direction: coneAxis(dirToMeep(normalQ3)),
                             angle: 1.1,
                         },
                         parameterTracks: [
@@ -1048,11 +1102,7 @@ export class Effects {
 
         const [r, g, b] = muzzleFlashLight(weapon).color;
 
-        const direction = {
-            x: directionMeep[0]!,
-            y: directionMeep[1]!,
-            z: directionMeep[2]!,
-        };
+        const direction = coneAxis(directionMeep);
 
         this.emitter(
             positionMeep,
