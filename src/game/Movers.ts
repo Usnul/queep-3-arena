@@ -752,6 +752,26 @@ export class MoverSystem {
         if (!alive) return;
 
         for (const trigger of this.triggers) {
+            /*
+             An exact box test, for every kind of trigger.
+
+             A jump pad is the one trigger you touch by *standing on it*, and
+             through D-133 this test gave a push trigger -- and only a push
+             trigger -- four extra units under the player's feet, because a patch
+             facet was a sheet given `FACET_THICKNESS` of volume behind whichever
+             face its winding called the front. `am_thornish`'s corner pads are
+             capped by a nodraw patch wound downwards, so the player stood four
+             units above the pad and 0.12 units above the top plane of its
+             trigger, and an exact test said no.
+
+             D-139 centres the facet on its surface instead, and the player now
+             rests 0.625 units above the pad -- 3.4 units *inside* the trigger.
+             Measured over every `trigger_push` on every map in the set, 295 of
+             them, extending the box down by four units, by one, or not at all
+             changes no answer anywhere. The standoff is inert, and an inert
+             workaround that reaches four units past the player's feet is worth
+             deleting rather than keeping as insurance.
+            */
             if (!boxesOverlap(playerMinsQ3, playerMaxsQ3, trigger.mins, trigger.maxs)) continue;
             this.fire(trigger);
         }

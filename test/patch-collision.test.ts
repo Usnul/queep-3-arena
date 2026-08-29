@@ -25,12 +25,17 @@
  * archway solid too, and the second failure is much worse than the bug: the
  * corridor under the arch becomes a wall, silently, on a map that loads fine.
  *
- * So the synthetic cases below are not decoration. The flat patch pins which
- * side of a surface the solid goes on, which no map-level assertion can see
- * because getting it backwards still produces collision -- just in the wrong
- * place. The dome and the bowl are the same nine control points wound opposite
- * ways, and pin that the decomposition reads concavity from the drawn side
- * rather than from the shape of the point cloud.
+ * So the synthetic cases below are not decoration. The flat patch pins *where*
+ * the solid is, which no map-level assertion can see because putting it in the
+ * wrong place still produces collision -- just four units off the surface. The
+ * dome and the bowl are the same nine control points wound opposite ways, and
+ * pin that the decomposition reads concavity from the drawn side rather than
+ * from the shape of the point cloud.
+ *
+ * The two are asked opposite questions about the same winding on purpose. The
+ * winding decides the *shape* -- dome or bowl -- and it decides nothing about
+ * which side of a sheet is solid, because Q3's patch facets have no sides. Both
+ * halves of that are load-bearing and both have a case here; see D-139.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -140,20 +145,47 @@ function drawnNormal(patch: ClipMapPatch): [number, number, number] {
     return [nx / len, ny / len, nz / len];
 }
 
+/** The same nine points with each row reversed, which reverses the winding. */
+function reversedRows(
+    points: readonly (readonly [number, number, number])[],
+    width: number
+): (readonly [number, number, number])[] {
+    const out: (readonly [number, number, number])[] = [];
+    for (let i = 0; i < points.length; i += width) {
+        for (let k = width - 1; k >= 0; k--) out.push(points[i + k]!);
+    }
+    return out;
+}
+
+const FLAT: [number, number, number][] = [
+    [-64, -64, 0], [0, -64, 0], [64, -64, 0],
+    [-64, 0, 0], [0, 0, 0], [64, 0, 0],
+    [-64, 64, 0], [0, 64, 0], [64, 64, 0],
+];
+
 describe('a flat patch', () => {
     /*
      A 3x3 control grid lying in the z = 0 plane. One facet, and the thing worth
-     asserting is which side of it is solid: a patch is a sheet, the collider
-     has to be given a thickness, and putting that thickness on the wrong side
-     builds a floor whose solid half is in the air above it. Nothing about the
-     map loading, the body count or the shape's own validity changes if this is
-     backwards.
+     asserting is where its volume is: a patch is a sheet, the collider has to be
+     given a thickness, and where that thickness goes decides what height a
+     player stands at on every curved floor in the game.
+
+     This used to assert that the solid went *behind the drawn side*, and that
+     was the bug rather than the fix. Q3's patch facets are zero-thickness and
+     collide from both faces, so a mapper has never had a reason to wind a
+     collision patch one way rather than the other -- and on `am_thornish` 54% of
+     the near-horizontal patch cells came out with their solid on the upward
+     side, including the nodraw caps over the corner jump pads, which put the
+     player four units above the pad and above its push trigger entirely. The
+     shell straddles the sheet now, so the error is the standoff either way round
+     rather than nothing or everything.
+
+     The pair of cases below is the whole point: the same nine points wound both
+     ways have to produce the *same* solid, because the winding is not
+     information. See DECISIONS.md D-139.
     */
-    const patch = synthetic(3, 3, [
-        [-64, -64, 0], [0, -64, 0], [64, -64, 0],
-        [-64, 0, 0], [0, 0, 0], [64, 0, 0],
-        [-64, 64, 0], [0, 64, 0], [64, 64, 0],
-    ]);
+    const patch = synthetic(3, 3, FLAT);
+    const reversed = synthetic(3, 3, reversedRows(FLAT, 3));
 
     it('becomes exactly one convex facet', () => {
         const out = patchToHulls(patch);
@@ -161,14 +193,30 @@ describe('a flat patch', () => {
         expect(out.dropped).toBe(0);
     });
 
-    it('is solid behind the drawn side and open in front of it', () => {
+    it('straddles the surface rather than hanging behind it', () => {
         const out = patchToHulls(patch);
         const [nx, ny, nz] = drawnNormal(patch);
 
-        // Two units behind the surface, which is inside the facet's thickness.
-        expect(solidAt(out.hulls, -nx * 2, -ny * 2, -nz * 2)).toBe(true);
-        // And two units in front of it, which is the side the player stands on.
+        // A quarter unit either side of the sheet, which is inside the shell.
+        expect(solidAt(out.hulls, -nx * 0.25, -ny * 0.25, -nz * 0.25)).toBe(true);
+        expect(solidAt(out.hulls, nx * 0.25, ny * 0.25, nz * 0.25)).toBe(true);
+
+        // Two units either side, which is well outside it in both directions.
+        expect(solidAt(out.hulls, -nx * 2, -ny * 2, -nz * 2)).toBe(false);
         expect(solidAt(out.hulls, nx * 2, ny * 2, nz * 2)).toBe(false);
+    });
+
+    it('puts the solid in the same place wound either way', () => {
+        const forward = patchToHulls(patch).hulls;
+        const backward = patchToHulls(reversed).hulls;
+
+        // The two windings genuinely are opposite, or this proves nothing.
+        expect(drawnNormal(reversed)[2]).toBeCloseTo(-drawnNormal(patch)[2], 6);
+
+        expect(backward.length).toBe(forward.length);
+        for (let z = -2; z <= 2; z += 0.125) {
+            expect([z, solidAt(backward, 0, 0, z)]).toEqual([z, solidAt(forward, 0, 0, z)]);
+        }
     });
 
     it('does not extend past the control grid', () => {
@@ -184,8 +232,9 @@ describe('a flat patch', () => {
 /*
  The same nine control points, wound both ways.
 
- A patch has a drawn side, and which side that is decides everything here: the
- solid goes behind it. Wound one way these points are a dome, convex from the
+ The winding no longer decides which side of a sheet is solid -- the flat pair
+ above pins that it does not -- but it still decides the *shape*, and that is
+ what these two are for. Wound one way these points are a dome, convex from the
  front, and one facet is the right answer. Wound the other they are a bowl you
  stand inside, and the same single facet would fill the bowl to its rim. Nothing
  distinguishes the two cases except the winding, which is why they are tested as
@@ -198,11 +247,7 @@ const DOME: [number, number, number][] = [
 ];
 
 /** Reversing each row reverses the winding, so the drawn side swaps. */
-const BOWL: [number, number, number][] = [
-    DOME[2]!, DOME[1]!, DOME[0]!,
-    DOME[5]!, DOME[4]!, DOME[3]!,
-    DOME[8]!, DOME[7]!, DOME[6]!,
-];
+const BOWL = reversedRows(DOME, 3);
 
 describe('a patch that is convex from its drawn side', () => {
     const patch = synthetic(3, 3, DOME);
@@ -248,18 +293,24 @@ describe('a patch that is concave from its drawn side', () => {
         }
     });
 
-    it('is still solid immediately under the surface', () => {
+    it('is still solid at the surface, and thin', () => {
         const out = patchToHulls(patch);
 
         /*
-         The trough's wall passes through `z = 32` at `x = 64`, and the shell
-         hangs four units under it. Sampled mid-facet on purpose: where two
-         facets meet at a convex crease their shells splay apart and leave a
-         notch, which is behind the surface and so unreachable, but it is not
-         solid and a sample taken exactly on a crease would say so.
+         The trough's wall passes through `z = 32` at `x = 64`, and the shell is
+         centred on it rather than hung under it. Sampled mid-facet on purpose:
+         where two facets meet at a convex crease their shells splay apart and
+         leave a notch, which is not solid and a sample taken exactly on a crease
+         would say so.
+
+         The open samples are what pin the thickness. Two units under the surface
+         used to be inside the shell and is now outside it, which is the whole of
+         the change in `FACET_THICKNESS`: a facet that ran four units deep ran
+         four units *proud* wherever the winding was the other way round.
         */
-        expect(solidAt(out.hulls, 64, 0, 30)).toBe(true);
-        expect(solidAt(out.hulls, 64, 0, 34)).toBe(false);
+        expect(solidAt(out.hulls, 64, 0, 32)).toBe(true);
+        expect(solidAt(out.hulls, 64, 0, 30)).toBe(false);
+        expect(solidAt(out.hulls, 64, 0, 35)).toBe(false);
     });
 });
 
@@ -420,6 +471,124 @@ describe('am_thornish round columns', () => {
         physics.trace(trace, [0, 200, -100], [0, 312, -100], MINS, MAXS, MASK_PLAYERSOLID);
         expect(trace.fraction).toBe(1);
         expect(trace.startsolid).toBe(false);
+    });
+});
+
+describe('am_thornish corner jump pads', () => {
+    const built = existsSync(
+        join(process.cwd(), 'assets', 'built', 'am_thornish', 'collision.bsp')
+    );
+
+    /*
+     The measurement D-133 could only work around and D-139 fixes.
+
+     Each corner pad is capped by a `SURF_NODRAW` collision patch -- a flat disc
+     at z = -620 over the pad's ring skirt -- and the mapper wound it facing
+     *downwards*, which no map and no version of Q3 gives them a reason not to.
+     A facet hung behind its winding's front face therefore put four units of
+     solid *above* the drawn surface, the player stood on the back of the slab,
+     and the pad's `trigger_push` volume -- which spans exactly the four units
+     from the surface upwards -- was entirely below their feet. The pad could not
+     fire, and `Movers` compensated by testing push triggers against a box
+     extended down by the same four units.
+
+     Two things are asserted, and the second is the one that matters. The player
+     lands on the *surface the map draws* rather than a slab above it; and where
+     they land is inside the trigger, by enough that it is not a coincidence.
+    */
+    const PADS: [number, number][] = [
+        [-432, 1456],
+        [1456, 1456],
+        [-432, -1456],
+        [1456, -1456],
+    ];
+
+    /** Where the map draws the pad, and the floor of its push trigger. */
+    const SURFACE = -620;
+
+    /**
+     * How far above the surface a resting player is left, in Q3 units.
+     *
+     * `FACET_STANDOFF` -- half of `FACET_THICKNESS` -- plus Q3's own
+     * `SURFACE_CLIP_EPSILON`, which `PhysicsTrace` holds the box clear by. Both
+     * are deliberate and neither is a tolerance to be widened here: the whole
+     * point of the entry is that this number is small.
+     */
+    const STANDOFF = 0.5 + 0.125;
+
+    it.skipIf(!built)('leave a player on the surface, not four units above it', async () => {
+        const cm = loadMap('am_thornish');
+        const physics = await HeadlessPhysics.create(cm);
+        const trace = createTrace();
+
+        for (const [x, y] of PADS) {
+            // Straight down the pad's axis, from clear air well above it.
+            const from = -560;
+            const to = -680;
+            physics.trace(trace, [x, y, from], [x, y, to], [0, 0, 0], [0, 0, 0], MASK_PLAYERSOLID);
+
+            expect(trace.fraction, `no floor found over (${x},${y})`).toBeLessThan(1);
+            const stop = from + trace.fraction * (to - from);
+            expect(stop, `(${x},${y})`).toBeCloseTo(SURFACE + STANDOFF, 2);
+        }
+    });
+
+    it.skipIf(!built)('put a resting player inside the push trigger', async () => {
+        const cm = loadMap('am_thornish');
+        const raw = readFileSync(
+            join(process.cwd(), 'assets', 'extracted', 'maps', 'am_thornish.bsp')
+        );
+        const bsp = new BspFile(
+            raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
+            'am_thornish'
+        );
+        const physics = await HeadlessPhysics.create(cm);
+        const trace = createTrace();
+
+        const pushes = parseEntities(bsp.entityString).filter(
+            (e) => e.classname === 'trigger_push' && String(e.model).startsWith('*')
+        );
+        expect(pushes.length).toBe(8);
+
+        let corners = 0;
+
+        for (const push of pushes) {
+            const model = cm.models[Number(String(push.model).slice(1))];
+            if (model === undefined) continue;
+
+            const cx = (model.mins[0]! + model.maxs[0]!) / 2;
+            const cy = (model.mins[1]! + model.maxs[1]!) / 2;
+            if (!PADS.some(([x, y]) => Math.abs(x - cx) < 1 && Math.abs(y - cy) < 1)) continue;
+            corners += 1;
+
+            // Drop the standing box down the pad's axis and read off the feet.
+            const from = model.maxs[2]! + 64;
+            const to = model.mins[2]! - 96;
+            physics.trace(
+                trace,
+                [cx, cy, from + 24],
+                [cx, cy, to + 24],
+                MINS,
+                MAXS,
+                MASK_PLAYERSOLID
+            );
+            expect(trace.fraction, `nothing to stand on at (${cx},${cy})`).toBeLessThan(1);
+
+            const feet = from + trace.fraction * (to - from);
+
+            /*
+             `MoverSystem` fires a push trigger on an exact box overlap, so the
+             feet have to be under the trigger's ceiling with the box reaching
+             its floor. Asserted with a unit of daylight rather than as a bare
+             overlap: passing by a hundredth would be passing by luck.
+            */
+            expect(feet, `(${cx},${cy}) feet above the trigger`).toBeLessThan(model.maxs[2]! - 1);
+            expect(feet + (MAXS[2]! - MINS[2]!), `(${cx},${cy})`).toBeGreaterThan(
+                model.mins[2]! + 1
+            );
+        }
+
+        expect(corners).toBe(4);
     });
 });
 

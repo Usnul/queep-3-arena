@@ -6226,6 +6226,96 @@ only, and `WeaponSystem.damage` raises it with zero for a fully-absorbed hit -- 
 the kick along with the damage. Recorded rather than papered over; the fix is a second field on the
 event.
 
+### D-139: a patch facet has no front, so the shell straddles the sheet instead of hanging behind it
+
+D-133 fixed half of `am_thornish`'s jump pads and filed the other half. The filed half was that a
+player stands **four units above** the pads: the pads are capped by a `SURF_NODRAW` collision
+patch, `patchHull.ts` gives a facet `FACET_THICKNESS` of volume on the side its winding calls the
+back, and that patch is wound facing down — so the four units went up and the player stood on the
+back of the slab. Measured: a point trace down the pad's axis stopped at **z = -615.88** where the
+map's own surface is **-620** and the brush floor beneath it is **-624**. The pad's `trigger_push`
+volume is -620..-616, entirely below the feet, so the pad could not fire; D-133 worked that around
+by testing push triggers against a box extended down by the same four units.
+
+D-133 said no rule over the winding can recover what was never encoded, and that was right. What it
+did not say is that **nothing needs to be recovered**, because the question is the wrong one.
+
+**The winding is not a signal, and the shipped maps say so out loud.** `CM_TraceThroughPatchCollide`
+walks a facet's planes without asking which way it points: Q3's patch facets are zero-thickness and
+solid from both faces. So a collision patch's winding is unread by the engine and unchecked by the
+compiler, and a `SURF_NODRAW` one is not even checked by the mapper's eyes. On `am_thornish`,
+**6,208 of 11,584 near-horizontal patch cells — 54% — put their solid above the drawn surface**
+rather than below it. That is not a map full of mistakes. It is a field with no right answer, being
+read as if it had one, and coming out at a coin flip because that is what it is.
+
+A shell hung behind the "front" face is therefore exact on one side of the sheet and four units out
+on the other, and which side gets the error is decided by noise. So the shell is centred on the
+sheet: `FACET_STANDOFF` in front, the same behind, and the winding decides nothing about it. The
+thickness comes down from 4 to 1 at the same time, because the two numbers only make sense together
+— straddling at 4 would put every correctly-wound floor two units in the air.
+
+`FACET_THICKNESS` is now a floor, not a tuning knob. Two things set it and both are lower bounds.
+`hullFromPlanes` clips windings with a `CHOP_EPSILON` of 0.1, so front and back have to be far
+enough apart not to be taken for one plane; and half of it has to exceed `SURFACE_CLIP_EPSILON`, so
+the eighth of a unit Q3 holds a resting player clear by does not reach through the shell. One unit
+is ten times the first and four times the second.
+
+**The four units bought nothing.** Their stated reason was that "the swept query cannot step over
+the facet in one frame", and that is not a risk this port runs: `pm->trace` is `shape_cast` over the
+whole segment and a missile carries `RigidBodyFlags.CCD`. Nothing meets the level with a discrete
+narrowphase, and a swept query does not step over anything however thin it is. What the extra three
+units bought was error.
+
+Against a facet chord that already sits **1.2 units inside** a 128-unit column at `COLLISION_LEVEL`,
+half a unit of standoff is well inside a disagreement between the collision surface and the drawn
+one that this file has had since it shipped. After the change the same trace down the pad stops at
+**-619.38** — the standoff plus Q3's own clip epsilon — against -615.88 before.
+
+**Deciding the side from the geometry was tried and declined, and the measurement is why.** The
+obvious alternative is to read the side off something other than the winding: probe the brush lump
+either side of a planar patch and put the solid where a player cannot be. It works on the pads —
+four units of air below, a room above. Run over every map in the set it flips **511 of 2,280 planar
+patches, and 195 of those are on drawn surfaces**, whose windings *are* verified, because Q3 culls
+backfaces and a patch wound inside-out is not drawn. A heuristic that overrules 195 checked windings
+to fix a class where nothing was ever checked trades a known error for an unknown one, and it would
+have to keep being right on every map this port has not seen. Straddling has no such failure mode:
+it does not read the winding at all. The winding still decides the *decomposition* — `isConvex`
+reads concavity from the drawn side, which is what keeps an archway open — and that is a shape
+question with no second source, which is exactly why it is worth keeping the two apart.
+
+**One coupling had to be cut on the way.** `ESCAPE_MARGIN`, the safety net that catches a plane set
+which failed to bound a volume and came back as a map-sized box, was written as
+`4 * FACET_THICKNESS + 1`. The two are unrelated: a facet overshoots its block by the standoff and
+`CONVEX_EPSILON`, under a unit, while the margin exists to tell a facet from a million-unit box.
+Tying it to the thickness meant thinning the shell tightened the net to five units, which rejected
+**650 blocks that were in no trouble at all and left 65 single cells dropped** — holes in the
+collision surface, produced by a change that made every facet smaller. It is a flat 17 now, the
+figure it has always had. With that fixed the decomposition is unchanged across the whole map set:
+**59,657 facets against 59,675, the same 4 dropped cells, no hull that fails to build.**
+
+**D-133's workaround is gone.** With the facet centred, a player rests 0.625 units above the pad,
+which is 3.4 units *inside* its trigger. Measured over every `trigger_push` with a floor under it on
+every map in the set — 295 of them — extending the player's box down by four units, by one, or not
+at all **changes no answer anywhere**. The standoff is inert, and an inert workaround that reaches
+four units past the player's feet is worth deleting rather than keeping as insurance; `MoverSystem`
+tests every trigger with an exact box overlap again. (`kaos` and `kaos2` have four pads whose
+trigger brushes are buried 4.12 units under a *brush* floor and which fire on neither setting. That
+is a different bug, it predates all of this, and it is not touched here.)
+
+**What this costs is real and it is half a unit.** Every patch surface in the game is now 0.5 units
+proud of where it is drawn — a curved floor stands you that much high, a column is that much fatter,
+a patch wall that much closer. Where the winding happened to be right, that is a regression from
+zero. It is the price of not reading the winding at all, it is an eighth of what the wrong side cost,
+and it is under half the sagitta the same facets already carry. D-134's residual, which it records
+as "the discrete step and the four units of D-133's slab", loses that second term down to 0.5.
+
+**The tests changed, and one of them changed sides.** `patch-collision.test.ts` used to assert that a
+flat patch is solid behind its drawn side and open in front — pinning the very thing that was wrong.
+It now asserts the shell straddles, and that the *same nine control points wound both ways produce
+the same solid*, which is the property the bug violated. The dome and the bowl are untouched and
+still pin that a bowl stays open, because the winding still decides that. Two new cases measure the
+corner pads end to end: where the collision layer leaves a player standing, and that where it leaves
+them is inside the trigger by more than a unit.
 
 ---
 

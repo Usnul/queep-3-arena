@@ -54,6 +54,35 @@
  * always a facet that is a hair too big rather than one a player can fall
  * through -- and Q3's own bevel planes err in the same direction.
  *
+ * **The shell is centred on the sheet, not hung behind it.** Q3's patch facets
+ * are zero-thickness and collide from *both* faces -- `CM_TraceThroughPatchCollide`
+ * walks a facet's planes without asking which way it points -- so a mapper has
+ * never had a reason to wind a collision patch one way rather than the other.
+ * Nothing in the map checks it and nothing in the game reads it. Measured on
+ * `am_thornish`, 6,208 of its 11,584 near-horizontal patch cells -- 54% -- put
+ * their solid *above* the drawn surface rather than below it. That is not a map
+ * full of mistakes: it is a field with no right answer being sampled.
+ *
+ * A shell hung behind whichever face the winding calls the front is therefore
+ * exact on one side of the sheet and a whole `FACET_THICKNESS` out on the other,
+ * and which one it gets is a coin flip. That is not a hypothetical: the map's
+ * corner jump pads are capped by a `SURF_NODRAW` patch wound downwards, so the
+ * four units went *up*, the player stood on the back of the slab four units
+ * above the surface the map draws, and the pad's `trigger_push` volume was
+ * entirely below their feet.
+ *
+ * So the shell straddles the surface -- `FACET_STANDOFF` in front and the same
+ * behind -- and the winding decides nothing about it. That costs half a unit on
+ * the side that used to be exact and saves three and a half on the side that
+ * was not, and it reads nothing into the winding that Q3 does not. See
+ * DECISIONS.md D-139.
+ *
+ * The winding still decides the *decomposition*, and there it is load-bearing:
+ * `isConvex` reads concavity from the drawn side, which is what keeps an archway
+ * open, and there is no second source for that. The difference is that a shape
+ * question has no other answer, while "which side is solid" has a better one --
+ * don't ask it.
+ *
  * **A facet is a shell, not a fill.** A closed patch -- a column -- comes out as
  * a ring of wall facets rather than a solid cylinder, so the space inside it is
  * not solid and `pointContents` there reads empty. That is Q3's behaviour too:
@@ -105,18 +134,45 @@ export const COLLISION_LEVEL = 4;
 const CONVEX_EPSILON = 0.25;
 
 /**
- * How thick a facet is made, in Q3 units, behind its front surface.
+ * How thick a facet is made, in Q3 units, centred on the surface it came from.
  *
- * A patch is a sheet with no thickness and a collider needs volume. The number
- * only has to be enough that the swept query cannot step over the facet in one
- * frame, and small enough not to poke out of whatever the patch is applied to:
- * Q3 trim is rarely thinner than 8 units, and a player at 400 units a second
- * covers 3.2 in an 8ms frame.
+ * A patch is a sheet with no thickness and a collider needs volume. Half of this
+ * goes on each side; see the header for why it is not all put behind.
  *
- * A closed patch -- a full cylinder -- needs none of this, and gets none: its
- * own cell planes bound it from every side, so the closing plane is dropped.
+ * Every constraint on the number is a floor rather than a ceiling, so it is set
+ * to the smallest value that clears them all with room to spare. The two faces
+ * have to survive `hullFromPlanes`' winding clip, whose `CHOP_EPSILON` is 0.1,
+ * or the front and back are taken for one plane and the facet has no volume at
+ * all; and `FACET_STANDOFF` has to be more than `SURFACE_CLIP_EPSILON` so that
+ * the eighth of a unit Q3 holds a resting player clear by does not reach through
+ * the shell. One unit is ten times the first and four times the second.
+ *
+ * It was four, so that "the swept query cannot step over the facet in one
+ * frame". That is not a risk the query runs. `pm->trace` is `shape_cast` over
+ * the whole segment and a missile carries `RigidBodyFlags.CCD`; nothing in this
+ * port meets the level with a discrete narrowphase, and a swept query does not
+ * step over anything however thin it is. What the extra three units bought was
+ * error, and the error is what the header is about.
+ *
+ * The cost of the half unit that is left is best read against the gap this file
+ * already has: at `COLLISION_LEVEL` a facet chord across a 128-unit column sits
+ * 1.2 units inside the drawn surface. Standing off by 0.5 is well inside a
+ * disagreement between the collision surface and the drawn one that has been
+ * there since the decomposition shipped, and Q3's is larger still.
+ *
+ * A closed patch -- a full cylinder -- needs no closing plane, and gets none:
+ * its own cell planes bound it from every side.
  */
-const FACET_THICKNESS = 4;
+const FACET_THICKNESS = 1;
+
+/**
+ * Half of {@link FACET_THICKNESS}: how far the shell stands off each face.
+ *
+ * Both the cell planes and the closing plane are pushed out by this. The border
+ * planes are not -- they bound the facet *sideways*, where there is no sheet to
+ * straddle and growing the plane set would only widen the patch's own footprint.
+ */
+const FACET_STANDOFF = FACET_THICKNESS / 2;
 
 /**
  * Below this, a block's cell normals are taken to cancel out, meaning the block
@@ -142,8 +198,18 @@ const DEDUPE_DIST = 0.05;
  * wrong for some patch in some map, `hullFromPlanes` returns a hull the size of
  * `MAX_MAP_BOUNDS` rather than a facet, and a million-unit invisible box in the
  * middle of a level is not a failure to discover from a bug report.
+ *
+ * A flat number, and it has to be. This was `4 * FACET_THICKNESS + 1`, which
+ * reads as a margin proportional to how far a facet is allowed to stand off its
+ * own surface -- but the two are not related. A facet overshoots its block by
+ * the standoff and `CONVEX_EPSILON`, which is under a unit; the margin is here
+ * to tell a facet from a map-sized box, and anything between those two works.
+ * Tying it to the thickness meant that thinning the shell to a unit tightened
+ * this to five, and *that* rejected 650 blocks that were in no trouble at all,
+ * split them, and left 65 single cells dropped -- holes in the collision, from
+ * a change that made every facet smaller. Held at the figure it has always had.
  */
-const ESCAPE_MARGIN = 4 * FACET_THICKNESS + 1;
+const ESCAPE_MARGIN = 17;
 
 export interface PatchHullSet {
     readonly hulls: readonly BrushHull[];
@@ -229,9 +295,11 @@ export function patchToHulls(patch: ClipMapPatch): PatchFacets {
 
      `tessellatePatch` emits `(a, c, b)` for `a = (row, col)`, `b = a + 1`,
      `c = a + width`, so the outward normal is `cross(rowStep, colStep)` -- the
-     side the surface is drawn from. That is the side the solid goes *behind*,
-     which is what makes a column solid toward its axis and a floor solid
-     downwards without either case being special.
+     side the surface is drawn from. What that decides is the *decomposition*:
+     `isConvex` asks whether a block bulges past its own cell planes, so a dome
+     stays one facet and a bowl splits into the strips that keep an archway
+     open. It does not decide which side of the sheet is solid -- the shell
+     straddles it, and `FACET_THICKNESS` says why.
 
      Newell over all four corners rather than one triangle's cross product: a
      tessellated quad is not planar in general, and one triangle's normal tilts
@@ -442,7 +510,9 @@ export function patchToHulls(patch: ClipMapPatch): PatchFacets {
                 sumZ += nz * area;
                 totalArea += area;
 
-                addPlane(nx, ny, nz, supportOf(block, nx, ny, nz));
+                // Standing off the front by half the thickness; the closing
+                // plane below stands off the back by the same.
+                addPlane(nx, ny, nz, supportOf(block, nx, ny, nz) + FACET_STANDOFF);
             }
         }
 
@@ -466,9 +536,10 @@ export function patchToHulls(patch: ClipMapPatch): PatchFacets {
 
         /*
          The closing plane, behind the surface. Placed at the block's own
-         support in that direction *plus* the thickness, so it sits behind every
-         vertex of the front surface and cannot shave real volume off a block
-         that curves away from its own mean normal.
+         support in that direction *plus* the standoff -- the same figure the
+         cell planes were pushed out by, which is what centres the shell -- so it
+         sits behind every vertex of the surface and cannot shave real volume off
+         a block that curves away from its own mean normal.
         */
         const meanLength = Math.hypot(sumX, sumY, sumZ) / totalArea;
         if (meanLength > CLOSED_NORMAL_EPSILON) {
@@ -476,7 +547,7 @@ export function patchToHulls(patch: ClipMapPatch): PatchFacets {
             const bx = -sumX * inv;
             const by = -sumY * inv;
             const bz = -sumZ * inv;
-            addPlane(bx, by, bz, supportOf(block, bx, by, bz) + FACET_THICKNESS);
+            addPlane(bx, by, bz, supportOf(block, bx, by, bz) + FACET_STANDOFF);
         }
 
         const hull = hullFromPlanes(

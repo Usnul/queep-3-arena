@@ -345,7 +345,7 @@ describe('oa_dm7, as converted', () => {
 });
 
 /*
- * `am_thornish`, whose jump pads were half the bug report.
+ * `am_thornish`, which is where both halves of the jump-pad report came from.
  *
  * Eight `trigger_push` entities: four in the corners aimed at `target_position`
  * markers, and four in the middle aimed at `info_notnull`s. The second set did
@@ -403,5 +403,96 @@ describe('am_thornish, whose jump pads were the bug report', () => {
                 pad.centre[2] + velocity[2]! * time - 0.5 * gravity * time * time
             ).toBeCloseTo(destination.origin[2], 2);
         }
+    });
+
+    it('fires a corner pad for a player resting on it', () => {
+        /*
+         The other half of the report, and the shape of it changed under D-139.
+
+         The corner pads' triggers are four units tall and stand *on* the surface
+         the player stands on, so a player resting there is inside the volume and
+         an exact box test is all it takes. That was not true while a patch facet
+         hung four units of thickness above its own surface: the feet came to rest
+         at the top of the slab, 0.12 units past `maxs[2]`, and the pad was dead.
+         The facet is centred on its surface now and the feet land 0.625 above it,
+         which is where this test puts them -- so what is being asserted is the
+         real resting height rather than a standoff that used to compensate for
+         the wrong one.
+        */
+        const system = thornish();
+        const pad = system.triggers
+            .filter((t) => t.kind === 'push')
+            .find((t) => t.target === 'target_position2')!;
+
+        let pushed: readonly number[] | null = null;
+        const watched = new MoverSystem({
+            moverSound: () => {},
+            teleport: () => {},
+            hurt: () => {},
+            push: (v) => {
+                pushed = v;
+            },
+        });
+
+        const built = join(process.cwd(), 'assets', 'built', 'am_thornish');
+        const scene = JSON.parse(readFileSync(join(built, 'scene.json'), 'utf8')) as {
+            entities: MoverEntity[];
+            submodels: { minsQ3: number[]; maxsQ3: number[] }[];
+        };
+        watched.spawn(scene.entities, scene.submodels);
+
+        /*
+         A standing player on the pad: half a unit of `FACET_STANDOFF` plus the
+         eighth the solver holds them clear by, above the surface the trigger
+         sits on. `patch-collision.test.ts` measures that this is in fact where
+         the collision layer puts them; here it is the input.
+        */
+        const feet = pad.mins[2] + 0.625;
+        const mins = [pad.centre[0] - 15, pad.centre[1] - 15, feet];
+        const maxs = [pad.centre[0] + 15, pad.centre[1] + 15, feet + 56];
+
+        watched.update(0.016, mins, maxs, true);
+
+        expect(pushed).not.toBeNull();
+        expect(pushed![2]).toBeCloseTo(pad.pushVelocity![2]!, 6);
+    });
+
+    it('does not reach a trigger the player is genuinely nowhere near', () => {
+        /*
+         The other end of it. A player standing a foot above the pad is not on
+         the pad, and this used to be the assertion that the four-unit standoff
+         had not become "a push trigger reaches whatever is roughly beneath it".
+         It is kept with the standoff gone, because an exact box test is the
+         thing that has to stay exact.
+        */
+        const system = thornish();
+        const pad = system.triggers
+            .filter((t) => t.kind === 'push')
+            .find((t) => t.target === 'target_position2')!;
+
+        let pushed = false;
+        const watched = new MoverSystem({
+            moverSound: () => {},
+            teleport: () => {},
+            hurt: () => {},
+            push: () => {
+                pushed = true;
+            },
+        });
+
+        const built = join(process.cwd(), 'assets', 'built', 'am_thornish');
+        const scene = JSON.parse(readFileSync(join(built, 'scene.json'), 'utf8')) as {
+            entities: MoverEntity[];
+            submodels: { minsQ3: number[]; maxsQ3: number[] }[];
+        };
+        watched.spawn(scene.entities, scene.submodels);
+
+        const feet = pad.maxs[2] + 12;
+        const mins = [pad.centre[0] - 15, pad.centre[1] - 15, feet];
+        const maxs = [pad.centre[0] + 15, pad.centre[1] + 15, feet + 56];
+
+        watched.update(0.016, mins, maxs, true);
+
+        expect(pushed).toBe(false);
     });
 });
