@@ -62,6 +62,7 @@ import {
     NUM_CROSSHAIRS,
 } from '../src/client/crosshair.ts';
 import { CROSSHAIR_DEFAULT } from '../src/client/Hud.ts';
+import { parseMd3 } from '../tools/pipeline/md3.ts';
 import balance from '../src/game/balance.generated.json' with { type: 'json' };
 
 const BUILT = join(process.cwd(), 'assets', 'built');
@@ -698,6 +699,193 @@ describe('every weapon can be drawn in the player\'s hands', () => {
             expect(forward, `${tag} is held behind the eye`).toBeGreaterThan(0);
             expect(-left, `${tag} is held in the left hand`).toBeGreaterThan(0);
         }
+    });
+});
+
+/*
+ * The barrel that is a *model*, which is a different barrel from the one below.
+ *
+ * Five of the thirteen weapons are two files -- `machinegun.md3` is the
+ * receiver and the sights, and the tube that runs between the sights is
+ * `machinegun_barrel.md3` hung off `tag_barrel`. The pipeline read the item
+ * table, the item table names one file, and the guns shipped with their fronts
+ * missing: 16% of the machinegun, 46% of the gauntlet, 70% of the chaingun.
+ * Nothing failed, because a model that was never asked for cannot be reported
+ * absent. See D-141.
+ *
+ * The invariant is stated in *both* directions on purpose. A `tag_barrel` with
+ * no model behind it is the defect that shipped; a model with no tag to hang it
+ * on would be the same defect the other way up, and would draw the barrel at
+ * the weapon's origin.
+ */
+describe('a weapon that is two models reaches the bundle as two models', () => {
+    /** What OpenArena ships a `_barrel.md3` for, measured off the pk3s. */
+    const WITH_BARREL = [
+        'WP_BFG',
+        'WP_CHAINGUN',
+        'WP_GAUNTLET',
+        'WP_GRAPPLING_HOOK',
+        'WP_MACHINEGUN',
+    ];
+
+    const worldModel = (tag: string): string =>
+        (balance.items as { tag: string; type: string; models: string[] }[])
+            .find((i) => i.type === 'IT_WEAPON' && i.tag === tag)!
+            .models[0]!.replace(/\\/g, '/');
+
+    const barrelPath = (world: string): string =>
+        `${world.slice(0, -'.md3'.length)}_barrel.md3`;
+
+    it('converts a barrel for exactly the weapons whose model has a `tag_barrel`', () => {
+        const library = modelLibrary();
+
+        const tagged: string[] = [];
+        const converted: string[] = [];
+
+        for (const tag of WEAPON_TAGS) {
+            const world = worldModel(tag);
+
+            if (library.definition(world)?.tags.some((t) => t.name === 'tag_barrel') === true) {
+                tagged.push(tag);
+            }
+            if (library.definition(barrelPath(world)) !== null) converted.push(tag);
+        }
+
+        expect(tagged.sort(), 'weapons whose world model carries a `tag_barrel`').toEqual(
+            [...WITH_BARREL].sort()
+        );
+        expect(converted.sort(), 'weapons whose barrel model reached the bundle').toEqual(
+            [...WITH_BARREL].sort()
+        );
+    });
+
+    it('gives every barrel triangles to draw', () => {
+        const library = modelLibrary();
+
+        for (const tag of WITH_BARREL) {
+            const barrel = library.definition(barrelPath(worldModel(tag)))!;
+            const triangles = barrel.meshes.reduce((n, m) => n + m.indexCount / 3, 0);
+
+            expect(triangles, `${tag}'s barrel is an empty model`).toBeGreaterThan(0);
+        }
+    });
+
+    /*
+     The tag's *basis*, which is the half of `md3Tag_t` the bundle used to drop.
+
+     Three of the five bases are the model's own and would have survived being
+     thrown away. The gauntlet's and the chaingun's are quarter turns, so a
+     barrel placed by the origin alone comes out pointing across the gun rather
+     than along it -- and those two are the barrel you would notice, the
+     gauntlet's blade and the chaingun's rotor.
+
+     Checked against the source rather than against a recorded number: the tag
+     basis maps the barrel's own axes onto the weapon's, so turning each meep
+     basis vector by the stored quaternion has to reproduce the corresponding
+     row of `md3Tag_t.axis`, restated in meep axes.
+    */
+    it('carries the tag basis, not just its origin', () => {
+        const library = modelLibrary();
+
+        // Self-guard: if every basis were the model's own, this test would pass
+        // against a bundle that had thrown all five away.
+        const turned = WITH_BARREL.filter((tag) => {
+            const q = library
+                .definition(worldModel(tag))!
+                .tags.find((t) => t.name === 'tag_barrel')!.rotation;
+            return Math.abs(q[3]! ) < 0.999;
+        });
+        expect(turned.sort(), 'the two bases that are quarter turns').toEqual(
+            ['WP_CHAINGUN', 'WP_GAUNTLET'].sort()
+        );
+
+        const norm = (v: readonly number[]): [number, number, number] => {
+            const l = Math.hypot(v[0]!, v[1]!, v[2]!);
+            return [v[0]! / l, v[1]! / l, v[2]! / l];
+        };
+        const toMeep = (v: readonly number[]): [number, number, number] => [v[0]!, v[2]!, -v[1]!];
+        const negate = (v: [number, number, number]): [number, number, number] => [
+            -v[0],
+            -v[1],
+            -v[2],
+        ];
+
+        for (const tag of WITH_BARREL) {
+            const world = worldModel(tag);
+
+            const raw = readFileSync(join(process.cwd(), 'assets', 'extracted', world));
+            const md3 = parseMd3(
+                raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
+                world
+            );
+            const source = md3.tags[0]!.find((t) => t.name === 'tag_barrel')!;
+
+            const stored = library.definition(world)!.tags.find((t) => t.name === 'tag_barrel')!;
+
+            const rotation = new Quaternion().set(
+                stored.rotation[0]!,
+                stored.rotation[1]!,
+                stored.rotation[2]!,
+                stored.rotation[3]!
+            );
+
+            expect(rotation.length(), `${tag}: not a unit quaternion`).toBeCloseTo(1, 6);
+
+            /*
+             The rows are normalised first because `R_LerpTag` normalises them:
+             the exporter left a 1.8444 scale in two of these bases, and
+             carrying it through would draw the gauntlet's blade at nearly twice
+             the size of the gauntlet.
+
+             Q3's rows are forward, left, up; meep's model frame is x forward,
+             y up, z **right** -- so the third is the negated left.
+            */
+            const want: [string, [number, number, number]][] = [
+                ['x', toMeep(norm(source.axis[0]))],
+                ['y', toMeep(norm(source.axis[2]))],
+                ['z', negate(toMeep(norm(source.axis[1])))],
+            ];
+
+            for (const [axis, expected] of want) {
+                const got = new Vector3(
+                    axis === 'x' ? 1 : 0,
+                    axis === 'y' ? 1 : 0,
+                    axis === 'z' ? 1 : 0
+                ).applyQuaternion(rotation);
+
+                expect(got.x, `${tag}: ${axis} axis`).toBeCloseTo(expected[0], 5);
+                expect(got.y, `${tag}: ${axis} axis`).toBeCloseTo(expected[1], 5);
+                expect(got.z, `${tag}: ${axis} axis`).toBeCloseTo(expected[2], 5);
+            }
+        }
+    });
+
+    /*
+     And the whole point of it: the barrel lands where the gun's own mesh ends.
+
+     `machinegun.md3` runs to x = 16.0 and its `tag_barrel` is at x = 5.76; the
+     barrel model is 10.2 units long, so its far end sits at 15.96 -- flush with
+     the muzzle, `tag_flash` being at 16.74. A barrel drawn at the weapon's own
+     origin instead would stop 5.8 units short, inside the receiver, and the gun
+     would have a hole between its sights. That is the screenshot this fix came
+     from.
+    */
+    it('reaches the muzzle once it is placed on the tag', () => {
+        const library = modelLibrary();
+
+        const body = library.definition('models/weapons2/machinegun/machinegun.md3')!;
+        const barrel = library.definition('models/weapons2/machinegun/machinegun_barrel.md3')!;
+        const tag = body.tags.find((t) => t.name === 'tag_barrel')!;
+
+        // Down the barrel is +x in meep model axes, and this tag is unrotated.
+        const front = tag.origin[0]! + barrel.maxs[0]!;
+
+        expect(front, 'the barrel stops short of the muzzle').toBeCloseTo(15.96, 1);
+        expect(front, 'and does not shoot out past the gun').toBeLessThan(body.maxs[0]! + 0.5);
+        expect(
+            tag.origin[0]! + barrel.mins[0]!,
+            'and starts inside the receiver rather than at the origin'
+        ).toBeGreaterThan(5);
     });
 });
 

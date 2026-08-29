@@ -40,6 +40,7 @@ import {
     drawableSurfaces,
     type Md3Model,
     type Md3Surface,
+    type Md3Tag,
 } from './pipeline/md3.ts';
 import {
     derivedTextureKey,
@@ -80,6 +81,59 @@ const OUT_STRIDE = 12; // position(3) normal(3) uv(2) uv1(2) colour(2, unused)
  */
 function q3ToMeep(x: number, y: number, z: number): [number, number, number] {
     return [x, z, -y];
+}
+
+function normalise(v: readonly [number, number, number]): [number, number, number] {
+    const length = Math.hypot(v[0], v[1], v[2]);
+    return length === 0 ? [0, 0, 0] : [v[0] / length, v[1] / length, v[2] / length];
+}
+
+/**
+ * A tag's basis, as a quaternion in the axes the meshes were converted into.
+ *
+ * `md3Tag_t` stores three vectors -- forward, **left**, up -- expressed in the
+ * parent model's own frame, and Q3 attaches a child by
+ * `p = origin + Σ cᵢ · axis[i]`, which is the matrix whose *columns* are those
+ * vectors. A converted mesh lives in meep axes, so what the runtime needs is
+ * that rotation conjugated by the axis map: `M A M⁻¹`, whose columns work out
+ * as `M·forward`, `M·up` and `-M·left` -- x forward, y up, z **right**, which
+ * is exactly the frame `MODEL_TO_VIEW` documents the converted models in.
+ *
+ * The three rows are normalised first because `R_LerpTag` normalises them, and
+ * OA needs it to: `gauntlet.md3` and `vulcan.md3` both ship a `tag_barrel`
+ * whose basis is scaled by 1.8444, which the exporter left in and which Q3
+ * throws away before it ever multiplies. Carrying it through would make the
+ * gauntlet's blade almost twice the size of the gauntlet.
+ */
+function tagRotation(axis: Md3Tag['axis']): [number, number, number, number] {
+    const forward = normalise(axis[0]);
+    const left = normalise(axis[1]);
+    const up = normalise(axis[2]);
+
+    const [m00, m10, m20] = q3ToMeep(forward[0], forward[1], forward[2]);
+    const [m01, m11, m21] = q3ToMeep(up[0], up[1], up[2]);
+    const [nx, ny, nz] = q3ToMeep(left[0], left[1], left[2]);
+    const [m02, m12, m22] = [-nx, -ny, -nz];
+
+    // Shepperd: pivot on whichever of the four is largest, so the square root
+    // is never taken of something near zero.
+    const trace = m00 + m11 + m22;
+
+    if (trace > 0) {
+        const s = Math.sqrt(trace + 1) * 2;
+        return [(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, s / 4];
+    }
+    if (m00 > m11 && m00 > m22) {
+        const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+        return [s / 4, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s];
+    }
+    if (m11 > m22) {
+        const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+        return [(m01 + m10) / s, s / 4, (m12 + m21) / s, (m02 - m20) / s];
+    }
+
+    const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+    return [(m02 + m20) / s, (m12 + m21) / s, s / 4, (m10 - m01) / s];
 }
 
 interface Accum {
@@ -199,6 +253,41 @@ function handModelPaths(): { paths: string[]; fallbacks: string[] } {
     }
 
     return { paths: [...paths].sort(), fallbacks };
+}
+
+/**
+ * The barrel models, which are the front half of five of the thirteen guns.
+ *
+ * `CG_RegisterWeapon` builds this path the same way it builds the hands one --
+ * the world model's extension swapped for `_barrel.md3` -- and both
+ * `CG_AddPlayerWeapon` and `CG_Item` hang the result off the weapon's own
+ * `tag_barrel`. It is a *separate model* because Q3 spins it, and a converter
+ * that reads `bg_itemlist` and stops sees no reason it should exist: the item
+ * table names `machinegun.md3` and has nothing to say about the tube that
+ * bolts onto it.
+ *
+ * So the bundle shipped five guns with their fronts missing -- 16% of the
+ * machinegun, 46% of the gauntlet, 70% of the chaingun -- and every tag needed
+ * to put them back was already in the file. See D-141.
+ *
+ * Eight weapons ship none and that is not a defect; their world model carries
+ * no `tag_barrel` either. Filtered rather than reported for the same reason the
+ * hands fallbacks are.
+ */
+function barrelModelPaths(): string[] {
+    const paths = new Set<string>();
+
+    for (const item of balanceItems()) {
+        if (item.type !== 'IT_WEAPON') continue;
+
+        const world = (item.models[0] ?? '').replace(/\\/g, '/');
+        if (!world.toLowerCase().endsWith('.md3')) continue;
+
+        const barrel = `${world.slice(0, -'.md3'.length)}_barrel.md3`;
+        if (existsSync(join(EXTRACTED, barrel))) paths.add(barrel);
+    }
+
+    return [...paths].sort();
 }
 
 /**
@@ -357,6 +446,7 @@ async function convertModels(): Promise<void> {
         ...new Set([
             ...itemModelPaths(),
             ...hands.paths,
+            ...barrelModelPaths(),
             ...missileModelPaths(),
             ...EXTRA_MODELS,
         ]),
@@ -511,6 +601,7 @@ async function convertModels(): Promise<void> {
             tags: (md3.tags[0] ?? []).map((t) => ({
                 name: t.name,
                 origin: [t.origin[0], t.origin[2], -t.origin[1]],
+                rotation: tagRotation(t.axis),
             })),
         });
     }

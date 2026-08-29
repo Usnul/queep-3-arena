@@ -66,6 +66,7 @@ import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 
 import { bobFracSin, bobOddCycle } from './bob.ts';
+import { barrelAttachment, placeOnTag, type TagAttachment } from './barrel.ts';
 import type { ModelLibrary } from './map/loadModels.ts';
 import { weaponItemByTag } from '../game/Items.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
@@ -380,6 +381,17 @@ interface DrawnWeapon {
     readonly geometries: ShadedGeometry[];
     /** Parallel to `geometries`; the entity each one is linked to and off. */
     readonly entities: number[];
+    /**
+     * Parallel to `transforms`: where that piece sits on the gun, or null for a
+     * piece that *is* the gun.
+     *
+     * Only the barrel is ever non-null, and only for the five weapons that ship
+     * one. It is a per-piece field rather than a second list because everything
+     * else about a barrel -- built once, shown and hidden with the weapon,
+     * counted in `pieceCount` -- is what the body already does, and the one
+     * thing that differs is the pose it is written each frame. See `barrel.ts`.
+     */
+    readonly attachments: (TagAttachment | null)[];
     readonly offset: readonly [number, number, number];
     /**
      * `tag_flash` in the model's own axes, Q3 units, or null for a weapon that
@@ -487,9 +499,34 @@ export class ViewWeapon implements MuzzleFlashSink {
 
             placeViewWeapon(camera, wanted.offset, sway, scratchPosition, scratchRotation);
 
-            for (const transform of wanted.transforms) {
-                transform.position.set(scratchPosition.x, scratchPosition.y, scratchPosition.z);
-                transform.rotation.copy(scratchRotation);
+            for (let i = 0; i < wanted.transforms.length; i++) {
+                const transform = wanted.transforms[i]!;
+                const attachment = wanted.attachments[i]!;
+
+                if (attachment === null) {
+                    transform.position.set(
+                        scratchPosition.x,
+                        scratchPosition.y,
+                        scratchPosition.z
+                    );
+                    transform.rotation.copy(scratchRotation);
+                    continue;
+                }
+
+                /*
+                 The barrel, on the gun the gun is on. Written from the same
+                 `scratchPosition`/`scratchRotation` the body was, so it inherits
+                 the sway and the hands offset for free and cannot lag them by a
+                 frame -- which is the failure mode of parenting it to something
+                 that is itself written later in the tick.
+                */
+                placeOnTag(
+                    scratchPosition,
+                    scratchRotation,
+                    attachment,
+                    transform.position,
+                    transform.rotation
+                );
             }
         }
 
@@ -655,7 +692,14 @@ export class ViewWeapon implements MuzzleFlashSink {
         */
         const flash = world === undefined ? null : flashOffset(this.library, world);
 
-        if (offset === null || components === null || components.length === 0) {
+        // `world === undefined` is already covered by `components === null`, and
+        // is spelled out so the barrel lookup below has a path to pass it.
+        if (
+            world === undefined ||
+            offset === null ||
+            components === null ||
+            components.length === 0
+        ) {
             if (!this.unmodelled.includes(weapon)) this.unmodelled.push(weapon);
             return null;
         }
@@ -663,8 +707,23 @@ export class ViewWeapon implements MuzzleFlashSink {
         const transforms: Transform[] = [];
         const geometries: ShadedGeometry[] = [];
         const entities: number[] = [];
+        const attachments: (TagAttachment | null)[] = [];
 
-        for (const geometry of components) {
+        /*
+         The barrel, which for five of the thirteen weapons is the front of the
+         gun and lives in its own file -- `CG_RegisterWeapon` registers it
+         separately and `CG_AddPlayerWeapon` hangs it off `tag_barrel`. Null for
+         the other eight, which are one model and carry no such tag.
+        */
+        const barrel = barrelAttachment(this.library, world);
+        const barrelComponents = barrel === null ? null : this.library.components(barrel.model);
+
+        const pieces: [ShadedGeometry, TagAttachment | null][] = components.map((g) => [g, null]);
+        if (barrel !== null && barrelComponents !== null) {
+            for (const g of barrelComponents) pieces.push([g, barrel]);
+        }
+
+        for (const [geometry, attachment] of pieces) {
             // Position and rotation are both written every frame; this is the
             // case the flag exists for, exactly as in `ItemsView`.
             geometry.setFlag(ShadedGeometryFlags.DeferredBoundsUpdate);
@@ -691,12 +750,14 @@ export class ViewWeapon implements MuzzleFlashSink {
             transforms.push(transform);
             geometries.push(geometry);
             entities.push(builder.id);
+            attachments.push(attachment);
         }
 
         const drawn: DrawnWeapon = {
             transforms,
             geometries,
             entities,
+            attachments,
             offset,
             flash,
             visible: false,

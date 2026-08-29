@@ -10,8 +10,8 @@
   "uv1:2",
   "color_rg:2"
  ],
- "vertexBytes": 748512,
- "indexBytes": 229428,
+ "vertexBytes": 801936,
+ "indexBytes": 240828,
  "materials": [
   {
    "name": "models/weapons2/grenadel/grenadel",
@@ -1578,6 +1578,23 @@
    "surfaceLight": 0
   },
   {
+   "name": "models/weapons2/gauntlet/gauntlet1",
+   "albedo": "models/weapons2/gauntlet/gauntlet1",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/gauntlet/gauntlet1#normal",
+   "orm": "models/weapons2/gauntlet/gauntlet1#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transmission": 0,
+   "ior": 1.5,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
+   "surfaceLight": 0
+  },
+  {
    "name": "models/weapons2/grapple/hookgun",
    "albedo": "models/weapons2/grapple/hookgun",
    "albedoBlend": "opaque",
@@ -1660,6 +1677,23 @@
    "transparency": "mask",
    "alphaCutoff": 0.5,
    "doubleSided": true,
+   "surfaceLight": 0
+  },
+  {
+   "name": "models/weapons2/machinegun/mgun",
+   "albedo": "models/weapons2/machinegun/mgun",
+   "albedoBlend": "opaque",
+   "normal": "models/weapons2/machinegun/mgun#normal",
+   "orm": "models/weapons2/machinegun/mgun#orm",
+   "emissive": null,
+   "emissiveLuminance": 0,
+   "roughness": 0.85,
+   "metallic": 0,
+   "transmission": 0,
+   "ior": 1.5,
+   "transparency": "opaque",
+   "alphaCutoff": 0.5,
+   "doubleSided": false,
    "surfaceLight": 0
   },
   {
@@ -1922,6 +1956,7 @@
   "models/weapons2/gauntlet/gauntlet2": "models_weapons2_gauntlet_gauntlet2.delit.png",
   "models/weapons2/gauntlet/gauntlet2#normal": "models_weapons2_gauntlet_gauntlet2.normal.png",
   "models/weapons2/gauntlet/gauntlet2#orm": "models_weapons2_gauntlet_gauntlet2.orm.png",
+  "models/weapons2/gauntlet/gauntlet1": "models_weapons2_gauntlet_gauntlet1.png",
   "models/weapons2/grapple/hookgun": "models_weapons2_grapple_hookgun.delit.png",
   "models/weapons2/grapple/hookgun#normal": "models_weapons2_grapple_hookgun.normal.png",
   "models/weapons2/grapple/hookgun#orm": "models_weapons2_grapple_hookgun.orm.png",
@@ -3891,6 +3926,12 @@
       14.240499496459961,
       2.964524745941162,
       -0.0006550459656864405
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -3899,6 +3940,12 @@
       14.240499496459961,
       2.964524745941162,
       -0.0006550459656864405
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     }
    ]
@@ -3948,6 +3995,12 @@
       11.916594505310059,
       -11.781898498535156,
       5.7782111167907715
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     }
    ]
@@ -3981,6 +4034,12 @@
       32.389678955078125,
       5.463813304901123,
       -0.5263045430183411
+     ],
+     "rotation": [
+      0.7071067544940078,
+      0,
+      0,
+      0.7071068078790862
      ]
     },
     {
@@ -3989,9 +4048,39 @@
       -0.1424967497587204,
       5.397428512573242,
       0.009208738803863525
+     ],
+     "rotation": [
+      0.7071067544940078,
+      0,
+      0,
+      0.7071068078790862
      ]
     }
    ]
+  },
+  {
+   "name": "models/weapons/vulcan/vulcan_barrel.md3",
+   "meshes": [
+    {
+     "material": 88,
+     "vertexOffset": 11699,
+     "vertexCount": 684,
+     "indexOffset": 44838,
+     "indexCount": 1854
+    }
+   ],
+   "mins": [
+    0,
+    -4.288508415222168,
+    -3.9618849754333496
+   ],
+   "maxs": [
+    31.513164520263672,
+    4.273991584777832,
+    4.069365501403809
+   ],
+   "radius": 32.06291580200195,
+   "tags": []
   },
   {
    "name": "models/weapons/vulcan/vulcan_hand.md3",
@@ -4014,6 +4103,12 @@
       -4.683868408203125,
       -9.231090545654297,
       0.6562649011611938
+     ],
+     "rotation": [
+      0.7071067544940078,
+      0,
+      0,
+      0.7071068078790862
      ]
     }
    ]
@@ -4023,16 +4118,16 @@
    "meshes": [
     {
      "material": 89,
-     "vertexOffset": 11699,
+     "vertexOffset": 12383,
      "vertexCount": 18,
-     "indexOffset": 44838,
+     "indexOffset": 46692,
      "indexCount": 48
     },
     {
      "material": 90,
-     "vertexOffset": 11717,
+     "vertexOffset": 12401,
      "vertexCount": 591,
-     "indexOffset": 44886,
+     "indexOffset": 46740,
      "indexCount": 1698
     }
    ],
@@ -4054,6 +4149,12 @@
       1.6555599461330096e-14,
       0,
       1.6528794287816882e-21
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4062,6 +4163,12 @@
       18.537281036376953,
       3.985126495361328,
       0.0000015248961062752642
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4070,9 +4177,39 @@
       11.98727798461914,
       3.985124349594116,
       0.0000010838284651981667
+     ],
+     "rotation": [
+      0,
+      5.960464477539031e-8,
+      0,
+      0.9999999999999982
      ]
     }
    ]
+  },
+  {
+   "name": "models/weapons2/bfg/bfg_barrel.md3",
+   "meshes": [
+    {
+     "material": 90,
+     "vertexOffset": 12992,
+     "vertexCount": 144,
+     "indexOffset": 48438,
+     "indexCount": 288
+    }
+   ],
+   "mins": [
+    -0.0012148034293204546,
+    -5.265625,
+    -5.014642715454102
+   ],
+   "maxs": [
+    5.9987874031066895,
+    3.468749761581421,
+    5.04785680770874
+   ],
+   "radius": 9.44421100616455,
+   "tags": []
   },
   {
    "name": "models/weapons2/bfg/bfg_hand.md3",
@@ -4095,6 +4232,12 @@
       5.697338581085205,
       -13.22018051147461,
       7.085205554962158
+     ],
+     "rotation": [
+      -5.960464477539031e-8,
+      0,
+      0,
+      0.9999999999999982
      ]
     }
    ]
@@ -4104,9 +4247,9 @@
    "meshes": [
     {
      "material": 91,
-     "vertexOffset": 12308,
+     "vertexOffset": 13136,
      "vertexCount": 43,
-     "indexOffset": 46584,
+     "indexOffset": 48726,
      "indexCount": 240
     }
    ],
@@ -4128,18 +4271,48 @@
       11.021736145019531,
       -0.5934882164001465,
       0.07341188192367554
+     ],
+     "rotation": [
+      0.49999997019767756,
+      0.5000000298023224,
+      -0.49999999205337065,
+      0.5000000079466276
      ]
     }
    ]
   },
   {
-   "name": "models/weapons2/grapple/grapple.md3",
+   "name": "models/weapons2/gauntlet/gauntlet_barrel.md3",
    "meshes": [
     {
      "material": 92,
-     "vertexOffset": 12351,
+     "vertexOffset": 13179,
+     "vertexCount": 96,
+     "indexOffset": 48966,
+     "indexCount": 204
+    }
+   ],
+   "mins": [
+    -0.4640660285949707,
+    -7.356037616729736,
+    -7.279574871063232
+   ],
+   "maxs": [
+    0.5637707114219666,
+    7.434206008911133,
+    7.510664939880371
+   ],
+   "radius": 10.582785606384277,
+   "tags": []
+  },
+  {
+   "name": "models/weapons2/grapple/grapple.md3",
+   "meshes": [
+    {
+     "material": 93,
+     "vertexOffset": 13275,
      "vertexCount": 251,
-     "indexOffset": 46824,
+     "indexOffset": 49170,
      "indexCount": 768
     }
    ],
@@ -4161,6 +4334,12 @@
       14.171881675720215,
       1.2548385858535767,
       -3.26111795345696e-8
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4169,18 +4348,48 @@
       11.862060546875,
       1.277280330657959,
       -2.7314905892694696e-8
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     }
    ]
   },
   {
+   "name": "models/weapons2/grapple/grapple_barrel.md3",
+   "meshes": [
+    {
+     "material": 1,
+     "vertexOffset": 13526,
+     "vertexCount": 128,
+     "indexOffset": 49938,
+     "indexCount": 336
+    }
+   ],
+   "mins": [
+    -2.9955029487609863,
+    -4.708578109741211,
+    -4.708578586578369
+   ],
+   "maxs": [
+    9.30736255645752,
+    4.708578109741211,
+    4.708578109741211
+   ],
+   "radius": 11.444143295288086,
+   "tags": []
+  },
+  {
    "name": "models/weapons2/grenadel/grenadel.md3",
    "meshes": [
     {
-     "material": 93,
-     "vertexOffset": 12602,
+     "material": 94,
+     "vertexOffset": 13654,
      "vertexCount": 559,
-     "indexOffset": 47592,
+     "indexOffset": 50274,
      "indexCount": 1614
     }
    ],
@@ -4202,6 +4411,12 @@
       15.310614585876465,
       2.9332897663116455,
       -1.674628435921477e-7
+     ],
+     "rotation": [
+      0.7071067544940081,
+      -3.483662699543715e-10,
+      3.4836626232230956e-10,
+      0.707106807879086
      ]
     }
    ]
@@ -4210,10 +4425,10 @@
    "name": "models/weapons2/lightning/lightning.md3",
    "meshes": [
     {
-     "material": 94,
-     "vertexOffset": 13161,
+     "material": 95,
+     "vertexOffset": 14213,
      "vertexCount": 689,
-     "indexOffset": 49206,
+     "indexOffset": 51888,
      "indexCount": 2406
     }
    ],
@@ -4235,6 +4450,12 @@
       26.41281509399414,
       0,
       0
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4243,6 +4464,12 @@
       0,
       0,
       0
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     }
    ]
@@ -4251,17 +4478,17 @@
    "name": "models/weapons2/machinegun/machinegun.md3",
    "meshes": [
     {
-     "material": 95,
-     "vertexOffset": 13850,
+     "material": 96,
+     "vertexOffset": 14902,
      "vertexCount": 258,
-     "indexOffset": 51612,
+     "indexOffset": 54294,
      "indexCount": 834
     },
     {
-     "material": 96,
-     "vertexOffset": 14108,
+     "material": 97,
+     "vertexOffset": 15160,
      "vertexCount": 12,
-     "indexOffset": 52446,
+     "indexOffset": 55128,
      "indexCount": 24
     }
    ],
@@ -4283,6 +4510,12 @@
       5.764124393463135,
       1.9938580989837646,
       0.0006181448698043823
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4291,9 +4524,39 @@
       16.743986129760742,
       2.0011110305786133,
       0.03084874153137207
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     }
    ]
+  },
+  {
+   "name": "models/weapons2/machinegun/machinegun_barrel.md3",
+   "meshes": [
+    {
+     "material": 98,
+     "vertexOffset": 15172,
+     "vertexCount": 61,
+     "indexOffset": 55152,
+     "indexCount": 168
+    }
+   ],
+   "mins": [
+    -0.004275685176253319,
+    -1.6018978357315063,
+    -1.609797477722168
+   ],
+   "maxs": [
+    10.199567794799805,
+    1.612489938735962,
+    1.6097971200942993
+   ],
+   "radius": 10.450968742370605,
+   "tags": []
   },
   {
    "name": "models/weapons2/machinegun/machinegun_hand.md3",
@@ -4316,6 +4579,12 @@
       6.160070419311523,
       -7.799996852874756,
       5.832462310791016
+     ],
+     "rotation": [
+      3.2301669206177476e-14,
+      -1.7951499842182537e-7,
+      -1.7993855294661194e-7,
+      0.9999999999999677
      ]
     }
    ]
@@ -4324,10 +4593,10 @@
    "name": "models/weapons2/plasma/plasma.md3",
    "meshes": [
     {
-     "material": 97,
-     "vertexOffset": 14120,
+     "material": 99,
+     "vertexOffset": 15233,
      "vertexCount": 351,
-     "indexOffset": 52470,
+     "indexOffset": 55320,
      "indexCount": 1260
     }
    ],
@@ -4349,6 +4618,12 @@
       16.040376663208008,
       4.25015115737915,
       -0.0006551742553710938
+     ],
+     "rotation": [
+      0.7071067544940081,
+      0,
+      0,
+      0.707106807879086
      ]
     },
     {
@@ -4357,6 +4632,12 @@
       18.823286056518555,
       4.901101112365723,
       -0.06042542681097984
+     ],
+     "rotation": [
+      0.7071067544940078,
+      0,
+      0,
+      0.7071068078790862
      ]
     }
    ]
@@ -4365,24 +4646,24 @@
    "name": "models/weapons2/railgun/railgun.md3",
    "meshes": [
     {
-     "material": 98,
-     "vertexOffset": 14471,
+     "material": 100,
+     "vertexOffset": 15584,
      "vertexCount": 280,
-     "indexOffset": 53730,
+     "indexOffset": 56580,
      "indexCount": 1194
     },
     {
-     "material": 99,
-     "vertexOffset": 14751,
+     "material": 101,
+     "vertexOffset": 15864,
      "vertexCount": 9,
-     "indexOffset": 54924,
+     "indexOffset": 57774,
      "indexCount": 24
     },
     {
-     "material": 100,
-     "vertexOffset": 14760,
+     "material": 102,
+     "vertexOffset": 15873,
      "vertexCount": 9,
-     "indexOffset": 54948,
+     "indexOffset": 57798,
      "indexCount": 24
     }
    ],
@@ -4404,6 +4685,12 @@
       14.912920951843262,
       2.763434886932373,
       -0.06042534112930298
+     ],
+     "rotation": [
+      0.7071067544940078,
+      0,
+      0,
+      0.7071068078790862
      ]
     }
    ]
@@ -4412,10 +4699,10 @@
    "name": "models/weapons2/rocketl/rocketl.md3",
    "meshes": [
     {
-     "material": 101,
-     "vertexOffset": 14769,
+     "material": 103,
+     "vertexOffset": 15882,
      "vertexCount": 158,
-     "indexOffset": 54972,
+     "indexOffset": 57822,
      "indexCount": 612
     }
    ],
@@ -4437,6 +4724,12 @@
       14.768211364746094,
       3.7451257705688477,
       -0.0604252964258194
+     ],
+     "rotation": [
+      0.7071067544940078,
+      0,
+      0,
+      0.7071068078790862
      ]
     }
    ]
@@ -4462,6 +4755,12 @@
       11.916594505310059,
       -11.781898498535156,
       5.7782111167907715
+     ],
+     "rotation": [
+      0,
+      0,
+      0,
+      1
      ]
     }
    ]
@@ -4470,17 +4769,17 @@
    "name": "models/weapons2/shotgun/shotgun.md3",
    "meshes": [
     {
-     "material": 102,
-     "vertexOffset": 14927,
+     "material": 104,
+     "vertexOffset": 16040,
      "vertexCount": 659,
-     "indexOffset": 55584,
+     "indexOffset": 58434,
      "indexCount": 1755
     },
     {
-     "material": 103,
-     "vertexOffset": 15586,
+     "material": 105,
+     "vertexOffset": 16699,
      "vertexCount": 8,
-     "indexOffset": 57339,
+     "indexOffset": 60189,
      "indexCount": 18
     }
    ],
@@ -4502,6 +4801,12 @@
       23.079599380493164,
       0.30209028720855713,
       8.821947248508367e-15
+     ],
+     "rotation": [
+      0.006942987769392077,
+      0.0000648677392333976,
+      -0.002994271673504033,
+      0.9999714121164442
      ]
     },
     {
@@ -4510,6 +4815,12 @@
       0,
       1.764053347028203e-14,
       -4.035683502934262e-7
+     ],
+     "rotation": [
+      6.789584172661733e-11,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4518,6 +4829,12 @@
       0,
       1.764053347028203e-14,
       -4.035683502934262e-7
+     ],
+     "rotation": [
+      6.789584172661733e-11,
+      0,
+      0,
+      1
      ]
     },
     {
@@ -4526,6 +4843,12 @@
       23.079599380493164,
       0.30209028720855713,
       8.821947248508367e-15
+     ],
+     "rotation": [
+      0.006942987769392077,
+      0.0000648677392333976,
+      -0.002994271673504033,
+      0.9999714121164442
      ]
     }
    ]
@@ -4551,22 +4874,28 @@
       6.160070419311523,
       -7.799996852874756,
       5.832462310791016
+     ],
+     "rotation": [
+      3.2301669206177476e-14,
+      -1.7951499842182537e-7,
+      -1.7993855294661194e-7,
+      0.9999999999999677
      ]
     }
    ]
   }
  ],
  "stats": {
-  "models": 88,
+  "models": 93,
   "missing": 4,
-  "meshes": 123,
-  "vertices": 15594,
-  "triangles": 19119,
-  "materials": 104,
-  "texturesWritten": 169,
+  "meshes": 128,
+  "vertices": 16707,
+  "triangles": 20069,
+  "materials": 106,
+  "texturesWritten": 170,
   "untexturedSurfaces": 1,
-  "repairedSurfaces": 5,
+  "repairedSurfaces": 6,
   "reorientedTriangles": 57,
-  "rewrittenNormals": 1414
+  "rewrittenNormals": 1542
  }
 }

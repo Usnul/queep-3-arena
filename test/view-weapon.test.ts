@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
+import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 
 import { ViewWeapon, type CameraPose, type ViewWeaponState } from '../src/client/ViewWeapon.ts';
@@ -298,5 +299,160 @@ describe('a player with no gun to show has none in the scene', () => {
         expect(meshCount(ecd)).toBe(0);
         expect(view.drawnWeapon).toBe('');
         expect(view.unmodelled).toEqual(['WP_RAILGUN']);
+    });
+});
+
+/*
+ * The barrel, which is a second model hung off the first one.
+ *
+ * Five of the thirteen weapons are two files, and `ViewWeapon` used to draw one
+ * of them: the machinegun in your hands had no tube between its sights, and the
+ * gauntlet was a handle with no blade. `first-person.test.ts` owns the question
+ * of whether the *bundle* has the barrel; this owns whether the gun in hand is
+ * built out of it and placed on the tag. See D-141.
+ *
+ * The tag used here is a real one -- `gauntlet.md3`'s `tag_barrel`, whose basis
+ * is a quarter turn -- because the rotation is the half that is wrong in a way
+ * you cannot count: a barrel placed at the right point with the wrong basis is
+ * still a barrel, pointing across the gun.
+ */
+describe('a weapon that is two models is drawn as two models', () => {
+    const BODY = 'models/weapons2/gauntlet/gauntlet.md3';
+    const BARREL = 'models/weapons2/gauntlet/gauntlet_barrel.md3';
+
+    /** `gauntlet.md3`'s own `tag_barrel`, in meep model axes and Q3 units. */
+    const TAG_ORIGIN: [number, number, number] = [11.02, -0.59, 0.07];
+
+    /** And its basis: forward becomes -z, up becomes +x, right becomes -y. */
+    const TAG_ROTATION: [number, number, number, number] = [0.5, 0.5, -0.5, 0.5];
+
+    const BODY_PIECES = 2;
+    const BARREL_PIECES = 1;
+
+    function barrelLibrary() {
+        return {
+            definition(name: string) {
+                if (name.endsWith('_hand.md3')) {
+                    return { tags: [{ name: 'tag_weapon', origin: [8, -4, 12], rotation: [0, 0, 0, 1] }] };
+                }
+                if (name === BODY) {
+                    return {
+                        tags: [
+                            { name: 'tag_barrel', origin: TAG_ORIGIN, rotation: TAG_ROTATION },
+                        ],
+                    };
+                }
+                if (name === BARREL) return { tags: [] };
+                return null;
+            },
+            components(name: string): ShadedGeometry[] | null {
+                if (name === BODY) {
+                    return Array.from({ length: BODY_PIECES }, () => new ShadedGeometry());
+                }
+                if (name === BARREL) {
+                    return Array.from({ length: BARREL_PIECES }, () => new ShadedGeometry());
+                }
+                return null;
+            },
+        };
+    }
+
+    /** Every drawn piece's pose, in the order the entities were built. */
+    function drawnPoses(ecd: EntityComponentDataset): { position: Vector3; rotation: Quaternion }[] {
+        const out: { position: Vector3; rotation: Quaternion }[] = [];
+
+        const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
+            classes: unknown[],
+            visitor: (geometry: ShadedGeometry, transform: Transform) => void
+        ) => void;
+
+        traverse([ShadedGeometry, Transform], (_geometry, transform) => {
+            out.push({
+                position: transform.position.clone(),
+                rotation: transform.rotation.clone(),
+            });
+        });
+
+        return out;
+    }
+
+    it('draws the barrel as well as the body', () => {
+        const ecd = newDataset();
+        const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+
+        expect(meshCount(ecd), 'the gauntlet, blade included').toBe(
+            BODY_PIECES + BARREL_PIECES
+        );
+    });
+
+    it('puts the barrel on the tag rather than on the weapon origin', () => {
+        const ecd = newDataset();
+        const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+        view.update(pose([3, 4, 5]), 0.016, held('WP_GAUNTLET'));
+
+        const poses = drawnPoses(ecd);
+        expect(poses.length).toBe(BODY_PIECES + BARREL_PIECES);
+
+        // The body's pieces all share one pose; the barrel's does not.
+        const body = poses[0]!;
+        for (let i = 1; i < BODY_PIECES; i++) {
+            expect(poses[i]!.position.distanceTo(body.position)).toBeCloseTo(0, 9);
+        }
+
+        const barrel = poses[BODY_PIECES]!;
+
+        /*
+         Distance rather than components, because it is the one thing the view
+         direction cannot change: the tag is a point on a rigid model, so however
+         the gun is turned the barrel sits |tag| model units from it -- scaled
+         into scene metres by the same 1/32 every other piece is drawn at.
+        */
+        const WORLD_SCALE = 1 / 32;
+        const expected = Math.hypot(...TAG_ORIGIN) * WORLD_SCALE;
+
+        expect(barrel.position.distanceTo(body.position), 'the barrel is not on its tag').toBeCloseTo(
+            expected,
+            6
+        );
+        expect(expected, 'a tag at the origin would prove nothing').toBeGreaterThan(0.3);
+    });
+
+    it('turns the barrel by the tag basis, not just the gun', () => {
+        const ecd = newDataset();
+        const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+
+        const poses = drawnPoses(ecd);
+        const body = poses[0]!.rotation;
+        const barrel = poses[BODY_PIECES]!.rotation;
+
+        const tag = new Quaternion().set(...TAG_ROTATION);
+
+        // `CG_PositionRotatedEntityOnTag`: the child's axis is the tag's,
+        // multiplied by the parent's.
+        const expected = new Quaternion().multiplyQuaternions(body, tag);
+        expect(barrel.angleTo(expected), 'the barrel is not turned by its tag').toBeCloseTo(0, 6);
+
+        // And that is a real turn, not an identity dressed up as one.
+        expect(barrel.angleTo(body), 'the tag basis went missing').toBeGreaterThan(1);
+    });
+
+    it('takes the barrel off screen with the rest of the weapon', () => {
+        const ecd = newDataset();
+        const view = new ViewWeapon(ecd as never, barrelLibrary() as never);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+        expect(meshCount(ecd)).toBe(BODY_PIECES + BARREL_PIECES);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET', false));
+        expect(meshCount(ecd), 'a dead player still has a blade in the air').toBe(0);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+        expect(meshCount(ecd)).toBe(BODY_PIECES + BARREL_PIECES);
+        expect(view.pieceCount, 'and it was built once').toBe(BODY_PIECES + BARREL_PIECES);
     });
 });

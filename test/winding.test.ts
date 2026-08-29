@@ -49,6 +49,26 @@ interface Agreement {
 /**
  * Compare each triangle's winding against the normals stored at its vertices.
  *
+ * Against the **average of the three corner normals**, which is the same
+ * measurement `mesh-normals.ts` makes and is here for the same reason: a single
+ * corner is a vertex, and a vertex belongs to every face that names it. On a
+ * heavily smoothed surface its normal can lie a degree or two the wrong side of
+ * tangent to any one of them, and MD3 quantises normals to a 16-bit lat/long
+ * pair -- about 1.4 degrees -- so the sign of that dot product is noise exactly
+ * where the geometry is smoothest.
+ *
+ * This used to read corner `a` alone, and `gauntlet_barrel.md3` is what showed
+ * the difference: 68 of 68 triangles agree on the averaged normal and on
+ * corners `b` and `c` individually, while 10 of them have an `a` whose dot is
+ * between -0.002 and -0.078 -- 90.1 to 94.5 degrees off a face it is very
+ * nearly edge-on to. The mesh is manifold, all 102 of its edges carry exactly
+ * two faces, and the converter copies it through unaltered; the 85% was the
+ * ruler, not the model.
+ *
+ * It costs nothing as a guard. The defect this file exists for -- a converter
+ * that does not reverse winding -- scores 0.000 to 0.013 on every shipped map
+ * under this criterion, measured by reversing them back (D-141).
+ *
  * @param positions flat xyz
  * @param normals flat xyz, same vertex indexing as `positions`
  */
@@ -83,8 +103,11 @@ function agreement(
             continue;
         }
 
-        const dot =
-            (nx * normals[a]! + ny * normals[a + 1]! + nz * normals[a + 2]!) / length;
+        const mx = (normals[a]! + normals[b]! + normals[c]!) / 3;
+        const my = (normals[a + 1]! + normals[b + 1]! + normals[c + 1]!) / 3;
+        const mz = (normals[a + 2]! + normals[b + 2]! + normals[c + 2]!) / 3;
+
+        const dot = (nx * mx + ny * my + nz * mz) / length;
 
         if (dot > 0) agree += 1;
         else disagree += 1;
@@ -114,6 +137,8 @@ const PER_MODEL_THRESHOLD = 0.9;
  Models whose geometry does not admit an orientation at all, named rather than
  absorbed into a looser threshold.
 
+ Empty, and worth keeping for the argument rather than the list.
+
  `teleporter.md3`'s `t_center` is a four-pointed star built from zero-thickness
  fins: 16 distinct positions, 36 triangles, and 12 edges carrying three or four
  faces each where the spikes meet the middle. A fin has no outward side, so
@@ -125,10 +150,16 @@ const PER_MODEL_THRESHOLD = 0.9;
 
  `teleport_center` is not `cull none`, so Q3 draws it single-sided too and shows
  the same artefact. Content, not a port bug -- the same call D-060 made for
- `skelebot`. It is listed here so that if it ever gets *worse* the exemption has
- to be re-argued rather than silently covering it.
+ `skelebot`.
+
+ It was listed here, exempted at 0.8, until `agreement` started averaging the
+ three corner normals: the model reads 0.920 under that criterion and clears the
+ ordinary per-model bar on its own. An exemption that tolerates *less* than the
+ general rule is not an exemption, so it has been retired rather than left to
+ cover a model nothing is wrong with (D-141). If the star ever falls below 0.9
+ the general assertion catches it, which is what the exemption was for.
 */
-const UNORIENTABLE: readonly string[] = ['models/powerups/holdable/teleporter.md3'];
+const UNORIENTABLE: readonly string[] = [];
 
 const MAPS = ['oa_dm1', 'oa_dm4', 'oa_dm5', 'oa_dm7', 'aggressor', 'am_thornish'];
 

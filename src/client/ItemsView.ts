@@ -41,9 +41,12 @@
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
+import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometryFlags.js';
 
+import { barrelAttachment, placeOnTag, type TagAttachment } from './barrel.ts';
 import type { ModelLibrary } from './map/loadModels.ts';
 import type { ItemInstance, ItemSystem } from '../game/Items.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
@@ -53,6 +56,9 @@ const WORLD_SCALE = 1 / 32;
 /** Q3's `cg.autoAngles`: a full turn every 2048 ms, and every 1024 for health. */
 const SPIN_PERIOD_SECONDS = 2.048;
 const SPIN_PERIOD_FAST_SECONDS = 1.024;
+
+const scratchPosition = new Vector3();
+const scratchRotation = new Quaternion();
 
 interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
@@ -67,6 +73,16 @@ interface DrawnItem {
     readonly geometries: ShadedGeometry[];
     /** Parallel to `geometries`; the entity each one is linked to and off. */
     readonly entities: number[];
+    /**
+     * Parallel to `transforms`: where that piece sits on the item, or null for a
+     * piece that *is* the item.
+     *
+     * Only a weapon's barrel is ever non-null. `CG_Item` hangs it off the
+     * weapon's `tag_barrel` exactly as `CG_AddPlayerWeapon` does, so a
+     * machinegun lying on the floor has the same front the one in your hands
+     * has -- and had the same hole in it before D-141.
+     */
+    readonly attachments: (TagAttachment | null)[];
     /** `CG_Item`'s per-entity bob rate, so a row of pickups does not pulse in unison. */
     readonly bobScale: number;
     readonly fastSpin: boolean;
@@ -129,13 +145,29 @@ export class ItemsView {
             const transforms: Transform[] = [];
             const geometries: ShadedGeometry[] = [];
             const entities: number[] = [];
+            const attachments: (TagAttachment | null)[] = [];
 
             let missing = 0;
 
-            for (const modelPath of item.def.models) {
+            /*
+             `CG_Item`'s second half for a weapon on the ground: five of the
+             thirteen guns are two models, and the barrel hangs off the body's
+             `tag_barrel`. Not counted towards `missing`, because a weapon
+             without one is not a weapon missing one -- eight of them are a
+             single file and carry no such tag. See `barrel.ts`.
+            */
+            const barrel =
+                item.def.type === 'IT_WEAPON'
+                    ? barrelAttachment(this.library, item.def.models[0] ?? '')
+                    : null;
+
+            const pieces: [string, TagAttachment | null][] = item.def.models.map((m) => [m, null]);
+            if (barrel !== null) pieces.push([barrel.model, barrel]);
+
+            for (const [modelPath, attachment] of pieces) {
                 const components = this.library.components(modelPath);
                 if (components === null) {
-                    missing += 1;
+                    if (attachment === null) missing += 1;
                     continue;
                 }
 
@@ -156,6 +188,7 @@ export class ItemsView {
                     transforms.push(transform);
                     geometries.push(geometry);
                     entities.push(builder.id);
+                    attachments.push(attachment);
                 }
             }
 
@@ -171,6 +204,7 @@ export class ItemsView {
                 transforms,
                 geometries,
                 entities,
+                attachments,
                 // `scale = 0.005 + cent->currentState.number * 0.00001`, in ms.
                 bobScale: 0.005 + item.index * 0.00001,
                 fastSpin: item.def.type === 'IT_HEALTH',
@@ -218,14 +252,37 @@ export class ItemsView {
             const y = (item.origin[2] + bob) * WORLD_SCALE;
             const z = -item.origin[1] * WORLD_SCALE;
 
-            for (const transform of drawn.transforms) {
-                transform.position.set(x, y, z);
-                /*
-                 Q3 yaw is a rotation about +Z. Under `(x, y, z) -> (x, z, -y)`
-                 that is a rotation about meep's +Y with the same sign, because
-                 the axis mapping has determinant +1.
-                */
-                transform.rotation._fromAxisAngle(0, 1, 0, yaw);
+            /*
+             Q3 yaw is a rotation about +Z. Under `(x, y, z) -> (x, z, -y)` that
+             is a rotation about meep's +Y with the same sign, because the axis
+             mapping has determinant +1.
+
+             Built once per item into the scratch pair rather than once per
+             piece, because a barrel is placed *relative to* the item's pose and
+             so needs it as a value; every piece that is not attached then copies
+             it, which is one `_fromAxisAngle` per item where it used to be one
+             per mesh.
+            */
+            scratchPosition.set(x, y, z);
+            scratchRotation._fromAxisAngle(0, 1, 0, yaw);
+
+            for (let i = 0; i < drawn.transforms.length; i++) {
+                const transform = drawn.transforms[i]!;
+                const attachment = drawn.attachments[i]!;
+
+                if (attachment === null) {
+                    transform.position.set(x, y, z);
+                    transform.rotation.copy(scratchRotation);
+                    continue;
+                }
+
+                placeOnTag(
+                    scratchPosition,
+                    scratchRotation,
+                    attachment,
+                    transform.position,
+                    transform.rotation
+                );
             }
         }
     }

@@ -6422,3 +6422,110 @@ per-model because that is the unit a defect is reported in. And characters still
 mixed winding is content Q3 renders with the same artefacts, and the character test asserts the
 converter's invariant rather than the content's. Moving them is a separate argument with a separate
 measurement, and nobody has reported a character looking wrong.
+
+### D-141: five of the guns are two models, and the item table only names one of them
+
+Reported with a screenshot beside OpenArena's: the machinegun in your hands has no barrel. The tube
+that runs between its two sights is simply absent, and the rest of the gun is fine. "I'm guessing
+other assets have been affected as well" -- four of them are.
+
+**It is not damage in transit.** Read back with an independent decode, the built bundle's copy of
+every machinegun surface matches the source to **0.0** on positions and normals, and all 286
+triangles come out reversed exactly as the converter says it reverses them. Nothing was lost. The
+barrel is a *different file*, and the pipeline was never asked for it.
+
+`CG_RegisterWeapon` registers three models per weapon off one path, by swapping the extension:
+
+```c
+strcpy( path, item->world_model[0] );
+COM_StripExtension( path, path );
+strcat( path, "_flash.md3" );   weaponInfo->flashModel  = trap_R_RegisterModel( path );
+strcat( path, "_barrel.md3" );  weaponInfo->barrelModel = trap_R_RegisterModel( path );
+strcat( path, "_hand.md3" );    weaponInfo->handsModel  = trap_R_RegisterModel( path );
+```
+
+`convert-models.ts` reads `bg_itemlist`, and `bg_itemlist` names `machinegun.md3`. It had already
+grown a special case for `_hand.md3` -- D-121's, because the hands model carries the `tag_weapon`
+this port measures the gun's position from -- and that case is the reason the omission survived: the
+file that knows weapons are more than one model knew about exactly one of the two extras. A model
+nothing asks for cannot be reported missing, so the load log was clean, the `missing` list was the
+same four entries it has always been, and every test passed.
+
+How much of each gun was gone:
+
+| weapon | body | barrel | share of the gun missing |
+|---|---|---|---|
+| `vulcan.md3` (chaingun) | 259 tris | 618 tris | **70.5%** |
+| `gauntlet.md3` | 80 | 68 | **45.9%** |
+| `grapple.md3` | 256 | 112 | 30.4% |
+| `machinegun.md3` | 286 | 56 | 16.4% |
+| `bfg.md3` | 582 | 96 | 14.2% |
+
+The machinegun is the one that got reported and it is the *least* affected of the five. The chaingun
+was two thirds absent and nobody had said so, which is what a defect with no assertion behind it
+looks like.
+
+**Every tag needed to put them back was already in the bundle.** `machinegun.md3` ships a
+`tag_barrel` at (5.76, 0, 1.99); the barrel model runs from 0 to 10.2 along its own x, so its far end
+lands at 15.96 -- flush with the muzzle, `tag_flash` being at 16.74. The five weapons that ship a
+`_barrel.md3` are exactly the five whose world model carries a `tag_barrel`, so the invariant is
+stated in `first-person.test.ts` in **both** directions: a tag with no model behind it is the defect
+that shipped, and a model with no tag to hang it on would draw the barrel at the weapon's origin.
+
+**The half of `md3Tag_t` the bundle was throwing away.** A tag is a pose, not a point: it carries
+three basis vectors beside its origin, and `CG_PositionRotatedEntityOnTag` multiplies them into the
+attached model's axis. `BundleTag` had only `origin`. Three of the five bases are the model's own and
+would have survived being dropped; the gauntlet's and the chaingun's are quarter turns, and those are
+the two barrels you would notice -- the blade and the rotor. So the tag basis is now converted
+alongside the origin, as a quaternion in meep model axes: `M A M⁻¹`, whose columns work out as
+`M·forward`, `M·up` and `-M·left`, which is the x-forward y-up z-right frame `MODEL_TO_VIEW` already
+documents the converted models in.
+
+Both of those two bases are **scaled by 1.8444**, left in by whatever exported them. `R_LerpTag`
+normalises each row before it multiplies, so Q3 never sees it; carrying it through would have drawn
+the gauntlet's blade at nearly twice the size of the gauntlet. The rows are normalised here for the
+same reason, and the test checks the stored quaternion against the source rows rather than against a
+recorded number, so it is the arithmetic that is pinned and not its output.
+
+**Two places draw a weapon, and Q3 hangs the barrel in both.** `CG_AddPlayerWeapon` for the gun in
+your hands and `CG_Item` for the one lying on the floor, each doing it themselves. So `ViewWeapon`
+and `ItemsView` both do, through one `barrel.ts` -- a shared `barrelAttachment` and a `placeOnTag`
+that is `CG_PositionRotatedEntityOnTag` with the parent's pose already in world space. The barrel is
+a per-piece attachment on the existing lists rather than a second set of lists, because everything
+else about it -- built once, shown and hidden with the weapon, counted in `pieceCount` -- is what the
+body already does, and the only thing that differs is the pose written each frame. Measured on
+`am_thornish`, which places a BFG and two chainguns: 176 item pieces before, 179 after.
+
+**The spin is not ported, and that is a separate thing from the barrel being absent.**
+`CG_MachinegunSpinAngle` rolls the barrel about its own length while `EF_FIRING` is set and coasts it
+down over a second afterwards. Nothing carries "is firing" to the view weapon -- `flash()` is told
+about a shot, not about a trigger being held -- and plumbing it is a change to the state the renderer
+is given rather than to what it draws. All five barrels are therefore drawn at rest, which is the
+pose they are authored in and where Q3 draws them whenever you are not shooting.
+
+**A correct new model failed the winding test, and the ruler was what was wrong.** Adding the five
+barrels dropped `gauntlet_barrel.md3` onto `winding.test.ts` at 0.853, under the 0.9 per-model bar
+D-140 added. The mesh is not the problem: it is manifold, all 102 of its edges carry exactly two
+faces, the converter copies it through unaltered, and `windingAgreement` -- the measurement
+`convert-models.ts` uses to *decide* whether a surface needs repairing -- scores it **68 of 68**.
+
+The two disagreed because they were measuring different things. `mesh-normals.ts` compares the face
+against the **average of the three corner normals**; `winding.test.ts` compared it against corner `a`
+alone. On this surface corners `b` and `c` agree on all 68 triangles and corner `a` disagrees on 10,
+with dot products between **-0.002 and -0.078** -- 90.1 to 94.5 degrees off faces it is very nearly
+edge-on to. MD3 quantises normals to a 16-bit lat/long pair, about **1.4 degrees**, so on a surface
+that smooth the sign of that dot product is noise. A converter measuring one way and a test asserting
+another is how a model with nothing wrong with it reads as 85%.
+
+So the test now averages, which costs nothing as a guard: reversing every shipped map's winding back
+-- the defect this file exists for -- scores **0.000 to 0.013** under the averaged criterion, against
+0.000 to 0.021 under the old one. It catches the thing it was written to catch just as hard, and
+stops reporting smooth geometry as backwards.
+
+That **retires D-140's teleporter exemption**. `teleporter.md3` reads 0.920 averaged and clears the
+ordinary 0.9 per-model bar on its own, so its named exemption at 0.8 was holding it to a *looser*
+standard than every other model -- which is the opposite of what an exemption is for. The entry is
+gone and the argument for it is kept in the comment: the star is still zero-thickness fins with 12
+edges carrying three or four faces, Q3 still draws it single-sided and shows the same artefact, and
+if it ever falls below 0.9 the general assertion now catches it, which is what the exemption was for.
+

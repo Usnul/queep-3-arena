@@ -204,6 +204,20 @@ export interface BundleTag {
     readonly name: string;
     /** meep axes, Q3 units. */
     readonly origin: readonly number[];
+    /**
+     * The tag's own frame, as a quaternion `[x, y, z, w]` in meep model axes.
+     *
+     * An MD3 tag is a *pose*, not a point: `md3Tag_t` carries three basis
+     * vectors beside the origin and `CG_PositionRotatedEntityOnTag` multiplies
+     * them into the attached model's axis. Two of the five barrels are hung on
+     * a tag whose basis is a quarter turn -- the gauntlet's blade and the
+     * chaingun's rotor -- so a bundle that carried only the origin could place
+     * them and not orient them (D-141).
+     *
+     * Identity for every tag whose basis is the model's own, which is most of
+     * them, and written anyway so a reader never has to know which.
+     */
+    readonly rotation: readonly number[];
 }
 
 export interface BundleModel {
