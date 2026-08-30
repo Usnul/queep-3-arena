@@ -1282,6 +1282,56 @@ export function PM_UpdateViewAngles(ps: PlayerState, cmd: { angles: Int16Array }
     }
 }
 
+/**
+ * The angles {@link PM_UpdateViewAngles} *would* write, without writing them.
+ *
+ * `ps.viewangles` is a fixed-step quantity: it is only current as of the last
+ * step that ran. The camera is not -- it is written once per rendered frame --
+ * and orienting it from the stale array is what put the player's *heading* back
+ * on the simulation's clock while their *position* was being blended. At 165 Hz
+ * against a 60 Hz step that is a heading held for two or three frames and then
+ * jumped, which reads as a mouse that turns the view in jerks. See D-155.
+ *
+ * The clamp is the same one and the refusals are the same two -- an intermission
+ * and a corpse do not turn -- but the `delta_angles` repair the real function
+ * does on a clamped pitch is deliberately *not* done here. That write is how the
+ * server tells the client where it is now looking, it belongs to the step, and a
+ * render-rate reader that performed it would be a second author of simulation
+ * state running at an unbounded rate.
+ *
+ * @param angles the command angles to preview, in Q3's 16-bit units.
+ * @param out receives the degrees, Q3's `(pitch, yaw, roll)`.
+ * @returns whether `out` was written. False means pmove would have refused the
+ *   update, and the caller should keep reading `ps.viewangles` -- which is then
+ *   the correct answer rather than a stale one, because nothing is moving it.
+ */
+export function PM_PreviewViewAngles(
+    ps: PlayerState,
+    angles: Int16Array,
+    out: Vec3
+): boolean {
+    if (ps.pm_type === C.PM_INTERMISSION || ps.pm_type === C.PM_SPINTERMISSION) {
+        return false;
+    }
+
+    if (ps.pm_type !== C.PM_SPECTATOR && ps.stats[C.STAT_HEALTH]! <= 0) {
+        return false;
+    }
+
+    for (let i = 0; i < 3; i++) {
+        let temp = ((angles[i]! + ps.delta_angles[i]!) << 16) >> 16;
+
+        if (i === PITCH) {
+            if (temp > 16000) temp = 16000;
+            else if (temp < -16000) temp = -16000;
+        }
+
+        out[i] = short2angle(temp);
+    }
+
+    return true;
+}
+
 /* ------------------------------------------------------------------ *
  * bg_slidemove.c
  * ------------------------------------------------------------------ */

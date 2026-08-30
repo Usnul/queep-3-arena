@@ -7738,3 +7738,82 @@ mid-measurement. And the three per-map particles were chosen from the map's sun 
 in the running game -- each of the six was loaded and looked at -- rather than won against the
 alternatives in an A/B. `FINE_DUST_SMALL` on `oa_dm4` looks right; nobody has seen what
 `SMOKE_PARTICLE_SMALL` would have looked like there.
+
+### D-155: The eye was blended and the heading was not, so half of the render-rate camera had never been applied
+
+Reported as the camera moving in jerks when the mouse moves. It is the same fault D-081 fixed, in
+the same method, on the quantity that fix did not reach.
+
+`writeCamera` runs once per rendered frame and reads two things. The eye is blended between the
+last two fixed steps at the sub-step alpha, which is what D-081 added and what stopped the *world*
+juddering. The view angles were read off `ps.viewangles` -- and `ps.viewangles` is not a live
+quantity. `PM_UpdateViewAngles` is the only thing that writes it, `PmoveSingle` and
+`PlayerMovement.step` are the only things that call that, and both run on the fixed step. So the
+array is the mouse accumulator *as of the last step that ran*, and orienting a render-rate camera
+from it puts the player's heading straight back on the simulation's clock.
+
+The method's own doc comment claimed the opposite -- "the view angles are read live, from the same
+accumulator the mouse writes" -- which is why this survived a fix that was otherwise about exactly
+this. The sentence describes `this.yaw`; the code read the array `this.yaw` reaches one step later.
+
+**Measured in the running game, at 165 Hz against the 60 Hz step, turning at a steady 3 px of mouse
+per rendered frame.** Both quantities recorded on the same run: the camera's actual heading, taken
+off the transform's quaternion, and `ps.viewangles[1]`, which is what the old line read.
+
+| | per-frame turn | frames that did not turn |
+|---|---|---|
+| `ps.viewangles` (before) | 0, 0, -0.593, 0, 0, -0.593, 0, -0.396 ... | 20 of 32 |
+| live angles (after) | -0.198, every frame | 0 of 32 |
+
+Two frames of nothing and then three frames' worth of turn arriving at once, for ever. 3 px x 12
+short units is 0.198 degrees, and three of those is the 0.593 that was being delivered in one jump
+-- the totals match to the last digit, so the turn was never wrong in aggregate and was never
+anywhere but in lumps. That is the whole of what a player feels.
+
+**The fix is `PM_PreviewViewAngles`, which is `PM_UpdateViewAngles` with the writes taken out.**
+Same 16-bit truncation, same +/-16000 pitch clamp, same two refusals -- an intermission and a corpse
+do not turn -- against a scratch `Int16Array` holding the live accumulator. It returns whether it
+wrote anything, and false means pmove would have refused, in which case `ps.viewangles` is current
+by definition rather than stale and the caller keeps reading it.
+
+Three things it deliberately does not do.
+
+It does not repair `delta_angles` on a clamped pitch. That write is how a server tells a client
+where it is now looking; it belongs to the step, and a render-rate reader performing it would be a
+second author of simulation state running at an unbounded rate. Nothing is lost -- the controller
+clamps its own accumulator to +/-16000 before the array ever sees it, so the branch cannot fire from
+this call site.
+
+It does not write into `pmove.cmd.angles`. That array is the step's input, `fireIfReady` and both
+solvers read it back, and truncating through a private `Int16Array` costs six bytes and keeps the
+presentation out of it.
+
+And it does not touch where the shot goes -- `fireIfReady` still fires along `ps.viewangles`.
+
+**That last one is the obvious objection to the whole change, and measuring it turned it around.**
+The worry is that the view and the bullet now come off different clocks. They do. But `fireIfReady`
+runs *inside* the step, after `PM_UpdateViewAngles` has already taken the same accumulator, so a
+shot always leaves along the freshest angle in the system; the only question worth asking is how far
+the last frame the player actually *saw* was from it. Same run as above, as the angle between the
+heading drawn on a frame and the heading the next step fires along:
+
+| | mean | worst |
+|---|---|---|
+| `ps.viewangles` (before) | 0.557 deg | 0.593 deg |
+| live angles (after) | 0.377 deg | 0.593 deg |
+
+The gap **shrinks by a third**. The worst case is identical and is the frame that lands on a step,
+where the two agree by construction. So the old camera was not only jerky, it was showing an aim up
+to a whole step behind the one the trigger was about to use, and the fix closes that as a side
+effect of closing the other thing. The first draft of this entry claimed the divergence as an
+accepted cost "the same 16 ms Q3 has"; it is not a cost, and Q3 does not have it in that form --
+Q3 builds a `usercmd_t` per rendered frame, so its camera and its shot come off one command.
+
+The kicks stay blended, and that is not an oversight either. `previous.pitch` and `latest.pitch` are
+`CG_OffsetFirstPersonView`'s *offsets* -- the bob, the landing dip, the damage kick -- and they are
+solver outputs that cannot be recomputed without re-running it. Blending them is right for the same
+reason blending the eye is. Only the base angle is live, because only the base angle is the mouse.
+
+`test/player-controller.test.ts` pins both halves: a mouse move with no step between it and the
+write has to turn the camera, and two writes with no input between them have to produce the same
+heading. The second is the one that would catch a "live" reading that drifted with alpha.

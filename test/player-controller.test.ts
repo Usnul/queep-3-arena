@@ -550,6 +550,63 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         }
     });
 
+    it('turns the camera on a mouse move that has not been stepped yet', () => {
+        /*
+         The other half of the render-rate camera, and the half that was left on
+         the fixed step.
+
+         The eye is blended between the last two steps because it is a solver
+         output. The *view angles* are not a solver output in any sense that
+         matters at render rate -- they are the mouse accumulator, run through
+         `PM_UpdateViewAngles`' 16-bit truncation -- and reading them off
+         `ps.viewangles` puts them back on the fixed step, because that array is
+         only written when a step runs. So the world's position glided and the
+         world's heading stepped: at 165 Hz against a 60 Hz simulation, the
+         heading held for two or three frames and then jumped, which is what a
+         player feels as the mouse moving the camera in jerks.
+
+         The test is the report: move the mouse, do not step, and the camera has
+         to have turned. `writeCamera` runs once per rendered frame and there are
+         several of those inside one step, so "no step ran" is the ordinary case
+         and not an edge one.
+        */
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+
+        rig.player.writeCamera(rig.camera, 1);
+        const before: [number, number, number] = [...rig.camera.forward];
+
+        // One frame's worth of mouse at a middling turn rate -- and no `frame()`.
+        rig.look(12, 0);
+        rig.player.writeCamera(rig.camera, 1);
+
+        const turned = Math.hypot(
+            rig.camera.forward[0] - before[0],
+            rig.camera.forward[1] - before[1],
+            rig.camera.forward[2] - before[2]
+        );
+        expect(turned, 'camera heading between fixed steps').toBeGreaterThan(1e-4);
+    });
+
+    it('holds the aim still between steps when nothing has been asked of it', () => {
+        /*
+         The other side of the one above: live angles must not mean *drifting*
+         angles. Two writes with no input between them are the same heading, so a
+         resting camera is dead still rather than jittering around the step.
+        */
+        const rig = new Rig('oa_dm1', solver).settle();
+        rig.activate();
+
+        rig.player.writeCamera(rig.camera, 0.25);
+        const before: [number, number, number] = [...rig.camera.forward];
+
+        rig.player.writeCamera(rig.camera, 0.75);
+
+        expect(rig.camera.forward[0]).toBeCloseTo(before[0], 9);
+        expect(rig.camera.forward[1]).toBeCloseTo(before[1], 9);
+        expect(rig.camera.forward[2]).toBeCloseTo(before[2], 9);
+    });
+
     it('does not kick the view on the very first step, or on a respawn', () => {
         /*
          Every view kick is a difference against the previous fixed step, and on
@@ -1281,6 +1338,33 @@ describe.each<Solver>(['meep', 'q3'])('the world writes into ps between frames [
         expect(rig.player.ps.viewangles[1], 'a corpse turned with the mouse')
             .toBeCloseTo(aliveYaw, 6);
         expect(rig.shots.length, 'a corpse kept firing').toBe(shotsBefore);
+
+        /*
+         And the *camera*, which is a separate read: `writeCamera` takes the live
+         accumulator now rather than `ps.viewangles` (D-155), so a corpse is the
+         one case where the two are allowed to differ and the camera is the only
+         place you would see it. The write with no step in front of it is the
+         path a rendered frame takes.
+
+         **Two independent things hold this still, and this assertion only fires
+         when both are gone** -- established by removing each, not assumed.
+         `onPointerMove` freezes the accumulator for a dead player, and
+         `PM_PreviewViewAngles` refuses one exactly as `PM_UpdateViewAngles`
+         does. Drop the refusal alone and the frozen accumulator still gives the
+         right answer; drop the freeze alone and the refusal does, though the
+         respawn assertion below catches that one. So this pins the property a
+         player can see rather than either mechanism, and the redundancy is
+         deliberate: the refusal is what makes the preview a faithful stand-in
+         for the real function, whatever a future caller does with it.
+        */
+        const corpseForward: [number, number, number] = [...rig.camera.forward];
+
+        rig.look(400, 100);
+        rig.player.writeCamera(rig.camera, 1);
+
+        expect(rig.camera.forward[0], 'a corpse turned the camera').toBeCloseTo(corpseForward[0], 9);
+        expect(rig.camera.forward[1], 'a corpse turned the camera').toBeCloseTo(corpseForward[1], 9);
+        expect(rig.camera.forward[2], 'a corpse turned the camera').toBeCloseTo(corpseForward[2], 9);
         expect(
             Math.hypot(rig.origin[0]! - restingAt[0]!, rig.origin[1]! - restingAt[1]!),
             'a corpse walked off holding forward'

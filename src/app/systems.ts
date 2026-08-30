@@ -507,8 +507,11 @@ export class PresentationSystem extends System<never> {
          They hold different poses whenever the player is turning. `CameraSystem3`
          copies the camera entity onto Shade's camera during its own `update`,
          and it references components so it sorts ahead of this one -- so by the
-         time this line runs, the renderer's camera is the pose the fixed step
-         wrote and is the pose the frame will be drawn with. A gun placed from
+         time this line runs, the renderer's camera is the pose `ViewSystem`
+         wrote for *this* frame and is the pose the frame will be drawn with.
+         Not the fixed step's: the eye is blended and the angles are the live
+         accumulator (D-081, D-155), and the gun inherits both by reading the
+         camera rather than `ps`. A gun placed from
          anything else is a tick of mouse movement away from the view it is
          welded to, and swings across the screen by however far you just turned
          (D-081).

@@ -33,7 +33,7 @@
 
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { angleVectors, vec3, type Vec3 } from '../q3/math.ts';
-import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
+import { Pmove as runPmove, PM_PreviewViewAngles } from '../q3/pmove/pmove.ts';
 import {
     FORWARDMOVE,
     RIGHTMOVE,
@@ -997,6 +997,19 @@ export class PlayerController {
     }
 
     /**
+     * The mouse accumulator in `usercmd_t`'s 16-bit units, for {@link writeCamera}.
+     *
+     * Its own array rather than `pmove.cmd.angles`: that one is the step's, it
+     * is read back by `fireIfReady` and by both solvers, and a render-rate write
+     * into it would be the presentation editing a simulation input several times
+     * per step.
+     */
+    private readonly liveCommand = new Int16Array(3);
+
+    /** {@link PM_PreviewViewAngles}' answer, degrees. Reused, never allocated. */
+    private readonly liveAngles: Vec3 = vec3();
+
+    /**
      * Q3 (Z-up, units) -> meep (Y-up, metres). The only place this happens.
      *
      * **Called once per rendered frame, not once per fixed step**, and that is
@@ -1019,6 +1032,32 @@ export class PlayerController {
      *   arena shooter is the one thing that must not lag. Q3 does not blend them
      *   either -- it re-runs the whole prediction every rendered frame -- and
      *   this is the half of that which is cheap.
+     *
+     * **Live means the accumulator, and it did not for one release.** This read
+     * `ps.viewangles`, which is the accumulator *as of the last fixed step* --
+     * `PM_UpdateViewAngles` is the only thing that writes it and only a step
+     * runs it. So the eye was blended and the heading was not, and the fix above
+     * was half applied: the world's position glided at display rate while the
+     * world's heading advanced in 60 Hz stairs. It came back described as the
+     * mouse moving the camera in jerks, which is precisely what it is -- at 165
+     * Hz the heading holds for two or three frames and then jumps the whole
+     * step's worth of turn. {@link PM_PreviewViewAngles} runs the same 16-bit
+     * truncation and the same clamp against the live accumulator, writing
+     * nothing. See D-155.
+     *
+     * **The shot still leaves along `ps.viewangles`, and that is not the cost it
+     * looks like.** The obvious objection to a live camera is that the view and
+     * the bullet now come off different clocks. They do, but `fireIfReady` runs
+     * *inside* the step, after `PM_UpdateViewAngles` has already taken this same
+     * accumulator -- so a shot goes out along the freshest angle there is, and
+     * the only question is how far the last frame the player *saw* was from it.
+     * That distance gets **smaller**, because the frame is now current too.
+     * Measured on `oa_dm1` at 165 Hz, 3 px of mouse per frame, as the angle
+     * between the heading drawn on a frame and the heading the next step fires
+     * along: mean 0.557 degrees before, 0.377 after, same 0.593 worst case (the
+     * frame that lands on a step, where the two agree by construction). The old
+     * camera was not merely jerky, it was showing an aim up to a whole step
+     * behind the one the trigger would use.
      *
      * @param alpha `EntityManager.getFixedStepAlpha()`: how far the display is
      *   into the step that has not run yet. 1 lands exactly on the latest pose.
@@ -1048,16 +1087,33 @@ export class PlayerController {
         */
         const ps = this.ps;
 
+        /*
+         The accumulator as `usercmd_t` would carry it. Truncating through an
+         `Int16Array` rather than masking by hand is what makes this the same
+         quantity the step will see: `angles` is a short on Q3's wire, `setYaw`
+         writes an unsigned 16-bit yaw and the mouse writes a signed 32-bit one,
+         and the array is where those two become one number.
+        */
+        this.liveCommand[0] = this.pitch;
+        this.liveCommand[1] = this.yaw;
+        this.liveCommand[2] = 0;
+
+        // False is a view pmove would not have turned -- a corpse or an
+        // intermission -- and then `ps.viewangles` is current by definition.
+        const view = PM_PreviewViewAngles(ps, this.liveCommand, this.liveAngles)
+            ? this.liveAngles
+            : ps.viewangles;
+
         if (latest.dead) {
             scratchAngles[0] = DEAD_VIEW_PITCH;
-            scratchAngles[1] = ps.viewangles[1]!;
+            scratchAngles[1] = view[1]!;
             scratchAngles[2] = DEAD_VIEW_ROLL;
         } else {
             scratchAngles[0] =
-                ps.viewangles[0]! + previous.pitch + (latest.pitch - previous.pitch) * a;
-            scratchAngles[1] = ps.viewangles[1]!;
+                view[0]! + previous.pitch + (latest.pitch - previous.pitch) * a;
+            scratchAngles[1] = view[1]!;
             scratchAngles[2] =
-                ps.viewangles[2]! + previous.roll + (latest.roll - previous.roll) * a;
+                view[2]! + previous.roll + (latest.roll - previous.roll) * a;
         }
 
         orientToQ3Angles(scratchAngles, t.rotation);
