@@ -293,6 +293,31 @@ $hud-wrap-depth: 136px !default;
 /// over".
 $hud-wrap-shear: 3deg !default;
 
+/// How far the shear lifts a cluster's outer end clear of its own layout box.
+///
+/// **This is the number anything stacked over a cluster has to know**, and it
+/// exists because a transform does not move a layout box: flex measures where
+/// the ammo readout is declared to be, and the wrap then draws it somewhere
+/// else. Above the outer end, "somewhere else" is higher up.
+///
+/// It is the shear and nothing else, and that is `$hud-wrap-depth`'s doing:
+/// pushing the cluster back by its own reach lands the *outer* end on the screen
+/// plane, where the projection neither grows nor shrinks it. The turn takes
+/// width away there and gives no height back, and the perspective is a scale of
+/// one -- so what is left of the lift at the outer edge is `x·tan(shear)`, and
+/// the outer edge is where `x` is largest.
+///
+/// 320px is that `x`: the widest cluster, the same ammo-gauge-and-icon the depth
+/// above is sized from. `320 · tan(3°)` is 16.8, rounded up so the two constants
+/// round the same way. A narrower cluster lifts less and is covered by this; a
+/// wider one is *not*, so the 320 is the assumption both constants rest on --
+/// which is why `hud-wrap.test.ts` re-derives it from the compiled stylesheet
+/// rather than from this sentence.
+///
+/// See D-152, and `.queep-hud__corner` in `hud.scss` for the one place it is
+/// spent.
+$hud-wrap-lift: 17px !default;
+
 /* ------------------------------------------------------------------ *
  * Motion
  * ------------------------------------------------------------------ */

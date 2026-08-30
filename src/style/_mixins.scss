@@ -41,7 +41,9 @@
 ///     the negative one. Both outer ends end up nearer the player, which is the
 ///     whole effect.
 ///   - **The shear goes the same way.** `skewY` displaces y by `x·tan(a)`, so
-///     the same sign that brings the outer end forward also lifts it.
+///     the same sign that brings the outer end forward also lifts it -- clear of
+///     the layout box the row measured, which is what `$hud-wrap-lift` is the
+///     size of and why anything stacked over a cluster has to spend it.
 ///   - **The whole thing is pushed back first.** `translateZ` is written last
 ///     and therefore applies last, in the parent's space, so it moves both ends
 ///     of the turned cluster equally: the near end lands on the screen plane

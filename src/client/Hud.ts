@@ -37,7 +37,11 @@
  * left, and what else could I hold". That is the question a weapon switch is
  * asking. It sits *outside* the corner's turn: the clusters lean away from the
  * player under the shared perspective, and a readout you are actively reading
- * should face you square on.
+ * should face you square on. It is also far too wide to hang on that surface --
+ * twelve weapons of rack reach further forward through the turn than the wrap
+ * was given room to push back, and a magnified rack leaves the screen. Sitting
+ * above a leaning thing costs a gap the layout box does not know about, which is
+ * `.queep-hud__corner`'s in `hud.scss`. See D-152.
  *
  * The rack's timeout is Q3's `WEAPON_SELECT_TIME` and lives on
  * `PlayerController`, because the thing that knows a switch happened is the

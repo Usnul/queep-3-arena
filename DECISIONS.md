@@ -7359,3 +7359,98 @@ with a bloom halo around it, because `emissiveLuminance` is the leg that keeps i
 "the lights are too bright" turns out to mean those, the lever is D-093's luminance and not this
 constant — and cutting both is the thing this entry argues against, so it would want its own
 reasoning.
+
+### D-152: The weapon rack was landing on the ammo readout, and the corner it shares had quietly stopped being part of the wrap
+
+A screenshot: the row of weapon icons overlapping the top of the AMMO panel. Two faults under it,
+one of them the reported overlap and one of them the reason the two corners of the status bar had
+stopped being the same shape.
+
+**A transform does not move a layout box, and that is the whole of the first fault.** The rack sits
+above the ammo cluster in a flex column (`.queep-hud__corner`), spaced from it by `gap`. Flex spaces
+*boxes*. The cluster is then turned and sheared by `hud-wrap`, and `skewY` displaces y by
+`x·tan(3°)` about the inner edge — so its outer end is drawn 17px above the box the column measured,
+and an 8px gap is 9px of overlap at the end where the readout is highest. Nothing in CSS relates the
+two numbers; the only way this is ever right is for someone to have done the arithmetic.
+
+**The second fault is that the right-hand cluster was not being projected at all.** `perspective` is
+declared once, on `.queep-hud`, precisely so that both corners turn about one vanishing point —
+`hud.scss` opens by saying so. But a `perspective` applies to an element's *children*, and when the
+rack arrived the ammo cluster became a grandchild: the corner column in between was a flat wrapper,
+which ends the 3D context. The turn still happened; it was just projected by no eye. The four
+corners of the right-hand cluster, at 1440x810:
+
+| corner | before | after |
+|---|---|---|
+| inner top | 1088, 704 | 1050.5, 712.4 |
+| outer top | 1380.3, 687.2 | 1377.1, 687.7 |
+| outer bottom | 1380.3, 769.2 | 1377.1, 769.3 |
+| inner bottom | 1088, 786 | 1050.5, 786 |
+
+That first column is an affine squash — `cos(24°)` of width, sheared, and nothing else. The inner
+edge does not recede, because `translateZ(-136px)` had nothing to be depth *in*. So one corner of
+the screen was a perspective turn and the other was a flat trapezoid the same width, which is two
+shapes claiming to be two ends of one surface.
+
+**`transform-style: preserve-3d` on the column fixes the second, and it makes the first smaller
+without fixing it** — the projection pulls the whole cluster toward the vanishing point, so its
+outer top corner drops from 687.2 to 687.7 and the overlap goes from 8.8px to 8.3px. The gap is
+still short by the shear.
+
+So the gap is `space(2) + $hud-wrap-lift`, and `$hud-wrap-lift` is a new token sized the way
+`$hud-wrap-depth` already was: at the widest cluster the port has, which is 320px of ammo gauge and
+weapon icon. `320 · tan(3°)` is 16.8, rounded up to 17. The two constants are the same measurement
+of the same rectangle through the two halves of the same transform — one is how far it comes
+forward, the other how far it rises — and `hud-wrap.test.ts` now derives both from the compiled
+stylesheet and fails if the gauge is widened without revisiting them.
+
+Measured clearance between the rack's bottom edge and the highest point of the ammo cluster, over
+every width and weapon count the HUD has:
+
+| | 1024 (compact) | 1100 | 1280 | 1440 | 1920 | 2560 | 3440 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| before | -4.8 | -8.8 | -8.8 | -8.8 | -8.8 | -8.8 | -8.8 |
+| after | 14.5 | 8.7 | 8.7 | 8.7 | 8.7 | 8.7 | 8.7 |
+
+Compact gets more air than it asked for, because a 244px cluster lifts 10.5px once projected and the
+token is sized for 320. Holding the gauntlet gets 27px for the same reason: no ammo bar is drawn, so
+the cluster is an icon wide and barely leans at all. Both are the conservative direction.
+
+**The other way to fix this was to put the rack inside the wrap, and it does not survive the
+arithmetic.** One surface, edges aligned at every width, overlap structurally impossible — coplanar
+boxes with a gap between them cannot cross under a projective map. What kills it is that
+`$hud-wrap-depth` is 136px because a 320px cluster reaches 130px forward through a 24° turn, and
+pushing everything back by that much is what puts the near end at or behind the screen plane where
+the projection cannot magnify it. The rack is not 320px. Twelve weapons — every weapon in
+`balance.generated.json` — is 492px of rack, which reaches 200px, lands 64px in *front* of the
+plane, and is magnified 1.056 about a vanishing point it is already far from. Wrapped and measured
+in the page:
+
+| window | outer edge of a wrapped rack | window edge |
+|---|---:|---:|
+| 1920 | 1895.5 | 1920 |
+| 2560 | 2553.5 | 2560 |
+| 3440 | 3458.4 | 3440 |
+
+It hangs 18px off a 3440 screen, and that is with the *widest* rack on the *shipped* weapon list; a
+thirteenth slot is worse. Raising the depth to cover 492px would shrink both corners — including the
+health and armour the player reads far more often than they read a rack — by a sixth rather than a
+tenth, to pay for a row that is on screen for `WEAPON_SELECT_TIME` after a switch. D-137 put the rack outside the wrap because "a readout you are
+actively reading should face you square on", which is a judgement; this upholds it on arithmetic,
+which is not.
+
+**What is not fixed.** The rack's right edge still overhangs the ammo cluster's drawn outer edge, by
+31px at 1440 and 36px at 3440, and by 61px when the gauntlet, which draws no ammo bar, leaves an 80px cluster. That
+is not the wrap: a rack is wider than a cluster and the two are right-aligned in layout, which is
+the only anchor available — the cluster's *drawn* edge moves with the screen width, so no fixed
+inset can meet it. Restoring the perspective made it 3px worse, and it is not visible against
+a background that is already a gradient fading to nothing. The middle column was the thing to check
+after moving a corner inboard: the click-to-play line, which is the longest text the port draws and
+wraps to two lines at 1280, keeps 24.6px of clearance at 1280 and 23.8px at 1440 from the right-hand
+cluster's projected inner edge -- more, at both, than the 18.1px and 17.3px the left-hand cluster has
+always left it.
+
+Verified in the Browser pane, at seven widths and three weapon counts, by projecting each corner of
+the two elements through the live transform rather than by reading a bounding box — an axis-aligned
+box around a sheared quad is not the quad, and the whole of what is being measured is an outer end
+that leaves its own box by 17.

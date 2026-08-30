@@ -17,7 +17,10 @@
 //
 //   - **The wrap is one surface.** `perspective` is declared once, on the row
 //     both clusters sit in, so the two turns share a vanishing point.
-//     `@include hud-wrap` per side is the only place a transform appears.
+//     `@include hud-wrap` per side is the only place a transform appears -- and
+//     every wrapper between that row and a cluster has to be `preserve-3d`, or
+//     the side behind it is turned by no eye at all. `.queep-hud__corner` is the
+//     one such wrapper and D-152 is what happened when it was not.
 //   - **A gauge is one rule.** Health, armour and ammo are the same block three
 //     times; what differs is a colour, and the colour arrives through
 //     `--queep-gauge-color` from the modifier class. A fourth resource is four
@@ -98,10 +101,36 @@
 // A column rather than a second flex child of `.queep-hud` so the rack is
 // aligned to the ammo it belongs to at any width, and so it is *outside* the
 // wrap -- see `.queep-hud__rack`.
+//
+// Both declarations below exist because of where this column *is*: between the
+// `perspective` and the cluster it turns. That makes it the one element that
+// knows about both boxes, so it is where the projection is let through and where
+// the room the projection takes is given back. See D-152.
 .queep-hud__corner {
     display: flex;
     flex-direction: column;
-    gap: space(2);
+
+    // space(2) is the gap you can see; `$hud-wrap-lift` is the gap the wrap
+    // takes back. Flex spaces layout boxes, and the shear lifts the cluster's
+    // outer end out of its box -- 17px of it at the widest cluster -- so a plain
+    // space(2) here puts the rack's bottom edge *through* the top of the ammo
+    // readout at the end where the readout is highest. The sum clears it at
+    // every width and every weapon count; the token is where the arithmetic is.
+    gap: space(2) + $hud-wrap-lift;
+
+    // The whole reason the wrap is one surface is that one `perspective` is
+    // declared on `.queep-hud` and both clusters are turned under it. A flat
+    // wrapper in between ends the 3D context, and the cluster inside it would be
+    // projected by nothing at all: a plain affine squash where the other corner
+    // has a perspective turn, which is two different shapes claiming to be two
+    // ends of one surface. `preserve-3d` passes the parent's eye through.
+    //
+    // The gap above does not depend on this one, which is deliberate. A browser
+    // that forces this back to `flat` -- and several will, for an ancestor with
+    // `overflow`, `opacity` or a filter, none of which is here today -- gets the
+    // affine squash back and still has the gap above, because the gap is sized
+    // from the shear and the shear is the part the projection does not touch.
+    transform-style: preserve-3d;
 
     &--right {
         align-items: flex-end;
@@ -391,6 +420,19 @@
 // Deliberately *not* inside `.queep-hud__cluster`: the clusters are turned under
 // the shared perspective, and a readout you are actively reading should face you
 // square on. It shares the corner and not the curve.
+//
+// And it could not join the curve even if that were wanted, which is the part
+// that is geometry rather than taste. `$hud-wrap-depth` is 136px because a 320px
+// cluster reaches 130px forward through a 24° turn, and pushing everything back
+// by that much is what keeps the near end at or behind the screen plane where
+// the projection cannot magnify it. Twelve weapons of rack is 492px, which
+// reaches 200px -- 64px in *front* of the plane, magnified by 1.056 about the
+// vanishing point, and 18px off the right edge of the window at 3440. The rack
+// is simply too wide a thing to hang on this surface, and raising the depth to
+// fit it would shrink the health and armour readouts to pay for it.
+//
+// So it stays flat, above, with `.queep-hud__corner`'s gap holding it clear of
+// where the cluster's outer end actually lands. See D-152.
 .queep-hud__rack {
     display: flex;
     align-items: center;
