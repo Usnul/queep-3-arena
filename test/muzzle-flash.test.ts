@@ -28,11 +28,16 @@
  *     other shooter -- and the player when their gun is not drawn -- still gets
  *     a light, at the origin the simulation reported.
  *
- * See D-115.
+ * See D-115. And D-158, which is the same complaint reported a second time,
+ * because two of the thirteen weapons ship no `tag_flash` and were still being
+ * lit fourteen units in front of the eye -- one of them the gauntlet, which
+ * every player spawns holding. The muzzle is now asked of the model in three
+ * steps rather than one, and "a flash the gun declines" is down to the two
+ * refusals that are about there being no *gun*.
  */
 
 import { describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
@@ -44,7 +49,15 @@ import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Ligh
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
 
-import { ViewWeapon, type CameraPose, type ViewWeaponState } from '../src/client/ViewWeapon.ts';
+import {
+    handOffset,
+    muzzleOffset,
+    ViewWeapon,
+    type CameraPose,
+    type ViewWeaponState,
+} from '../src/client/ViewWeapon.ts';
+import { ModelLibrary } from '../src/client/map/loadModels.ts';
+import type { ModelBundle } from '../src/client/map/SceneBundle.ts';
 import { Effects } from '../src/client/Effects.ts';
 import { Arena } from '../src/client/Arena.ts';
 import { Shadows } from '../src/client/Shadows.ts';
@@ -121,23 +134,50 @@ const FLASH_TAGS: Readonly<Record<string, readonly number[]>> = {
     // The gauntlet has no muzzle, and OA ships it no flash tag. Absent here too.
 };
 
+/**
+ * `tag_barrel`, which is what the gauntlet has instead -- OA's marks it at
+ * (11.02, -0.59, 0.07), where the blade hangs. Round numbers here, same shape.
+ */
+const BARREL_TAGS: Readonly<Record<string, readonly number[]>> = {
+    'models/weapons2/gauntlet/gauntlet.md3': [10, -2, 0],
+};
+
+/**
+ * The model's own bounds, which is all a model with no tags at all has to say.
+ * OA's prox launcher is the one, and D-158 measures its front rather than
+ * putting the light back in the middle of the screen.
+ */
+const BOUNDS: Readonly<Record<string, { mins: number[]; maxs: number[] }>> = {
+    'models/weapons/proxmine/proxmine.md3': { mins: [-10, -2, -4], maxs: [12, 6, 4] },
+};
+
 const PIECES: Readonly<Record<string, number>> = {
     'models/weapons2/shotgun/shotgun.md3': 2,
     'models/weapons2/rocketl/rocketl.md3': 3,
     'models/weapons2/gauntlet/gauntlet.md3': 1,
+    'models/weapons/proxmine/proxmine.md3': 1,
 };
+
+const NO_BOUNDS = { mins: [0, 0, 0], maxs: [0, 0, 0] };
 
 function stubLibrary() {
     return {
         definition(name: string) {
             if (name.endsWith('_hand.md3')) {
-                return { tags: [{ name: 'tag_weapon', origin: HAND_TAG }] };
+                return { ...NO_BOUNDS, tags: [{ name: 'tag_weapon', origin: HAND_TAG }] };
             }
 
-            const flash = FLASH_TAGS[name];
-            if (flash === undefined) return PIECES[name] === undefined ? null : { tags: [] };
+            if (PIECES[name] === undefined) return null;
 
-            return { tags: [{ name: 'tag_flash', origin: flash }] };
+            const tags: { name: string; origin: readonly number[] }[] = [];
+
+            const flash = FLASH_TAGS[name];
+            if (flash !== undefined) tags.push({ name: 'tag_flash', origin: flash });
+
+            const barrel = BARREL_TAGS[name];
+            if (barrel !== undefined) tags.push({ name: 'tag_barrel', origin: barrel });
+
+            return { ...(BOUNDS[name] ?? NO_BOUNDS), tags };
         },
         components(name: string): ShadedGeometry[] | null {
             const count = PIECES[name];
@@ -319,15 +359,54 @@ describe('a flash the gun declines', () => {
     });
 
     /*
-     The gauntlet, and OA's prox launcher: a model with no `tag_flash`. Q3 lights
-     these from the player's own origin, which is roughly where the fallback puts
-     them, so declining is the faithful answer rather than a hole.
+     And the one that is *not* a refusal any more. See D-158: a weapon whose
+     model ships no `tag_flash` used to decline and be lit at `CalcMuzzlePoint`
+     instead -- which for the gauntlet, one of the two weapons every player
+     spawns holding, made the commonest flash in the game the exact light on the
+     view axis D-115 is named for.
     */
-    it('is declined by a weapon whose model ships no flash tag', () => {
-        const { view } = drawing('WP_GAUNTLET');
+    it('is taken by a weapon whose model ships no flash tag, and lit on the gun', () => {
+        const { ecd, view } = drawing('WP_GAUNTLET');
 
         expect(view.drawnWeapon, 'the gauntlet is drawn').toBe('WP_GAUNTLET');
-        expect(view.flash('WP_GAUNTLET'), 'but it has no muzzle to flash').toBe(false);
+        expect(view.flash('WP_GAUNTLET'), 'and a drawn gun has a front').toBe(true);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
+        const flash = onlyLight(ecd);
+
+        /*
+         `tag_barrel`, where the blade goes: the hands tag puts the gun 8 units
+         out, 4 down and 12 to the right, and the blade is 10 further down the
+         model and 2 below its origin.
+        */
+        expect(flash.z, 'down the gauntlet, not down the view').toBeCloseTo(18 * S, 3);
+        expect(flash.x, 'on the side the gun is drawn').toBeCloseTo(-12 * S, 3);
+        expect(flash.y, 'and below the crosshair').toBeCloseTo(-6 * S, 3);
+
+        expect(
+            Math.hypot(flash.x, flash.y),
+            'off the view axis, which is the whole complaint'
+        ).toBeGreaterThan(0.3);
+    });
+
+    /*
+     A model that marks nothing at all -- OA's prox launcher carries no tags on
+     its world model, so there is no authored point to read and the front of its
+     own bounds is measured instead.
+    */
+    it('is taken by a model with no tags at all, and lit at the front of it', () => {
+        const { ecd, view } = drawing('WP_PROX_LAUNCHER');
+
+        expect(view.drawnWeapon, 'the prox launcher is drawn').toBe('WP_PROX_LAUNCHER');
+        expect(view.flash('WP_PROX_LAUNCHER'), 'and it still has a front').toBe(true);
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_PROX_LAUNCHER'));
+        const flash = onlyLight(ecd);
+
+        // Bounds 12 forward, y -2..6 and z -4..4: the centre of the front face.
+        expect(flash.z, 'the front of the model, from a hands tag 8 out').toBeCloseTo(20 * S, 3);
+        expect(flash.y, '4 below the eye and 2 up the middle of the face').toBeCloseTo(-2 * S, 3);
+        expect(flash.x, 'on the side the gun is drawn').toBeCloseTo(-12 * S, 3);
     });
 
     it('is dropped when the gun is put away mid-flash', () => {
@@ -393,7 +472,28 @@ describe('Arena sends a flash to the gun only when the gun is the shooter', () =
         expect(view.flashLit, 'and the gun in your hands did not flash').toBe(false);
     });
 
+    /*
+     The refusal that is left, and it is about the *gun* rather than the tag:
+     `WP_RAILGUN` is not in this bundle, so nothing is drawn and there is nothing
+     to hang a light on. D-158 took the other two refusals away -- a weapon whose
+     model ships no `tag_flash` is still drawn, and a drawn gun has a front.
+    */
     it('falls back to the world when the player has no gun to flash', () => {
+        const ecd = newDataset();
+        const view = new ViewWeapon(ecd as never, stubLibrary() as never);
+        const arena = newArena(ecd);
+        arena.viewWeapon = view;
+
+        view.update(pose([0, 0, 0]), 0.016, held('WP_RAILGUN'));
+        expect(view.drawnWeapon, 'nothing on screen to take it').toBe('');
+
+        arena.muzzleFlash([64, 0, 0], FORWARD, 'WP_RAILGUN', 0);
+
+        const flash = onlyLight(ecd);
+        expect(flash.x, 'no model, so the shot lights itself').toBeCloseTo(64 * S, 6);
+    });
+
+    it("puts the gauntlet's flash on the gauntlet, not in the middle of the screen", () => {
         const ecd = newDataset();
         const view = new ViewWeapon(ecd as never, stubLibrary() as never);
         const arena = newArena(ecd);
@@ -401,12 +501,14 @@ describe('Arena sends a flash to the gun only when the gun is the shooter', () =
 
         view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
         arena.muzzleFlash([64, 0, 0], FORWARD, 'WP_GAUNTLET', 0);
+        view.update(pose([0, 0, 0]), 0.016, held('WP_GAUNTLET'));
 
         const flash = onlyLight(ecd);
-        expect(flash.x, 'the gauntlet has no flash tag, so the shot lights itself').toBeCloseTo(
-            64 * S,
-            6
+        expect(flash.z, 'on the blade, not 64 units out where the swing was').toBeCloseTo(
+            18 * S,
+            3
         );
+        expect(Math.hypot(flash.x, flash.y), 'and off the view axis').toBeGreaterThan(0.3);
     });
 
     it('lights the world when nothing has handed it a view weapon', () => {
@@ -984,5 +1086,169 @@ describe('a muzzle pointed exactly along an axis', () => {
         expect(cone!.y).toBeCloseTo(0, 9);
         expect(cone!.z).toBeCloseTo(-r, 6);
         expect(Math.hypot(cone!.x, cone!.y, cone!.z), 'not a unit axis').toBeCloseTo(1, 12);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * The bundle
+ *
+ * Everything above runs on a stub with round numbers, which pins the
+ * arithmetic and says nothing about the models the game actually loads. These
+ * read the built bundle, because the whole of D-158 is a claim about what OA's
+ * thirteen weapons do and do not carry.
+ * ------------------------------------------------------------------ */
+
+const BUILT = join(process.cwd(), 'assets', 'built');
+
+function bundleLibrary(): ModelLibrary {
+    const bundle = JSON.parse(
+        readFileSync(join(BUILT, 'models', 'models.json'), 'utf8')
+    ) as ModelBundle;
+
+    // Geometry is not touched: every assertion below reads `definition`.
+    return new ModelLibrary(bundle, new Float32Array(0), new Uint32Array(0), []);
+}
+
+const WEAPONS = (balance.items as { type: string; tag: string; models: string[] }[])
+    .filter((i) => i.type === 'IT_WEAPON')
+    .map((i) => ({ tag: i.tag, world: i.models[0]!.replace(/\\/g, '/') }));
+
+/** The muzzle measured from the eye, in Q3's own forward/right/up. */
+function fromTheEye(
+    library: ModelLibrary,
+    weapon: { tag: string; world: string }
+): { forward: number; right: number; up: number } {
+    const hand = handOffset(library, weapon.tag)!;
+    const muzzle = muzzleOffset(library, weapon.world)!;
+
+    // `hand` is the camera's -- x left, y up, z forward -- and `muzzle` is the
+    // model's -- x forward, y up, z right. The same sum `barrelOffset` makes.
+    return {
+        forward: hand[2] + muzzle[0],
+        right: -hand[0] + muzzle[2],
+        up: hand[1] + muzzle[1],
+    };
+}
+
+describe('every weapon OpenArena ships has a muzzle to be lit at', () => {
+    /**
+     * The complaint, as a property of all thirteen rather than of eleven.
+     *
+     * `CalcMuzzlePoint` is `forward * 14` and nothing else, so its `right` and
+     * `up` are exactly zero however the player is facing -- that is what "in
+     * your face" means numerically. Every weapon's muzzle now clears it in all
+     * three: further out than fourteen units, on the right where the gun is
+     * drawn, and below the crosshair.
+     */
+    it('puts it off the view axis, in front of the eye and on the gun side', () => {
+        const library = bundleLibrary();
+
+        expect(WEAPONS.length, 'weapons in the balance table').toBe(13);
+
+        for (const weapon of WEAPONS) {
+            expect(muzzleOffset(library, weapon.world), `${weapon.tag} has no muzzle`).not.toBeNull();
+
+            const { forward, right, up } = fromTheEye(library, weapon);
+
+            expect(forward, `${weapon.tag} is nearer than CalcMuzzlePoint`).toBeGreaterThan(14);
+            expect(right, `${weapon.tag} is not on the side the gun is drawn`).toBeGreaterThan(3);
+            expect(up, `${weapon.tag} is not below the crosshair`).toBeLessThan(0);
+            expect(
+                Math.hypot(right, up),
+                `${weapon.tag} is on the view axis, which is the bug`
+            ).toBeGreaterThan(5);
+        }
+    });
+
+    /**
+     * Which step of the cascade each weapon takes, named rather than counted.
+     *
+     * The list is the interesting part: if a pipeline change drops the tags, or
+     * OA's assets are swapped for ones that carry more of them, this is where
+     * the port finds out -- and the second and third rows are the only reason
+     * {@link muzzleOffset} exists at all.
+     */
+    it('reads a tag for twelve of them and measures the thirteenth', () => {
+        const library = bundleLibrary();
+
+        const authored: string[] = [];
+        const barrelled: string[] = [];
+        const measured: string[] = [];
+
+        for (const { tag, world } of WEAPONS) {
+            const tags = library.definition(world)!.tags;
+
+            if (tags.some((t) => t.name === 'tag_flash')) authored.push(tag);
+            else if (tags.some((t) => t.name === 'tag_barrel')) barrelled.push(tag);
+            else measured.push(tag);
+        }
+
+        expect(authored.length, 'weapons whose author marked a muzzle').toBe(11);
+        expect(barrelled, 'the gauntlet has a blade mount and no muzzle').toEqual(['WP_GAUNTLET']);
+        expect(measured, "OA's prox launcher marks nothing at all").toEqual(['WP_PROX_LAUNCHER']);
+    });
+
+    /**
+     * What the third step is worth, measured against the muzzles that *were*
+     * authored -- which is the only check available for a number no modeller
+     * wrote down.
+     *
+     * Only the weapons it would actually be reached for are comparable: one
+     * file, no barrel model, so the front of the bounds is the front of the
+     * gun. On those it lands within a few centimetres of the authored point.
+     */
+    it('estimates a muzzle within five units of an authored one', () => {
+        const library = bundleLibrary();
+        let compared = 0;
+
+        for (const { tag, world } of WEAPONS) {
+            const def = library.definition(world)!;
+
+            const flash = def.tags.find((t) => t.name === 'tag_flash');
+            if (flash === undefined) continue;
+            if (library.definition(world.replace(/\.md3$/, '_barrel.md3')) !== null) continue;
+            if (tag === 'WP_SHOTGUN') continue; // see below
+
+            const estimate = [
+                def.maxs[0]!,
+                (def.mins[1]! + def.maxs[1]!) / 2,
+                (def.mins[2]! + def.maxs[2]!) / 2,
+            ];
+
+            const error = Math.hypot(
+                estimate[0]! - flash.origin[0]!,
+                estimate[1]! - flash.origin[1]!,
+                estimate[2]! - flash.origin[2]!
+            );
+
+            expect(error, `${tag}'s front is nowhere near its muzzle`).toBeLessThan(5);
+            compared += 1;
+        }
+
+        // Three `continue`s above, and a loop that skipped everything would
+        // pass silently. Six weapons are one file with a marked muzzle.
+        expect(compared, 'nothing was actually compared').toBe(6);
+    });
+
+    /**
+     * And its failure mode, pinned rather than hidden.
+     *
+     * `shotgun.md3` carries a second surface that is not the gun: an additive
+     * laser-sight beam running from x = 20 to x = 45, which drags the model's
+     * bounds twenty-two units past the barrel. The shotgun marks a `tag_flash`,
+     * so the estimate is never reached for it -- but a future weapon with a
+     * decorative surface and no tags would put its light out in mid-air, and
+     * that is the reason the estimate is the last step and not the rule.
+     */
+    it('would be wrong about the one model that carries something that is not the gun', () => {
+        const library = bundleLibrary();
+        const def = library.definition('models/weapons2/shotgun/shotgun.md3')!;
+        const flash = def.tags.find((t) => t.name === 'tag_flash')!;
+
+        expect(def.maxs[0]! - flash.origin[0]!, 'the laser sight is not the barrel').toBeGreaterThan(
+            20
+        );
+        expect(muzzleOffset(library, 'models/weapons2/shotgun/shotgun.md3')![0], 'so the tag wins')
+            .toBeCloseTo(flash.origin[0]!, 6);
     });
 });

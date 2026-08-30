@@ -303,12 +303,17 @@ export class Arena implements WeaponEvents {
      * The flash goes on the gun when there is a gun, and in the world otherwise.
      *
      * `ViewWeapon` draws exactly one weapon -- the local player's -- and it is
-     * the only thing in the scene with a `tag_flash` to hang a light on, so it
-     * gets first refusal on the local player's own shots and everything else
-     * falls through to a light at the shot's origin. Refusal is a real answer
-     * and not a formality: a dead player, a weapon the bundle has no model for
-     * and a weapon that ships no flash tag all decline, and each of them still
-     * has to light something.
+     * the only thing in the scene with a barrel to hang a light on, so it gets
+     * first refusal on the local player's own shots and everything else falls
+     * through to a light at the shot's origin. Refusal is a real answer
+     * and not a formality: a dead player and a weapon the bundle has no model
+     * for both decline, and each of them still has to light something.
+     *
+     * A weapon whose model ships no `tag_flash` used to be a third refusal, and
+     * is not one any more: a gun that is drawn has a front, and `muzzleOffset`
+     * finds it. That mattered because the gauntlet is one of the two weapons
+     * every player spawns holding, so the commonest muzzle flash in the game was
+     * the one D-115 is named for -- 44 cm dead ahead of the eye. See D-158.
      *
      * The *sound* does not move with the light. It is the shot's own event, it
      * is placed by the simulation, and the listener is at the eye a half-metre

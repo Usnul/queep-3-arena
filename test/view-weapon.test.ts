@@ -69,6 +69,16 @@ const PIECES: Readonly<Record<string, number>> = {
     'models/weapons2/gauntlet/gauntlet.md3': 5,
 };
 
+/**
+ * Bounds every stub model shares, because nothing here reads them for size.
+ *
+ * They are read at all only by `muzzleOffset`'s last step -- the front of a
+ * model that marks no muzzle -- so 10 units forward is what a flash on one of
+ * these weapons is measured from. See `muzzle-flash.test.ts` for the tests that
+ * are about that number rather than merely needing one.
+ */
+const BOUNDS = { mins: [-4, -4, -4], maxs: [10, 4, 4] };
+
 function piecesOf(weapon: string): number {
     return PIECES[weaponItemByTag(weapon)!.models[0]!]!;
 }
@@ -84,8 +94,15 @@ function piecesOf(weapon: string): number {
 function stubLibrary() {
     return {
         definition(name: string) {
-            if (!name.endsWith('_hand.md3')) return null;
-            return { tags: [{ name: 'tag_weapon', origin: [8, -4, 12] }] };
+            if (name.endsWith('_hand.md3')) {
+                return { ...BOUNDS, tags: [{ name: 'tag_weapon', origin: [8, -4, 12] }] };
+            }
+
+            // A world model has to have a definition as well as components, and
+            // for the same reason the real library cannot hand out one without
+            // the other: D-158 reads the muzzle off it, and falls back to the
+            // model's own bounds for a mesh that marks none.
+            return PIECES[name] === undefined ? null : { ...BOUNDS, tags: [] };
         },
         components(name: string): ShadedGeometry[] | null {
             const count = PIECES[name];
@@ -336,16 +353,22 @@ describe('a weapon that is two models is drawn as two models', () => {
         return {
             definition(name: string) {
                 if (name.endsWith('_hand.md3')) {
-                    return { tags: [{ name: 'tag_weapon', origin: [8, -4, 12], rotation: [0, 0, 0, 1] }] };
+                    return {
+                        ...BOUNDS,
+                        tags: [
+                            { name: 'tag_weapon', origin: [8, -4, 12], rotation: [0, 0, 0, 1] },
+                        ],
+                    };
                 }
                 if (name === BODY) {
                     return {
+                        ...BOUNDS,
                         tags: [
                             { name: 'tag_barrel', origin: TAG_ORIGIN, rotation: TAG_ROTATION },
                         ],
                     };
                 }
-                if (name === BARREL || name === NO_BARREL) return { tags: [] };
+                if (name === BARREL || name === NO_BARREL) return { ...BOUNDS, tags: [] };
                 return null;
             },
             components(name: string): ShadedGeometry[] | null {

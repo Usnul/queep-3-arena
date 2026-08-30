@@ -8049,3 +8049,61 @@ is a paler blue-white.
 about 1,800 vertices; the worst case a Q3 map can produce is the railgun's own 8192-unit trace,
 1,635 knots and under fifteen thousand — a shot fired down the longest sight line in the game.
 There is no cap in `makeHelixStroke` because the caller's range already is one.
+
+### D-158: two weapons never got D-115's fix, and one of them is what every player spawns holding
+
+D-115 moved the muzzle flash light off the view axis and onto `tag_flash`, and the report it fixed
+was "the muzzle flash light seems to be centered on the player". It was reported again. The light
+still lands on the view axis for the gauntlet and OA's prox launcher -- `CalcMuzzlePoint`, fourteen
+units dead ahead of the eye at eye height, 44 cm of nothing -- because those are the two weapons
+whose world models ship no `tag_flash`, and D-115's `ViewWeapon.flash` declined them and handed them
+back to `Effects`. The gauntlet is one of the two weapons a player spawns with, so the commonest
+flash in the game was the one the fix was named after.
+
+**Measured before it was believed.** The eleven weapons that do carry a tag are correct, and were
+checked in the running app rather than argued about: the machinegun's light projects *inside the
+ring of its own barrel's muzzle*, 0.74 units past where the mesh stops and 0.03 off the axis the
+barrel is drawn along. On nine of the eleven the tag sits within 2.6 units of the end of the mesh;
+the two that reach further are the grapple, whose hook is 7 units past its own flash tag, and the
+shotgun, whose laser sight is 22. Nothing about the placement arithmetic was wrong. What was wrong
+was the answer to "and if there is no tag?", which was "put it back in the middle of the screen".
+
+**The muzzle is asked of the model, in three steps.** `ViewWeapon.muzzleOffset`, each step a fact
+about *that* mesh rather than a number somebody picked:
+
+| step | what it reads | who reaches it |
+| --- | --- | --- |
+| 1 | `tag_flash`, the muzzle its author marked | eleven weapons |
+| 2 | `tag_barrel`, the mount its author marked for the front of the gun -- for the gauntlet, where the blade goes | the gauntlet |
+| 3 | the front of its own bounds, at the centre of that face | OA's prox launcher, whose world model carries no tags at all |
+
+Step 3 is an estimate and is labelled one. What can be said about it is measured: run it on the
+weapons it *would* be reached for -- one file, no barrel model -- and compare against the muzzle
+their authors did mark, and it is within 0.45 to 4.3 units on all six. Its failure mode is pinned
+in the same test rather than left to be discovered: `shotgun.md3` carries a second surface that is
+not the gun, an additive laser-sight beam running out to x = 45, which drags the model's bounds
+twenty-two units past the barrel. The shotgun marks a `tag_flash` so the estimate never runs on it,
+and that is exactly why the estimate is the last step and not the rule.
+
+**`barrelOffset` deliberately did not take the wider answer.** The same three steps would give the
+prox launcher a projectile spawn point too, and it keeps `CalcMuzzlePoint`. A lamp wants to be on
+the gun and can be estimated onto it; a projectile's birthplace decides what a rocket clears and
+what it detonates against, and D-116 already trades ten units of aim to move it there. That trade
+is worth making against a point a modeller authored and is not worth making blind.
+
+**What is left of "the gun declines".** Two refusals, both about there being no gun: a dead player,
+and a weapon the bundle has no model for. The third -- no tag -- is gone, because a gun that is
+drawn has a front whether or not anybody marked it. `Effects.muzzleFlash` keeps every other
+shooter, which is every bot, and stays the honest answer there: nothing draws a weapon model for
+them, so there is no barrel to hang anything on.
+
+The *visible* half of the flash is untouched and still gated on `hasFlashModel` -- Q3's own
+`if (!flash.hModel) return;` -- so the gauntlet lights the room and still throws no sparks. Those
+two halves used to disagree about where as well as whether, and now they only disagree about
+whether, which is the disagreement D-115 argued for.
+
+Pinned by `muzzle-flash.test.ts`: that all thirteen weapons land further out than `CalcMuzzlePoint`,
+on the side the gun is drawn, below the crosshair and more than five units off the view axis; that
+the cascade takes step 1 eleven times, step 2 for the gauntlet and step 3 for the prox launcher and
+nothing else; and the two claims about the estimate above. The gauntlet's own light was looked at in
+the preview browser, on the blade, where the old one was on the crosshair.

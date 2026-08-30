@@ -71,6 +71,7 @@ import {
     barrelSpinAngle,
     newBarrelSpin,
     placeOnTag,
+    TAG_BARREL,
     type TagAttachment,
 } from './barrel.ts';
 import type { ModelLibrary } from './map/loadModels.ts';
@@ -293,6 +294,54 @@ export function flashOffset(
 }
 
 /**
+ * The point on a drawn weapon that its flash comes out of. Model axes, Q3 units.
+ *
+ * `tag_flash` for the eleven weapons that ship one, and this exists for the two
+ * that do not. Q3 answers those by drawing nothing -- `CG_AddPlayerWeapon`
+ * returns on `if (!flash.hModel)`, above the dlight -- and D-115 chose to light
+ * them anyway, because a shot with no light reads as a shot that did not happen.
+ * What it then did with them was hand them back to `Effects`, which lights the
+ * *shot's* origin: `CalcMuzzlePoint`, fourteen units straight out from the eye
+ * on the view axis. That is the light-in-your-face D-115 is named after, still
+ * on for the gauntlet -- which every player spawns holding. See D-158.
+ *
+ * So the question "where on this gun" is asked of the model rather than
+ * answered by a constant, in three steps, each one a fact about *this* mesh:
+ *
+ *  1. `tag_flash`, the muzzle its author marked.
+ *  2. `tag_barrel`, the mount its author marked for the front half of the gun --
+ *     which for the gauntlet is where the blade goes, and is the only point on
+ *     it anybody authored.
+ *  3. the front of its own bounds, on the centre of that face, for a model that
+ *     carries no tags at all. OA's prox launcher is the one, and this is an
+ *     estimate rather than a reading -- `muzzle-flash.test.ts` runs it on the
+ *     six weapons it would be *reached* for if they had marked nothing, and
+ *     measures it against the muzzles they did mark. That is the only check
+ *     available for a number no modeller wrote down, and the same test pins the
+ *     one model it would be wrong about.
+ *
+ * Null only when `model` is not in the bundle, which for a weapon on screen is
+ * already impossible: {@link ViewWeapon} has its meshes by then.
+ */
+export function muzzleOffset(
+    library: ModelLibrary,
+    model: string
+): [number, number, number] | null {
+    const flash = flashOffset(library, model);
+    if (flash !== null) return flash;
+
+    const def = library.definition(model);
+    if (def === null) return null;
+
+    const barrel = def.tags.find((t) => t.name === TAG_BARREL);
+    if (barrel !== undefined) {
+        return [barrel.origin[0]!, barrel.origin[1]!, barrel.origin[2]!];
+    }
+
+    return [def.maxs[0]!, (def.mins[1]! + def.maxs[1]!) / 2, (def.mins[2]! + def.maxs[2]!) / 2];
+}
+
+/**
  * Where a weapon's projectiles leave it, as an offset from the eye.
  *
  * `tag_flash` reached through `tag_weapon`: the gun hangs off the hands model
@@ -308,6 +357,15 @@ export function flashOffset(
  *
  * Null when the weapon has no hands tag or its model ships no `tag_flash`, which
  * is the caller's cue to use `CalcMuzzlePoint` as the port always has.
+ *
+ * **`flashOffset` and not {@link muzzleOffset}, deliberately.** The light took
+ * the wider answer in D-158 and this did not, because the two are asking
+ * different questions: a lamp wants to be *on the gun* and can be estimated
+ * onto it, and a projectile's birthplace is gameplay -- it decides what a rocket
+ * clears and what it detonates against, and D-116 already trades 10 units of
+ * aim for it. A spawn point nobody authored is not a trade worth making blind,
+ * so the two weapons with no `tag_flash` keep `CalcMuzzlePoint` for their shots
+ * and get a light on the barrel all the same.
  */
 export function barrelOffset(
     library: ModelLibrary,
@@ -425,8 +483,11 @@ interface DrawnWeapon {
     readonly attachments: (TagAttachment | null)[];
     readonly offset: readonly [number, number, number];
     /**
-     * `tag_flash` in the model's own axes, Q3 units, or null for a weapon that
-     * ships none -- the gauntlet, and OA's prox launcher.
+     * The muzzle in the model's own axes, Q3 units. See {@link muzzleOffset}.
+     *
+     * Never null, which is the whole of D-158: a weapon that is *drawn* has a
+     * front, so there is always somewhere on it to hang the light, and only a
+     * weapon with no model at all falls back to the shot's own origin.
      *
      * Not permuted the way {@link handOffset} permutes `tag_weapon`, and for a
      * reason: the hands tag is an offset *from the eye* and has to be expressed
@@ -434,7 +495,7 @@ interface DrawnWeapon {
      * carried into the world by the model's own rotation, which already contains
      * `MODEL_TO_VIEW`. Permuting it as well would apply that turn twice.
      */
-    readonly flash: readonly [number, number, number] | null;
+    readonly muzzle: readonly [number, number, number];
     /**
      * Whether the geometries are attached, which is what "on screen" means.
      *
@@ -620,10 +681,10 @@ export class ViewWeapon implements MuzzleFlashSink {
          same answer for the same reason -- `CG_AddPlayerWeapon` re-adds the
          dlight at `tag_flash` on every frame the flash is up.
         */
-        if (wanted !== null && wanted.flash !== null && this.flashSeconds > 0) {
+        if (wanted !== null && this.flashSeconds > 0) {
             // `scratchPosition`/`scratchRotation` are this frame's: they are
             // written exactly when `wanted` is non-null, which is this branch.
-            this.lightFlash(wanted.flash);
+            this.lightFlash(wanted.muzzle);
 
             // And the particles, once per shot, at the muzzle the light just
             // moved to -- see `pendingBurst` for why they are not raised from
@@ -657,15 +718,18 @@ export class ViewWeapon implements MuzzleFlashSink {
      * this class the simulation reaches: `Arena` offers every muzzle flash to
      * the gun first and falls back to a light in the world when the answer is
      * no. Answering honestly is what makes that fallback correct -- a player who
-     * is dead, holding a weapon the bundle has no model for, or holding one that
-     * ships no `tag_flash` has nothing to hang a light on, and would otherwise
-     * fire with no flash at all.
+     * is dead, or holding a weapon the bundle has no model for, has no gun on
+     * screen to hang a light on and would otherwise fire with no flash at all.
+     *
+     * **Those are now the only two refusals, and there used to be a third**: a
+     * weapon whose model ships no `tag_flash` declined and was lit on the view
+     * axis instead. A drawn gun has a front whether or not anybody marked it,
+     * and {@link muzzleOffset} finds one -- see D-158.
      *
      * @returns whether the gun took it.
      */
     flash(weapon: string): boolean {
         if (this.current === null || this.currentName !== weapon) return false;
-        if (this.current.flash === null) return false;
 
         this.flashSeconds = MUZZLE_FLASH_SECONDS;
         this.pendingBurst = true;
@@ -810,28 +874,32 @@ export class ViewWeapon implements MuzzleFlashSink {
         const offset = world === undefined ? null : handOffset(this.library, weapon);
         const components = world === undefined ? null : this.library.components(world);
         /*
-         `tag_flash`, and unlike the other two it is allowed to be missing. Every
-         weapon OA ships carries one except the gauntlet -- which has no muzzle
-         to flash -- and the prox launcher, whose model has no tags at all. Both
-         fall back to a light at the shot's own origin.
+         Where the flash goes on this gun. Not allowed to be missing any more:
+         every weapon OA ships carries a `tag_flash` except the gauntlet, which
+         has a `tag_barrel` where its blade goes, and the prox launcher, whose
+         model carries no tags at all and is measured instead. Only a weapon with
+         no *model* declines now, and it declines for want of a gun rather than
+         for want of a tag -- see `muzzleOffset` and D-158.
 
-         That fallback is a *divergence*, and this used to say it was roughly
-         what Q3 does. It is not: `CG_AddPlayerWeapon` returns on
+         The light for all thirteen is still a *divergence*, and this used to say
+         it was roughly what Q3 does. It is not: `CG_AddPlayerWeapon` returns on
          `if (!flash.hModel)` before it reaches the dlight, so Q3 gives these two
          no muzzle light at all. The port lights them because a shot with no
          light reads as a shot that did not happen (D-115), and the flash's
          visible half is gated on the C's own test instead -- see
          `hasFlashModel`.
         */
-        const flash = world === undefined ? null : flashOffset(this.library, world);
+        const muzzle = world === undefined ? null : muzzleOffset(this.library, world);
 
         // `world === undefined` is already covered by `components === null`, and
-        // is spelled out so the barrel lookup below has a path to pass it.
+        // is spelled out so the barrel lookup below has a path to pass it. So is
+        // `muzzle === null`, which needs a model to be missing to happen at all.
         if (
             world === undefined ||
             offset === null ||
             components === null ||
-            components.length === 0
+            components.length === 0 ||
+            muzzle === null
         ) {
             if (!this.unmodelled.includes(weapon)) this.unmodelled.push(weapon);
             return null;
@@ -892,7 +960,7 @@ export class ViewWeapon implements MuzzleFlashSink {
             entities,
             attachments,
             offset,
-            flash,
+            muzzle,
             visible: false,
         };
         this.drawn.set(weapon, drawn);

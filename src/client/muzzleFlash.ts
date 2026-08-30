@@ -159,9 +159,14 @@ const NO_FLASH_MODEL: ReadonlySet<string> = new Set([
  *
  * The *light* in this port does not consult this, and that is D-115's standing
  * divergence rather than an oversight -- a shot with no light at all reads as a
- * shot that did not happen, and `Effects` has lit every weapon since. What
- * consults it is the flash's visible half, because a burst of sparks out of a
- * melee weapon is not a divergence anyone asked for.
+ * shot that did not happen, so every weapon has been lit since. What consults it
+ * is the flash's visible half, because a burst of sparks out of a melee weapon
+ * is not a divergence anyone asked for.
+ *
+ * Those two halves used to disagree about *where*: the light for a weapon with
+ * no flash model was also a weapon with no `tag_flash`, so it went to the shot's
+ * origin on the view axis while every other weapon's rode the barrel. D-158 put
+ * it on the gun, which is what this port meant by lighting them at all.
  */
 export function hasFlashModel(weapon: string): boolean {
     return !NO_FLASH_MODEL.has(weapon);

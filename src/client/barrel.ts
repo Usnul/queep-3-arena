@@ -47,8 +47,15 @@ import type { ModelLibrary } from './map/loadModels.ts';
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
 
-/** The tag `CG_AddPlayerWeapon` and `CG_Item` both hang the barrel off. */
-const TAG_BARREL = 'tag_barrel';
+/**
+ * The tag `CG_AddPlayerWeapon` and `CG_Item` both hang the barrel off.
+ *
+ * Exported because `ViewWeapon.muzzleOffset` reads it too, as the front of a gun
+ * whose author marked no muzzle -- and reads the *tag* rather than calling
+ * {@link barrelAttachment}, because that one is null when the barrel *file* is
+ * missing and the tag is a fact about this mesh either way.
+ */
+export const TAG_BARREL = 'tag_barrel';
 
 /** A model hung off another model's tag: what to draw, and where it sits. */
 export interface TagAttachment {
