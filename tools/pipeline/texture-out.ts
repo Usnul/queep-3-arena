@@ -57,6 +57,22 @@
  * has no alpha channel, so `opaque`, `alpha` and `premultiplied` all leave it
  * alone and all three land on the same copy.
  *
+ * # And a glow map is masked by the test its pass was drawn under
+ *
+ * The third axis, and it composes with the other two the same way. A Q3 glow
+ * pass can carry an `alphaFunc`, and on that pass the test is not a silhouette
+ * -- the surface is drawn either way -- it is the mask saying *which texels
+ * glow*. `shader-to-pbr.ts` explains why that belongs to the emissive slot; the
+ * restatement here is to write the image **black** wherever the test fails,
+ * because an emissive is added rather than composited and black adds nothing.
+ *
+ * It is exact. Every other entry in the table above trades something away --
+ * luminance for coverage, a whole image for its mean -- and this one trades
+ * nothing, because a per-texel binary test is precisely what a texture can say.
+ *
+ * The mask is applied before the flatten and before the blend, because both of
+ * those overwrite the alpha channel the test has to read.
+ *
  * # A generated map is not a Q3 image and does not restate
  *
  * {@link writeDerivedTexture} carries the normal and ORM maps, and it bypasses
@@ -72,7 +88,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 
 import type { ShaderIndex } from './shader-index.ts';
-import type { ImageBlend } from './shader-to-pbr.ts';
+import { alphaTestPasses, type AlphaTest, type ImageBlend } from './shader-to-pbr.ts';
 import { decodeTga, type DecodedImage } from './tga.ts';
 
 /**
@@ -150,10 +166,26 @@ export function textureCounts(cache: TextureCache): { written: number; missing: 
  * blend: the flattening happens to the image *before* the blend restates it,
  * and the two compose -- an additive shell is flattened and then turned into
  * coverage, in that order.
+ *
+ * `alphaTest` is the third, and it is the one that has to be here or the fix it
+ * carries does nothing: a glow pass's `alphaFunc` is baked into the *image*
+ * (D-153), and OA's plasma gun names one image for both its albedo and its
+ * glow. Without this axis both references key to `models/weapons2/plasma/skin`,
+ * the memo hands the second one the first one's file, and the mask either never
+ * gets written or gets written over the gun's own skin.
  */
-export function textureKey(virtualPath: string, blend: ImageBlend, flat = false): string {
-    const suffix = blend === 'opaque' ? (flat ? 'flat' : '') : flat ? `${blend}.flat` : blend;
-    return suffix === '' ? virtualPath : `${virtualPath}#${suffix}`;
+export function textureKey(
+    virtualPath: string,
+    blend: ImageBlend,
+    flat = false,
+    alphaTest: AlphaTest | null = null
+): string {
+    const parts: string[] = [];
+    if (blend !== 'opaque') parts.push(blend);
+    if (flat) parts.push('flat');
+    if (alphaTest !== null) parts.push(alphaTest.toLowerCase());
+
+    return parts.length === 0 ? virtualPath : `${virtualPath}#${parts.join('.')}`;
 }
 
 /** The virtual path a {@link textureKey} was made from. */
@@ -305,6 +337,49 @@ function effectiveBlend(blend: ImageBlend, hasAlpha: boolean): ImageBlend {
     if (blend === 'add' || blend === 'filter') return blend;
     if (hasAlpha) return blend;
     return blend === 'addAlpha' ? 'add' : 'opaque';
+}
+
+/**
+ * The same reduction for the alpha test, and for the same reason.
+ *
+ * An image with no alpha channel is alpha 255 everywhere, so `GT0` and `GE128`
+ * pass on every texel and select nothing -- folding them to `null` lets such a
+ * reference share the unmasked file rather than writing a byte-identical copy
+ * under a second name.
+ *
+ * `LT128` is kept, because on such an image it passes *nowhere*: Q3 would draw
+ * that glow pass as nothing at all, and a glow Q3 does not draw is not one this
+ * port should invent. It does not arise in OA -- every alpha-tested glow stage
+ * in the set names a TGA with a real alpha channel -- but "black" is the honest
+ * answer if it ever does, and a silently unmasked one would be the bug this
+ * whole axis exists to fix.
+ */
+function effectiveAlphaTest(test: AlphaTest | null, hasAlpha: boolean): AlphaTest | null {
+    if (test === null || hasAlpha) return test;
+    return test === 'LT128' ? test : null;
+}
+
+/**
+ * Black out the texels a Q3 alpha test rejected, in place.
+ *
+ * Runs *before* {@link restate}, which is not incidental: the emissive is
+ * written `opaque`, and `opaque` forces alpha to 255 -- so the channel the test
+ * reads has to be read while it is still the file's own. Afterwards there is
+ * nothing left to test.
+ *
+ * The colour goes to black rather than the alpha to zero because an emissive is
+ * added, not composited: `emissive_factor * texture_emissive` at RGB 0 adds
+ * nothing, which is exactly a texel Q3's alpha test discarded. Zeroing alpha
+ * instead would say nothing to a slot that never samples it.
+ */
+function applyAlphaTest(rgba: Uint8Array, test: AlphaTest): void {
+    for (let i = 0; i < rgba.length; i += 4) {
+        if (alphaTestPasses(test, rgba[i + 3]!)) continue;
+
+        rgba[i] = 0;
+        rgba[i + 1] = 0;
+        rgba[i + 2] = 0;
+    }
 }
 
 /** Apply a restatement in place. See the table at the top of this file. */
@@ -479,7 +554,13 @@ export async function writeTexture(
     /** When set, a generated de-lit albedo here replaces the image's colour. */
     mapsRoot: string | null = null,
     /** `PbrMaterial.environmentMapped`: reduce the image to its mean colour. */
-    flatten = false
+    flatten = false,
+    /**
+     * `PbrMaterial.emissiveAlphaTest`: black out the texels Q3's alpha test
+     * rejected. Only ever set on an emissive reference -- an albedo's test is a
+     * silhouette and becomes `transparency: 'mask'` instead. See D-153.
+     */
+    alphaTest: AlphaTest | null = null
 ): Promise<string | null> {
     const delit = mapsRoot === null ? null : delitAlbedoPath(mapsRoot, virtualPath);
     const hasDelit = delit !== null && existsSync(delit);
@@ -491,7 +572,7 @@ export async function writeTexture(
      resolves to, and the file is named `.delit` so a bundle says on disk which
      one it holds rather than leaving it to be inferred from a timestamp.
     */
-    const key = textureKey(virtualPath, blend, flatten);
+    const key = textureKey(virtualPath, blend, flatten, alphaTest);
 
     const existing = cache.byKey.get(key);
     if (existing !== undefined) return existing === '' ? null : existing;
@@ -515,8 +596,8 @@ export async function writeTexture(
 
     try {
         // A byte copy cannot carry a colour that is not in the file, nor an
-        // image that is not the one on disk.
-        if (!hasDelit && !flatten && isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
+        // image that is not the one on disk, nor a mask over either.
+        if (!hasDelit && !flatten && alphaTest === null && isJpeg && (blend === 'opaque' || blend === 'alpha' || blend === 'premultiplied')) {
             // A JPEG has no alpha, so none of these three change a pixel of it.
             const out = `${flat}${resolved.slice(resolved.lastIndexOf('.'))}`;
             const shared = cache.byFile.get(`${virtualPath}#opaque`);
@@ -530,6 +611,7 @@ export async function writeTexture(
 
         let decoded = await decode(src, isTga);
         const effective = effectiveBlend(blend, decoded.hadAlpha);
+        const test = effectiveAlphaTest(alphaTest, decoded.hadAlpha);
 
         let suffix = '';
         if (hasDelit) {
@@ -547,6 +629,18 @@ export async function writeTexture(
          the image stands for. An additive shell wants the brightness of its
          average colour, which is the first of those two and not the second.
         */
+        /*
+         Before the flatten as well as before the restatement, and for the same
+         reason both times: the test reads the file's own alpha, and neither of
+         those two leaves it there. A masked env-mapped glow then averages to
+         the mean of the part that glows, which is what such a surface averages
+         to as it turns -- the same argument the flatten makes for itself.
+        */
+        if (test !== null) {
+            applyAlphaTest(decoded.rgba, test);
+            suffix = `.${test.toLowerCase()}${suffix}`;
+        }
+
         if (flatten) {
             decoded = flattenToMean(decoded, 'sRGB');
             suffix = `.flat${suffix}`;

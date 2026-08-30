@@ -2636,9 +2636,19 @@ Not meep's numbers, but they establish what the engine was fed. 4,370 files flat
 pk3s in Q3 load order; 104 `.shader` scripts yielding 2,226 entries and 1,960 unique shader
 names, with 250 name collisions across files and 36 parse warnings. The Q3 → PBR projection
 drops, in total across the OA shader set: 1,588 `tcMod`, 925 non-benign `rgbGen`, 786 `tcGen`,
-410 `alphaGen`, 376 `deformVertexes`, 90 `animMap`, 1 `videoMap`, 1 `alphaFunc LT128`. That is
+410 `alphaGen`, 376 `deformVertexes`, 90 `animMap`, 1 `videoMap`. That is
 the measured lossiness of the material conversion — every one of those is a surface that animated
 in Q3 and does not here.
+
+**One category left this list rather than shrinking, and it is the only one that has.** The set's
+single `alphaFunc LT128` was counted here until D-153, on the argument that an inverted alpha test
+cannot be written as a cutoff. True of the transparency slot, which has one number to say it in;
+untrue of the glow map that particular test was gating, which is a texture and states a per-texel
+test exactly. It was OA's plasma gun, and dropping it had the port emitting all of `skin.tga`
+where Q3 emits the 1.8% of it under alpha 128 — so the number was not measuring lossiness so much
+as recording where a conversion had thrown away something it could have kept. Nothing else in the
+list has that property: the remaining 4,176 are animation and view-dependence, and this projection
+is static.
 
 **Every number in that paragraph moved in D-083, and two of them moved for reasons worth
 separating.** The entry and collision counts went *up* because the reader was mis-tracking brace

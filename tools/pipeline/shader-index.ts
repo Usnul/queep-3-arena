@@ -163,6 +163,8 @@ export class ShaderIndex {
                 orm: implicit,
                 emissive: null,
                 emissiveLuminance: 0,
+                // No stages at all, so no glow pass and no test on one.
+                emissiveAlphaTest: null,
                 // No script, so no `tcGen` either: this samples the model's UVs.
                 environmentMapped: false,
                 roughness: 0.85,

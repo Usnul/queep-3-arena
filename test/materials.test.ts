@@ -33,19 +33,29 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import sharp from 'sharp';
 
 import { parseShaderScript } from '../tools/pipeline/shader-script.ts';
 import {
+    alphaTestPasses,
     shaderToPbr,
     TRANSMISSIVE,
     UNLIT_LUMINANCE,
+    type AlphaTest,
     type PbrMaterial,
 } from '../tools/pipeline/shader-to-pbr.ts';
+import { decodeTga } from '../tools/pipeline/tga.ts';
 import { ShaderIndex } from '../tools/pipeline/shader-index.ts';
-import { derivedTextureKey, textureKey, texturePathOf } from '../tools/pipeline/texture-out.ts';
+import {
+    derivedTextureKey,
+    textureCache,
+    textureKey,
+    texturePathOf,
+    writeTexture,
+} from '../tools/pipeline/texture-out.ts';
 import { classify, inScopeNames, loadSpec } from '../tools/material-matrix.ts';
 import { LOCAL_LIGHT_SCALE } from '../tools/convert-map.ts';
 
@@ -208,7 +218,41 @@ models/weapons2/plasma/skin
         expect(plasma.transparency, 'a later stage alpha-testing is that stage only').toBe(
             'opaque'
         );
-        expect(plasma.dropped, 'an inverted test cannot be a cutoff').toContain('alphaFunc LT128');
+
+        /*
+         The test is not the silhouette, but it is not nothing either: it went to
+         the slot whose pass carried it. D-153 and the block below.
+        */
+        expect(plasma.emissiveAlphaTest, 'the glow pass keeps its own mask').toBe('LT128');
+        expect(plasma.dropped, 'a mask the emissive states is not a loss').not.toContain(
+            'alphaFunc LT128'
+        );
+    });
+
+    /*
+     An inverted test that no emissive can state is still a drop. Nothing in OA
+     is shaped this way -- its one `alphaFunc LT128` is the plasma gun's glow --
+     but the record has to keep meaning what it says, or "0 drops" stops being
+     evidence of anything.
+    */
+    it('still records an inverted test that lands on a slot which cannot state it', () => {
+        const m = project(`
+textures/test/inverted
+{
+    {
+        map textures/test/inverted.tga
+        alphaFunc LT128
+    }
+    {
+        map $lightmap
+        blendfunc filter
+    }
+}`);
+        expect(m.emissive, 'no additive pass, so no glow map to bake a mask into').toBeNull();
+        expect(m.emissiveAlphaTest).toBeNull();
+        expect(m.dropped, 'a cutoff cannot say "draw where it is more transparent"').toContain(
+            'alphaFunc LT128'
+        );
     });
 
     it('reads `alphaFunc GT0` as a near-zero cutoff rather than a half one', () => {
@@ -473,6 +517,150 @@ models/weapons/nailgun/nailgun
             false
         );
         expect(m.emissiveLuminance).toBe(UNLIT_LUMINANCE);
+    });
+});
+
+/*
+ D-153. A glow pass's `alphaFunc` says *which texels glow*, and the port was
+ dropping it and emitting the whole image -- OA's plasma gun glowing over all of
+ `skin.tga` where Q3 glows the 1.8% of it under alpha 128.
+
+ The reason this suite could not see it is worth keeping next to the tests: the
+ projection was asked whether the plasma gun was transparent and answered
+ correctly, and nothing asked what it was emitting or over how much of itself.
+*/
+describe('a glow pass keeps the mask it was drawn under', () => {
+    it('carries the test off the stage that became the emissive', () => {
+        const m = project(`
+models/weapons2/plasma/skin
+{
+    {
+        map models/weapons2/plasma/skin.tga
+        rgbGen lightingDiffuse
+    }
+    {
+        map models/weapons2/plasma/skin.tga
+        blendfunc add
+        rgbGen wave sin 0 1 0 1
+        alphaFunc LT128
+    }
+}`);
+        expect(m.emissive).toBe('models/weapons2/plasma/skin');
+        expect(m.emissiveAlphaTest).toBe('LT128');
+    });
+
+    /*
+     The two fallbacks reach an emissive with no glow pass behind it at all --
+     `q3map_lightimage`, and an unlit surface emitting its own albedo. A test
+     that no pass carried would be one this projection invented.
+    */
+    it('leaves it null when the emissive came from a fallback rather than a stage', () => {
+        const declared = project(`
+textures/test/panel
+{
+    q3map_surfacelight 3000
+    q3map_lightimage textures/test/panel_glow.tga
+    {
+        map $lightmap
+        rgbgen identity
+    }
+    {
+        map textures/test/panel.tga
+        blendfunc filter
+    }
+}`);
+        expect(declared.emissive).toBe('textures/test/panel_glow');
+        expect(declared.emissiveAlphaTest).toBeNull();
+
+        const flame = project(`
+textures/test/flame
+{
+    cull none
+    {
+        map textures/test/flame.tga
+        blendfunc blend
+    }
+}`);
+        expect(flame.unlit).toBe(true);
+        expect(flame.emissive).toBe('textures/test/flame');
+        expect(flame.emissiveAlphaTest).toBeNull();
+    });
+
+    /*
+     The plasma gun names one image for its skin and for its glow. If both
+     references key the same, the memo in `texture-out.ts` hands the second one
+     whatever the first one wrote -- so either the gun is painted with its own
+     mask or the mask is never written. Neither is visible from the projection,
+     which is why the assertion is here and not only in the bundle.
+    */
+    it('names a masked emissive apart from an unmasked copy of the same image', () => {
+        const path = 'models/weapons2/plasma/skin';
+
+        expect(textureKey(path, 'opaque')).toBe(path);
+        expect(textureKey(path, 'opaque', false, 'LT128')).toBe(`${path}#lt128`);
+        expect(textureKey(path, 'opaque', false, 'LT128')).not.toBe(textureKey(path, 'opaque'));
+
+        // The axes compose, and the path is still recoverable from all of them.
+        expect(textureKey(path, 'add', true, 'GE128')).toBe(`${path}#add.flat.ge128`);
+        expect(texturePathOf(textureKey(path, 'add', true, 'GE128'))).toBe(path);
+    });
+
+    /*
+     The restatement itself, on an image written for the purpose: a two-by-two
+     with one texel under the test and three over it. Black rather than
+     transparent, because an emissive is added and not composited -- alpha is not
+     read in that slot at all, so zeroing it would say nothing.
+    */
+    it('writes the glow black wherever the test failed, and keeps it where it passed', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'queep-glow-'));
+        const assetRoot = join(dir, 'assets');
+        const outDir = join(dir, 'out');
+        mkdirSync(join(assetRoot, 'test'), { recursive: true });
+        mkdirSync(outDir, { recursive: true });
+
+        // alpha 0 and 100 pass `LT128`; 128 and 255 do not.
+        const rgba = Uint8Array.from([
+            200, 40, 40, 0,
+            40, 200, 40, 100,
+            40, 40, 200, 128,
+            200, 200, 40, 255,
+        ]);
+        await sharp(Buffer.from(rgba), { raw: { width: 2, height: 2, channels: 4 } })
+            .png()
+            .toFile(join(assetRoot, 'test', 'glow.png'));
+
+        const index = new ShaderIndex(assetRoot);
+        const cache = textureCache();
+
+        const masked = await writeTexture(
+            index, assetRoot, 'test/glow', outDir, cache, 'opaque', null, false, 'LT128'
+        );
+        const whole = await writeTexture(
+            index, assetRoot, 'test/glow', outDir, cache, 'opaque', null, false, null
+        );
+
+        expect(masked, 'a masked reference is its own file').not.toBe(whole);
+
+        const read = async (file: string): Promise<number[]> => {
+            const raw = await sharp(join(outDir, file)).ensureAlpha().raw().toBuffer();
+            return [...raw];
+        };
+
+        expect(await read(masked!), 'the two that failed the test add nothing').toEqual([
+            200, 40, 40, 255,
+            40, 200, 40, 255,
+            0, 0, 0, 255,
+            0, 0, 0, 255,
+        ]);
+
+        expect(await read(whole!), 'and the unmasked reference is untouched by any of it').toEqual([
+            200, 40, 40, 255,
+            40, 200, 40, 255,
+            40, 40, 200, 255,
+            200, 200, 40, 255,
+        ]);
+
+        rmSync(dir, { recursive: true, force: true });
     });
 });
 
@@ -836,6 +1024,130 @@ describe('a materials transparency and its albedo image agree', () => {
         expect(existsSync(join(BUILT, 'oa_dm1', 'textures', coverage!))).toBe(true);
         expect(existsSync(join(BUILT, 'oa_dm1', 'textures', colour!))).toBe(true);
     });
+});
+
+/*
+ * The glow masks, checked against what the pipeline actually wrote.
+ *
+ * The rule tests above prove the projection carries the test; this proves the
+ * consequence reached disk. It is the half the reported bug lived in, and the
+ * half no rule test could have seen: the projection named the plasma gun's
+ * emissive correctly the whole time, and the *file* behind that name was the
+ * gun's own skin, because the albedo had already been written under the same
+ * key and the memo handed it back. D-153.
+ */
+describe('a masked glow reached the bundle as a mask', () => {
+    interface Bundle {
+        readonly materials: readonly {
+            name: string;
+            albedo: string | null;
+            emissive: string | null;
+            emissiveLuminance: number;
+        }[];
+        readonly textures: Readonly<Record<string, string | null>>;
+    }
+
+    const bundles: { label: string; bundle: Bundle; textureDir: string }[] = [
+        ...MAPS.map((name) => ({
+            label: name,
+            bundle: JSON.parse(readFileSync(join(BUILT, name, 'scene.json'), 'utf8')) as Bundle,
+            textureDir: join(BUILT, name, 'textures'),
+        })),
+        {
+            label: 'models',
+            bundle: JSON.parse(
+                readFileSync(join(BUILT, 'models', 'models.json'), 'utf8')
+            ) as Bundle,
+            textureDir: join(BUILT, 'models', 'textures'),
+        },
+    ];
+
+    const index = new ShaderIndex(EXTRACTED).load();
+
+    /** Every bundle material whose emissive key carries an alpha-test suffix. */
+    const masked = bundles.flatMap(({ label, bundle, textureDir }) =>
+        bundle.materials
+            .filter((m) => /#(?:.*\.)?(gt0|ge128|lt128)$/.test(m.emissive ?? ''))
+            .map((m) => ({ label, bundle, textureDir, material: m }))
+    );
+
+    /*
+     A guard on the guard. Every assertion below is `it.each` over a list the
+     bundles produce, and an empty list is a green run that checked nothing --
+     which is exactly the state this suite was in before D-153.
+    */
+    it('has a masked glow in the shipping set to check at all', () => {
+        expect(masked.map((m) => `${m.label}:${m.material.name}`)).toEqual([
+            'models:models/weapons2/plasma/skin',
+        ]);
+    });
+
+    it.each(masked)(
+        'is its own file, not the skin it was written beside [$label:$material.name]',
+        ({ bundle, material }) => {
+            expect(material.albedo, 'the case only bites when one image is both').not.toBeNull();
+            expect(bundle.textures[material.emissive!], 'the mask was written').toBeTruthy();
+            expect(bundle.textures[material.emissive!]).not.toBe(
+                bundle.textures[material.albedo!]
+            );
+        }
+    );
+
+    /*
+     The mask itself, against Q3's own image. Black is the whole of the
+     restatement -- an emissive is added, so a black texel emits nothing -- and
+     the two directions are both worth asserting: black where the test fails is
+     the bug that was reported, and *not* black where it passes is the
+     over-correction that would replace it with an unlit gun.
+    */
+    it.each(masked)(
+        'is black exactly where Q3s alpha test rejected the texel [$label:$material.name]',
+        async ({ bundle, textureDir, material }) => {
+            const key = material.emissive!;
+            // The test is the last dot-separated part of the suffix after `#`,
+            // and `#lt128` has no dot in it at all.
+            const suffix = key.slice(key.lastIndexOf('#') + 1).split('.');
+            const test = suffix[suffix.length - 1]!.toUpperCase() as AlphaTest;
+
+            const source = index.resolveTexture(texturePathOf(key));
+            expect(source, 'the Q3 image the mask was taken from').not.toBeNull();
+            const q3 = decodeTga(readFileSync(join(EXTRACTED, source!)));
+
+            const written = await sharp(join(textureDir, bundle.textures[key]!))
+                .ensureAlpha()
+                .raw()
+                .toBuffer({ resolveWithObject: true });
+
+            expect([written.info.width, written.info.height]).toEqual([q3.width, q3.height]);
+
+            let glowing = 0;
+            let wrong = 0;
+            for (let i = 0; i < q3.rgba.length; i += 4) {
+                const passes = alphaTestPasses(test, q3.rgba[i + 3]!);
+                const black =
+                    written.data[i] === 0 &&
+                    written.data[i + 1] === 0 &&
+                    written.data[i + 2] === 0;
+
+                if (passes) glowing += 1;
+                // A texel Q3 rejected must be black. One it kept must be
+                // whatever the artwork says -- including black, where the
+                // artwork is black -- so only the first direction is per-texel.
+                if (!passes && !black) wrong += 1;
+            }
+
+            expect(wrong, 'texels emitting light Q3 does not draw').toBe(0);
+            expect(glowing, 'a mask that rejects everything is not a glow map').toBeGreaterThan(0);
+
+            /*
+             And the number the bug was: OA glows 1.8% of the plasma gun. A
+             regression that restored the whole-image emissive would put this at
+             100% and pass every other assertion here.
+            */
+            const fraction = glowing / (q3.width * q3.height);
+            expect(fraction, 'a glow map that covers the surface is the bug').toBeLessThan(0.5);
+        }
+    );
 });
 
 /*

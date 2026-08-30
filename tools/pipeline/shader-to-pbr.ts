@@ -24,6 +24,7 @@
  * | best-ranked non-additive stage | `texture_albedo`                         |
  * | `blendfunc add` stage       | `texture_emissive` -- an additive pass over |
  * |                             | a lit surface *is* a glow map               |
+ * | that stage's `alphaFunc`    | the glow map's own mask, baked into it      |
  * | `q3map_surfacelight <n>`    | emissive intensity, and a real point light  |
  * | `q3map_lightimage <tex>`    | emissive texture when no additive stage     |
  * | `q3map_sun r g b i deg elev`| a directional light for the map             |
@@ -109,6 +110,31 @@
  * under-brightens in between rather than over-brightening -- the same trade
  * D-079 already took.
  *
+ * # A glow pass's `alphaFunc` says where it glows, and is kept
+ *
+ * An `alphaFunc` on the *albedo* stage is a silhouette: it decides which texels
+ * of the surface are drawn at all, and it becomes `transparency: 'mask'` with a
+ * cutoff. An `alphaFunc` on the *glow* stage is a different statement about a
+ * different slot -- the surface is drawn either way, and the test decides which
+ * texels of it are **bright**.
+ *
+ * The two were being conflated in opposite directions. Reading the test off any
+ * stage alpha-tested the whole plasma gun on the strength of one sitting three
+ * passes down (see the note beside `alphaTested`); reading it off the albedo
+ * stage alone fixed that and left the glow pass's test dropped entirely, so the
+ * emissive was the stage's image *whole* -- OA's plasma gun emitting all of
+ * `skin.tga` where Q3 emits the 1.8% of it under `alphaFunc LT128`, which is 48
+ * times the light over the whole gun rather than its coils. D-153.
+ *
+ * So the test travels with the slot it belongs to. A cutoff is one number and
+ * cannot state an inverted test; an emissive is a *texture* and states a
+ * per-texel binary test exactly, by being black where the test fails. Nothing is
+ * approximated and nothing is dropped -- which is why this is the one place
+ * `alphaFunc LT128` stops being counted as a loss.
+ *
+ * The whole class is 19 stages across OA's 104 scripts: 18 CTF and team-icon
+ * decals this port does not build, and the plasma gun, which it does.
+ *
  * # What an image's alpha channel means depends on the blend that read it
  *
  * meep premultiplies on upload and un-premultiplies in the shader, so an alpha
@@ -159,6 +185,35 @@ export type TransparencyMode = 'opaque' | 'mask' | 'blend';
  */
 export type ImageBlend = 'opaque' | 'alpha' | 'add' | 'addAlpha' | 'filter' | 'premultiplied';
 
+/**
+ * A Q3 alpha test, named the way a shader script names it.
+ *
+ * `NameToAFunc` accepts exactly these three and warns on anything else, so the
+ * set is closed. What each one does is `GL_GREATER 0`, `GL_GEQUAL 0.5` and
+ * `GL_LESS 0.5` against the fragment's alpha -- and with the default `alphaGen
+ * identity` putting 255 in the vertex colour and `GL_MODULATE` combining it,
+ * that fragment alpha *is* the image's alpha channel.
+ */
+export type AlphaTest = 'GT0' | 'GE128' | 'LT128';
+
+/** Whether a byte passes a Q3 alpha test, at the thresholds `GL_ALPHA_TEST` used. */
+export function alphaTestPasses(test: AlphaTest, alpha: number): boolean {
+    switch (test) {
+        case 'GT0':
+            return alpha > 0;
+        // `GL_GEQUAL 0.5` and `GL_LESS 0.5` against `alpha / 255`, so the
+        // boundary sits between 127 and 128 rather than on a byte.
+        case 'GE128':
+            return alpha >= 128;
+        case 'LT128':
+            return alpha < 128;
+    }
+}
+
+function alphaTestOf(name: string | null): AlphaTest | null {
+    return name === 'GT0' || name === 'GE128' || name === 'LT128' ? name : null;
+}
+
 export interface PbrMaterial {
     readonly name: string;
     /** Virtual texture path, without extension; the resolver picks `.jpg`/`.tga`. */
@@ -180,6 +235,24 @@ export interface PbrMaterial {
     readonly orm: string | null;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
+    /**
+     * The alpha test Q3 gated the *glow pass* with, or `null` when it gated it
+     * with nothing.
+     *
+     * A glow stage's `alphaFunc` is not a silhouette, the way the albedo
+     * stage's is -- it is the mask that says *which texels of the image glow*.
+     * The emissive is a texture, so a per-texel binary test restates into one
+     * exactly, with nothing approximated: `texture-out.ts` blacks out the
+     * texels the test rejects. A caller that writes the emissive image has to
+     * apply it, and has to key the result apart from an unmasked copy of the
+     * same file -- which the plasma gun needs, its albedo and its glow being
+     * one image.
+     *
+     * `null` for every emissive that did not come from a stage at all -- the
+     * `q3map_lightimage` and unlit-albedo fallbacks below -- because there was
+     * no pass to carry a test.
+     */
+    readonly emissiveAlphaTest: AlphaTest | null;
     /**
      * Every drawn stage was `tcGen environment`, so no image here is a skin.
      *
@@ -720,16 +793,6 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         }
     }
 
-    /*
-     `GT0` and `GE128` are the two Q3 tests a single cutoff can express. `LT128`
-     -- draw where the image is *more* transparent -- is an inverted test that a
-     cutoff cannot say at all, so it is recorded as a drop rather than quietly
-     mapped onto its own opposite.
-    */
-    for (const s of stages) {
-        if (s.alphaFunc === 'LT128') dropped.push('alphaFunc LT128');
-    }
-
     /* ---- pick the albedo and emissive stages ---- */
 
     type DrawnStage = StageInfo & { readonly path: string };
@@ -776,6 +839,35 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         albedoStage === null ? 'opaque' : imageBlendOf(albedoStage.blend, albedoStage.alphaFunc);
     let emissive: string | null = emissiveStage?.path ?? null;
 
+    /*
+     The glow pass's own mask, carried rather than dropped.
+
+     An `alphaFunc` on the stage that becomes the emissive says *where on the
+     image it glows*, and an emissive is a texture, so that restates exactly --
+     see {@link PbrMaterial.emissiveAlphaTest}. Without it the plasma gun emitted
+     its whole 512x512 skin where OA glows 1.8% of it, which is 48 times the
+     light Q3 draws, spread over a gun instead of over its coils (D-153).
+
+     Only ever read off a stage. The fallbacks below fire when there was no glow
+     stage, and a test that no pass carried is not a test.
+    */
+    const emissiveAlphaTest = alphaTestOf(emissiveStage?.alphaFunc ?? null);
+
+    /*
+     `GT0` and `GE128` are the two Q3 tests a single cutoff can express. `LT128`
+     -- draw where the image is *more* transparent -- is an inverted test that a
+     cutoff cannot say at all, so it is recorded as a drop rather than quietly
+     mapped onto its own opposite.
+
+     Unless it is the glow pass's, in which case nothing is dropped: an emissive
+     is a texture and the test is baked into it above. That is the only slot
+     where an inverted test costs nothing, because it is the only one that is
+     per-texel rather than a single number.
+    */
+    for (const s of stages) {
+        if (s.alphaFunc === 'LT128' && s !== emissiveStage) dropped.push('alphaFunc LT128');
+    }
+
     /* ---- transparency: `FinishShader`'s rule, and only it ---- */
 
     const stage0 = stages[0];
@@ -788,6 +880,9 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
      one whose silhouette becomes the material's. Taking it from any stage
      alpha-tested the whole plasma gun on the strength of an `alphaFunc LT128`
      sitting on a pulsing glow pass three stages down.
+
+     That test is not discarded, though -- it belongs to the glow, and it goes to
+     the emissive. See {@link PbrMaterial.emissiveAlphaTest}.
     */
     const alphaTested = albedoStage?.alphaFunc ?? null;
 
@@ -924,6 +1019,7 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
         orm: derivedFrom,
         emissive,
         emissiveLuminance,
+        emissiveAlphaTest,
         environmentMapped,
         roughness,
         metallic,

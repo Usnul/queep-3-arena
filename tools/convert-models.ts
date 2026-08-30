@@ -519,9 +519,20 @@ async function convertModels(): Promise<void> {
                 }
                 if (albedoKey === null) untexturedSurfaces += 1;
 
+                /*
+                 The glow pass's `alphaFunc` rides along, and has to: the plasma
+                 gun is the case the whole axis exists for, its albedo and its
+                 emissive being one file that must be written twice -- once
+                 whole, once black outside the coils. See D-153.
+                */
                 let emissiveKey: string | null = null;
                 if (pbr.emissive !== null && pbr.emissiveLuminance > 0) {
-                    emissiveKey = textureKey(pbr.emissive, 'opaque', pbr.environmentMapped);
+                    emissiveKey = textureKey(
+                        pbr.emissive,
+                        'opaque',
+                        pbr.environmentMapped,
+                        pbr.emissiveAlphaTest
+                    );
                     textures[emissiveKey] = await writeTexture(
                         index,
                         EXTRACTED,
@@ -530,7 +541,8 @@ async function convertModels(): Promise<void> {
                         textureCache,
                         'opaque',
                         null,
-                        pbr.environmentMapped
+                        pbr.environmentMapped,
+                        pbr.emissiveAlphaTest
                     );
                     if (textures[emissiveKey] === null) emissiveKey = null;
                 }

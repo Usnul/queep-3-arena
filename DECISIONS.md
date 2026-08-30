@@ -7454,3 +7454,86 @@ Verified in the Browser pane, at seven widths and three weapon counts, by projec
 the two elements through the live transform rather than by reading a bounding box — an axis-aligned
 box around a sheared quad is not the quad, and the whole of what is being measured is an outer end
 that leaves its own box by 17.
+
+### D-153: The plasma gun was its own glow map, because the mask that says which part of it glows belongs to a slot nothing was carrying it to
+
+Reported as over-exposed textures on the plasma gun, with a guess attached: an emissive that was
+too aggressively all-glow. The guess was right, and the reason it was right is a slot mismatch that
+this file has now made twice in opposite directions.
+
+OA's `models/weapons2/plasma/skin` is four passes:
+
+```
+{ map skin.tga            rgbGen lightingDiffuse }                       diffuse, shaded
+{ map d_met.tga           blendfunc gl_dst_color gl_src_color  detail }  detail multiply
+{ map skin.tga            blendfunc add  rgbGen wave sin 0 1 0 1
+                          alphaFunc LT128 }                              the glow
+{ map spots.tga           blendfunc gl_dst_color gl_dst_alpha ... }      1999 fake specular
+```
+
+The third pass is a glow over a lit surface, which is a glow map, and the projection took it as
+one. What it did not take was the `alphaFunc LT128` sitting on the same pass. That test is the
+whole of the artwork's intent: `NameToAFunc` maps it to `GL_LESS 0.5`, the default `alphaGen
+identity` puts 255 in the vertex alpha and `GL_MODULATE` leaves the fragment alpha as the image's
+own, so the pass draws exactly where `skin.tga`'s alpha channel is under 128. In OA's artwork that
+is **1.8% of a 512x512 image** — the coil window and four segment lights, and nothing else.
+
+The port emitted all of it. `emissiveLuminance` is `UNLIT_LUMINANCE`, 16.2 cd/m2, and it was
+multiplying a texture whose mean luminance is 0.149 across 82% non-black texels, so the gun added
+**2.42 cd/m2 of unshaded light at every pixel of itself**, on top of its diffuse term. This port's
+own measured range for an ordinary lit wall is 1 to 6 cd/m2 (D-150). The gun was as bright as the
+room, everywhere, and it was that way in a renderer that had otherwise shaded it correctly.
+
+| | texels emitting | mean emitted luminance | over the gun |
+|---|---|---|---|
+| before | 82.1% | 0.149 | 2.42 cd/m2 |
+| after | 1.8% | 0.0027 | 0.04 cd/m2 |
+
+**The mask is not lossy, and that is the point.** D-084's note beside `alphaTested` says `LT128` is
+an inverted test that a cutoff cannot express, and records it as a drop. That is true of the
+*transparency* slot, where the whole statement has to fit in one number, `alphaCutoff`. It is not
+true of the emissive, which is a **texture**: a per-texel binary test restates into one exactly, by
+writing the image black where the test fails. Every other entry in `texture-out.ts`'s table trades
+something away — luminance for coverage, a whole image for its mean — and this one trades nothing.
+So `alphaFunc LT128` stops being counted as a loss in the one place where it is not one.
+
+The two faults were the same mistake with the sign flipped. Reading the test off *any* stage
+alpha-tested the whole gun on the strength of a glow pass three stages down; fixing that by reading
+it off the albedo stage alone left the glow pass's test dropped entirely. A test belongs to the
+pass that carries it, and the pass decides which slot it lands in.
+
+**The key needed a third axis or the fix would have done nothing.** The plasma gun names one image
+for both its skin and its glow, so both references key to `models/weapons2/plasma/skin`, and
+`textureKey` is what the write memo is keyed on. Before this the two shared a file — and shared it
+in the wrong direction, since the albedo is written first and with `mapsRoot` set, so the emissive
+was silently getting the *de-lit* albedo, an image that is a statement about diffuse colour and
+about nothing else. `#lt128` splits them, and the emissive now gets its own write with no de-lit
+applied, which is what the model converter was asking for all along.
+
+**The class, counted rather than asserted.** An `alphaFunc` on an additive pass appears 19 times
+across OA 0.8.8's 104 shader scripts. Eighteen are `GE128` on CTF team textures, team icons, the
+`proto2` set and two Lei effects, none of which this port builds; the nineteenth is the plasma gun.
+So the shipping blast radius is one material, and the fix is in the projection anyway, because the
+other eighteen are one converted CTF map away from lighting up the same way.
+
+**What was looked at and left alone.** Three neighbouring shapes turned up in the same sweep and
+none of them is this bug:
+
+- **`rgbGen` on a glow pass**, dropped for 8 shipping materials as `wave` and 3 as `const`. That is
+  a *scale*, not a mask, and where it is a coloured one a grey `emissive_factor` cannot state it at
+  all. Six of the eight are world materials whose luminance `convert-map.ts` refits photometrically
+  from flux over area, so a scalar folded in upstream would be discarded. Making the emissive
+  factor a colour is the honest fix and it is a change to the photometric fit, not to this.
+- **`textures/evil8_lights/evil8_rlight`**, whose emissive is its whole albedo. That is the
+  `q3map_lightimage` fallback firing with no lightimage declared, on a shader that names no glow
+  image at all — there is no mask in the content to carry. Its brightness is fitted rather than
+  assumed, which is the difference.
+- **The pulsing.** `rgbGen wave sin 0 1 0 1` means the coils breathe between off and full, and the
+  port emits them at full continuously. On 1.8% of the surface that is a coil that does not pulse,
+  not an over-exposed gun, and it is the same class as the entry above.
+
+Verified in the Browser pane on `oa_dm1` with the gun in hand: a dark shaded casing with four
+bright coil segments, which is a plasma gun. `materials.test.ts` gains the rule tests and a bundle
+invariant that reads the written glow map back against Q3's own alpha channel and fails if a texel
+Q3 rejects emits anything — the suite was green through the whole of this bug, having asked whether
+the gun was transparent and never what it was emitting or over how much of itself.

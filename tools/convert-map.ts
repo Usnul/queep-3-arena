@@ -53,7 +53,12 @@ import {
     writeTexture,
 } from './pipeline/texture-out.ts';
 import { tessellatePatch, type PatchVertex } from '../src/q3/bsp/patch.ts';
-import { UNLIT_LUMINANCE, type ImageBlend, type PbrMaterial } from './pipeline/shader-to-pbr.ts';
+import {
+    UNLIT_LUMINANCE,
+    type AlphaTest,
+    type ImageBlend,
+    type PbrMaterial,
+} from './pipeline/shader-to-pbr.ts';
 import { readLightGrid } from '../src/q3/bsp/LightGrid.ts';
 import {
     fitGridLights,
@@ -245,6 +250,12 @@ interface SceneMaterial {
     readonly environmentMapped: boolean;
     readonly emissive: string | null;
     readonly emissiveLuminance: number;
+    /**
+     * `PbrMaterial.emissiveAlphaTest`, carried for the same reason
+     * `environmentMapped` is: the texture pass below runs over `materials` and
+     * has to write the image the key was built from. The runtime reads neither.
+     */
+    readonly emissiveAlphaTest: AlphaTest | null;
     readonly roughness: number;
     readonly metallic: number;
     /** See `PbrMaterial.transmission`; 0 for all but glass and clear water. */
@@ -370,7 +381,8 @@ async function convertTexture(
     outDir: string,
     written: TextureCache,
     blend: ImageBlend,
-    flatten = false
+    flatten = false,
+    alphaTest: AlphaTest | null = null
 ): Promise<string | null> {
     return writeTexture(
         index,
@@ -380,7 +392,8 @@ async function convertTexture(
         written,
         blend,
         MATERIAL_MAPS,
-        flatten
+        flatten,
+        alphaTest
     );
 }
 
@@ -475,8 +488,14 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                     emissive:
                         pbr.emissive === null
                             ? null
-                            : textureKey(pbr.emissive, 'opaque', pbr.environmentMapped),
+                            : textureKey(
+                                  pbr.emissive,
+                                  'opaque',
+                                  pbr.environmentMapped,
+                                  pbr.emissiveAlphaTest
+                              ),
                     emissiveLuminance: pbr.emissiveLuminance,
+                    emissiveAlphaTest: pbr.emissiveAlphaTest,
                     roughness: pbr.roughness,
                     metallic: pbr.metallic,
                     transmission: pbr.transmission,
@@ -1154,6 +1173,10 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
      because the same image can be referenced through two different Q3 blends and
      then has to be written twice. An emissive is always `opaque`: it is the
      colour an additive pass added, and that pass's alpha would only dim it.
+
+     Its alpha is still read once, before being forced -- not as coverage but as
+     the mask an `alphaFunc` on that pass tested against, which says which texels
+     glow rather than how much. `emissiveAlphaTest` carries it; D-153 says why.
     */
     /*
      A surface on a brush entity -- a lit door panel -- has geometry but no
@@ -1208,7 +1231,8 @@ async function convertMap(mapName: string, index: ShaderIndex): Promise<void> {
                 textureDir,
                 written,
                 'opaque',
-                m.environmentMapped
+                m.environmentMapped,
+                m.emissiveAlphaTest
             );
         }
 
