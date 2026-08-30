@@ -1242,17 +1242,44 @@ describe('a hitscan shot leaves a trail', () => {
         return [out[0]!, out[1]!, out[2]!];
     }
 
+    /**
+     * The straight beam, which is the trail with exactly two knots.
+     *
+     * A railgun shot draws two trails since D-157 -- the core and the spiral
+     * wound round it -- and the knot count is what tells them apart rather than
+     * the order they were built in. `seed_trail_stroke` lays a stroke down as two
+     * knots and says why in its own margin: a straight line needs no more, and
+     * every ring can share one frame. A curve is the case that needs more, so a
+     * two-knot trail is a straight one by construction.
+     */
+    function coreIn(ecd: EntityComponentDataset): TrailRecord {
+        const straight = trailsIn(ecd).filter((t) => t.trail.tube!.getCount() === 2);
+
+        expect(straight.length, 'expected exactly one straight beam').toBe(1);
+
+        return straight[0]!;
+    }
+
+    /** The spiral: the trail that is not the straight one. */
+    function helixIn(ecd: EntityComponentDataset): TrailRecord {
+        const curved = trailsIn(ecd).filter((t) => t.trail.tube!.getCount() !== 2);
+
+        expect(curved.length, 'expected exactly one spiral').toBe(1);
+
+        return curved[0]!;
+    }
+
     it('runs from the barrel to the hit, in metres and meep axes', () => {
         const ecd = newDataset();
 
         // Q3 (x, y, z) -> meep (x, z, -y), scaled. 320 units apart on Q3's +x.
         new Effects(ecd).hitscanTrail('WP_RAILGUN', [0, 0, 64], [320, 0, 64]);
 
-        const trails = trailsIn(ecd);
-        expect(trails.length).toBe(1);
+        // The core and the spiral D-157 winds around it.
+        expect(trailsIn(ecd).length).toBe(2);
 
-        const from = knot(trails[0]!.trail, 0);
-        const to = knot(trails[0]!.trail, 1);
+        const from = knot(coreIn(ecd).trail, 0);
+        const to = knot(coreIn(ecd).trail, 1);
 
         expect(from[0]).toBeCloseTo(0, 6);
         expect(from[1]).toBeCloseTo(64 * WORLD_SCALE, 6);
@@ -1295,17 +1322,16 @@ describe('a hitscan shot leaves a trail', () => {
             const ecd = newDataset();
             new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [512, 0, 0]);
 
-            const trails = trailsIn(ecd);
-            expect(trails.length, `${weapon} drew nothing`).toBe(1);
-            expect(trails[0]!.trail.width, `${weapon} width`).toBeCloseTo(
-                coreQ3 * WORLD_SCALE,
-                6
-            );
+            expect(trailsIn(ecd).length, `${weapon} drew nothing`).toBeGreaterThan(0);
+
+            const beam = coreIn(ecd).trail;
+
+            expect(beam.width, `${weapon} width`).toBeCloseTo(coreQ3 * WORLD_SCALE, 6);
             expect(
-                trails[0]!.trail.width,
+                beam.width,
                 `${weapon} is drawn at Q3's quad extent again`
             ).not.toBeCloseTo(quadQ3 * WORLD_SCALE, 6);
-            expect(trails[0]!.trail.maxAge, `${weapon} lifetime`).toBeCloseTo(seconds, 6);
+            expect(beam.maxAge, `${weapon} lifetime`).toBeCloseTo(seconds, 6);
         }
     });
 
@@ -1328,6 +1354,345 @@ describe('a hitscan shot leaves a trail', () => {
                 quadQ3
             );
         }
+    });
+
+    /*
+     ------------------------------------------------------------------------
+     The spiral, which `CG_RailTrail` winds around the core and this port drew
+     nothing of until D-157.
+
+     **The number in circulation for it is the wrong number**, and that is what
+     most of this checks. `r_railWidth` 16 belongs to `RT_RAIL_RINGS`, which
+     `CG_RailTrail` stopped emitting in Q3 1.30 and the OA cgame keeps behind
+     `cg_oldRail` "0". The path that runs builds the spiral out of `RT_SPRITE`
+     puffs at `re->radius = 1.1`, so the quad is 2.2 units and the artwork lights
+     0.68 of it -- a factor of twenty-three from the number a transcription would
+     have used.
+     ------------------------------------------------------------------------
+    */
+
+    /** Where a point sits relative to a shot: along the axis, and off it. */
+    function aboutAxis(
+        point: readonly [number, number, number],
+        from: readonly [number, number, number],
+        direction: readonly [number, number, number]
+    ): { along: number; offset: [number, number, number] } {
+        const dx = point[0] - from[0];
+        const dy = point[1] - from[1];
+        const dz = point[2] - from[2];
+
+        const along = dx * direction[0] + dy * direction[1] + dz * direction[2];
+
+        return {
+            along,
+            offset: [
+                dx - along * direction[0],
+                dy - along * direction[1],
+                dz - along * direction[2],
+            ],
+        };
+    }
+
+    /*
+     A thousand units along Q3's +x, which is meep's +x too, so the shot axis is
+     a unit vector no test has to reconstruct.
+    */
+    const SHOT_Q3 = 1000;
+    const SHOT_AXIS = [1, 0, 0] as const;
+
+    function railShot(): EntityComponentDataset {
+        const ecd = newDataset();
+        new Effects(ecd).hitscanTrail('WP_RAILGUN', [0, 0, 0], [SHOT_Q3, 0, 0]);
+        return ecd;
+    }
+
+    /*
+     `TubeX` keeps knot rows in a Float32 table, so everything read back out of
+     one carries about seven digits and no more. The tolerances below are sized
+     for that rather than for the arithmetic: a metre of `along` resolves to
+     about two parts in ten million, which is a hundredth of a millimetre and
+     four orders of magnitude finer than anything being asserted.
+    */
+
+    /** Every helix knot, as an offset from the shot line and a distance along it. */
+    function helixKnots(
+        ecd: EntityComponentDataset
+    ): { along: number; offset: [number, number, number] }[] {
+        const trail = helixIn(ecd).trail;
+        const count = trail.tube!.getCount();
+
+        const out = [];
+        for (let i = 0; i < count; i++) {
+            out.push(aboutAxis(knot(trail, i), [0, 0, 0], SHOT_AXIS));
+        }
+        return out;
+    }
+
+    it('winds the rings around the shot at the C radius and the C pitch', () => {
+        const knots = helixKnots(railShot());
+
+        // `RADIUS` 4, on every knot: a helix, not a cone and not a wobble.
+        for (const [i, k] of knots.entries()) {
+            expect(
+                Math.hypot(k.offset[0], k.offset[1], k.offset[2]),
+                `knot ${i} is off the RADIUS 4 helix`
+            ).toBeCloseTo(4 * WORLD_SCALE, 7);
+        }
+
+        /*
+         `SPACING` 5 between knots, and `ROTATION` 1 of a 36-way table across
+         each of them -- ten degrees, so a full turn takes 180 units. That is the
+         gentle winding the C asks for rather than a tight corkscrew, and getting
+         the ratio of the two wrong is the mistake nobody would see in a
+         screenshot.
+        */
+        for (let i = 1; i < knots.length; i++) {
+            expect(knots[i]!.along - knots[i - 1]!.along, `knot ${i} spacing`).toBeCloseTo(
+                5 * WORLD_SCALE,
+                5
+            );
+
+            const a = knots[i - 1]!.offset;
+            const b = knots[i]!.offset;
+
+            const cosine =
+                (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) /
+                (Math.hypot(a[0], a[1], a[2]) * Math.hypot(b[0], b[1], b[2]));
+
+            /*
+             Looser than the rest because `acos` near a small angle divides the
+             float32 residue by `sin`: a hundred-thousandth of a degree still
+             separates ten from every other step the C could have taken.
+            */
+            expect((Math.acos(cosine) * 180) / Math.PI, `knot ${i} turn`).toBeCloseTo(
+                10,
+                4
+            );
+        }
+    });
+
+    /*
+     Which way it winds is observable where its phase is not. Q3 steps through
+     `RotatePointAroundVector(axis[i], vec, temp, i * 10)`, which is the
+     right-hand rule about the shot, and `toMeep`'s axis swap has determinant +1
+     so the sense survives the change of basis. A mirrored corkscrew passes every
+     assertion above and fails this one.
+    */
+    it('turns the way Q3 turns, by the right-hand rule about the shot', () => {
+        const knots = helixKnots(railShot());
+
+        const a = knots[0]!.offset;
+        const b = knots[1]!.offset;
+
+        const cross = [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ];
+
+        const handedness =
+            cross[0]! * SHOT_AXIS[0] + cross[1]! * SHOT_AXIS[1] + cross[2]! * SHOT_AXIS[2];
+
+        expect(handedness, 'the spiral is mirrored').toBeGreaterThan(0);
+    });
+
+    /*
+     `VectorMA(move, 20, vec, move)` runs before the loop and the loop still
+     iterates `ceil(len / SPACING)` times, so Q3's last few rings are twenty
+     units inside whatever stopped the shot -- where they are depth-tested away.
+     Ending at the impact point draws what Q3 shows; running past it would put a
+     corkscrew out the far side of a thin wall.
+    */
+    it('starts twenty units down the shot and stops at what was hit', () => {
+        const ecd = railShot();
+        const knots = helixKnots(ecd);
+
+        // `along` is measured from the barrel, so the first ring is `startQ3`
+        // down the shot and the last one is on the thing that stopped it.
+        expect(knots[0]!.along, 'the spiral starts at the barrel').toBeCloseTo(
+            20 * WORLD_SCALE,
+            5
+        );
+        expect(
+            knots[knots.length - 1]!.along,
+            'the spiral runs past what was hit'
+        ).toBeCloseTo(SHOT_Q3 * WORLD_SCALE, 5);
+
+        // The entity sits at its own first ring rather than at the barrel.
+        expect(helixIn(ecd).transform.position.x).toBeCloseTo(20 * WORLD_SCALE, 9);
+    });
+
+    it('draws no spiral on a shot shorter than the twenty units it starts after', () => {
+        const ecd = newDataset();
+        new Effects(ecd).hitscanTrail('WP_RAILGUN', [0, 0, 0], [16, 0, 0]);
+
+        // The core still draws; every ring Q3 would place is past the wall.
+        expect(trailsIn(ecd).length).toBe(1);
+        expect(coreIn(ecd).trail.tube!.getCount()).toBe(2);
+    });
+
+    /**
+     * The width, and the whole reason the rings needed a measurement of their own.
+     *
+     * `r_railWidth` is asserted against rather than merely absent, because it is
+     * what anybody adding this from memory reaches for and it is twenty-three
+     * times too wide. It is not even the quad on the path it belongs to:
+     * `DoRailDiscs` corners at `0.25 * spanWidth` on a circle, so 16 draws a
+     * 5.66-unit square.
+     */
+    it('draws the strand at the width `railDisc` paints, not at `r_railWidth`', () => {
+        const trail = helixIn(railShot()).trail;
+
+        expect(trail.width).toBeCloseTo(0.68 * WORLD_SCALE, 6);
+
+        expect(trail.width, 'drawn at r_railWidth 16').not.toBeCloseTo(
+            16 * WORLD_SCALE,
+            6
+        );
+        expect(trail.width, "drawn at the ring sprite's own quad").not.toBeCloseTo(
+            2.2 * WORLD_SCALE,
+            6
+        );
+
+        const measured = EFFECT_WIDTHS.WP_RAILGUN_RINGS;
+
+        // `re->radius = 1.1`, doubled: `RB_SurfaceSprite` corners at `+/- radius`.
+        expect(measured.quadQ3).toBe(2.2);
+        expect(measured.shader).toBe('railDisc');
+        expect(measured.coreQ3).toBeLessThan(measured.quadQ3);
+        expect(measured.coreQ3).toBeCloseTo(0.68, 6);
+
+        // Thinner than the core it is wound around, which is what a ring is.
+        expect(measured.coreQ3).toBeLessThan(EFFECT_WIDTHS.WP_RAILGUN.coreQ3);
+    });
+
+    /*
+     `le->endTime = cg.time + (i >> 1) + 600`, with `i` the distance from the
+     first ring: half a millisecond of extra life per unit, so the far end of a
+     long shot outlives the 600 ms core by seconds. Both gradients are linear in
+     distance, so the two-ended age the stroke seeder already had reproduces the
+     C exactly rather than approximately.
+    */
+    it('gives each ring the life the C gives it, which outlasts the core', () => {
+        const ecd = railShot();
+
+        const trail = helixIn(ecd).trail;
+        const wound = SHOT_Q3 - 20;
+
+        expect(trail.maxAge).toBeCloseTo(0.6 + 0.0005 * wound, 9);
+        expect(trail.maxAge, 'the spiral dies with the core').toBeGreaterThan(
+            coreIn(ecd).trail.maxAge
+        );
+
+        const age = (index: number): number =>
+            trail.tube!.getKnotAttribute_Scalar(index, TUBE_ATTRIBUTE_ADDRESS_AGE);
+
+        const last = trail.tube!.getCount() - 1;
+
+        // The near ring has 600 ms of life left, whatever the shot's length.
+        expect(trail.maxAge - age(0)).toBeCloseTo(0.6, 6);
+        // The far one is born new and is the last thing left.
+        expect(age(last)).toBeCloseTo(0, 9);
+    });
+
+    /*
+     The part of `makeHelixStroke` that is new machinery rather than arithmetic.
+     `seed_trail_stroke` gives every knot of a straight beam one shared frame
+     because a straight beam does not turn; a helix turns at every knot, so each
+     ring's frame is parallel-transported from the last by the engine's own
+     `tube_frame_transport`. A ring that is not perpendicular to the curve is a
+     tube with a pinch in it, and it would not be visible in any of the position
+     assertions above.
+    */
+    it('keeps every ring square to the curve it is wound along', () => {
+        const trail = helixIn(railShot()).trail;
+        const tube = trail.tube!;
+
+        const normal = [0, 0, 0];
+        const binormal = [0, 0, 0];
+
+        for (let i = 1; i < tube.getCount() - 1; i++) {
+            tube.getKnotNormal(normal, i);
+            tube.getKnotBinormal(binormal, i);
+
+            expect(Math.hypot(...normal), `knot ${i} normal`).toBeCloseTo(1, 5);
+            expect(Math.hypot(...binormal), `knot ${i} binormal`).toBeCloseTo(1, 5);
+            expect(
+                normal[0]! * binormal[0]! +
+                    normal[1]! * binormal[1]! +
+                    normal[2]! * binormal[2]!,
+                `knot ${i} frame is not square`
+            ).toBeCloseTo(0, 5);
+
+            /*
+             `N x B` is the axis the ring is extruded around, and the chord
+             through a knot's neighbours is the curve's tangent there to second
+             order. On a helix this gentle the two agree to well inside a
+             thousandth.
+            */
+            const spun = [
+                normal[1]! * binormal[2]! - normal[2]! * binormal[1]!,
+                normal[2]! * binormal[0]! - normal[0]! * binormal[2]!,
+                normal[0]! * binormal[1]! - normal[1]! * binormal[0]!,
+            ];
+
+            const before = knot(trail, i - 1);
+            const after = knot(trail, i + 1);
+
+            const chord = [
+                after[0] - before[0],
+                after[1] - before[1],
+                after[2] - before[2],
+            ];
+            const scale = 1 / Math.hypot(chord[0]!, chord[1]!, chord[2]!);
+
+            expect(
+                spun[0]! * chord[0]! * scale +
+                    spun[1]! * chord[1]! * scale +
+                    spun[2]! * chord[2]! * scale,
+                `knot ${i} ring is not perpendicular to the curve`
+            ).toBeCloseTo(1, 3);
+        }
+    });
+
+    it('winds a spiral for the railgun and for nothing else', () => {
+        for (const weapon of ['WP_MACHINEGUN', 'WP_CHAINGUN', 'WP_LIGHTNING']) {
+            const ecd = newDataset();
+            new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [SHOT_Q3, 0, 0]);
+
+            expect(trailsIn(ecd).length, `${weapon} drew a spiral`).toBe(1);
+        }
+    });
+
+    /*
+     The rings are not the core's colour, and that is the one thing about their
+     colour that ports. Q3 draws the core in `ci->color1` and the spiral in
+     `ci->color2`, whose stock defaults are "4" and "5" -- red and magenta. There
+     are no player colours here so both are constants, but making them the same
+     constant would lose the distinction the C is built around.
+    */
+    it('gives the spiral its own colour, as `ci->color2` is not `ci->color1`', () => {
+        const ecd = railShot();
+
+        const core = coreIn(ecd).trail.color;
+        const rings = helixIn(ecd).trail.color;
+
+        expect([rings.x, rings.y, rings.z]).not.toEqual([core.x, core.y, core.z]);
+    });
+
+    it('is gone once the last ring has faded, which is after the core', () => {
+        const ecd = newDataset();
+        const effects = new Effects(ecd);
+
+        effects.hitscanTrail('WP_RAILGUN', [0, 0, 0], [SHOT_Q3, 0, 0]);
+        expect(trailsIn(ecd).length).toBe(2);
+
+        // The core is gone at `cg_railTrailTime`; the spiral is not.
+        effects.update(0.6);
+        expect(trailsIn(ecd).length, 'the core outlived its own fade').toBe(1);
+
+        effects.update(0.0005 * (SHOT_Q3 - 20));
+        expect(trailsIn(ecd).length, 'the spiral outlived its own fade').toBe(0);
     });
 
     /*
@@ -1388,7 +1753,7 @@ describe('a hitscan shot leaves a trail', () => {
         const age = (weapon: string, index: number): number => {
             const ecd = newDataset();
             new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [512, 0, 0]);
-            const trail = trailsIn(ecd)[0]!.trail;
+            const trail = coreIn(ecd).trail;
             return trail.tube!.getKnotAttribute_Scalar(index, TUBE_ATTRIBUTE_ADDRESS_AGE);
         };
 

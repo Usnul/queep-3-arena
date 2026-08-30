@@ -50,6 +50,20 @@
     "models/weapons2/railgun/railcore.tga"
    ]
   },
+  "WP_RAILGUN_RINGS": {
+   "weapon": "WP_RAILGUN_RINGS",
+   "shader": "railDisc",
+   "geometry": "sprite",
+   "quadQ3": 2.2,
+   "quadSource": "CG_RailTrail's ring `re->radius = 1.1`, doubled: RB_SurfaceSprite is a half-extent",
+   "drawnAs": "Trail3D helix (Effects.hitscanTrail, makeHelixStroke)",
+   "coreQ3": 0.68,
+   "halfMaximumQ3": 0.72,
+   "coreFraction": 0.31,
+   "textures": [
+    "models/weapons2/railgun/f_railgun3.jpg"
+   ]
+  },
   "WP_MACHINEGUN": {
    "weapon": "WP_MACHINEGUN",
    "shader": "gfx/misc/tracer",

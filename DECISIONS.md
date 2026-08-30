@@ -7916,3 +7916,136 @@ which is why the room lit up around them.
 Trails draw at `FramePhase.AfterTransparency`, which the renderer runs before
 `graph_postprocess_bloom`, so "the halo is the bloom chain's" is true of the three beams and not
 only of the bolt.
+
+### D-157: the rail spiral is a helix of sprites, and `r_railWidth` belongs to a path Q3 stopped taking in 1.30
+
+Reported as a follow-on to D-156: the railgun draws a bare line where Q3 draws a line inside a
+corkscrew. Both halves of that are true. This port has only ever drawn `CG_RailTrail`'s core,
+and D-156 took that core from 12 units to the 2.03 its artwork paints — correct, and it made
+the missing spiral impossible to ignore.
+
+**The spiral everybody cites is not the spiral the game draws.** `RT_RAIL_RINGS` — the quad
+strip `RB_SurfaceRailRings` hands to `DoRailDiscs` at `r_railWidth` 16 and `r_railSegmentLength`
+32 — came out of `CG_RailTrail` in Q3 1.30. The OA cgame keeps it, behind `cg_oldRail`, whose
+default is `"0"` (`cg_main.c`), and past that branch is an unconditional `return`. What the
+shipped default builds instead is a **helix of sprites**:
+
+```c
+#define RADIUS   4
+#define ROTATION 1
+#define SPACING  5
+
+for (i = 0 ; i < 36; i++)
+    RotatePointAroundVector(axis[i], vec, temp, i * 10);
+
+VectorMA(move, 20, vec, move);
+...
+    re->reType     = RT_SPRITE;
+    re->radius     = 1.1f;
+    re->customShader = cgs.media.railRingsShader;      // "railDisc"
+    ...
+    VectorMA(move2, RADIUS, axis[j], move2);
+    le->pos.trDelta = axis[j] * 6;
+    le->endTime     = cg.time + (i >> 1) + 600;
+...
+    j = (j + ROTATION) % 36;
+```
+
+One sprite every five units, four units off the shot line, stepping ten degrees of a
+thirty-six-way table each time — a full turn per 180 units. That is a long, gentle winding, not a
+tight corkscrew, and it is the thing on screen.
+
+**So `r_railWidth` 16 is the wrong number twice.** It is not on the path that runs; and on the
+path it does belong to it is not a quad extent either. `DoRailDiscs` puts its four corners at
+`0.25 * spanWidth` on a circle at 45/135/225/315 degrees and maps `0..1` of the texture across
+the square they inscribe, so 16 draws a **5.66**-unit quad. Neither reading makes it sixteen.
+
+#### The width, measured the way D-156 measures everything
+
+`railDisc` is one additive `clampmap` of `models/weapons2/railgun/f_railgun3` under `tcMod
+rotate 130` — a rotating sprite, which is exactly the case `spriteProfile`'s inscribed disc was
+written for. `extract-effect-widths.ts` gains a fifth row and the quad is `re->radius = 1.1`
+doubled, because `RB_SurfaceSprite` corners at `origin ± radius`:
+
+| effect | shader | quad | painted core | FWHM |
+| --- | --- | --- | --- | --- |
+| rail rings | `railDisc` | 2.2 | **0.68** | 0.72 |
+
+Equivalent width and half-maximum agree to 6%, the tightest of the five. A transcription of
+`r_railWidth` would have drawn the strand **twenty-three times** too wide — a corkscrew whose
+threads are thicker than the beam they are wound around, and thicker than half a player.
+
+#### A `Trail3D` can be a helix; the engine's two seeders cannot
+
+`seed_trail_tube` collapses every knot onto the head and needs something that travels.
+`seed_trail_stroke` lays the whole shape down at birth, which is right, and lays it down as
+**two knots sharing one frame** — it says why in its own margin: *"the stroke is straight, so
+every ring shares one frame and no transport is needed."* Those are the only two assumptions in
+the way. `src/client/helixStroke.ts` takes both back out: as many knots as the curve needs, and
+`tube_frame_transport` — the engine's own rotation-minimising frame, the one a moving trail's
+head uses when it turns a corner — per knot. A wound tube therefore bends by the same code a
+dragged one does, and the simulator downstream only ever touches age, alpha and the along-tube
+UV, so a seeded curve stays the curve it was seeded as.
+
+Knot spacing is Q3's `SPACING`, so a knot lands where Q3 put a sprite; ten degrees of a
+4-unit-radius helix is half a millimetre of chord error, orders below a pixel. **Turn rate and
+knot spacing are separate parameters even though the C states them as one thing**, because
+folded together the first person to want a smoother curve gets a differently-wound one.
+
+The winding direction ports. `RotatePointAroundVector` conjugates its planar rotation by a basis
+whose `vup` is `vr × vf`, and the two sign flips cancel to leave the plain right-hand rule about
+the shot; `toMeep`'s axis swap has determinant +1, so the corkscrew turns the way Q3's does. The
+*phase* does not port and is not a parameter — Q3 starts at `axis[18]`, half a turn round a
+perpendicular `PerpendicularVector` chose, and where a helix starts on its own circle is not
+observable.
+
+#### The lifetime gradient falls out exactly
+
+`le->endTime = cg.time + (i >> 1) + 600` gives each ring half a millisecond of extra life per
+unit of distance, so a long shot's far end outlives its 600 ms core by seconds. That is linear in
+distance, and the stroke seeder's two-ended age is linear in `f`, so the trail's `maxAge` is the
+farthest ring's life and the near end is seeded having already lived the difference. Every knot
+dies at the millisecond its sprite did — reproduced, not approximated.
+
+#### Four divergences, all deliberate
+
+**The tube is continuous where Q3's spiral is dotted**, and this is the one worth a number.
+Q3's rings are 0.68 units of painted core every 5.05 units of arc, so the strand is mostly gap;
+a tube has none and puts out about **9.5×** the light. The alternative is a strand thin enough
+to carry the same integral once the gaps are closed, and that is 0.07 Q3 units — two
+millimetres, a seventh of a pixel at the range a rail shot is read at. Better a spiral you can
+see than an integral you cannot; this is the failure D-156's tracer row guards against from the
+other side.
+
+That ratio reads worse on paper than it looks in the pane. Photographed in `oa_dm1` against a
+550-unit shot, the strand is a fine thread — clearly a corkscrew when the core is beside it, and
+close to invisible on its own, because 0.68 units is two centimetres and the tube carries no
+falloff of its own to spread. So the 9.5 buys back most of what the gaps took and the result is
+subtle rather than hot. If that ever changes, the lever is the strand's *alpha*, which is
+nobody's measurement, and not its width, which is one.
+
+**The rings do not drift outward.** Q3 gives each sprite `trDelta = axis[j] * 6`, so the spiral
+blooms from 4 units to nearly 8 as it fades. `Trail3D`'s simulator ages and fades knots and never
+moves them, and a seeded curve is fixed at birth. Porting it would mean re-seeding positions
+every frame for up to sixteen hundred knots to animate an effect that is already fading out.
+
+**It stops at what was hit.** Q3's `move` starts twenty units down the shot and the loop still
+runs `ceil(len / SPACING)` times, so the last three or four rings are *inside* whatever stopped
+the shot, where the depth buffer eats them. Ending at the impact point draws what Q3 shows rather
+than what it submits — and a corkscrew emerging from the far side of a thin wall would be
+neither. A shot shorter than twenty units gets no spiral at all, which is the same statement.
+
+**The colour is a constant, as the core's already is.** Q3 draws the core in the shooter's
+`ci->color1` and the rings in `ci->color2` — the *other* of a player's two colours, so the two
+are always distinguishable — and the stock defaults are `color1` `"4"` and `color2` `"5"`
+(`cl_main.c`), which `CG_ColorFromString` turns into red and magenta. There are no player colours
+here. What carries across is the relation rather than the pair: the rings are not the core's
+colour, and by default they are the broader-spectrum of the two, which against a blue-white core
+is a paler blue-white.
+
+#### Cost
+
+`round(length / 5) + 1` knots at nine ring vertices each. A thousand-unit shot is 197 knots and
+about 1,800 vertices; the worst case a Q3 map can produce is the railgun's own 8192-unit trace,
+1,635 knots and under fifteen thousand — a shot fired down the longest sight line in the game.
+There is no cap in `makeHelixStroke` because the caller's range already is one.

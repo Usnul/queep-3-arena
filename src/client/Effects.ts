@@ -53,6 +53,7 @@ import {
     MUZZLE_FLASH_SECONDS,
 } from './muzzleFlash.ts';
 import { coreWidthQ3, type MeasuredEffect } from './effectWidth.ts';
+import { makeHelixStroke } from './helixStroke.ts';
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -268,6 +269,50 @@ interface HitscanTrail {
      */
     readonly ageFrom: number;
     readonly ageTo: number;
+    /**
+     * A second tube wound around the first, for the one weapon that has one.
+     *
+     * Optional because it is the railgun's and nothing else's: Q3 builds it in
+     * `CG_RailTrail` and there is no other spiral in the game.
+     */
+    readonly helix?: HitscanHelix;
+}
+
+/**
+ * The spiral `CG_RailTrail` winds around the rail core, in Q3's own numbers.
+ *
+ * **Every field here is a `#define` or a literal from that function**, which is
+ * why they are separate fields rather than a metre or two of pre-multiplied
+ * geometry: the C states the shape as "step `SPACING` along, turn `ROTATION`
+ * of thirty-six", and {@link makeHelixStroke} wants a turn rate and a knot
+ * spacing. Converting is `hitscanTrail`'s job and the arithmetic is one line;
+ * writing 1.117 radians per metre down here instead would be a number nobody
+ * could check against `cg_weapons.c`.
+ */
+interface HitscanHelix {
+    /** Packed `0xRRGGBB`. */
+    readonly color: number;
+    /** Which measurement gives the strand its diameter. See {@link coreWidthQ3}. */
+    readonly width: MeasuredEffect;
+    /** `RADIUS`: how far off the shot line the spiral is wound. */
+    readonly radiusQ3: number;
+    /** `SPACING`: the axial step between one ring and the next. */
+    readonly spacingQ3: number;
+    /**
+     * How far round the spiral turns per {@link spacingQ3}.
+     *
+     * `ROTATION` is 1, and it indexes a thirty-six entry table built by
+     * `RotatePointAroundVector(axis[i], vec, temp, i * 10)`, so one step is ten
+     * degrees and a full turn takes 180 units. That is a gentle winding rather
+     * than a tight corkscrew, and it is the C's.
+     */
+    readonly degreesPerSpacing: number;
+    /** `VectorMA(move, 20, vec, move)`: how far down the shot the first ring sits. */
+    readonly startQ3: number;
+    /** The 600 ms floor in `le->endTime = cg.time + (i >> 1) + 600`, in seconds. */
+    readonly seconds: number;
+    /** That statement's `i >> 1`: half a millisecond of extra life per Q3 unit. */
+    readonly secondsPerQ3: number;
 }
 
 /**
@@ -323,11 +368,17 @@ interface HitscanTrail {
  *   the muzzle point that origin hangs in mid-air in front of the eye. See
  *   {@link Effects.hitscanTrail}.
  *
- * # `CG_RailTrail` -- the one that is already the right shape
+ * # `CG_RailTrail` -- the one that is already the right shape, and the one that is two things
  *
  * A `LE_FADE_RGB` local entity from start to end over `cg_railTrailTime`, 600 ms,
  * in the shooter's own `ci->color1` at 0.75. The only one of the four with a
  * lifetime to port, and the row below takes it unchanged.
+ *
+ * It is also the only one that draws **twice**. The same function winds a spiral
+ * around that core out of `RT_SPRITE` puffs of `railRingsShader`, and the row
+ * below carries it as {@link HitscanTrail.helix}; {@link Effects.railHelix} is
+ * where it is built and where the `RT_RAIL_RINGS` that everybody cites for this
+ * is disposed of.
  *
  * # `RT_LIGHTNING` -- a beam with no lifetime at all
  *
@@ -367,6 +418,7 @@ interface HitscanTrail {
  * | `RB_SurfaceLightningBolt`'s literal 8 | 16 | **2.16** |
  * | `r_railCoreWidth` 6 | 12 | **2.03** |
  * | `cg_tracerWidth` 1 | 2 | **0.98** |
+ * | the rings' `re->radius = 1.1` | 2.2 | **0.68** |
  *
  * The tracer barely moves, and that is the check on the method rather than a
  * coincidence: `gfx/misc/tracer2` is a 16x16 blob that fills its quad, because
@@ -374,11 +426,12 @@ interface HitscanTrail {
  * room, the artist used it for falloff; where it did not, there is nothing to
  * take away.
  *
- * **The railgun keeps only its core, and Q3 draws a spiral round it** --
- * `RT_RAIL_RINGS`, `r_railWidth` 16 -- which this port has never drawn. That is
- * an omission worth its own fix and not a reason to leave the core fat: a beam
- * widened to stand in for a missing spiral is a number that means nothing and
- * can be checked against nothing.
+ * **The spiral's row is the one that had to find its own quad**, and D-156 left
+ * it out for exactly that reason. `r_railWidth` 16 is the number the manuals
+ * quote, and it belongs to `RT_RAIL_RINGS` -- which `CG_RailTrail` stopped
+ * emitting in Q3 1.30 and the OA cgame keeps behind `cg_oldRail` "0". The path
+ * that runs draws the spiral as sprites at `re->radius = 1.1`, so the quad is
+ * 2.2 and the artwork lights 0.68 of it. See {@link Effects.railHelix}.
  */
 const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
     /*
@@ -422,7 +475,35 @@ const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
      railgun is blue-white in every screenshot of the game, so that is what it
      is, and it is a constant where Q3 has a per-player value.
     */
-    WP_RAILGUN: { color: 0x9fd8ff, width: 'WP_RAILGUN', seconds: 0.6, ageFrom: 0, ageTo: 0 },
+    WP_RAILGUN: {
+        color: 0x9fd8ff,
+        width: 'WP_RAILGUN',
+        seconds: 0.6,
+        ageFrom: 0,
+        ageTo: 0,
+        /*
+         The spiral, whose numbers are all `CG_RailTrail`'s and whose colour is
+         not, for the same reason the core's is not. Q3 draws the rings in
+         `ci->color2` where the core is `ci->color1` -- the shooter's *other*
+         colour, so the two are always distinguishable -- and the stock defaults
+         are `color1` "4" and `color2` "5" (`cl_main.c`), which
+         `CG_ColorFromString` turns into red and magenta. There are no player
+         colours here, so what carries across is the relation rather than the
+         pair: the rings are not the core's colour, and by default they are the
+         broader-spectrum of the two. Against a blue-white core that is a paler
+         blue-white.
+        */
+        helix: {
+            color: 0xdceeff,
+            width: 'WP_RAILGUN_RINGS',
+            radiusQ3: 4,
+            spacingQ3: 5,
+            degreesPerSpacing: 10,
+            startQ3: 20,
+            seconds: 0.6,
+            secondsPerQ3: 0.0005,
+        },
+    },
 
     /*
       has no lifetime to port, as above. This port fires it
@@ -843,7 +924,9 @@ export class Effects {
      * `start[2] -= 4` to move it off the ray, because it reads better there.
      *
      * Nothing is drawn for a weapon the table has no row for, which is the
-     * shotgun and the gauntlet. See {@link HITSCAN_TRAILS}.
+     * shotgun and the gauntlet. A row with a {@link HitscanTrail.helix} draws a
+     * second tube wound around the first, which is the railgun and only the
+     * railgun. See {@link HITSCAN_TRAILS}.
      */
     hitscanTrail(
         weapon: string,
@@ -882,18 +965,130 @@ export class Effects {
             texture: '/assets/built/fx/tracer.png',
         });
 
+        this.addTrail(trail, ax, ay, az, spec.seconds);
+
+        if (spec.helix !== undefined) {
+            this.railHelix(spec.helix, [ax, ay, az], [bx, by, bz]);
+        }
+    }
+
+    /**
+     * The spiral `CG_RailTrail` winds around the rail core.
+     *
+     * **Q3 stopped drawing the thing everybody cites for this.** `RT_RAIL_RINGS`
+     * -- the `r_railWidth` 16 quad strip that `RB_SurfaceRailRings` hands to
+     * `DoRailDiscs` -- came out of `CG_RailTrail` in Q3 1.30, and the OA cgame
+     * keeps it only behind `cg_oldRail`, whose default is "0". What the shipped
+     * default path builds instead is a helix of *sprites*: thirty-six
+     * perpendiculars precomputed around the shot, one `RT_SPRITE` of
+     * `railRingsShader` every `SPACING` units, stepped `ROTATION` of those
+     * thirty-six each time. That is the corkscrew, and it is what this draws.
+     *
+     * **A tube is a continuous corkscrew where Q3's is a dotted one**, which is
+     * the one divergence here worth naming. Q3's rings are 2.2-unit sprites five
+     * units apart, so most of the spiral is gap; a tube has no gaps and
+     * therefore puts out more light than the sprites did. The alternative is a
+     * strand thin enough to carry the same light once the gaps are closed, and
+     * that is a corkscrew a fifth of a Q3 unit across -- under a pixel at any
+     * range a rail shot is read at, which is the failure D-156's tracer row
+     * guards against in the other direction. Better a spiral you can see than an
+     * integral you cannot.
+     *
+     * Q3's spiral overshoots: `move` starts twenty units down the shot and the
+     * loop still runs `ceil(len / SPACING)` times, so the last three or four
+     * rings are inside whatever was hit. They are depth-tested away there, so
+     * ending the tube at the impact point draws what Q3 *shows* rather than what
+     * it submits -- and a corkscrew coming out of the far side of a thin wall
+     * would be neither.
+     *
+     * A shot shorter than `startQ3` gets no spiral at all, which is the same
+     * statement: every ring Q3 would place is past the thing that stopped it.
+     */
+    private railHelix(
+        spec: HitscanHelix,
+        from: readonly [number, number, number],
+        to: readonly [number, number, number]
+    ): void {
+        const dx = to[0] - from[0];
+        const dy = to[1] - from[1];
+        const dz = to[2] - from[2];
+
+        const lengthQ3 = Math.hypot(dx, dy, dz) / WORLD_SCALE;
+
+        const woundQ3 = lengthQ3 - spec.startQ3;
+        if (woundQ3 <= 0) return;
+
+        // Along the shot to where `VectorMA(move, 20, vec, move)` leaves it.
+        const f = spec.startQ3 / lengthQ3;
+
+        /*
+         `le->endTime = cg.time + (i >> 1) + 600` with `i` the distance from the
+         first ring, so the far end outlives the near end and the whole spiral
+         outlives the 600 ms core on any shot longer than the room it was fired
+         in. The trail's own life is the longest of them, and the near end is
+         seeded having already lived the difference -- which makes each knot die
+         at the millisecond its sprite did, because both gradients are linear in
+         distance and `makeHelixStroke` interpolates the ends the same way
+         `seed_trail_stroke` does.
+        */
+        const duration = spec.seconds + spec.secondsPerQ3 * woundQ3;
+
+        const start = {
+            x: from[0] + dx * f,
+            y: from[1] + dy * f,
+            z: from[2] + dz * f,
+        };
+
+        const trail = makeHelixStroke({
+            from: start,
+            to: { x: to[0], y: to[1], z: to[2] },
+            radius: spec.radiusQ3 * WORLD_SCALE,
+            /*
+             The C turns `degreesPerSpacing` every `spacingQ3` of travel; this is
+             the same rate said per metre, which is the form a helix is written
+             in when its tessellation is not also its shape.
+            */
+            radiansPerMetre:
+                ((spec.degreesPerSpacing * Math.PI) / 180) /
+                (spec.spacingQ3 * WORLD_SCALE),
+            // A knot where Q3 put a sprite: ten degrees apart, which is 0.5 mm of
+            // chord error on a helix this wide and far below a pixel.
+            knotSpacing: spec.spacingQ3 * WORLD_SCALE,
+            color: spec.color,
+            thickness: coreWidthQ3(spec.width) * WORLD_SCALE,
+            duration,
+            ageFrom: (duration - spec.seconds) / duration,
+            ageTo: 0,
+            texture: '/assets/built/fx/tracer.png',
+        });
+
+        this.addTrail(trail, start.x, start.y, start.z, duration);
+    }
+
+    /**
+     * Put a built trail in the world and arrange for it to leave again.
+     *
+     * The knots are already in world space, both for a stroke and for a helix.
+     * The transform is what the trail system links on, and putting it at the
+     * source keeps the entity's own position somewhere meaningful rather than at
+     * the world origin.
+     */
+    private addTrail(
+        trail: Trail3D,
+        x: number,
+        y: number,
+        z: number,
+        seconds: number
+    ): void {
         const transform = new Transform();
-        // The knots are already in world space. The transform is what the system
-        // links on, and putting it at the source keeps the entity's own position
-        // somewhere meaningful rather than at the world origin.
-        transform.position.set(ax, ay, az);
+        transform.position.set(x, y, z);
 
         const entity = new Entity();
         entity.add(transform).add(trail).build(this.ecd);
 
-        // The stroke is invisible once every knot has reached `maxAge`; nothing
-        // in the trail system removes the entity, so this is what ends it.
-        this.expire(entity.id, spec.seconds);
+        // A trail is invisible once every knot has reached `maxAge`; nothing in
+        // the trail system removes the entity, so this is what ends it.
+        this.expire(entity.id, seconds);
     }
 
     /** A bullet strike: a small spark burst. The mark is `impactMark`'s. */

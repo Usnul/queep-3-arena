@@ -11,17 +11,17 @@
  *
  * ---
  *
- * Four of Q3's weapon effects are a *quad with a picture on it*: the plasma
- * bolt, the lightning beam, the railgun core and the machinegun tracer. This
- * port draws all four as solid geometry -- an emissive sphere and three tubes --
- * because the renderer has bloom and local lights where Q3 had a painted
- * falloff, and a sphere that lights the corridor it flies down is a better
- * picture than a decal that does not (D-130).
+ * Five of Q3's weapon effects are a *quad with a picture on it*: the plasma
+ * bolt, the lightning beam, the railgun's core and the spiral wound round it,
+ * and the machinegun tracer. This port draws all five as solid geometry -- an
+ * emissive sphere and four tubes -- because the renderer has bloom and local
+ * lights where Q3 had a painted falloff, and a sphere that lights the corridor
+ * it flies down is a better picture than a decal that does not (D-130).
  *
  * **The number the C gives for each of them is the size of the image, not the
  * size of the light**, and that is the whole reason this tool exists. Every one
- * of those four textures is a narrow bright filament or core sitting inside a
- * wide dark margin, and the margin is the shader's own falloff. Transcribing the
+ * of those textures is a narrow bright filament or core sitting inside a wide
+ * dark margin, and the margin is the shader's own falloff. Transcribing the
  * quad's half-extent onto solid geometry paints the entire falloff at core
  * brightness, which is a plasma bolt the size of a wall brick and a lightning
  * beam you could walk along. See D-156.
@@ -39,20 +39,21 @@
  * It is also invariant to how many additive passes a shader stacks: a second
  * copy of the same image scales the integral and the peak together, so
  * `sprites/plasma1` drawing `plasmaa.tga` twice measures the same as once. On
- * these four it lands within 15% of the half-maximum width, which is the sanity
+ * these five it lands within 15% of the half-maximum width, which is the sanity
  * check that the profiles have no pathological tail; both are reported.
  *
- * Intensity is luminance, because all four stages are additive (`blendfunc add`
- * or `GL_SRC_ALPHA GL_ONE` over a texture with no alpha channel), so what a
- * texel contributes to the frame is what it is worth here.
+ * Intensity is luminance, because every stage measured here is additive
+ * (`blendfunc add` or `GL_SRC_ALPHA GL_ONE` over a texture with no alpha
+ * channel), so what a texel contributes to the frame is what it is worth here.
  *
  * # What is not measured
  *
  * The quad extents themselves, which stay written down below with their
  * citations. They were never wrong -- `ent.radius = 16` really is Q3's sprite
- * half-extent -- and lifting a renderer literal and two cvar defaults out of C
- * by regex would be a fragile way to restate four numbers that have not moved
- * since 1999.
+ * half-extent -- and lifting two renderer literals and two cvar defaults out of
+ * C by regex would be a fragile way to restate five numbers that have not moved
+ * since 1999. Reading them is also where the rings row's whole argument lives,
+ * and a regex cannot say why `r_railWidth` is not among them.
  *
  * Output: `src/client/effectWidths.generated.json`, committed for the same
  * reasons `balance.generated.json` is -- it derives from GPLv2 content, it is
@@ -79,7 +80,14 @@ const OUT = join(ROOT, 'src', 'client', 'effectWidths.generated.json');
 type Geometry = 'beam' | 'sprite';
 
 interface EffectSpec {
-    /** `WP_*`, so the runtime tables can be keyed the way every other one is. */
+    /**
+     * What the runtime asks for this measurement by.
+     *
+     * A `WP_*`, so the tables are keyed the way every other one is -- but the
+     * key names the *effect* and not the weapon, because one weapon can draw
+     * more than one of these. The railgun draws two, and `WP_RAILGUN_RINGS` is
+     * the second.
+     */
     readonly weapon: string;
     /** The Q3 shader whose artwork decides the answer. */
     readonly shader: string;
@@ -87,7 +95,7 @@ interface EffectSpec {
     /**
      * The full span of Q3's quad in Q3 units -- a diameter, never a half-extent.
      *
-     * Every one of the four C numbers is a half-extent, because both places that
+     * Every one of the C numbers is a half-extent, because both places that
      * build these quads work outwards from a centre line: `RB_AddQuadStamp` puts
      * corners at `origin +/- left +/- up` for a sprite, and `DoRailCore` extrudes
      * `+/-spanWidth` for a beam. So each is doubled here, once, where it can be
@@ -138,11 +146,6 @@ const EFFECTS: readonly EffectSpec[] = [
      `CG_RailTrail`'s `RT_RAIL_CORE`, drawn by `RB_SurfaceRailCore` as
      `DoRailCore(..., r_railCoreWidth->integer)`; the cvar's default is "6"
      (`tr_init.c`). `cgs.media.railCoreShader` is `railCore`.
-
-     Q3 also draws `RT_RAIL_RINGS` -- the spiral, `r_railWidth` 16 -- and this
-     port does not. That is an omission and not a reason to fatten the core:
-     a core widened to stand in for a missing spiral is a number that means
-     nothing and cannot be checked against anything.
     */
     {
         weapon: 'WP_RAILGUN',
@@ -151,6 +154,42 @@ const EFFECTS: readonly EffectSpec[] = [
         quadQ3: 12,
         quadSource: 'r_railCoreWidth default 6, doubled: DoRailCore extrudes +/-',
         drawnAs: 'Trail3D stroke (Effects.hitscanTrail)',
+    },
+
+    /*
+     The spiral wound around that core, and **the one row here whose Q3 number
+     is not the one everybody quotes**. `r_railWidth` 16 belongs to
+     `RT_RAIL_RINGS`, which `CG_RailTrail` stopped emitting in Q3 1.30; the OA
+     cgame keeps it behind `cg_oldRail` (default "0", `cg_main.c`) and its
+     default path builds the spiral out of *sprites* instead:
+
+     ```c
+     re->reType = RT_SPRITE;
+     re->radius = 1.1f;
+     re->customShader = cgs.media.railRingsShader;
+     ```
+
+     So the quad is `RB_SurfaceSprite`'s again -- `e->radius` scaled onto the
+     view axes and cornered by `RB_AddQuadStamp` -- and 1.1 is a half-extent
+     like the plasma bolt's 16, for a 2.2-unit sprite.
+
+     `r_railWidth` would have been the wrong number even on the path it belongs
+     to: `DoRailDiscs` puts its four corners at `0.25 * spanWidth` on a circle at
+     45/135/225/315 degrees, and maps `0..1` of the texture across the square
+     they inscribe, so 16 draws a 5.66-unit quad and not a 16-unit one. Neither
+     reading makes it 16, and this one is the one that runs.
+
+     `cgs.media.railRingsShader` is `railDisc` (`cg_weapons.c`), one additive
+     `clampmap` of `f_railgun3` under `tcMod rotate 130` -- a rotating sprite,
+     which is why {@link spriteProfile}'s inscribed disc is the right domain.
+    */
+    {
+        weapon: 'WP_RAILGUN_RINGS',
+        shader: 'railDisc',
+        geometry: 'sprite',
+        quadQ3: 2.2,
+        quadSource: "CG_RailTrail's ring `re->radius = 1.1`, doubled: RB_SurfaceSprite is a half-extent",
+        drawnAs: 'Trail3D helix (Effects.hitscanTrail, makeHelixStroke)',
     },
 
     /*

@@ -11,13 +11,15 @@
  *
  * ---
  *
- * Four of Q3's weapon effects are a quad with a picture on it -- the plasma
- * bolt's sprite, and the lightning, rail and tracer beams -- and this port draws
- * all four as solid geometry. `MissileView` gives the bolt an emissive sphere
- * with a light inside it because this renderer has bloom and local lights where
- * Q3 had a painted falloff (D-130); `Effects.hitscanTrail` gives the three beams
- * a `Trail3D` tube because one fading stroke is the one mechanism that covers
- * three unrelated things in the C.
+ * Five of Q3's weapon effects are a quad with a picture on it -- the plasma
+ * bolt's sprite, the lightning, rail and tracer beams, and the spiral of ring
+ * sprites wound around the rail -- and this port draws all five as solid
+ * geometry. `MissileView` gives the bolt an emissive sphere with a light inside
+ * it because this renderer has bloom and local lights where Q3 had a painted
+ * falloff (D-130); `Effects.hitscanTrail` gives the beams a `Trail3D` tube
+ * because one fading stroke is the one mechanism that covers three unrelated
+ * things in the C, and `Effects.railHelix` winds a fourth tube out of the same
+ * component (D-157).
  *
  * **The size each of them was drawn at came from the wrong number**, and this
  * module is the fix. See D-156.
@@ -25,12 +27,17 @@
  * # The number the C gives is the size of the image
  *
  * `ent.radius = 16` on the plasma sprite, `spanWidth 8` in
- * `RB_SurfaceLightningBolt`, `r_railCoreWidth` 6, `cg_tracerWidth` 1. Every one
- * of those is a half-extent of the **quad**, and a quad is the canvas: what is
- * painted on it is a narrow bright filament inside a wide dark margin, and the
- * margin is the shader's own falloff. `sprites/plasmaa.tga` lights a third of
- * its radius and spends the rest on rays and halo; the lightning frames light an
- * eighth of their height and the rail core an eighth of its own.
+ * `RB_SurfaceLightningBolt`, `r_railCoreWidth` 6, `cg_tracerWidth` 1,
+ * `re->radius = 1.1` on a rail ring. Every one of those is a half-extent of the
+ * **quad**, and a quad is the canvas: what is painted on it is a narrow bright
+ * filament inside a wide dark margin, and the margin is the shader's own
+ * falloff. `sprites/plasmaa.tga` lights a third of its radius and spends the
+ * rest on rays and halo; the lightning frames light an eighth of their height
+ * and the rail core an eighth of its own.
+ *
+ * The rings are the row where reading the C mattered most, because the number in
+ * circulation for them -- `r_railWidth` 16 -- is not even the quad. It belongs
+ * to `RT_RAIL_RINGS`, which `CG_RailTrail` has not emitted since Q3 1.30.
  *
  * Solid geometry has no margin. Transcribed onto a sphere or a tube, the quad's
  * extent draws the entire falloff at core brightness -- which is a plasma bolt
