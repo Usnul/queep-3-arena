@@ -42,6 +42,7 @@ import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 
 import { Effects } from '../src/client/Effects.ts';
+import { EFFECT_WIDTHS, type MeasuredEffect } from '../src/client/effectWidth.ts';
 import { ModelLibrary } from '../src/client/map/loadModels.ts';
 import type { ModelBundle } from '../src/client/map/SceneBundle.ts';
 import {
@@ -1264,33 +1265,68 @@ describe('a hitscan shot leaves a trail', () => {
     });
 
     /**
-     * The table, transcribed from the C rather than read back from `Effects`.
+     * The table, transcribed rather than read back from `Effects`.
      *
-     * Widths are diameters: the renderer's rail cvars are half-extents, because
-     * `DoRailCore` extrudes `+/-spanWidth`. `r_railCoreWidth` is 6, so a rail
-     * beam is 12 units across; `RB_SurfaceLightningBolt` passes a hard-coded 8,
-     * so a bolt is 16; `cg_tracerWidth` is 1, so a tracer is 2.
+     * **Two widths per weapon, and the point of the test is that they differ.**
+     * `quadQ3` is Q3's, doubled because every one of its numbers is a
+     * half-extent -- `DoRailCore` extrudes `+/-spanWidth`, so `r_railCoreWidth`
+     * 6 is a 12-unit quad, `RB_SurfaceLightningBolt`'s literal 8 is a 16-unit
+     * one and `cg_tracerWidth` 1 is a 2-unit one. `coreQ3` is how much of that
+     * quad the shader's texture actually lights, measured by
+     * `tools/extract-effect-widths.ts` and transcribed here from its output.
+     *
+     * A tube has no painted falloff, so it is drawn at the core and the quad is
+     * the bug D-156 fixed: these rows used to assert `quadQ3`, which is a
+     * lightning bolt seven times wider than the artwork it is standing in for.
+     * Both are written down so that a regression to the old number fails with
+     * the reason next to it rather than as a bare arithmetic mismatch.
      */
-    const TRAILS: readonly [string, number, number][] = [
-        // weapon, diameter in Q3 units, seconds
-        ['WP_MACHINEGUN', 2, 0.06],
-        ['WP_CHAINGUN', 2, 0.06],
-        ['WP_RAILGUN', 12, 0.6], // `cg_railTrailTime` is 600 ms.
-        ['WP_LIGHTNING', 16, 0.05],
+    const TRAILS: readonly [string, MeasuredEffect, number, number, number][] = [
+        // weapon, measurement it draws at, Q3 quad span, measured core, seconds
+        ['WP_MACHINEGUN', 'WP_MACHINEGUN', 2, 0.98, 0.06],
+        // `CG_Bullet` draws the chaingun and the machinegun through one `CG_Tracer`.
+        ['WP_CHAINGUN', 'WP_MACHINEGUN', 2, 0.98, 0.06],
+        ['WP_RAILGUN', 'WP_RAILGUN', 12, 2.03, 0.6], // `cg_railTrailTime` is 600 ms.
+        ['WP_LIGHTNING', 'WP_LIGHTNING', 16, 2.16, 0.05],
     ];
 
     it("carries each weapon's own width and lifetime", () => {
-        for (const [weapon, widthQ3, seconds] of TRAILS) {
+        for (const [weapon, , quadQ3, coreQ3, seconds] of TRAILS) {
             const ecd = newDataset();
             new Effects(ecd).hitscanTrail(weapon, [0, 0, 0], [512, 0, 0]);
 
             const trails = trailsIn(ecd);
             expect(trails.length, `${weapon} drew nothing`).toBe(1);
             expect(trails[0]!.trail.width, `${weapon} width`).toBeCloseTo(
-                widthQ3 * WORLD_SCALE,
+                coreQ3 * WORLD_SCALE,
                 6
             );
+            expect(
+                trails[0]!.trail.width,
+                `${weapon} is drawn at Q3's quad extent again`
+            ).not.toBeCloseTo(quadQ3 * WORLD_SCALE, 6);
             expect(trails[0]!.trail.maxAge, `${weapon} lifetime`).toBeCloseTo(seconds, 6);
+        }
+    });
+
+    /**
+     * The measurement is of the artwork, so it has to agree with the artwork.
+     *
+     * The literals above are a transcription and this is what stops them being a
+     * transcription of nothing: every core is a real fraction of its quad, and
+     * the one that is nearly all of it is the one whose quad is two units across
+     * and has no room for a margin. Without this, `extract-effect-widths.ts`
+     * could emit anything and the table above would happily pin it.
+     */
+    it('draws each beam at the fraction of the quad its shader lights', () => {
+        for (const [weapon, key, quadQ3, coreQ3] of TRAILS) {
+            const measured = EFFECT_WIDTHS[key];
+
+            expect(measured.quadQ3, `${weapon} quad`).toBe(quadQ3);
+            expect(measured.coreQ3, `${weapon} core`).toBeCloseTo(coreQ3, 6);
+            expect(measured.coreQ3, `${weapon} lights more than its quad`).toBeLessThan(
+                quadQ3
+            );
         }
     });
 

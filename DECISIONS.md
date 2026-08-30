@@ -7817,3 +7817,102 @@ reason blending the eye is. Only the base angle is live, because only the base a
 `test/player-controller.test.ts` pins both halves: a mouse move with no step between it and the
 write has to turn the camera, and two writes with no input between them have to produce the same
 heading. The second is the one that would catch a "live" reading that drifted with alpha.
+
+### D-156: an effect's width comes from the artwork Q3 painted, not from the quad it was painted on
+
+Reported as *"plasma projectiles spawn way too large"* and *"the lightning gun's tracer is too
+wide"*. Both are the same mistake made in two files, and the check for it caught two more.
+
+Four of Q3's weapon effects are a quad with a picture on it, and this port draws all four as
+solid geometry: the plasma bolt is an emissive sphere with a light inside it (D-130), and the
+lightning, rail and machinegun trails are `Trail3D` tubes. The size each of them was drawn at
+came straight out of the C:
+
+| effect | C | what it means |
+| --- | --- | --- |
+| plasma bolt | `CG_Missile`'s `ent.radius = 16` | `RB_AddQuadStamp` corners at `origin ± left ± up` |
+| lightning | `RB_SurfaceLightningBolt`'s `DoRailCore(..., 8)` | `DoRailCore` extrudes `±spanWidth` |
+| rail core | `r_railCoreWidth` default `6` | as above |
+| tracer | `cg_tracerWidth` default `1` | `CG_Tracer` extrudes `±width` by hand |
+
+Each doubled to a diameter, and the doubling was right. **The quantity was wrong: every one of
+those numbers is the size of the image, not the size of the light.**
+
+A Q3 effect shader is a bright filament or core inside a wide dark margin, and the margin is
+the falloff the artist painted. Solid geometry has no margin, so drawn at the quad's extent it
+paints the whole falloff at core brightness. That is a plasma bolt drawn as a faceted ball the
+size of a wall brick, and a lightning beam half a metre thick — wider than the rail slug, and
+about a third of a player's width.
+
+**So the width is measured from the texture now.** `tools/extract-effect-widths.ts` reads each
+shader out of the game's own scripts, decodes every texture its stages name, and takes the
+**equivalent width** of the cross-section — the width of the top-hat carrying the same total
+light at the same peak brightness:
+
+```
+beam:    W_eq = integral(I dv) / peak(I)
+sprite:  R_eq = sqrt( integral(I dA) / (pi * peak(I)) )
+```
+
+Threshold-free, which is why it rather than a percentile: "where does a glow end" has no answer
+and every cutoff is a different opinion, while this one is an integral. It is also invariant to
+how many additive passes a shader stacks — a second copy of an image scales the integral and
+the peak together — which matters because `sprites/plasma1` draws its texture twice and
+`lightningBoltNew` draws two animated stages over six frames.
+
+| effect | shader | quad | painted core | FWHM |
+| --- | --- | --- | --- | --- |
+| plasma bolt | `sprites/plasma1` | 32 | **11.17** | 10.13 |
+| lightning | `lightningBoltNew` | 16 | **2.16** | 2.04 |
+| rail core | `railCore` | 12 | **2.03** | 1.50 |
+| tracer | `gfx/misc/tracer` | 2 | **0.98** | 1.00 |
+
+Equivalent width and half-maximum agree to within 15% on all four, which is the check that no
+profile has a pathological tail; both are emitted.
+
+**The tracer is the control.** It barely moves, and that is not luck: `gfx/misc/tracer2` is a
+16×16 blob that fills its quad, because at two units across there is no room for a margin.
+Where Q3 gave the artist room, the artist spent it on falloff; where it did not, there is
+nothing to take away. A method that shrank *everything* would be a method that had found the
+answer it went looking for.
+
+What is left outside the core is the falloff, and the falloff is the bloom chain's:
+`downsample_karis` weights every pixel by its own luminance rather than testing it against a
+cutoff, so a bright narrow thing spreads in proportion to how bright it is. Core in geometry,
+halo in post. `MissileView` already said that was what it was doing — and then halved Q3's 16
+to 8 and called the result a core. It is 5.59.
+
+**Two things this deliberately does not do.**
+
+It does not fatten the rail core to stand in for the spiral. Q3 draws `RT_RAIL_RINGS` at
+`r_railWidth` 16 around the core and this port never has; that is an omission worth its own
+fix, and a beam widened to cover for a missing one is a number that means nothing and can be
+checked against nothing.
+
+It does not extract the four quad extents from the C. They stay written down in the tool with
+their citations. They were never the wrong numbers, and lifting a renderer literal and two cvar
+defaults out of C by regex is a fragile way to restate four constants that have not moved since
+1999.
+
+The output is `src/client/effectWidths.generated.json`, committed for the reasons
+`balance.generated.json` is — it derives from GPLv2 content, it is small, and the runtime must
+not depend on the asset tree being present. `npm run check` re-measures and fails if it is
+stale, so the numbers cannot drift from the textures they came from, and `Effects.ts` holds a
+measurement *key* per weapon rather than a width, so a width cannot be edited there at all.
+
+Values are rounded to hundredths of a Q3 unit. `--check` compares bytes, a JPEG decoded by a
+different libjpeg build can differ in a channel's last bit, and a tenth of a millimetre of beam
+is not worth failing a build over.
+
+**Why matching the *width* is enough to match the light.** "At the same peak brightness" is the
+half of the definition the port already satisfies: the bolt's emissive luminance is a fixed 300
+— calibrated in D-130 against `base_light/light5_15k`'s 295.7, the brightest fitting in
+`am_thornish` — and each trail's colour is a fixed constant. Neither moves here. So holding
+brightness and fixing the width at the equivalent width is what makes the *total* light these
+four things emit equal to the total light Q3's shaders emitted. The quad extent had the plasma
+bolt putting out a little over twice as much and the lightning beam nearly eight times as much,
+which is why the room lit up around them.
+
+Trails draw at `FramePhase.AfterTransparency`, which the renderer runs before
+`graph_postprocess_bloom`, so "the halo is the bloom chain's" is true of the three beams and not
+only of the bolt.

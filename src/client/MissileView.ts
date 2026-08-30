@@ -110,6 +110,7 @@ import { meshlet_geometry_build_from_geometry } from '@woosh/meep-engine/src/sha
 import { make_octahedron_geometry } from '@woosh/meep-engine/src/shade/renderer/geometry/primitives/make_octahedron_geometry.js';
 
 import type { ModelLibrary } from './map/loadModels.ts';
+import { coreWidthQ3 } from './effectWidth.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
 import { missileModel } from '../game/Weapons.ts';
 import { MODEL_TO_VIEW } from './ViewWeapon.ts';
@@ -120,27 +121,42 @@ const WORLD_SCALE = 1 / 32;
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
- * The ball's radius in metres, which is half of `CG_Missile`'s.
+ * The ball's radius in metres: half of the sprite's *painted* core.
  *
  * `ent.radius = 16` on an `RT_SPRITE` is a half-extent, so Q3's plasma bolt is
  * 32 units across -- but a sprite is a bright core and its painted falloff in
  * one image, and this sphere is only the core. The falloff is the bloom chain's,
  * and that chain is thresholdless: `downsample_karis` weights every pixel by its
  * own luminance rather than testing it against a cutoff, so a bright small ball
- * spreads in proportion to how bright it is without being asked to. Half of
- * Q3's 16 is what leaves the glow somewhere to go and still arrives at roughly
- * the sprite's footprint on screen.
+ * spreads in proportion to how bright it is without being asked to.
+ *
+ * **The first version of this halved Q3's 16 and called that the core, and it
+ * was not one.** `sprites/plasmaa.tga` is a small white centre with a corona of
+ * thin rays over a wide halo, and its equivalent width -- the disc carrying the
+ * same light at the same peak brightness -- is 11.17 units across, not 16. A
+ * radius of 8 drew the halo as solid, faceted geometry, which is why the bolt
+ * read as a low-poly ball the size of a wall brick with a glow round it instead
+ * of a bolt. `coreWidthQ3` is where the measurement is explained; D-156 is the
+ * decision, and it moves three beam widths for the same reason.
  */
-const PLASMA_RADIUS = 8 * WORLD_SCALE;
+const PLASMA_RADIUS = (coreWidthQ3('WP_PLASMAGUN') / 2) * WORLD_SCALE;
 
 /**
  * How round the ball is: 8 * 4^2 = 128 triangles, with smooth normals.
  *
  * `make_octahedron_geometry` is the sphere this package has -- there is no
  * `SphereGeometry` -- and it projects a subdivided octahedron, which is a more
- * even vertex distribution than a UV sphere and has no pole. Detail 2 shows no
- * facets on a ball a quarter of a metre across; detail 3 is four times the
- * triangles for a shape that is mostly bloom by the time anyone sees it.
+ * even vertex distribution than a UV sphere and has no pole. Detail 3 is four
+ * times the triangles for a shape that is mostly bloom by the time anyone sees
+ * it.
+ *
+ * **This was a claim that the facets do not show, and at the old radius they
+ * did**: a bolt against a wall drew a visible octagon, because a ball 16 units
+ * across is a wide enough silhouette for 128 triangles to break up. It is not a
+ * claim now, it is a consequence of {@link PLASMA_RADIUS} -- the same ball at
+ * the sprite's measured core is a third of a metre across and reads as round
+ * with the bloom over it. If that radius is ever raised again, this is the
+ * second thing that has to move.
  */
 const PLASMA_DETAIL = 2;
 

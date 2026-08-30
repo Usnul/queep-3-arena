@@ -1,0 +1,68 @@
+{
+ "$generated": "tools/extract-effect-widths.ts -- do not edit by hand",
+ "$source": "OpenArena shader scripts and textures under assets/extracted",
+ "$method": "equivalent width of the shader cross-section, integral(I)/peak(I), scaled by the Q3 quad span. Diameters, in Q3 units. See D-156.",
+ "effects": {
+  "WP_PLASMAGUN": {
+   "weapon": "WP_PLASMAGUN",
+   "shader": "sprites/plasma1",
+   "geometry": "sprite",
+   "quadQ3": 32,
+   "quadSource": "CG_Missile's `ent.radius = 16`, doubled: RB_SurfaceSprite is a half-extent",
+   "drawnAs": "emissive sphere with a point light inside it (MissileView.plasmaBall)",
+   "coreQ3": 11.17,
+   "halfMaximumQ3": 10.13,
+   "coreFraction": 0.349,
+   "textures": [
+    "sprites/plasmaa.tga"
+   ]
+  },
+  "WP_LIGHTNING": {
+   "weapon": "WP_LIGHTNING",
+   "shader": "lightningBoltNew",
+   "geometry": "beam",
+   "quadQ3": 16,
+   "quadSource": "RB_SurfaceLightningBolt's literal spanWidth 8, doubled: DoRailCore extrudes +/-",
+   "drawnAs": "Trail3D stroke (Effects.hitscanTrail)",
+   "coreQ3": 2.16,
+   "halfMaximumQ3": 2.04,
+   "coreFraction": 0.135,
+   "textures": [
+    "textures/oafx/lbeam3.tga",
+    "textures/oafx/lbeam4.tga",
+    "textures/oafx/lbeam5.tga",
+    "textures/oafx/lbeam6.tga",
+    "textures/oafx/lbeam7.tga",
+    "textures/oafx/lbeam8.tga"
+   ]
+  },
+  "WP_RAILGUN": {
+   "weapon": "WP_RAILGUN",
+   "shader": "railCore",
+   "geometry": "beam",
+   "quadQ3": 12,
+   "quadSource": "r_railCoreWidth default 6, doubled: DoRailCore extrudes +/-",
+   "drawnAs": "Trail3D stroke (Effects.hitscanTrail)",
+   "coreQ3": 2.03,
+   "halfMaximumQ3": 1.5,
+   "coreFraction": 0.169,
+   "textures": [
+    "models/weapons2/railgun/railcore.tga"
+   ]
+  },
+  "WP_MACHINEGUN": {
+   "weapon": "WP_MACHINEGUN",
+   "shader": "gfx/misc/tracer",
+   "geometry": "beam",
+   "quadQ3": 2,
+   "quadSource": "cg_tracerWidth default 1, doubled: CG_Tracer extrudes +/-",
+   "drawnAs": "Trail3D stroke (Effects.hitscanTrail)",
+   "coreQ3": 0.98,
+   "halfMaximumQ3": 1,
+   "coreFraction": 0.49,
+   "textures": [
+    "gfx/misc/tracer2.jpg"
+   ]
+  }
+ }
+}

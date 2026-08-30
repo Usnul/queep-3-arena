@@ -52,6 +52,7 @@ import {
     muzzleFlashLight,
     MUZZLE_FLASH_SECONDS,
 } from './muzzleFlash.ts';
+import { coreWidthQ3, type MeasuredEffect } from './effectWidth.ts';
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
@@ -245,8 +246,15 @@ const ENERGY_FADE_START = 450;
 interface HitscanTrail {
     /** Packed `0xRRGGBB`, which is what `make_gradient_stroke` takes. */
     readonly color: number;
-    /** Tube diameter, in Q3 units. */
-    readonly widthQ3: number;
+    /**
+     * Which measurement in `effectWidths.generated.json` gives the tube its
+     * diameter. A `WP_*`, and not always this row's own: the chaingun takes the
+     * machinegun's, because `CG_Bullet` draws both through one `CG_Tracer`.
+     *
+     * A key rather than a number, so that the width cannot be edited here
+     * without the artwork it was measured from agreeing. See {@link coreWidthQ3}.
+     */
+    readonly width: MeasuredEffect;
     /** Seconds from full strength to gone. */
     readonly seconds: number;
     /**
@@ -335,16 +343,42 @@ interface HitscanTrail {
  * - **The gauntlet**, which has a 32-unit reach and no beam of any kind. A trail
  *   the length of your own arm is not a thing anyone would see.
  *
- * # Widths
+ * # Widths, and the one that was measured rather than transcribed
  *
- * Q3's own, converted to diameters, because the renderer's rail cvars are
- * half-extents -- `DoRailCore` extrudes `+/-spanWidth` about the centre line:
+ * These used to be Q3's quad extents, doubled: `r_railCoreWidth` 6 became 12,
+ * `RB_SurfaceLightningBolt`'s literal 8 became 16, `cg_tracerWidth` 1 became 2.
+ * The doubling was right -- `DoRailCore` extrudes `+/-spanWidth` about the
+ * centre line, so every one of those C numbers is a half-extent -- and the
+ * quantity was wrong.
  *
- * | source | C value | here |
+ * **A Q3 beam is a quad with a picture on it, and the quad is the canvas.**
+ * `railcore.tga` is a thin filament in a mostly-black 64x64; the six
+ * `lbeam` frames light about an eighth of their height and spend the rest on
+ * the falloff either side. A tube has no falloff, so drawn at the quad's width
+ * it paints all of that at core brightness -- which is how a lightning bolt
+ * ended up half a metre thick and wider than the rail slug that killed you.
+ *
+ * So the width comes from the artwork now, as the equivalent width of the
+ * shader's own cross-section, and {@link coreWidthQ3} is where that is
+ * explained. What each row lost:
+ *
+ * | source | quad span | painted core |
  * | --- | --- | --- |
- * | `r_railCoreWidth` | 6 | 12 |
- * | `RB_SurfaceLightningBolt`'s literal | 8 | 16 |
- * | `cg_tracerWidth` | 1 | 2 |
+ * | `RB_SurfaceLightningBolt`'s literal 8 | 16 | **2.16** |
+ * | `r_railCoreWidth` 6 | 12 | **2.03** |
+ * | `cg_tracerWidth` 1 | 2 | **0.98** |
+ *
+ * The tracer barely moves, and that is the check on the method rather than a
+ * coincidence: `gfx/misc/tracer2` is a 16x16 blob that fills its quad, because
+ * at two units across there is no room for a margin. Where Q3 gave the artist
+ * room, the artist used it for falloff; where it did not, there is nothing to
+ * take away.
+ *
+ * **The railgun keeps only its core, and Q3 draws a spiral round it** --
+ * `RT_RAIL_RINGS`, `r_railWidth` 16 -- which this port has never drawn. That is
+ * an omission worth its own fix and not a reason to leave the core fat: a beam
+ * widened to stand in for a missing spiral is a number that means nothing and
+ * can be checked against nothing.
  */
 const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
     /*
@@ -364,8 +398,20 @@ const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
      The colour is `gfx/misc/tracer`'s own warm white, which is what the shader
      tints; the poly's `modulate` is a flat 255 in the C.
     */
-    WP_MACHINEGUN: { color: 0xffe9b0, widthQ3: 2, seconds: 0.06, ageFrom: 0.75, ageTo: 0 },
-    WP_CHAINGUN: { color: 0xffe9b0, widthQ3: 2, seconds: 0.06, ageFrom: 0.75, ageTo: 0 },
+    WP_MACHINEGUN: {
+        color: 0xffe9b0,
+        width: 'WP_MACHINEGUN',
+        seconds: 0.06,
+        ageFrom: 0.75,
+        ageTo: 0,
+    },
+    WP_CHAINGUN: {
+        color: 0xffe9b0,
+        width: 'WP_MACHINEGUN',
+        seconds: 0.06,
+        ageFrom: 0.75,
+        ageTo: 0,
+    },
 
     /*
      `CG_RailTrail`: `cg_railTrailTime` is 600 ms and the beam fades as one --
@@ -376,7 +422,7 @@ const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
      railgun is blue-white in every screenshot of the game, so that is what it
      is, and it is a constant where Q3 has a per-player value.
     */
-    WP_RAILGUN: { color: 0x9fd8ff, widthQ3: 12, seconds: 0.6, ageFrom: 0, ageTo: 0 },
+    WP_RAILGUN: { color: 0x9fd8ff, width: 'WP_RAILGUN', seconds: 0.6, ageFrom: 0, ageTo: 0 },
 
     /*
       has no lifetime to port, as above. This port fires it
@@ -386,7 +432,13 @@ const HITSCAN_TRAILS: Readonly<Record<string, HitscanTrail>> = {
      the same picture by a different mechanism, and it is the reason this row
      exists rather than a `Trail3D` that is kept alive and moved.
     */
-    WP_LIGHTNING: { color: 0xa8b6ff, widthQ3: 16, seconds: 0.05, ageFrom: 0, ageTo: 0 },
+    WP_LIGHTNING: {
+        color: 0xa8b6ff,
+        width: 'WP_LIGHTNING',
+        seconds: 0.05,
+        ageFrom: 0,
+        ageTo: 0,
+    },
 };
 
 /**
@@ -816,7 +868,7 @@ export class Effects {
             from: new Vector3(ax, ay, az),
             to: new Vector3(bx, by, bz),
             color: spec.color,
-            thickness: spec.widthQ3 * WORLD_SCALE,
+            thickness: coreWidthQ3(spec.width) * WORLD_SCALE,
             duration: spec.seconds,
             age_from: spec.ageFrom,
             age_to: spec.ageTo,

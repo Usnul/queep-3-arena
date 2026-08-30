@@ -221,6 +221,22 @@ export class ShaderIndex {
         return null;
     }
 
+    /**
+     * The parsed script entry for `name`, or `null` if no script declares it.
+     *
+     * The stages as written, before {@link material} has decided what they mean.
+     * A caller that wants the *shader* rather than the material it converts to
+     * needs them: `extract-effect-widths.ts` reads the `map`/`animmap` paths out
+     * of a beam shader to measure the artwork Q3 actually painted, and a
+     * `PbrMaterial` has already thrown the frame list away by then.
+     *
+     * Names are lowercased on load, as Q3 lowercases them, so this does the same
+     * to its argument rather than making every caller remember to.
+     */
+    entry(name: string): ShaderScriptEntry | null {
+        return this.byName.get(name.toLowerCase()) ?? null;
+    }
+
     /** Every `q3map_sun` in the loaded scripts, keyed by shader name. */
     suns(): Map<string, SunLight> {
         const out = new Map<string, SunLight>();
