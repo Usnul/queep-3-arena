@@ -44,6 +44,25 @@
 export const FOV_DEFAULT = 90;
 
 /**
+ * The camera's far plane, in scene metres.
+ *
+ * Named rather than inline because it is not only the camera's number any more:
+ * it is the bound `Atmosphere.ts` sizes its haze box *against* -- deliberately
+ * well under it, so the medium ends before the view does -- and a test asserts
+ * that relationship rather than leaving it to two numbers agreeing by habit.
+ *
+ * Nothing in a Q3 arena is 600 m from anything else -- the largest of the six
+ * is 178 m corner to corner -- so this is not a draw-distance decision. It is
+ * the *only* bound on a view ray that leaves through a hole where a sky surface
+ * used to be, since `convert-map` drops those rather than drawing Q3's box, and
+ * that ray is what this number is really about.
+ */
+export const CAMERA_CLIP_FAR = 600;
+
+/** The camera's near plane, in scene metres. */
+export const CAMERA_CLIP_NEAR = 0.1;
+
+/**
  * `CG_CalcFov`'s vertical angle, in degrees.
  *
  * `aspect` is width / height, which is what meep's `Renderer.aspect_ratio`

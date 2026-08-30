@@ -7360,6 +7360,92 @@ with a bloom halo around it, because `emissiveLuminance` is the leg that keeps i
 constant — and cutting both is the thing this entry argues against, so it would want its own
 reasoning.
 
+### D-151: The air was vacuum, and the box that fills it is the map's own box rather than a big one
+
+**Superseded in part by D-154**, in both halves of its title. The box is no longer the map's own
+box -- it is the map plus 100 m on every face -- and the medium is no longer meep's default fog
+droplet. The reasoning below about *why* the box's size is a decision about the sky is what D-154
+builds on and is unchanged; what changed is the number that argument lands on, once there was a
+density low enough that a larger box did not put a grey ceiling over the level.
+
+meep 3.11.2, and a global `ParticipatingMedia` volume covering the map — "effectively adding
+volumetric lighting into the game", as asked.
+
+**There is no switch to find.** `Renderer` asks `scene.volumetrics.source.volumes.length > 0` and
+skips the composite pass entirely when the answer is no, so the whole subsystem is gated on a scene
+containing a medium. Turning volumetric lighting on is therefore *putting one thing in the world*:
+`ParticipatingMediaSystem3` registered beside `LightSystem3`, and one entity carrying a
+`ParticipatingMedia` and a `Transform`. Nothing else was reachable to configure and nothing else
+needed to be — unlike Brick4 (D-107), where the upload and the mode are two separate half-measures
+either of which silently does nothing on its own.
+
+**The box is fitted to the map, and the reason is the sky.** The obvious reading of "a very large
+box covering at least the whole map" is a box so big the question stops being asked. It renders
+wrong, and it renders wrong on the four maps here that have a sun. What a pixel shows is the
+optical depth along its view ray, which is extinction times the distance the ray travels *inside
+the box*. A ray that hits a wall stops at the wall and does not care how far the box extends past
+it. A ray that hits the sky does not stop; it runs to `camera.clip_far`, which this port sets to
+600 m. So the box's size is precisely and only a decision about the skybox:
+
+| box | optical depth on a sky ray | transmittance |
+|---|---:|---:|
+| the map (~80 m across) | 0.40 | 0.67 |
+| 600 m, i.e. "very large" | 3.02 | 0.05 |
+
+The second is a grey ceiling where the sky used to be. Fitting the box costs one lookup —
+`SceneBundle.submodels`, model 0, the world's own brushwork in Q3 units — and `worldBoxOf` grows it
+by an 8 m margin so that `fade_distance`'s inward taper stays outside anything that is stood in,
+and so a `?fly=1` camera through a wall still has fog around it. The margin is required to exceed
+the fade for the same reason, and a test asserts it: a taper reaching back inside the map lights
+the outermost rooms through thinner air than the middle ones, which is a gradient across the level
+that nothing else in the port would explain.
+
+**The axis swap is where this goes wrong silently.** Q3 is `x` forward, `y` left, `z` up; meep is
+metres, `y` up, `z` back. For a point that is a sign flip, but for an *interval* the ends swap too:
+the meep `z` range runs from `-maxsQ3.y` to `-minsQ3.y`. Getting only the sign gives a box in the
+mirrored half of the map; getting the ends the wrong way round gives a negative extent, which Shade
+poses its unit cube by without complaint and which renders as no fog at all. Neither raises
+anything. `atmosphere.test.ts` builds a box asymmetric on all three axes so that a mistake cannot
+pass by landing on the same numbers, and checks the shipped bundles' own bounds land inside the
+volume with the margin clear on all six faces.
+
+**0.005 per metre, chosen at the value meep's own default makes and then looked at.** The number is
+authored as `target_extinction` rather than as `density`, because density is per-particle — 3.0e7
+per cubic metre for the fog spec and some other number entirely for smoke — and the component's
+setter does that division. meep calls its default "very dense fog"; that name is about the particle
+count, and what it actually comes to is 0.005/m, which is 0.95 transmittance across a room and 0.67
+along the diagonal of most of these maps. The upper end is the constraint. Q3 is a game about
+seeing someone across a room and shooting them, and a rail sightline down a map's long axis is what
+a haze setting is spending.
+
+Three states at one camera in `aggressor`, the large room above the water, in the Browser pane:
+
+| extinction | what it looks like |
+|---|---|
+| ~0 | the room as it has always rendered: the ceiling fixture is a hot spot with nothing around it |
+| 0.005 | light stands in the air under the fixture, and the far wall carries mild aerial perspective — visibly volumetric, fully readable |
+| 0.02 | milky: the far wall washes out and the room stops reading as a room |
+
+**The first attempt at that comparison measured nothing, and the reason is worth writing down.**
+Setting `density` on the `ParticipatingMediaVolume` in the page appears to work and is undone
+within a frame: `ParticipatingMediaSystem3` polls, finds the volume disagrees with its *component*,
+and writes the component's value back over it. That is the system working exactly as its docblock
+says, and it means the only writable end of this is the ECS component. Four screenshots were taken
+before the discrepancy showed up in a readback; they were indistinguishable from each other because
+they were all the same picture.
+
+**The frame cost was not measured.** The Browser pane hides itself between calls here, `rAF` stops
+with it, and every attempt at a frame-time comparison timed out mid-measurement. The passes are
+real work — a froxel grid, a scattering LUT, a TAA resolve and a composite — and `?fog=off` exists
+partly so that cost can be taken back on a machine that needs it, and partly because "is the haze
+the reason I could not see him" is a question a player is entitled to answer for themselves. What
+that switch costs when it is *on* is still an open number.
+
+**Q3's own fog is untouched and unrelated.** The BSP has a `fog` lump and every leaf and brush
+carries a `fogNum`; this port has never read either, and this does not start. `CONTENTS_FOG` is a
+gameplay-visible volume that changes what a trace hits, and a single global medium is a different
+thing that happens to share a word.
+
 ### D-152: The weapon rack was landing on the ammo readout, and the corner it shares had quietly stopped being part of the wrap
 
 A screenshot: the row of weapon icons overlapping the top of the AMMO panel. Two faults under it,
@@ -7537,3 +7623,118 @@ bright coil segments, which is a plasma gun. `materials.test.ts` gains the rule 
 invariant that reads the written glow map back against Q3's own alpha channel and fails if a texel
 Q3 rejects emits anything — the suite was green through the whole of this bug, having asked whether
 the gun was transparent and never what it was emitting or over how much of itself.
+
+### D-154: The fog was the particle, not the density, and the box that proved it is 100 m rather than 600
+
+Reported: the volumetric lighting D-151 added reads as a foggy environment, the extinction is too
+high, and what is wanted is a per-map preset drawn from meep's `MIE_PARTICLES_STANDARD_PRECOMPUTED`
+leaning toward normal city haze -- enough for depth cues at the ranges the maps actually have. Plus
+one volume per map, made much larger than the map.
+
+**The diagnosis was wrong for a day and it mattered which half was wrong.** D-151 left the particle
+at meep's default and tuned only the density. That default is `FOG_DROPLET_MEDIUM` in all but name
+-- 5 um water droplets, `g` 0.853 -- and the phase function does not read the density at all:
+`shader_volumetrics_build_participating_media` packs `diameter_micron`, and
+`jendersie_deon_get_fog_params` looks the scattering lobe up from *that*. A 10 um droplet carries
+the forward diffraction peak that puts a halo round a lamp in fog. No density removes it; it is a
+different curve.
+
+So the two were separated before either was touched, at a fixed camera down `am_thornish`'s long
+hall, by swapping only the particle at the **original** 0.005/m:
+
+| medium at 0.005/m | what the frame shows |
+|---|---|
+| `FOG_DROPLET_MEDIUM`, 10 um | every ceiling lamp haloed, the upper half of the frame washed white |
+| `CONTINENTAL_HAZE_MEDIUM`, 0.5 um | a hall with air in it; depth builds down the colonnade |
+
+Same optical depth, same lights, same frame. **The particle was most of the complaint.** The
+density came down afterwards on its own merits rather than to compensate for it, which is the only
+reason it could come down as little as it did.
+
+**The sightlines were measured, and the measurement's main use was to kill the idea it was taken
+for.** 256 rays per origin from every spawn, item, weapon and ammo entity on each map's own
+collision hull, eye height, azimuth uniform, elevation within 25 degrees of horizontal:
+
+| map | median | p95 | p99 |
+|---|---:|---:|---:|
+| `oa_dm1` | 3.9 m | 15.3 m | 21.5 m |
+| `oa_dm4` | 3.4 m | 13.1 m | 18.2 m |
+| `oa_dm5` | 3.8 m | 14.6 m | 21.2 m |
+| `oa_dm7` | 6.1 m | 24.9 m | 35.9 m |
+| `aggressor` | 3.9 m | 15.7 m | 20.9 m |
+| `am_thornish` | 6.3 m | 55.9 m | 94.7 m |
+
+Half of every sightline in this game is under six metres. The obvious use of that is to normalise
+each map's extinction so all six carry the same optical depth at the same *rank* of sightline, and
+that is wrong, because most of what a player sees is not extinction along a sightline -- it is
+in-scattering around the lights, which scales with density and does not care how far away the wall
+behind it is. Normalised that way `am_thornish` came out at 0.0008/m and was indistinguishable from
+the feature being off, on the one map with room for atmosphere. The shipped numbers therefore sit
+within +-20% of a single 0.0020/m, which is the same claim as "the six maps are outdoors on the same
+afternoon", and the sightlines only earn that +-20%: `oa_dm4`, the tightest, takes the most per
+metre; `am_thornish`, with twice the p95 of the next map, takes the least, which holds the loss
+across its 178 m diagonal to 25% rather than 30%.
+
+**The particles come off each map's own sun**, on the reading that a sun's colour is a statement
+about what its light travelled through. `oa_dm1` has no sun at all, so it has no weather and gets
+`FINE_DUST_SMALL` -- the only entry chosen for its *albedo*, 0.92/0.90/0.88, because a room full of
+something with albedo 1.0 can only ever get brighter and that map is meant to be dim. `oa_dm4`'s sun
+is 0.64/0.13/0.13, by a distance the reddest of the six, and dust is what reddens a sun, so it gets
+the same particle. `oa_dm5`'s is the dimmest and coldest at 7 lux, so `MARITIME_HAZE_MEDIUM`, whose
+2.04 blue-to-red extinction ratio is the strongest tilt in the library. The other three get the
+default haze.
+
+| map | particle | extinction | visibility | T at its own p95 |
+|---|---|---:|---:|---:|
+| `oa_dm1` | `FINE_DUST_SMALL` | 0.0022 | 1.8 km | 0.967 |
+| `oa_dm4` | `FINE_DUST_SMALL` | 0.0024 | 1.6 km | 0.969 |
+| `oa_dm5` | `MARITIME_HAZE_MEDIUM` | 0.0021 | 1.9 km | 0.970 |
+| `oa_dm7` | `CONTINENTAL_HAZE_MEDIUM` | 0.0018 | 2.2 km | 0.956 |
+| `aggressor` | `CONTINENTAL_HAZE_MEDIUM` | 0.0020 | 2.0 km | 0.969 |
+| `am_thornish` | `CONTINENTAL_HAZE_MEDIUM` | 0.0016 | 2.4 km | 0.914 |
+
+Visibility is Koschmieder's `3.912 / extinction`. The band is 1.4 to 3.3 km, which is a hazy city
+day at one end and a smoggy one at the other; 0.0039 is where meteorology stops saying haze and
+starts saying mist, and D-151's 0.005 was 780 m and was fog by definition.
+
+**"Much larger than the map" turned out to have a ceiling, and it is a long way below the far
+plane.** D-151 fitted the box to the map with an 8 m margin and argued that the box's size is a
+decision about the sky and nothing else -- a ray that hits a wall cannot tell how far the box
+extends past it, and only a ray through a hole where `convert-map` dropped a sky surface can, since
+that one runs to `camera.clip_far`. That argument survives; the number it landed on does not.
+
+The tempting size is the far plane itself, 600 m, because then the medium is unbounded as far as any
+frame is concerned and the box stops being a tuning variable at all. Looking up out of `oa_dm7`'s
+courtyard at 0.0018/m:
+
+| margin | box, on a 55 x 41 x 42 m map | sky |
+|---|---|---|
+| 600 m | 1255 x 1241 x 1242 | dusty pink; the blue is gone |
+| 200 m | 455 x 441 x 442 | washed toward mauve |
+| 100 m | 255 x 241 x 242 | the map's own blue, hazing warm toward the horizon |
+
+**The failure is not the renderer's.** The environment map already contains a sky, which is to say
+it already contains an atmosphere's worth of scattering, and 600 m of medium in front of it charges
+twice for the same air. 100 m is the largest margin that keeps the double-count reading as haze on
+the map's own sky rather than as a colour grade over it -- and it is still between 2.6 and 6.4 times
+the map on every axis, 20 to 260 times by volume, which is "much larger than the map" by any
+reading. `skyOpticalDepthOf` is that budget written down (0.16 to 0.24 across the six, so 15% to 21%
+of the skybox replaced), and a test bounds it, so the two constants cannot drift into each other.
+
+**Two things the adversarial pass found, both silent.** `atmosphereFor` was
+`MAP_ATMOSPHERE[map] ?? DEFAULT_ATMOSPHERE`, which for a map called `constructor` or `toString`
+answers with a *function* off `Object.prototype` -- and TypeScript types that lookup as an
+`AtmospherePreset` and says nothing, so the failure would have surfaced two calls later as
+"undefined is not in MIE_PARTICLES_STANDARD_PRECOMPUTED". It is `Object.hasOwn` now. And
+`mediumFor` has to write the particle *before* the extinction, because `target_extinction` is a
+setter that divides by the particle currently held: the other order leaves the fog droplet's
+density behind, which against continental haze is a factor of 250 in the direction of a solid white
+wall, with nothing raised. A test asserts the resulting density against the cross-section it should
+have come from, per preset.
+
+**What is not established.** The frame cost, still, for D-151's reason: the Browser pane hides
+itself between calls, `rAF` stops with it, and every attempt at a frame-time comparison timed out
+mid-measurement. And the three per-map particles were chosen from the map's sun and then *checked*
+in the running game -- each of the six was loaded and looked at -- rather than won against the
+alternatives in an A/B. `FINE_DUST_SMALL` on `oa_dm4` looks right; nobody has seen what
+`SMOKE_PARTICLE_SMALL` would have looked like there.

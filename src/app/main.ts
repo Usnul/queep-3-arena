@@ -64,6 +64,7 @@ import type { Scene } from '@woosh/meep-engine/src/shade/renderer/scene/Scene.js
 import type { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { VolumetricLightMap } from '@woosh/meep-engine/src/engine/graphics3/VolumetricLightMap.js';
 import { VolumetricLightMapSystem3 } from '@woosh/meep-engine/src/engine/graphics3/VolumetricLightMapSystem3.js';
+import { ParticipatingMediaSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticipatingMediaSystem3.js';
 import { ShadeIndirectLightingMode } from '@woosh/meep-engine/src/shade/renderer/ShadeIndirectLightingMode.js';
 import {
     attachVolumetricLightMap,
@@ -71,6 +72,7 @@ import {
     loadVolumetricLightMap,
     postBake,
 } from '../client/VolumetricLight.ts';
+import { attachWorldAtmosphere, skyOpticalDepthOf, WORLD_MARGIN } from '../client/Atmosphere.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { PlayerController } from '../client/PlayerController.ts';
 import { FlyCamera } from '../client/FlyCamera.ts';
@@ -93,7 +95,7 @@ import { Menu } from '../client/ui/Menu.ts';
 import { Settings, type SettingsStorage } from '../client/ui/Settings.ts';
 import { graphicsPage } from '../client/ui/graphics.ts';
 import { gameplayPage } from '../client/ui/gameplay.ts';
-import { CameraLens } from '../client/lens.ts';
+import { CAMERA_CLIP_FAR, CAMERA_CLIP_NEAR, CameraLens } from '../client/lens.ts';
 import { audioPage, type MasterHost, type MixerHost } from '../client/ui/audio.ts';
 import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
 import { buildRoster } from './roster.ts';
@@ -226,6 +228,21 @@ function useEnvironmentLighting(): boolean {
 }
 
 /**
+ * `?fog=off` empties the air again, the way every build before the world
+ * volume existed had it.
+ *
+ * The same A/B shape as `?gi=ibl`, and for a change of the same reach: the
+ * medium is what turns Shade's volumetrics on at all, so this is the switch
+ * between a scene with in-scattering in it and one without. Worth having
+ * because the feature costs frame time as well as pixels, and because "is the
+ * haze the reason I could not see him" is a question a player is entitled to
+ * answer for themselves.
+ */
+function useAtmosphere(): boolean {
+    return new URLSearchParams(window.location.search).get('fog') !== 'off';
+}
+
+/**
  * `?bake=lightmap` bakes this map's volumetric lightmap and writes it back to
  * `assets/built/<map>/`, then leaves the game running on the result.
  *
@@ -293,6 +310,15 @@ async function main(): Promise<void> {
      a device restart. See `VolumetricLight.ts`.
     */
     await em.addSystem(new VolumetricLightMapSystem3(graphics, scene));
+    /*
+     The air, which in this port is one box covering the map -- see
+     `Atmosphere.ts`. Unlike the lightmap above there is nothing to switch on
+     afterwards: `Renderer` runs its volumetrics passes exactly when the scene
+     holds a volume, so registering the system and attaching a component is the
+     whole of it. Registered unconditionally even under `?fog=off`, because a
+     system with nothing linked to it costs a poll over an empty map.
+    */
+    await em.addSystem(new ParticipatingMediaSystem3(graphics, scene));
     await em.addSystem(new CameraSystem3(graphics));
     await em.addSystem(new DecalSystem3(graphics, engine.assetManager));
     await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
@@ -577,6 +603,41 @@ async function main(): Promise<void> {
         void runLightMapBake(graphics, scene, ecd, mapName, lightMap, !environmentOnly);
     }
 
+    /*
+     The air the map stands in, which is what makes its lights visible between
+     the lamp and the wall rather than only on the wall. See `Atmosphere.ts`.
+
+     After the bake rather than before it, and the order genuinely does not
+     matter: `brick4_bake_basic` traces geometry against lights and has no
+     notion of a medium, so a volume raised either side of it changes nothing
+     about what gets baked. It goes last so the scene the bake captures stays
+     exactly the one its own comment above describes.
+    */
+    const atmosphere = useAtmosphere() ? attachWorldAtmosphere(ecd, loaded.bundle) : null;
+
+    if (atmosphere !== null) {
+        const [sx, sy, sz] = atmosphere.box.size;
+
+        console.log(
+            `[queep] atmosphere: ${atmosphere.preset.particle} at ` +
+            `${atmosphere.density.toExponential(2)}/m3 -- ` +
+            `${atmosphere.extinction.toFixed(5)}/m, ` +
+            `${(atmosphere.visibility / 1000).toFixed(1)} km visibility` +
+            `\n  ${atmosphere.preset.why}` +
+            `\n  box ${sx.toFixed(0)} x ${sy.toFixed(0)} x ${sz.toFixed(0)} m ` +
+            `(the map plus ${WORLD_MARGIN} m on every face), ` +
+            `${skyOpticalDepthOf(atmosphere.preset).toFixed(2)} optical depth on a sky ray`
+        );
+    } else if (!useAtmosphere()) {
+        console.log('[queep] atmosphere: none (?fog=off)');
+    } else {
+        console.warn(
+            `[queep] atmosphere: none -- ${mapName}'s bundle carries no world submodel, so there ` +
+            'is nothing to size the volume against. Re-run ' +
+            `\`node tools/convert-map.ts ${mapName}\` to write one.`
+        );
+    }
+
     if (volumes.sized === 0 && loaded.bundle.lights.length > 0) {
         console.warn(
             '[queep] no light was given a volume: every one of them is still a point source. ' +
@@ -638,9 +699,10 @@ async function main(): Promise<void> {
     const camera = new Camera();
     camera.active.set(true);
     camera.autoClip = false;
-    // Scene is metres (DECISIONS.md D-011). A Q3 arena is ~50 m across.
-    camera.clip_near = 0.1;
-    camera.clip_far = 600;
+    // Scene is metres (DECISIONS.md D-011). A Q3 arena is ~50 m across. Both
+    // planes live in `lens.ts` because the fog box is sized off the far one.
+    camera.clip_near = CAMERA_CLIP_NEAR;
+    camera.clip_far = CAMERA_CLIP_FAR;
 
     /*
      `cg_fov`, and it does not go on the camera directly any more.
