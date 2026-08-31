@@ -5133,7 +5133,7 @@ by both paths, so the player's plasma gun and a bot's cannot be different colour
 | --- | --- |
 | `color` | `CG_RegisterWeapon`'s `flashDlightColor`, transcribed. Yellow for the three weapons firing the same round, blue for the plasma and lightning family, two distinct oranges for the launchers, `1, 0.7, 1` for the BFG. |
 | `reachQ3` | the radius `trap_R_AddLightToScene` is given: 300 for the impulse flash every weapon gets, 150 for the three Q3 lights *continuously* while firing. |
-| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 280 to the BFG's 2,100 -- D-160 halved the whole column, and every number D-115 first wrote here was double the one now in the table. |
+| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 140 to the BFG's 1,050 -- D-160 halved the whole column and D-161 halved it again, so every number D-115 first wrote here is four times the one now in the table. |
 
 Two things are deliberately absent from that table.
 
@@ -5830,7 +5830,7 @@ Two departures from the C, both deliberate:
   |---|---|---|
   | colour | `0.6, 0.6, 1.0` | `MAKERGB( weaponInfo->flashDlightColor, … )`, the one colour the C states for this weapon — and the same three numbers `muzzleFlash.ts` already holds, read rather than retyped |
   | reach | 150 Q3 units | `muzzleFlash.ts`'s reach for the gauntlet, lightning gun and grapple: the three `CG_AddPlayerWeapon` lights *continuously* rather than pulsing at 300. A bolt in flight is the continuous case |
-  | flux | 400 lm | below the gauntlet's 560, the dimmest continuous flash in that table at the time, because `fireRateMs` 100 and `speed` 2000 put ten or more bolts down a long sightline at once where only ever one gauntlet glow exists. **D-160 halved the flash table and left this number alone**, so the comparison no longer holds against the gauntlet's 280; what it still holds against is the 770 of the muzzle pop that launches the bolt, which is the comparison the argument actually needs |
+  | flux | 400 lm | below the gauntlet's 560, the dimmest continuous flash in that table at the time, because `fireRateMs` 100 and `speed` 2000 put ten or more bolts down a long sightline at once where only ever one gauntlet glow exists. **D-160 and D-161 took the flash table to a quarter and left this number alone**, so neither comparison holds any more: the gauntlet's flash is 140 and the plasma gun's own is **385**, which is *below* the 400 a bolt carries. The bolt is now the brighter of the two, which is not a thing anybody chose -- see D-161, which records it rather than fixing it, because the reports that moved the column were about muzzle flashes |
   | emissive | 300 | the same quantity as a map material's `emissiveLuminance`, whose top value on `am_thornish` is **295.7** for `base_light/light5_15k`. A bolt is level with the brightest fitting in the level, and not an order of magnitude past it |
 
   The emissive is applied *through* the colour, so blue carries the 300 and the other two carry 180
@@ -8251,13 +8251,16 @@ where it is: the report was about muzzle flashes, a bolt in flight is not one, a
 half of D-130's argument — one bolt well under the muzzle pop that launched it, ten of them over it
 — still holds against the plasma flash's 770. Recorded at both ends rather than quietly allowed to
 drift, because that number was chosen *against* this table and a reader arriving at either one
-should find out that the other moved.
+should find out that the other moved. (D-161 halved the column a second time and inverted the pair
+outright: the plasma flash is now 385 against the bolt's 400.)
 
 **No expectation had to be edited, which is the property worth having.** Nothing in
 `muzzle-flash.test.ts` names a lumen value; it reads the table and checks the arithmetic against
 whatever is in it, so a retune moves the expected value with the actual one. The only absolute
 comparison anywhere is `missile-view.test.ts`'s "the bolt is dimmer than the muzzle pop it was
-launched by", and 400 against 770 still passes it. A tuning cut that needed a test edited would have
+launched by", and 400 against 770 still passes it. (It does not survive D-161, which halved the
+column again and put the flash under the bolt; that entry says why the line was removed rather than
+inverted.) A tuning cut that needed a test edited would have
 been a tuning cut that broke something.
 
 One assertion was **added**, and it is the review's own finding rather than the change's. The test
@@ -8270,3 +8273,47 @@ It is a hole the moment the two paths stop agreeing — a caller that scales the
 an `Effects.muzzleFlash` that sets intensity after the table has spoken — and that is the drift the
 one table exists to prevent. Verified live rather than assumed: with the gun's line taken out and
 the flux doubled, the new line fails on its own.
+
+### D-161: the same cut a second time, and the bolt the flash has now fallen underneath
+
+D-160's halving was not enough — reported the same way and answered the same way, one factor over
+the whole `lumens` column and nothing else. The column is now a quarter of what D-115 authored:
+the gauntlet 140, the machinegun and chaingun 315, the plasma gun 385, the BFG 1,050. "Just the
+intensity" was the instruction and is what the diff is: `reachQ3`, `color`, `MUZZLE_FLASH_SECONDS`
+and the particle burst are all where D-160 left them, for the reasons written there.
+
+**Three values now carry a `.5`** — the shotgun's 787.5, the rocket launcher's 612.5 and the
+`default:` arm's 437.5 — because the numbers they descend from were not multiples of four. They are
+exact quarters rather than rounded ones. Rounding would be tidier and would put drift into the one
+property all three cuts have been careful to leave alone, which is the ratios between the weapons;
+a light authored in lumens has no more reason to be an integer than a distance has.
+
+**Where this leaves a flash against the room it is fired in.** Same arithmetic as D-160 —
+`lumens / 4pi / d^2`, the conversion this port authors every light through — against `oa_dm1`'s own
+28 fixtures, which run 88 to 6,589 lm with a median of 671:
+
+| | D-115 | after D-160 | after D-161 |
+| --- | --- | --- | --- |
+| a wall 2 m off a shotgun muzzle | 62.7 lux | 31.3 lux | 15.7 lux |
+| the same wall, machinegun | 25.1 lux | 12.5 lux | 6.3 lux |
+| the brightest flash carried | 4,200 lm | 2,100 lm | 1,050 lm |
+
+A median fixture 3 m away delivers 5.9 lux, so a machinegun flash and a wall lamp are now roughly
+the same event and a shotgun blast is about two and a half of them. The flash is still the brightest thing
+happening in front of the muzzle, which is what D-115 asks of it; it is no longer anywhere near the
+brightest thing in the level, and a BFG flash is now an *eleventh* of the explosion it is scaled
+against rather than a third.
+
+**The plasma bolt is now brighter than the plasma muzzle flash**, at 400 lm against 385, and that is
+this entry's one uncomfortable fact. D-130 chose 400 explicitly as a number *below* the pop that
+launches it — ten bolts in the air where the flash is one light for 50 ms — and two halvings of a
+table the bolt was measured against have taken the pop underneath it. The bolt was left alone
+anyway: both reports were about muzzle flashes, the bolt is not one, and dimming a light nobody
+complained about to preserve a comparison is a worse answer than saying the comparison broke.
+
+`missile-view.test.ts` had that comparison as an assertion, and it now says why it does not. The
+choice there was between pinning the inversion — which would make a test out of a state nobody
+chose — and pinning the old relationship, which fails. Neither is a test; what survives is the
+bolt's own two numbers, 400 lm and 150 units, which is what D-130 actually decided. The line comes
+back the day the flashes come back up or the bolt follows them down, and that is a decision for
+whoever is looking at the screen.

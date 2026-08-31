@@ -57,7 +57,7 @@ export const MUZZLE_FLASH_SECONDS = 0.05;
  * Reached by a weapon this table has not been told about -- which is a weapon
  * `balance.weapons` has just grown, since the twelve it has are all below.
  */
-const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens: 875 };
+const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens: 437.5 };
 
 /**
  * Per weapon, and two of the three columns are Q3's own numbers.
@@ -77,12 +77,16 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  *   well" different questions (GAP-011), and this column is the second one --
  *   scaled to the muzzle blast the weapon looks like it should have, against the
  *   explosion's 12,000 lm as the bright end of the scale. The whole column has
- *   come down twice on the same complaint, and both times as one factor over the
- *   whole table rather than twelve separate judgements: 30% after the first set
- *   was seen in play, and halved outright in D-160. The ratios between the
- *   weapons survived both and are the part worth keeping: the shotgun is still
- *   the largest blast of the twelve and the BFG still the brightest, by the same
- *   factors they were before either cut.
+ *   come down three times on the same complaint, and every time as one factor
+ *   over the whole table rather than twelve separate judgements: 30% after the
+ *   first set was seen in play, halved in D-160, and halved again in D-161 when
+ *   that was still not enough. The ratios between the weapons have survived all
+ *   three and are the part worth keeping -- the shotgun is still the largest
+ *   blast of the twelve and the BFG still the brightest, by the factors they
+ *   had when the column was authored. Three values carry a `.5` because the
+ *   numbers they came from were not multiples of four; they are exact quarters
+ *   of what D-115 wrote rather than tidied ones, since a tidied table would put
+ *   drift into the one property these cuts have been careful to preserve.
  *
  * What is **not** here is a source radius, which is the one an area light wants
  * and the one this table would most like to vary: a shotgun's blast is a
@@ -91,38 +95,38 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  */
 const FLASHES: Readonly<Record<string, MuzzleFlashLight>> = {
     // MAKERGB( 0.6, 0.6, 1.0 ), and lit at 150 while firing rather than pulsed.
-    WP_GAUNTLET: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 280 },
-    WP_LIGHTNING: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 700 },
+    WP_GAUNTLET: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 140 },
+    WP_LIGHTNING: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 350 },
 
     // MAKERGB( 1, 1, 0 ): the two weapons firing the same round.
-    WP_MACHINEGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 630 },
-    WP_CHAINGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 630 },
+    WP_MACHINEGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 315 },
+    WP_CHAINGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 315 },
 
     // MAKERGB( 1, 1, 0 ), and the largest muzzle blast in the game.
-    WP_SHOTGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1575 },
+    WP_SHOTGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 787.5 },
 
     // MAKERGB( 1, 0.70, 0 ).
-    WP_GRENADE_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 910 },
-    WP_PROX_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 910 },
+    WP_GRENADE_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 455 },
+    WP_PROX_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 455 },
 
     // MAKERGB( 1, 0.75f, 0 ).
-    WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 1225 },
+    WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 612.5 },
     /*
      Also `MAKERGB( 1, 0.75f, 0 )`, and brighter than the machinegun it sits
      between because `Weapon_Nailgun_Fire` is fifteen `fire_nail`s at once and Q3
      draws one flash for the lot. A second of nailgun is one flash a second and a
      second of chaingun is thirty-three, so the two are not comparable per shot.
     */
-    WP_NAILGUN: { color: [1, 0.75, 0], reachQ3: 300, lumens: 1050 },
+    WP_NAILGUN: { color: [1, 0.75, 0], reachQ3: 300, lumens: 525 },
 
     // MAKERGB( 0.6, 0.6, 1.0 ), but pulsed like the rest.
-    WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 770 },
+    WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 385 },
 
     // MAKERGB( 1, 0.5f, 0 ).
-    WP_RAILGUN: { color: [1, 0.5, 0], reachQ3: 300, lumens: 1050 },
+    WP_RAILGUN: { color: [1, 0.5, 0], reachQ3: 300, lumens: 525 },
 
     // MAKERGB( 1, 0.7f, 1 ), and the brightest thing a player carries.
-    WP_BFG: { color: [1, 0.7, 1], reachQ3: 300, lumens: 2100 },
+    WP_BFG: { color: [1, 0.7, 1], reachQ3: 300, lumens: 1050 },
 };
 
 /** The flash `weapon` throws, or the white default for one with no entry. */

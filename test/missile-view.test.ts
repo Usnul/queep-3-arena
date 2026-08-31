@@ -388,7 +388,7 @@ describe('a missile model', () => {
             expect(light.color.b).toBeCloseTo(flash.color[2], 9);
         });
 
-        it('lights continuously and dimly, which is not what the muzzle does', () => {
+        it('lights continuously and dimly, at the two numbers D-130 chose', () => {
             const { ecd } = bolt();
 
             const light = componentsIn<Light>(ecd, Light)[0]![1];
@@ -399,12 +399,21 @@ describe('a missile model', () => {
             expect(light.intensity.getValue()).toBeCloseTo(400 / (4 * Math.PI), 9);
 
             /*
-             Far below the muzzle pop it was launched by, and that is the whole
-             argument for the number: `fireRateMs` 100 and `speed` 2000 put ten
-             or more of these in the air at once, where the flash is one light
-             for 50 ms.
+             It used to be far below the muzzle pop that launched it, and that
+             was the whole argument for the number: `fireRateMs` 100 and `speed`
+             2000 put ten or more of these in the air at once, where the flash is
+             one light for 50 ms.
+
+             **That comparison is gone rather than weakened.** D-160 and D-161
+             took the flash column to a quarter of what D-130 chose 400 against,
+             and 400 is now the larger of the two -- 400 lm of bolt against 385
+             of plasma flash. Asserting the inversion would pin a relationship
+             nobody chose, and asserting the old one would fail on a table this
+             port has retuned three times; what is left is the bolt's own two
+             numbers, which are what D-130 actually decided. If the flashes come
+             back up, or the bolt follows them down, the comparison belongs here
+             again.
             */
-            expect(light.intensity.getValue()).toBeLessThan(flash.lumens / (4 * Math.PI));
 
             /*
              150 Q3 units, which is `muzzleFlash.ts`'s reach for the three

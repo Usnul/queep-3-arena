@@ -205,12 +205,17 @@ const PLASMA_LUMINANCE = 300;
  * exists. Ten lights at 400 lm is already brighter than the muzzle flash that
  * launched them.
  *
- * **D-160 halved that whole flash table and this number was left where it is**,
- * so two of the three figures above are now 770 and 280. The argument survives
- * the half that matters -- one bolt is still well under the pop that fired it,
- * and ten are still brighter -- but 400 is no longer under the gauntlet's flash.
- * Left alone deliberately: the report D-160 answered was about muzzle flashes,
- * and a bolt in flight is the one plasma light nobody complained about.
+ * **D-160 and D-161 took that whole flash table to a quarter and this number was
+ * left where it is**, so two of the three figures above are now 385 and 140 --
+ * and 400 is above both of them. The argument this number was chosen by is
+ * therefore spent: a bolt is no longer under the pop that fired it but four
+ * percent over, and the ten a sustained burst puts in the air are ten times it.
+ *
+ * Left alone deliberately all the same. Both reports were about muzzle flashes,
+ * a bolt in flight is not one, and dimming a light nobody complained about to
+ * rescue a comparison is the wrong way round -- the comparison is what broke.
+ * D-161 records it, `missile-view.test.ts` no longer asserts it, and the number
+ * to revisit when the flashes are next touched is this one.
  */
 const PLASMA_LIGHT_LUMENS = 400;
 
