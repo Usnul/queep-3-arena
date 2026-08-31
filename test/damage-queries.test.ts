@@ -303,3 +303,95 @@ describe('a missile in flight', () => {
         expect(r.board.damage.get(100) ?? 0, 'the bullet stopped on the rocket').toBeGreaterThan(0);
     });
 });
+
+/* ------------------------------------------------------------------ *
+ * One line of sight, two backends
+ * ------------------------------------------------------------------ */
+
+describe('line of sight', () => {
+    /**
+     * A bot's `BotEntityVisible` and a blast's `CanDamage` are the same question
+     * asked by different callers, and since D-159 they are the same method. It
+     * has two implementations -- meep's `raycast` where there is a broadphase,
+     * `CM_BoxTrace`'s `isPoint` path where there is not -- so a bot that engages
+     * on one backend must engage on the other.
+     *
+     * The segments are eye-to-eye between spawn points plus a fan of rays into
+     * the open at bot engagement range, which is the distribution `perceive`
+     * actually asks: spawn pairs alone are almost all blocked, and a suite made
+     * only of blocked lines would pass against a query that always says no.
+     */
+    it('answers the same on the broadphase as on the clipmap', async () => {
+        const physics = await HeadlessPhysics.create(cm);
+        const bodies = new CharacterBodies(
+            { system: physics.system, ecd: physics.ecd },
+            physics.ecd,
+            physics.traceIgnores
+        );
+
+        const board = new Board();
+        const ray = new WeaponSystem(cm, board, null, new DamageQueries(physics.system, bodies));
+        const ported = new WeaponSystem(cm, board, null, null);
+
+        // Q3 origins are 24 units above the floor and a spawn is lifted 9 more;
+        // `DEFAULT_VIEWHEIGHT` puts the eye 26 above that.
+        const eyes = spawns.map((s) => vec3(s[0]!, s[1]!, s[2]! + 9 + 26));
+
+        const segments: [Vec3, Vec3][] = [];
+        for (const a of eyes) {
+            for (const b of eyes) {
+                if (a !== b) segments.push([a, b]);
+            }
+        }
+
+        // A fixed LCG rather than `Math.random`, so a failure is reproducible.
+        let seed = 0x9e3779b9;
+        const rand = (): number => {
+            seed = (seed * 1664525 + 1013904223) >>> 0;
+            return seed / 0x100000000;
+        };
+
+        for (const a of eyes) {
+            for (let i = 0; i < 96; i++) {
+                const yaw = rand() * Math.PI * 2;
+                const pitch = (rand() - 0.5) * 0.9;
+
+                /*
+                 Short rays as well as long ones. `ENGAGE_RANGE` is 2200 units
+                 and almost nothing at that range is clear on `oa_dm1`, so a fan
+                 of only long rays gives a sample that is 98% wall -- which a
+                 query that answered "blocked" to everything would pass.
+                */
+                const range = 64 + rand() * (i % 2 === 0 ? 500 : 2100);
+                segments.push([
+                    a,
+                    vec3(
+                        a[0]! + Math.cos(yaw) * Math.cos(pitch) * range,
+                        a[1]! + Math.sin(yaw) * Math.cos(pitch) * range,
+                        a[2]! + Math.sin(pitch) * range
+                    ),
+                ]);
+            }
+        }
+
+        let clear = 0;
+        const disagreed: string[] = [];
+
+        for (const [a, b] of segments) {
+            const byRay = ray.visible(a, b);
+            const byPort = ported.visible(a, b);
+
+            if (byPort) clear += 1;
+            if (byRay !== byPort) {
+                disagreed.push(`${a.join()} -> ${b.join()}: ray ${byRay}, clipmap ${byPort}`);
+            }
+        }
+
+        expect(disagreed, `${disagreed.length} of ${segments.length} disagreed`).toEqual([]);
+
+        // Neither "everything is a wall" nor "nothing is": both answers appear.
+        expect(clear, 'no segment was clear; the sample is all wall').toBeGreaterThan(0);
+        expect(clear, 'every segment was clear; the sample misses the geometry')
+            .toBeLessThan(segments.length);
+    });
+});

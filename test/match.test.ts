@@ -34,7 +34,7 @@ import { join } from 'node:path';
 
 import { BspFile } from '../src/q3/bsp/BspFile.ts';
 import { ClipMap } from '../src/q3/cm/ClipMap.ts';
-import { boxTrace, createTrace, type TraceResult } from '../src/q3/cm/trace.ts';
+import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
 import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
 import { ItemSystem, type DropTrace, type ItemInstance } from '../src/game/Items.ts';
 import { buildWaypoints, linkMapPortals, type WaypointGraph } from '../src/game/Waypoints.ts';
@@ -268,12 +268,7 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     const world: BotWorld = {
         graph,
         items: items.items,
-        trace: (start, mins, maxs, end, mask): TraceResult => {
-            const out = createTrace();
-            if (physics !== null) physics.trace(out, start, end, mins, maxs, mask);
-            else boxTrace(out, cm, start, end, mins, maxs, mask);
-            return out;
-        },
+        visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
         playerOrigin: () => playerOrigin,
         playerAlive: () => true,
         spawns: spawns.map(snap),
@@ -528,11 +523,7 @@ describe('what the bots deliberately do not do', () => {
         const world: BotWorld = {
             graph,
             items: items.items,
-            trace: (start, mins, maxs, end, mask): TraceResult => {
-                const out = createTrace();
-                physics!.trace(out, start, end, mins, maxs, mask);
-                return out;
-            },
+            visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
             playerOrigin: () => vec3(0, 0, -1e6),
             playerAlive: () => false,
             spawns,

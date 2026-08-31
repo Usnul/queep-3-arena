@@ -35,7 +35,6 @@ import type { MoverHost } from '../client/MeepMove.ts';
 import type { WaypointGraph } from '../game/Waypoints.ts';
 import type { Damageable } from '../game/Weapons.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
-import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3 as q3vec3 } from '../q3/math.ts';
 
 export interface Roster {
@@ -70,15 +69,14 @@ export function buildRoster(options: {
     const botWorld: BotWorld = {
         graph,
         items: items.items,
-        trace: (start, mins, maxs, end, mask) => {
-            const out = createTrace();
-            if (physicsWorld !== null) {
-                physicsWorld.trace(out, start, end, mins, maxs, mask);
-            } else {
-                boxTrace(out, clipMap, start, end, mins, maxs, mask);
-            }
-            return out;
-        },
+        /*
+         The weapon system's own line of sight, so a bot sees exactly as far as
+         it can shoot. It also gets the backend split for free -- `raycast` where
+         there is a broadphase, the ported point trace where there is not -- which
+         is what this closure used to do by hand, with a `createTrace()` per call
+         and a zero-size box that `PhysicsTrace` swept as a shape. See D-159.
+        */
+        visible: (fromQ3, toQ3) => arena.weapons.visible(fromQ3, toQ3),
         playerOrigin: () => player.ps.origin,
         playerAlive: () => player.inventory.health > 0,
         spawns: botSpawns.map((spawn) => {

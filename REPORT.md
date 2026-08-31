@@ -1726,14 +1726,22 @@ the expensive way.
 - **What it costs at runtime** (`npm run bench-match`, re-taken on meep 3.2.0): one trace on the
   `?move=q3` path costs 3.72 µs against 0.29 µs for the ported clipmap answering the whole
   question; `shape_cast` alone is 3.05 µs of it and `traceBrushList`, which produces the fraction,
-  plane and solidity flags, is 0.21 µs. A six-bot deathmatch on `oa_dm1` is 185 µs a frame on the
-  shipping path and 32 µs on the clipmap, for the same match.
+  plane and solidity flags, is 0.21 µs.
 
   That ratio is **the cost of this port's decision to keep Q3's arithmetic while running on meep's
   broadphase**, and it should be read that way rather than as a price the engine imposes. A
   consumer using `KinematicMover` pays for one sweep, not for a sweep plus an overlap plus a
-  re-derivation — which is exactly what the shipping path does now, at 6.0 queries a frame against
-  the 30.4 this entry was written about.
+  re-derivation.
+
+  **The per-match figure this entry used to quote was measuring something else, and D-159 found
+  out what.** It said a six-bot deathmatch on `oa_dm1` was 185 µs a frame on the shipping path
+  against 32 µs on the clipmap, at "6.0 queries a frame". Bots run on `KinematicMover`, which
+  sweeps inside meep rather than through this seam — so all 6.0 of those were the bots' *line of
+  sight*, asked through `pm->trace` with zero mins and maxs and therefore swept as a box. Asking it
+  as a ray instead takes the same match to **113 µs a frame and 0.0 traces a frame**, and leaves
+  the shipping path making no `PhysicsTrace` call at all outside `?move=q3`. The clipmap row is
+  unchanged. What is written above about the per-*trace* cost stands; what was written
+  about the per-*match* cost was a benchmark of one avoidable query.
 - **What would still be worth having**, stated as a small API request rather than as a gap: a
   directional term on the result — the separating-axis distance at `t = 0` signed against the
   sweep direction, which the query already computes and discards. It would let a consumer
@@ -2496,7 +2504,8 @@ Reproduce with `npm run bench-match`. Six bots and one standing player, 30 simul
 
 **Re-taken on meep 3.2.0, with movement on `KinematicMover` (D-071, D-072).** The earlier version
 of this table measured `bg_pmove` driving `PhysicsTrace`, which is now the `?move=q3` path; both
-are here because the difference is the point.
+are here because the difference is the point. **The per-frame and traces-per-frame rows are
+pre-D-159** and are kept as taken; the correction below says what they were actually measuring.
 
 | | `oa_dm1` | | `aggressor` | |
 |---|---:|---:|---:|---:|
@@ -2515,15 +2524,37 @@ because `KinematicMover` resolves a move in one recover-slide-ground sequence wh
 per-brush re-derivation. Frame cost roughly halved on `oa_dm1` (356 µs → 185) even though each
 remaining query does more work.
 
+> **Correction, D-159: the 6.0 was not `KinematicMover`'s.** It was the bots' line of sight — all
+> of it. `KinematicMover` sweeps *inside* meep and never touches the `PhysicsTrace` seam this
+> harness counts, so the only thing reaching that seam in a match was `Bots.perceive`, asking a
+> ray through `pm->trace` with zero mins and maxs and getting a swept `BoxShape3D` for it. Asked
+> as a ray, the same six-bot match on the same host goes:
+>
+> | | `oa_dm1` physics | `oa_dm1` clipmap | `aggressor` physics | `aggressor` clipmap |
+> |---|---:|---:|---:|---:|
+> | before, per frame | 218 µs | 37 µs | 277 µs | 31 µs |
+> | after, per frame | **113 µs** | 37 µs | **139 µs** | 27 µs |
+> | traces per frame, before | 6.0 | — | 6.0 | — |
+> | traces per frame, after | **0.0** | — | **0.0** | — |
+>
+> (Median of three fresh runs; this host reads higher across the board than the series in the
+> table above, so read the pair, not either number against the table.) Everything the section
+> below says about the *per-trace* decomposition stands — that is a microbenchmark of
+> `PhysicsTrace` and is unaffected. What does not stand is any reading of the per-frame figures as
+> the cost of the shipping movement path: on the shipping path, after D-159, a match makes no
+> `PhysicsTrace` call at all. How many queries `KinematicMover` issues internally is a question
+> this harness has never been able to answer, and the 6.0 was never it.
+
 For the record, the arrangement this replaced — `bg_pmove` driving meep's physics through
 `PhysicsTrace`, measured on 3.0.2: 356 µs and 30.4 traces a frame on `oa_dm1`, 248 µs and 25.2 on
 `aggressor`.
 
 The two backends produce the same match — the bots walk the same distance to within 3%, take the
-same pickups, fire a comparable number of shots — and one costs **six to eleven times** what the
-other does (185 µs against 32 on `oa_dm1`, 262 against 24 on `aggressor`). A whole deathmatch at
-either figure is nothing next to a 16.7 ms budget, so this is not a performance problem for this
-port. It is a *finding*, and it wanted decomposing:
+same pickups, fire a comparable number of shots — and one costs several times what the other does:
+**six to eleven times** as this was first written (185 µs against 32 on `oa_dm1`, 262 against 24 on
+`aggressor`), **three to five** once the line of sight stopped being a swept box (113 against 37,
+139 against 27). A whole deathmatch at any of those figures is nothing next to a 16.7 ms budget, so
+this is not a performance problem for this port. It is a *finding*, and it wanted decomposing:
 
 | one trace on `oa_dm1`, meep 3.2.0 | |
 |---|---:|
@@ -2545,7 +2576,8 @@ the whole question for less than a tenth of what `shape_cast` costs on its own.
 
 **This table is now about the road not taken.** It measures `?move=q3`, the configuration that
 kept Q3's contact semantics on meep's broadphase. The shipping path does not do this any more: it
-asks `KinematicMover` for a move and gets one, at 6.0 queries a frame instead of 30.4. The
+asks `KinematicMover` for a move and gets one — through no counted seam at all, see the D-159
+correction above; "6.0 queries a frame instead of 30.4" was the bots' line of sight. The
 decomposition is kept because it is the clearest statement of what reproducing another engine's
 narrowphase costs, and because the ratio is the evidence behind GAP-021's argument that a consumer
 should adopt the solver rather than rebuild around the queries.
@@ -2574,10 +2606,11 @@ Two things follow, and the maintainer should weigh them separately:
 
 Two ratios in this section point in opposite directions and it is worth being explicit about
 which is which. **Per trace**, the `?move=q3` path costs 13× the clipmap (3.72 µs against 0.29).
-**Per frame**, the shipping path costs 6× the clipmap on `oa_dm1` (185 µs against 32) — better
-than the per-trace figure, because `KinematicMover` asks 6.0 questions a frame where
-`PM_SlideMove` asked 30.4. Fewer, more expensive queries beat many cheap ones here, and that is
-the argument for the solver in one line.
+**Per frame**, the shipping path costs 3× the clipmap on `oa_dm1` (113 µs against 37, post-D-159)
+— better than the per-trace figure, because `KinematicMover` resolves a move inside meep where
+`PM_SlideMove` asked 30.4 separate questions. Fewer, more expensive queries beat many cheap ones
+here, and that is the argument for the solver in one line. The second clause of that sentence used
+to cite "6.0 questions a frame"; those six were the bots' line of sight and are gone — D-159.
 
 One more thing about where the per-trace cost goes: the expensive branch of `PhysicsTrace` is the
 one taken at a *resting* contact, where `shape_cast` reports `t ≈ 0` and the whole per-brush
@@ -2604,8 +2637,8 @@ Per frame, measured by driving the simulation directly:
 | | cost | taken on |
 |---|---|---|
 | 6 bots: perception, tree, `Pmove`, character placement (browser, with models) | 1.3-1.8 ms | 3.0.2, ported `bg_pmove`; **not re-taken** |
-| 6 bots: the same simulation with no presentation layer (`npm run bench-match`) | **0.185 ms** on `oa_dm1`, 0.262 ms on `aggressor` | 3.2.0, `KinematicMover` |
-| the same, on the ported path (`?move=q3`) | 0.032 ms / 0.024 ms | 3.2.0 |
+| 6 bots: the same simulation with no presentation layer (`npm run bench-match`) | **0.113 ms** on `oa_dm1`, 0.139 ms on `aggressor` | post-D-159; was 0.218 / 0.277 on this host when a bot's line of sight was a swept box |
+| the same, on the ported path (`?move=q3`) | 0.037 ms / 0.027 ms | post-D-159 |
 | of which planning, when it runs | one BFS plus one A* per bot, at most every 0.25 s | |
 
 The headless row was 0.36 ms when the bots ran `bg_pmove` through `PhysicsTrace`; moving them

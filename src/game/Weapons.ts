@@ -782,7 +782,7 @@ export class WeaponSystem {
 
             // Q3 requires line of sight for splash; `CanDamage` traces to the
             // target and to the corners of its box.
-            if (!this.canDamage(atQ3, target)) continue;
+            if (!this.visible(atQ3, target.origin)) continue;
 
             this.damage(target, points);
         }
@@ -823,12 +823,34 @@ export class WeaponSystem {
         return null;
     }
 
-    /** `CanDamage`: is there an unobstructed path from the blast to the target? */
-    private canDamage(fromQ3: ArrayLike<number>, target: Damageable): boolean {
-        if (this.queries !== null) return this.queries.visible(fromQ3, target.origin);
+    /**
+     * Is there an unobstructed path from one point to another?
+     *
+     * `CanDamage` asks it of a blast and a target; `BotEntityVisible` asks it of
+     * an eye and an enemy. Same question, so it is one method -- and it is a
+     * *line*, which is the whole point of it living here. On the physics backend
+     * that is `raycast`, which needs no shape at all; on the clipmap one it is
+     * `CM_BoxTrace` with zero mins and maxs, which sets `tw.isPoint` and walks
+     * the BSP with no box offset on any plane.
+     *
+     * A bot's line of sight used to go through the generic `pm->trace` seam
+     * instead, with zero mins and maxs passed as arguments. Nothing downstream of
+     * that seam reads a zero-size box as a ray: `PhysicsTrace` turned it into a
+     * `BoxShape3D`, swept it with `shape_cast` -- GJK bisection against every
+     * broadphase candidate -- and then ran `overlap_shape` and the ported
+     * per-brush trace on top, to recover a contact plane for an answer that only
+     * ever read `fraction`. Once per bot per frame. See D-159.
+     *
+     * `MASK_SOLID` where `BotEntityVisible` passes `MASK_SHOT`, and here the two
+     * cannot disagree: the bits `MASK_SHOT` adds are `CONTENTS_BODY` and
+     * `CONTENTS_CORPSE`, which no *brush* carries -- Q3 sets them on entities,
+     * through `gentity_t.r.contents` -- and this is world geometry only.
+     */
+    visible(fromQ3: ArrayLike<number>, toQ3: ArrayLike<number>): boolean {
+        if (this.queries !== null) return this.queries.visible(fromQ3, toQ3);
 
-        boxTrace(trace, this.cm, fromQ3, target.origin, ZERO, ZERO, MASK_SOLID);
-        return trace.fraction === 1.0;
+        boxTrace(sightTrace, this.cm, fromQ3, toQ3, ZERO, ZERO, MASK_SOLID);
+        return sightTrace.fraction === 1.0;
     }
 
     private damage(target: Damageable, points: number): void {
@@ -878,6 +900,17 @@ export class WeaponSystem {
 }
 
 const ZERO = vec3();
+
+/*
+ `visible` gets its own, rather than sharing the `trace` above.
+
+ The others are private and each reads its result before returning, so one
+ scratch between them is safe by inspection. `visible` is public -- a bot asks it
+ once a frame from outside any shot -- and a shared scratch would make a future
+ caller inside `hitscanShot`, between the world trace and the `surfaceFlags` read
+ that decides whether the bullet leaves a mark, silently overwrite it.
+*/
+const sightTrace = createTrace();
 
 /**
  * Slab-method ray/AABB intersection, returning the entry fraction along

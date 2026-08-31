@@ -8107,3 +8107,85 @@ on the side the gun is drawn, below the crosshair and more than five units off t
 the cascade takes step 1 eleven times, step 2 for the gauntlet and step 3 for the prox launcher and
 nothing else; and the two claims about the estimate above. The gauntlet's own light was looked at in
 the preview browser, on the blade, where the old one was on the crosshair.
+
+### D-159: a bot's line of sight was a swept box, because the seam it was asked through had no way to say "ray"
+
+Reported as an inefficiency in `Bots.perceive`, and it is one — but the interesting part is not
+that the query was slow, it is *why nobody could see that it was*. The call read:
+
+```ts
+const line = this.world.trace(this.scratch, [0, 0, 0], [0, 0, 0], this.playerEye, MASK_SHOT);
+if (line.fraction < 0.99) return;
+```
+
+Zero mins, zero maxs: the caller is saying "a ray". Nothing downstream believed it. `BotWorld.trace`
+is `pm->trace`'s shape, so on the shipping backend it reaches `PhysicsTrace.trace`, which builds a
+`BoxShape3D` out of those zeros — grown by `SURFACE_CLIP_EPSILON`, so not even degenerate — sweeps
+it with `shape_cast`, and then, because a *sweep* has to answer questions a line never asks, runs
+`overlap_shape` and the ported `CM_TraceThroughBrush` over the result to recover a contact plane and
+`startsolid` flags. For an answer whose only reader is `fraction`.
+
+**Measured on `oa_dm1`, over eye-to-eye segments at bot engagement range:**
+
+| | µs per query |
+| --- | --- |
+| `shape_cast` on a zero-size box (what it was doing) | 19.3 |
+| meep `raycast` | 1.37 |
+| `CM_BoxTrace` with zero extents (`tw.isPoint`) | 0.55 |
+
+`aggressor` 28.1 → 1.40, `am_thornish` 48.4 → 2.37, `oa_dm7` 10.2 → 0.95. The multiplier climbs with
+map size because a sweep's broadphase candidate set is its swept AABB, and this sweep is 2200 units
+long — the longest in the game. pmove's own traces are a frame of movement and cost 4.2 µs; the
+query nobody was measuring cost five times that, six times a frame.
+
+**What it cost the whole simulation.** A six-bot deathmatch on `oa_dm1`, no renderer, 30 s at
+125 Hz: **221 µs a frame before, 102 µs after.** One query, more than half the simulation. And
+`bench-match`'s "traces/frame" figure for the physics backend fell from 6.0 to **0.0**, which is the
+part worth keeping: bots run on `KinematicMover`, which sweeps inside meep rather than through the
+`PhysicsTrace` seam, so every physics trace that harness has ever counted in a match *was* the bots'
+line of sight. GAP-021's "6.0 queries a frame against the 30.4 this entry was written about" was
+counting six zero-size boxes.
+
+**The fix is not a faster trace, it is asking the right question.** `WeaponSystem` already had this
+query. `CanDamage` — Q3's "is there anything between the blast and the target" — has been a
+`raycast` since phase 9, with the argument written down in `DamageQueries.ts`: *"A ray is cheaper
+than a sweep and needs no shape, so a line of sight is a ray."* The bot never got it, because the
+bot asked the world through a movement seam instead of asking the weapon system.
+
+So `canDamage` is now the public `WeaponSystem.visible(from, to)`, and `BotWorld.trace` is gone,
+replaced by `BotWorld.visible(from, to): boolean`. `BotEntityVisible` and `CanDamage` are the same
+question and are now the same method — with the two implementations that question deserves, a
+`raycast` where there is a broadphase and `CM_BoxTrace`'s `isPoint` path where there is not.
+
+**A boolean, not a trace.** The seam went from five arguments and a `TraceResult` to two arguments
+and a `bool`. That is what made the old shape unfixable in place: `trace(start, mins, maxs, end,
+mask)` *can* be handed a ray and has no way to be told it was, so every implementation behind it has
+to assume the general case. A signature that cannot express "line" gets a box.
+
+**Three behaviour changes, all deliberate.**
+
+- **`fraction < 0.99` is now `fraction === 1`.** The 1% was slop for a box: a swept hull one
+  epsilon fat clips geometry near a target pressed against a wall, and the tolerance hid it. A line
+  has no width and needs no allowance, and `CanDamage` has tested `=== 1.0` all along. Measured over
+  490 spawn-to-spawn and fan segments on `oa_dm1`, 648 on `aggressor` and 268 on `oa_dm7`: the new
+  answer agrees with the old on **every one**.
+- **On `am_thornish`, the ray disagrees with the old box twice in 1856** — grazing contacts where
+  the epsilon-fattened box caught a surface the line misses. That is the box being wrong, not the
+  ray.
+- **On the `?move=q3` backend, bots now see through curved surfaces.** That backend has no
+  `DamageQuery`, so `visible` takes the clipmap, and the clipmap does not collide patches (D-017).
+  Accepted rather than worked around, because on that backend the bot's *bullets* already pass
+  through those columns — `hitscanShot` traces the same clipmap — and so does `CanDamage`. The old
+  arrangement had a bot refusing to fire at a player behind cover its own shots ignored. Sight and
+  shot now agree, which is the property worth having when they cannot both be right.
+
+**Pinned by `damage-queries.test.ts`**: 714 segments on `oa_dm1` — spawn eye to spawn eye, plus a
+seeded fan of short and long rays — must get the same answer from both implementations, and the
+sample must contain both answers (78 clear, 636 blocked). A query stuck on either one fails it;
+both mutants were run.
+
+**`visible` got its own scratch `TraceResult`** rather than sharing the module's `trace`. The other
+users are private and each reads its result before returning; a public method called once a frame
+from outside any shot is a different lifetime, and the trap it sets — overwriting the trace whose
+`surfaceFlags` decides whether a bullet leaves a mark — is the kind that surfaces as a cosmetic bug
+months later.

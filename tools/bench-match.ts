@@ -113,6 +113,13 @@ async function run(mapName: string, usePhysics: boolean): Promise<Row> {
      * to count through. Reported as `--` rather than as a smaller number, since
      * a smaller number would read as "the clipmap traces less", and it does not
      * -- it is the same pmove making the same calls.
+     *
+     * The figure fell to near zero at D-159 and that is the finding, not a
+     * broken counter. Bots here run on `KinematicMover`, which sweeps inside
+     * meep rather than through this seam, so the 6.0 per frame this used to
+     * report was the bots' line of sight and nothing else -- six zero-size boxes
+     * a frame, swept because the seam they were asked through had no way to say
+     * "ray". They are rays now and they do not come this way at all.
      */
     let traces = 0;
 
@@ -177,16 +184,14 @@ async function run(mapName: string, usePhysics: boolean): Promise<Row> {
     const world: BotWorld = {
         graph,
         items: items.items,
-        // `physics.trace` counts itself; only the clipmap branch needs counting.
-        trace: (start, mins, maxs, end, mask) => {
-            const out = createTrace();
-            if (physics !== null) physics.trace(out, start, end, mins, maxs, mask);
-            else {
-                traces += 1;
-                boxTrace(out, cm, start, end, mins, maxs, mask);
-            }
-            return out;
-        },
+        /*
+         The same line of sight the weapon system uses, and uncounted, because it
+         no longer goes through the seam `traces` measures: it is a line rather
+         than a swept box, so it is `raycast` where there is a broadphase and
+         `CM_BoxTrace`'s `isPoint` path where there is not. `weapons` here has no
+         `DamageQuery`, so this harness takes the second on both rows. See D-159.
+        */
+        visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
         playerOrigin: () => playerOrigin,
         playerAlive: () => true,
         spawns: spawns.map(snap),

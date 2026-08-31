@@ -42,7 +42,7 @@ import { BehaviorStatus } from '@woosh/meep-engine/src/engine/intelligence/behav
 import { Bot } from '../game/Bot.ts';
 import { Character, CHARACTERS, type LegsAnimation } from './Characters.ts';
 import { WaypointGraph } from '../game/Waypoints.ts';
-import { weaponStats, type WeaponId, MASK_SHOT } from '../game/Weapons.ts';
+import { weaponStats, type WeaponId } from '../game/Weapons.ts';
 import { vec3, type Vec3 } from '../q3/math.ts';
 import type { ItemInstance } from '../game/Items.ts';
 import { canBeGrabbed, touchesItem, type Inventory } from '../game/Items.ts';
@@ -61,14 +61,18 @@ export interface BotWorld {
     readonly graph: WaypointGraph;
     /** Everything a bot might want to walk to. */
     readonly items: readonly ItemInstance[];
-    /** Line of sight, in Q3 units. */
-    trace(
-        start: ArrayLike<number>,
-        mins: ArrayLike<number>,
-        maxs: ArrayLike<number>,
-        end: ArrayLike<number>,
-        contentMask: number
-    ): { fraction: number };
+    /**
+     * `BotEntityVisible`: is the line from `fromQ3` to `toQ3` unobstructed?
+     *
+     * A boolean rather than a trace, because that is the entire question -- and
+     * asking it as a trace is what made it expensive. This used to be the
+     * general `trace(start, mins, maxs, end, mask)`, called with zero mins and
+     * maxs to mean "a ray"; every backend behind it then rebuilt that ray into a
+     * swept box. `WeaponSystem.visible` is the query, and it is the same one
+     * `CanDamage` uses, so a bot's sight and its bullet agree by construction.
+     * See D-159.
+     */
+    visible(fromQ3: ArrayLike<number>, toQ3: ArrayLike<number>): boolean;
     /** Where the player is, and whether it is alive. */
     playerOrigin(): Vec3;
     playerAlive(): boolean;
@@ -484,15 +488,7 @@ export class BotRuntime {
 
         bot.eye(this.scratch);
 
-        const line = this.world.trace(
-            this.scratch,
-            [0, 0, 0],
-            [0, 0, 0],
-            this.playerEye,
-            MASK_SHOT
-        );
-
-        if (line.fraction < 0.99) return;
+        if (!this.world.visible(this.scratch, this.playerEye)) return;
 
         bot.enemyVisible = true;
         board.sinceSeen = 0;
