@@ -55,9 +55,9 @@ export const MUZZLE_FLASH_SECONDS = 0.05;
  * `CG_RegisterWeapon`'s `default:` arm: white, and the ordinary reach.
  *
  * Reached by a weapon this table has not been told about -- which is a weapon
- * `balance.weapons` has just grown, since the eleven it has are all below.
+ * `balance.weapons` has just grown, since the twelve it has are all below.
  */
-const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens: 1750 };
+const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens: 875 };
 
 /**
  * Per weapon, and two of the three columns are Q3's own numbers.
@@ -76,10 +76,13 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  *   its reach differs. Photometric units make "physically plausible" and "reads
  *   well" different questions (GAP-011), and this column is the second one --
  *   scaled to the muzzle blast the weapon looks like it should have, against the
- *   explosion's 12,000 lm as the bright end of the scale. The whole column came
- *   down 30% after the first set was seen in play: too hot, and uniformly so,
- *   which is what makes it one number rather than eleven. The ratios between the
- *   weapons survived that and are the part worth keeping.
+ *   explosion's 12,000 lm as the bright end of the scale. The whole column has
+ *   come down twice on the same complaint, and both times as one factor over the
+ *   whole table rather than twelve separate judgements: 30% after the first set
+ *   was seen in play, and halved outright in D-160. The ratios between the
+ *   weapons survived both and are the part worth keeping: the shotgun is still
+ *   the largest blast of the twelve and the BFG still the brightest, by the same
+ *   factors they were before either cut.
  *
  * What is **not** here is a source radius, which is the one an area light wants
  * and the one this table would most like to vary: a shotgun's blast is a
@@ -88,38 +91,38 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  */
 const FLASHES: Readonly<Record<string, MuzzleFlashLight>> = {
     // MAKERGB( 0.6, 0.6, 1.0 ), and lit at 150 while firing rather than pulsed.
-    WP_GAUNTLET: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 560 },
-    WP_LIGHTNING: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 1400 },
+    WP_GAUNTLET: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 280 },
+    WP_LIGHTNING: { color: [0.6, 0.6, 1], reachQ3: 150, lumens: 700 },
 
     // MAKERGB( 1, 1, 0 ): the two weapons firing the same round.
-    WP_MACHINEGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1260 },
-    WP_CHAINGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1260 },
+    WP_MACHINEGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 630 },
+    WP_CHAINGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 630 },
 
     // MAKERGB( 1, 1, 0 ), and the largest muzzle blast in the game.
-    WP_SHOTGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 3150 },
+    WP_SHOTGUN: { color: [1, 1, 0], reachQ3: 300, lumens: 1575 },
 
     // MAKERGB( 1, 0.70, 0 ).
-    WP_GRENADE_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 1820 },
-    WP_PROX_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 1820 },
+    WP_GRENADE_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 910 },
+    WP_PROX_LAUNCHER: { color: [1, 0.7, 0], reachQ3: 300, lumens: 910 },
 
     // MAKERGB( 1, 0.75f, 0 ).
-    WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 2450 },
+    WP_ROCKET_LAUNCHER: { color: [1, 0.75, 0], reachQ3: 300, lumens: 1225 },
     /*
      Also `MAKERGB( 1, 0.75f, 0 )`, and brighter than the machinegun it sits
      between because `Weapon_Nailgun_Fire` is fifteen `fire_nail`s at once and Q3
      draws one flash for the lot. A second of nailgun is one flash a second and a
      second of chaingun is thirty-three, so the two are not comparable per shot.
     */
-    WP_NAILGUN: { color: [1, 0.75, 0], reachQ3: 300, lumens: 2100 },
+    WP_NAILGUN: { color: [1, 0.75, 0], reachQ3: 300, lumens: 1050 },
 
     // MAKERGB( 0.6, 0.6, 1.0 ), but pulsed like the rest.
-    WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 1540 },
+    WP_PLASMAGUN: { color: [0.6, 0.6, 1], reachQ3: 300, lumens: 770 },
 
     // MAKERGB( 1, 0.5f, 0 ).
-    WP_RAILGUN: { color: [1, 0.5, 0], reachQ3: 300, lumens: 2100 },
+    WP_RAILGUN: { color: [1, 0.5, 0], reachQ3: 300, lumens: 1050 },
 
     // MAKERGB( 1, 0.7f, 1 ), and the brightest thing a player carries.
-    WP_BFG: { color: [1, 0.7, 1], reachQ3: 300, lumens: 4200 },
+    WP_BFG: { color: [1, 0.7, 1], reachQ3: 300, lumens: 2100 },
 };
 
 /** The flash `weapon` throws, or the white default for one with no entry. */

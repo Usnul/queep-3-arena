@@ -614,6 +614,12 @@ describe('every weapon brings its own light', () => {
 
         const plasma = muzzleFlashLight('WP_PLASMAGUN');
         expect(inWorld.distance.getValue()).toBeCloseTo(plasma.reachQ3 * S, 6);
+        // The brightness too, and on this path as well as the gun's: it is the
+        // one column of the table that is the port's own number rather than
+        // Q3's, so it is the one a retune moves -- D-160 halved all thirteen --
+        // and a bot's flash reading a different value than yours is exactly the
+        // drift the one table exists to prevent.
+        expect(inWorld.intensity.getValue()).toBeCloseTo(plasma.lumens / (4 * Math.PI), 6);
         expect([inWorld.color.r, inWorld.color.g, inWorld.color.b]).toEqual([...plasma.color]);
     });
 

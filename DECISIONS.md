@@ -5133,7 +5133,7 @@ by both paths, so the player's plasma gun and a bot's cannot be different colour
 | --- | --- |
 | `color` | `CG_RegisterWeapon`'s `flashDlightColor`, transcribed. Yellow for the three weapons firing the same round, blue for the plasma and lightning family, two distinct oranges for the launchers, `1, 0.7, 1` for the BFG. |
 | `reachQ3` | the radius `trap_R_AddLightToScene` is given: 300 for the impulse flash every weapon gets, 150 for the three Q3 lights *continuously* while firing. |
-| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 560 to the BFG's 4,200. |
+| `lumens` | **chosen.** Q3's dlight has no brightness -- it is a colour and a radius, so every flash in the game is equally bright -- and this port's lights are photometric. GAP-011 again: "physically plausible" and "reads well" are different questions, and this is the second one. Scaled against the explosion's 12,000 lm, from the gauntlet's 280 to the BFG's 2,100 -- D-160 halved the whole column, and every number D-115 first wrote here was double the one now in the table. |
 
 Two things are deliberately absent from that table.
 
@@ -5830,7 +5830,7 @@ Two departures from the C, both deliberate:
   |---|---|---|
   | colour | `0.6, 0.6, 1.0` | `MAKERGB( weaponInfo->flashDlightColor, … )`, the one colour the C states for this weapon — and the same three numbers `muzzleFlash.ts` already holds, read rather than retyped |
   | reach | 150 Q3 units | `muzzleFlash.ts`'s reach for the gauntlet, lightning gun and grapple: the three `CG_AddPlayerWeapon` lights *continuously* rather than pulsing at 300. A bolt in flight is the continuous case |
-  | flux | 400 lm | below the gauntlet's 560, the dimmest continuous flash in that table, because `fireRateMs` 100 and `speed` 2000 put ten or more bolts down a long sightline at once where only ever one gauntlet glow exists |
+  | flux | 400 lm | below the gauntlet's 560, the dimmest continuous flash in that table at the time, because `fireRateMs` 100 and `speed` 2000 put ten or more bolts down a long sightline at once where only ever one gauntlet glow exists. **D-160 halved the flash table and left this number alone**, so the comparison no longer holds against the gauntlet's 280; what it still holds against is the 770 of the muzzle pop that launches the bolt, which is the comparison the argument actually needs |
   | emissive | 300 | the same quantity as a map material's `emissiveLuminance`, whose top value on `am_thornish` is **295.7** for `base_light/light5_15k`. A bolt is level with the brightest fitting in the level, and not an order of magnitude past it |
 
   The emissive is applied *through* the colour, so blue carries the 300 and the other two carry 180
@@ -8189,3 +8189,84 @@ users are private and each reads its result before returning; a public method ca
 from outside any shot is a different lifetime, and the trap it sets — overwriting the trace whose
 `surfaceFlags` decides whether a bullet leaves a mark — is the kind that surfaces as a cosmetic bug
 months later.
+
+### D-160: the muzzle flash column comes down by half, and the light is the only half of the flash that moves
+
+Reported the same way the last cut was: the flashes are too bright, and too bright everywhere rather
+than on one weapon. So the answer has the same shape — one factor over the whole of
+`muzzleFlash.ts`'s `lumens` column, 0.5, applied to the twelve weapons `balance.weapons` names and
+to the `default:` arm a thirteenth would reach. The gauntlet goes 560 → 280 and the BFG 4,200 →
+2,100; every value between them halves with them, and all thirteen land on integers.
+
+**Why a factor and not thirteen judgements.** The `lumens` column is the one column of that table
+Q3 does not supply — a Q3 dlight is a colour and a radius, so every flash in the game is equally
+bright — and what this port authored was not thirteen brightnesses but a *set of ratios* against the
+explosion's 12,000 lm: a shotgun blast is the big one, the machinegun's is small and constant, the
+BFG's is the brightest thing a player carries. Those ratios are what was tuned and what the report
+did not complain about. A uniform factor is the edit that leaves them intact, which is why the 30%
+cut before this one was also a single number.
+
+**What deliberately did not move:**
+
+- **`reachQ3`.** 300 and 150 are `trap_R_AddLightToScene`'s own radii, straight out of
+  `CG_AddPlayerWeapon` — the one brightness-adjacent column that *is* transcribed. A flash still
+  marks the same volume of corridor; it is less hot inside it.
+- **`color`.** `flashDlightColor`, also transcribed, and the same three numbers the visible burst
+  reads.
+- **The visible burst.** `Effects.muzzleFlashParticles` takes `muzzleFlashLight(weapon).color` and
+  nothing else from this table, so the core and sparks out of the barrel are exactly what they were.
+  The complaint was about a room going white, which is the light's doing and not the sprite's.
+- **`MUZZLE_FLASH_SECONDS`**, which is already this port's divergence (50 ms against the C's 20) and
+  is about whether a flash is seen at all rather than how hard it lands.
+- **The explosion's 12,000 lm**, which is the anchor the column was scaled against and not part of
+  the complaint. So the gap widens on purpose: the brightest flash a player carries was a third of a
+  rocket going off and is now a sixth of one, which is the shape of "the guns were too hot" and not
+  a claim that the explosion was right and everything else wrong.
+
+**Measured against the room rather than argued about.** The pane would not composite this session
+— the renderer failed its first compute dispatch and `graphics.frameIndex` never left 0, which is
+the hidden-tab boot and not this change — so the flashes were raised in the live app and read back
+instead of photographed. `Effects.muzzleFlash` on `oa_dm1` produces exactly the halved flux and the
+unchanged reach: 22.28 cd / 150 units for the gauntlet, 125.33 cd / 300 for the shotgun,
+167.11 cd / 300 for the BFG. What that is worth is the comparison against the map's own 28 fixtures,
+which run 88 to 6,589 lm with a median of 671:
+
+| | before | after | for scale |
+| --- | --- | --- | --- |
+| a wall 2 m off a shotgun muzzle | 62.7 lux | 31.3 lux | a median fixture 3 m away is 5.9 lux |
+| the same wall, machinegun | 25.1 lux | 12.5 lux | " |
+| the brightest flash carried | 4,200 lm | 2,100 lm | the map's brightest fixture is 6,589 lm |
+
+Inverse-square off the flux, which is the arithmetic this port authors every light through — the
+same `lumens / 4pi / d^2` `loadMap` and the lightgrid use — and not a reading off the shader.
+
+So the flash still lands about five times the room's own light on the surface in front of it, which
+is the property D-115 cares about — a shot with no light reads as a shot that did not happen — and
+it no longer arrives as the brightest thing in the level. Exposure is automatic (D-130), so half the
+flux is not half the picture; the last word on how it reads belongs to whoever is playing.
+
+**The one relationship this inverts.** D-130 chose the plasma bolt's 400 lm as "below the gauntlet's
+560, the dimmest continuous flash in that table", and the gauntlet is now 280. The bolt was left
+where it is: the report was about muzzle flashes, a bolt in flight is not one, and the load-bearing
+half of D-130's argument — one bolt well under the muzzle pop that launched it, ten of them over it
+— still holds against the plasma flash's 770. Recorded at both ends rather than quietly allowed to
+drift, because that number was chosen *against* this table and a reader arriving at either one
+should find out that the other moved.
+
+**No expectation had to be edited, which is the property worth having.** Nothing in
+`muzzle-flash.test.ts` names a lumen value; it reads the table and checks the arithmetic against
+whatever is in it, so a retune moves the expected value with the actual one. The only absolute
+comparison anywhere is `missile-view.test.ts`'s "the bolt is dimmer than the muzzle pop it was
+launched by", and 400 against 770 still passes it. A tuning cut that needed a test edited would have
+been a tuning cut that broke something.
+
+One assertion was **added**, and it is the review's own finding rather than the change's. The test
+called "writes the same light whichever path builds it" checked `type`, `distance`, `intensity` and
+`color` on the gun's flash but only `type`, `distance` and `color` on the world's — so the
+brightness of every flash raised for a *bot* was the one field in that table nothing read back, on
+the path a player sees more often than their own. Not a hole a shared `applyMuzzleFlash` could fall
+through today, which is why it survived: doubling the flux there trips the gun's assertion first.
+It is a hole the moment the two paths stop agreeing — a caller that scales the light it was handed,
+an `Effects.muzzleFlash` that sets intensity after the table has spoken — and that is the drift the
+one table exists to prevent. Verified live rather than assumed: with the gun's line taken out and
+the flux doubled, the new line fails on its own.

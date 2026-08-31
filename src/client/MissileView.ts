@@ -194,16 +194,23 @@ const PLASMA_LUMINANCE = 300;
  *
  * Q3 gives this weapon no `missileDlight` at all -- only the rocket (200) and
  * the BFG light their own flight -- so there is nothing to transcribe and the
- * question is what a travelling light should cost. `muzzleFlash.ts` sets the
- * scale: 12,000 lm for an explosion, 1,540 for this gun's muzzle pop, and 560
- * for the gauntlet, the dimmest of the three flashes that light *continuously*
- * rather than pulsing.
+ * question is what a travelling light should cost. `muzzleFlash.ts` set the
+ * scale it was chosen against: 12,000 lm for an explosion, 1,540 for this gun's
+ * muzzle pop, and 560 for the gauntlet, the dimmest of the three flashes that
+ * light *continuously* rather than pulsing.
  *
- * A bolt is continuous, so it belongs with the gauntlet, and it goes below it:
+ * A bolt is continuous, so it belongs with the gauntlet, and it went below it:
  * `fireRateMs` is 100 and `speed` is 2000, so sustained fire puts ten or more of
  * these in the air down a long sightline where only ever one gauntlet glow
  * exists. Ten lights at 400 lm is already brighter than the muzzle flash that
  * launched them.
+ *
+ * **D-160 halved that whole flash table and this number was left where it is**,
+ * so two of the three figures above are now 770 and 280. The argument survives
+ * the half that matters -- one bolt is still well under the pop that fired it,
+ * and ten are still brighter -- but 400 is no longer under the gauntlet's flash.
+ * Left alone deliberately: the report D-160 answered was about muzzle flashes,
+ * and a bolt in flight is the one plasma light nobody complained about.
  */
 const PLASMA_LIGHT_LUMENS = 400;
 
