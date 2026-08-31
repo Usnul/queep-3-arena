@@ -13,11 +13,14 @@ point of the exercise, not a shortfall in it.
 The ported `bg_pmove.c` and `cm_*` are still here, bit-exact against the C, as the reference the
 shipping path is measured against.
 
-The point of the exercise is the engineering report in [REPORT.md](REPORT.md).
+**The point of the exercise is the engineering report in [REPORT.md](REPORT.md).** This file is an
+index: every reasoned choice below is a pointer into the documents at the bottom, where the
+argument actually lives.
 
 ## Setup
 
-Requires Node >= 24, `@woosh/meep-engine` >= 3.10.0, and a WebGPU-capable browser.
+Requires Node 24+, a WebGPU-capable browser, and your own licensed copy of `@woosh/meep-engine`,
+which is a peer dependency — `package.json` holds the version range.
 
 ```bash
 npm install
@@ -28,14 +31,13 @@ npm run assets
 npm run dev
 ```
 
-`npm run assets` converts the static props, the 15 player characters and the sound bank. It is
-separate from the map conversion because it runs once for the whole game rather than once per
-map — with one ordering caveat: a map names its own ambience and music, so `npm run
-convert-sounds` wants running again after a new map is converted, and says so.
-
 `npm run setup` clones the reference C sources at pinned commits and downloads the OpenArena
 0.8.8 game data (425 MB). Nothing it fetches is committed — see [ASSETS.md](ASSETS.md) for
 provenance and licensing of every input.
+
+`npm run assets` converts the static props, the 15 player characters and the sound bank, once for
+the whole game rather than once per map. One ordering caveat: a map names its own ambience and
+music, so `npm run convert-sounds` wants running again after a new map is converted, and says so.
 
 ### Material maps, optionally
 
@@ -56,85 +58,12 @@ assets/ml/venv/Scripts/python tools/cosmos/build_maps.py
 Then re-run the converters. What each channel is worth, and why two of the four the network offers
 are thrown away and replaced by a hand table, is D-092 and D-093.
 
-Then open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space
-to jump, ctrl to crouch, shift to walk, mouse-1 to fire, 1-9 or the wheel to change weapon,
-**escape for the menu**. Input runs on meep's own `engine.devices` rather than DOM listeners —
-see GAP-017 for why that is not optional.
+## Playing
 
-### The menu
-
-Escape opens it, escape or the scrim closes it. The game keeps running behind it and the scrim is
-translucent and unblurred on purpose: a render-scale or field-of-view change is judged by what it
-does to the picture, so the picture has to still be there (D-099). Settings are saved to
-IndexedDB and applied on the next load.
-
-Three pages, split by whether the row has a right answer. Every graphics row has one for a given
-machine — more of it looks better, costs more, and the player is buying frames. No gameplay or
-audio row does, which is why they are not on the same page (D-126).
-
-**Gameplay**
-
-| setting | what it writes |
-|---|---|
-| Field of view | `Camera.fov`; `cg_fov`, 60–130, default 90 |
-| Crosshair | `cg_drawCrosshair`, `gfx/2d/crosshair[a-j]`. Defaults to **D** and not id's E — a dot is hard to find against a lit-and-bloomed render, and `?crosshair=4` puts id's back (D-129) |
-| Colour crosshair by health | `cg_crosshairHealth`, which Q3 defaults on |
-
-**Graphics**
-
-| setting | what it writes |
-|---|---|
-| Shadows | which lights cast: off, the sun only, or all of them. Defaults to the sun — one light throwing the shadow a player reads as a shape, rather than dozens throwing short ones into geometry that already occludes them (D-108, D-128) |
-| Ambient occlusion | `feature_ssao_enabled`, which is GTAO. On, and the one of the three the arenas need: the lightmaps shade the level and nothing moving through it (D-109) |
-| Screen-space reflections | `feature_ssr_enabled`. Off, and greyed out on any map with a baked light volume — SSR and Brick4 are alternatives in the renderer, and setting the flag there costs the fused indirect path for nothing (D-109) |
-| Bloom | `feature_bloom_enabled`. On. Off saves the composite and not the bright pass, which automatic exposure needs either way (D-109) |
-| Adaptive resolution | meep's `DynamicResolutionScaling`, which trades internal resolution for frame time |
-| Render scale | `Renderer.internal_resolution_scale`, 50–100%. Alternative to adaptive resolution — each greys the other out (D-101) |
-| Frame-rate target | what adaptive resolution aims to hold. Default 60, against the engine's own 30 |
-| Frame-rate counter | the `stats.js` panel. Off; `cg_drawFPS` is 0 in Q3 too, and the arena is what you came to look at (D-128) |
-
-**Audio**
-
-| setting | what it writes |
-|---|---|
-| Master | `SoundEngine.volume`, the gain node every path runs through — the sopra bus tree *and* the probe reverb's wet return, which is why it is not the bus called `master` (GAP-034) |
-| Effects | sopra's `effects` **and** `ambient` buses. One row, because one-shots and looping map speakers are a mixing distinction and not one a player has a word for — Q3's `s_volume` covered both |
-| Music | sopra's `music` bus: the background track a map's `worldspawn` asks for |
-
-Each fader is a fraction of the mix the engine ships rather than an absolute gain, so 100% is
-`SopraEngine.defaultBuses()` untouched. That is not a flourish: the shipped mix is effects at
-**1.2** and music at **0.1**, so sliders that wrote linear gains and defaulted to 1.0 would quieten
-every effect and raise the background track by 20 dB on the first frame the menu applied its
-defaults — a settings screen that remixes the game by existing.
-
-**There is no motion blur row**, and it was removed rather than defaulted off (D-127). Q3 is played
-by people who come round a corner at 800 units a second and expect the room to be legible on the
-frame it appears in; a setting whose right answer is the same for every player of this game is a
-decision with a control in front of it. `Renderer`'s own field initialiser is `false` and nothing
-in the port names the flag, so the removal holds against a stale value in storage too.
-
-The graphics rows exist because **3.6.0 opened the smallest possible door** — a `renderer` getter
-with "Danger zone" written on it — and the shape of what came through it is worth stating: they are
-switches, and there is not a quality setting among them. The `GTAO` and `SSR` objects are a private
-field of `Renderer` with no getter, so they are out of reach with the renderer already in hand; the
-quality knobs that exist are call arguments `Renderer` hardcodes — `SSR.graph_pass`'s `mip`,
-`graph_postprocess_bloom`'s `intensity` and `mips` — and the shadow *resolution* is a module-private
-constant, as is the atlas size beside it. So there is no anti-aliasing row and no Low / Medium /
-High, and that is still GAP-024 — smaller than it was, and the menu says so in its own footer rather
-than looking thin for no reason (D-108, D-109). There is no supersampling for a second reason:
-`pixelRatio`, the one property that reaches it, throws on any scale that is not a whole number
-(BUG-11).
-
-**`MotionBlur` is the exception, and it points at the fix** — which is why the finding is kept
-although the row is gone. It is newer than GTAO and SSR and was built the other way round: the
-renderer owns one and hands it out, `get motion_blur()`, with the getter's docblock reading
-"Configure it via `renderer.motion_blur.*`". `dof` is the same. The flag and the tuning are
-deliberately separated and both are public — which is exactly the shape GAP-024 asks for, already in
-the package, for whatever the engine added most recently.
-
-A map picker and a match setup screen are the next two pages. The shell takes a list of pages and
-nothing in it names any of them; what is missing for maps is a manifest of what the pipeline has
-actually built (D-097, Q-008).
+Open `http://localhost:5173/?map=oa_dm1`. Click to capture the mouse; WASD to move, space to jump,
+ctrl to crouch, shift to walk, mouse-1 to fire, 1-9 or the wheel to change weapon, **escape for the
+menu**. Input runs on meep's own `engine.devices` rather than DOM listeners — see GAP-017 for why
+that is not optional.
 
 | query parameter | effect |
 |---|---|
@@ -146,14 +75,30 @@ actually built (D-097, Q-008).
 | `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Beats the saved setting for the session; out of range is ignored rather than clamped |
 | `?fog=off` | empties the air, taking the map's volumetric lighting with it -- the volume is what turns Shade's volumetrics on at all, so this is the whole feature and its frame cost (D-151, D-154) |
 
+### The menu
+
+Escape opens it, and the game keeps running behind a translucent, unblurred scrim: a render-scale
+or field-of-view change is judged by what it does to the picture, so the picture has to still be
+there (D-099). Settings save to IndexedDB. Three pages — Gameplay, Graphics, Audio — split by
+whether a row has a right answer: every graphics row has one for a given machine, and no gameplay
+or audio row does (D-126). The shell takes a list of pages and names none of them; a map picker and
+a match setup screen are the next two (D-097, Q-008).
+
+What is *not* on the graphics page is the more interesting half. Those rows are feature switches
+with no quality setting among them, because the knobs that would tune them are private to
+`Renderer` or hardcoded at its call sites — GAP-024, with D-108, D-109 and D-127 recording what was
+offered, what was refused and what was removed. The audio faders are fractions of the mix the
+engine ships rather than absolute gains, which is not a flourish: written as gains defaulting to
+1.0, they would remix the game on the first frame the menu applied its defaults (GAP-034).
+
 ## Verification
 
 ```bash
 npm run check
 ```
 
-Typechecks, verifies the `trap_` matrix and balance tables are current, and runs the
-differential test suites. The movement suites need the WebAssembly oracle:
+Typechecks, verifies the `trap_` matrix and balance tables are current, and runs the differential
+test suites. The movement suites need the WebAssembly oracle:
 
 ```bash
 node oracle/build.mjs
@@ -164,97 +109,53 @@ TypeScript port is then run against it frame by frame and must agree bit-for-bit
 randomised traces and roughly 50,000 simulated movement frames, tolerance zero. Emscripten is
 expected at `.refs/emsdk`; `oracle/build.mjs` prints the install commands if it is missing.
 
-Three findings in the report are reproducible on their own:
+Three findings in the report reproduce on their own:
 
-```bash
-npm run divergence
-```
-
-which runs identical input through the C oracle, the ported clipmap and meep's physics and
-reports how far the third drifts from the first, with the second as a bit-exact control.
-
-```bash
-npm run bench-match
-```
-
-which plays a six-bot deathmatch headlessly on both movement paths and then decomposes the cost of
-a single trace. It is where section 5's numbers come from: the shipping path needs 6.0 traces a
-frame where driving `bg_pmove` through meep's physics needed 30.4, and in that older arrangement
-the ported Q3 rule that decides the answer cost 0.22 µs against the 3.06 of the `shape_cast` in
-front of it.
-
-```bash
-npm run navmesh-probe
-```
-
-which builds meep's `NavigationMesh` from a Quake III level three different ways — solid
-brushes, render surfaces, and an extracted walkable surface — repairs each with the engine's
-topology toolkit, and reports how many spawn-point pairs `find_path` can route between. The
-answers are 5%, 0% and 48%, against 100% for the waypoint graph this port ships. GAP-016 explains
-what that difference is, and includes a claim I got wrong twice before getting it right.
+| command | what it shows |
+|---|---|
+| `npm run divergence` | identical input through the C oracle, the ported clipmap and meep's physics, and how far the third drifts from the first — with the second as a bit-exact control |
+| `npm run bench-match` | a six-bot deathmatch played headlessly on both movement paths, then the cost of a single trace decomposed. Section 5's numbers come from here: the shipping path needs 6.0 traces a frame where driving `bg_pmove` through meep's physics needed 30.4, and in that older arrangement the ported Q3 rule that decides the answer cost 0.22 µs against the 3.06 of the `shape_cast` in front of it |
+| `npm run navmesh-probe` | meep's `NavigationMesh` built from a Quake III level three ways — solid brushes, render surfaces, and an extracted walkable surface — each repaired with the engine's topology toolkit. 5%, 0% and 48% of spawn-point pairs are routable, against 100% for the waypoint graph this port ships. GAP-016 explains what that difference is, and includes a claim I got wrong twice before getting it right |
 
 ## What works
 
-- **Six OpenArena maps** convert and render at 137–253 FPS (measured on meep 3.0.2), with
-  lighting reconstructed as dynamic lights from two sources: the map's own `.shader` data, and
-  the BSP lightgrid q3map2 bakes. The second exists because the first is not enough — `oa_dm5`
-  reconstructed to zero lights over 107,414 triangles and `oa_dm7` left 70 of 79 player positions
-  under a lux, because their lighting was authored as `light` entities that q3map2 deletes at
-  compile time. Fitting lights to the lightgrid closes that: all six maps are now lit, asserted
-  in lux at every spawn point and pickup. See GAP-006 and D-078.
-- **Movement** is Q3's motor on meep's kinematic solver: `PM_Accelerate`, `PM_Friction` and
-  `PM_CmdScale` produce a desired velocity, and meep's `KinematicMover` resolves it. Strafe
-  jumping survives because it lives entirely in the acceleration function and never touches a
-  trace -- flat headings top out at exactly 320 u/s and a scripted strafe chain reaches 354.
-  Ported in spirit, not in body (D-071).
-- **The ported `bg_pmove.c` also ships**, bit-exact against the C, reachable with `?move=q3`. It
-  is the reference the new path is judged against rather than the shipping path: the ported
-  `cm_trace` agrees with meep's physics on hit-or-miss for 100.0% of 20,000 sampled sweeps, with
-  a p90 fraction error of 5.3e-8.
-- **Weapons** fire with Q3's own damage numbers and fire rates, extracted from the sources
-  rather than transcribed.
-- **Items** spawn, drop to the floor, bob, spin, get picked up under `BG_CanItemBeGrabbed`'s
-  rules and respawn on their own clocks.
-- **Movers** — doors, plats, buttons — run `g_mover.c`'s four-state machine, with jump pads
-  solved by `AimAtTarget` and teleporters that take you somewhere.
+- **Six OpenArena maps**, lit by dynamic lights reconstructed from the map's own `.shader` data
+  and from the BSP lightgrid q3map2 bakes. The second source exists because the first is not
+  enough: two maps came back with almost no light at all, their lighting having been authored as
+  `light` entities q3map2 deletes at compile time. All six are now asserted in lux at every spawn
+  point and pickup (GAP-006, D-078).
+- **Movement**: Q3's motor on meep's kinematic solver. Strafe jumping survives because it lives
+  entirely in the acceleration function and never touches a trace — flat headings top out at
+  exactly 320 u/s and a scripted strafe chain reaches 354 (D-071).
+- **The ported `bg_pmove.c`**, bit-exact against the C and reachable with `?move=q3`. It is the
+  reference the new path is judged against rather than the shipping path.
+- **Weapons** with Q3's own damage numbers and fire rates, extracted from the sources rather than
+  transcribed.
+- **Items** that spawn, drop to the floor, bob, spin, obey `BG_CanItemBeGrabbed` and respawn on
+  their own clocks.
+- **Movers** — doors, plats, buttons — on `g_mover.c`'s four-state machine, with jump pads solved
+  by `AimAtTarget` and teleporters that take you somewhere.
 - **15 characters**, converted from MD3 vertex-morph animation to skinned glTF by inferring a
   skeleton the source data does not contain.
 - **Audio** on meep's `AudioEmitter` components, one path for all four of Q3's sound calls:
-  positional one-shots for weapons, impacts, items, movers, jump pads and footsteps; looping
-  sources that follow what owns them, from map ambience to a rocket's fly sound; and the map's
-  own background track.
+  positional one-shots, looping sources that follow what owns them, and the map's own background
+  track.
 - **Bots** on meep's behaviour trees, running the *same* movement the player does — they route,
-  fight, take items, and one has been observed strafe-jumping. On meep 3.2.0 they are grounded
-  89–94% of a match against the ported path's 86–93%, and on `oa_dm1` they engage roughly three
-  times as often. The regression that showed on `aggressor` under 3.0.2 was BUG-7 and is gone
-  (D-073).
-- **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — are meep's particles,
-  GPU decals and clustered lights.
-- **The first-person view** — the crosshair and the gun in your hands — is Q3's artwork and Q3's
-  arithmetic on meep's own UI and mesh paths: `gfx/2d/crosshair[a-j]` tinted by
-  `CG_GetColorForHealth`, and the weapon placed at the offset its hands model's `tag_weapon`
-  authored, bobbing on `CG_CalculateWeaponPosition`'s sway. What it does not have is the two
-  render flags Q3 leans on — `RF_DEPTHHACK`, so the gun clips into a wall you press against, and
-  `RF_MINLIGHT`, so a dark room gets a dark gun (D-080).
+  fight, take items, and one has been observed strafe-jumping. On meep 3.2.0, grounded 89–94% of
+  a match against the ported path's 86–93% (D-073).
+- **Effects** — explosions, smoke, sparks, impact marks, muzzle flashes — on meep's particles, GPU
+  decals and clustered lights.
+- **The first-person view**: Q3's artwork and Q3's arithmetic on meep's own UI and mesh paths.
+  What it does not have is the two render flags Q3 leans on — `RF_DEPTHHACK`, so the gun clips
+  into a wall you press against, and `RF_MINLIGHT`, so a dark room gets a dark gun (D-080).
+- **The menu**, on meep's `View` hierarchy over meep's own `Option` model (D-097, D-126).
+- **A stylesheet with defines**: `src/style/_tokens.scss` is the single source for colour, type,
+  space, shape, motion and stacking. It emits the same values as `--queep-*` custom properties for
+  runtime overrides, and feeds meep's own `--meep-*` theme hooks from the same variables (D-098).
 
-- **The menu**, on meep's `View` hierarchy over meep's own `Option` model, with the settings
-  saved to IndexedDB. Escape opens it, the game keeps running behind it, and it is a shell over a
-  list of pages rather than a screen — Gameplay, Graphics and Audio are three values in an array,
-  and a map picker and a match setup screen go in beside them without the shell changing (D-097,
-  D-126). What is on the graphics page is bounded by what the engine hands an application: most
-  quality knobs behind `Renderer` are still out of reach, which is GAP-024 for the second time,
-  and the four rows over the renderer's own feature flags — shadows, ambient occlusion,
-  reflections and bloom — are what 3.6.0 gave back (D-108, D-109). The audio page is three faders
-  over sopra's bus graph, and master is the one node in the mix that is not a bus: the probe
-  reverb's wet return joins below the tree, so the bus called `master` is not one (GAP-034).
-- **A stylesheet with defines.** `src/style/_tokens.scss` is the single source for colour, type,
-  space, shape, motion and stacking; it emits the same values as `--queep-*` custom properties
-  for runtime overrides, and feeds meep's own `--meep-*` theme hooks from the same variables
-  (D-098).
-
-Every one of those has an edge it does not reach, and each is written down rather than left to
-be discovered: see [DECISIONS.md](DECISIONS.md) D-041, D-045 and D-055 for what movers,
-characters and bots respectively do *not* do.
+Every one of those has an edge it does not reach, and each is written down rather than left to be
+discovered: see [DECISIONS.md](DECISIONS.md) D-041, D-045 and D-055 for what movers, characters
+and bots respectively do *not* do.
 
 ## Documents
 
