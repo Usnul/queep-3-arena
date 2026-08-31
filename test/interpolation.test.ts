@@ -38,7 +38,7 @@ import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/Entity
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { System } from '@woosh/meep-engine/src/engine/ecs/System.js';
 import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
-import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem3.js';
+import { CameraSystem } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem.js';
 import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
 
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
@@ -58,6 +58,21 @@ import { vec3 } from '../src/q3/math.ts';
 function executionOrder(em: EntityManager): string[] {
     const order = (em as unknown as { systemsExecutionOrder: object[] }).systemsExecutionOrder;
     return order.map((system) => system.constructor.name);
+}
+
+/**
+ * Where one system landed in that order, found by its class rather than by a
+ * name spelled out at the call site.
+ *
+ * meep 3.13.0 renamed `CameraSystem3` to `CameraSystem`, and a spelled-out name
+ * does not survive that: `indexOf` returns `-1`, which `toBeLessThan` reads as
+ * "sorts before everything" and the case goes on passing while pinning nothing.
+ * A system that never reached the order fails here instead.
+ */
+function positionOf(order: string[], system: { name: string }): number {
+    const at = order.indexOf(system.name);
+    expect(at, `${system.name} never reached the execution order`).toBeGreaterThanOrEqual(0);
+    return at;
 }
 
 /** `EntityManager.startup` is callback-style; every caller here wants a promise. */
@@ -405,23 +420,23 @@ describe('the execution order phase 9 relies on', () => {
          -- would score it above the component-less simulation systems and
          schedule it to snapshot poses one step before they are written.
         */
-        expect(order.indexOf('PoseRecorderSystem')).toBeGreaterThan(order.indexOf('DoorSystem'));
+        expect(positionOf(order, PoseRecorderSystem)).toBeGreaterThan(positionOf(order, DoorSystem));
     });
 
-    it('schedules ViewSystem ahead of CameraSystem3, which is what makes the camera smooth', async () => {
+    it('schedules ViewSystem ahead of CameraSystem, which is what makes the camera smooth', async () => {
         const em = new EntityManager();
         em.attachDataset(new EntityComponentDataset());
 
         /*
          Registered *after* the camera system on purpose. Registration order is
          what decides a tie, and this must not be one: `ViewSystem` declares
-         `Transform` for write where `CameraSystem3` declares it for read, and
+         `Transform` for write where `CameraSystem` declares it for read, and
          `updateExecutionOrder` scores a writer at twice a reader. If that ever
          stops being true the camera goes back to being a frame late, which is
          the first half of D-081 and is invisible except as judder.
         */
         await em.addSystem(
-            new CameraSystem3({ isGraphicsEngine: true, camera: { camera: {} } } as never) as never
+            new CameraSystem({ isGraphicsEngine: true, camera: { camera: {} } } as never) as never
         );
         await em.addSystem(
             new ViewSystem({
@@ -437,7 +452,7 @@ describe('the execution order phase 9 relies on', () => {
 
         const order = executionOrder(em);
 
-        expect(order.indexOf('ViewSystem')).toBeLessThan(order.indexOf('CameraSystem3'));
+        expect(positionOf(order, ViewSystem)).toBeLessThan(positionOf(order, CameraSystem));
     });
 
     it('hands ViewSystem the sub-step alpha, so the camera lands between two steps', async () => {
@@ -471,13 +486,13 @@ describe('the execution order phase 9 relies on', () => {
         expect(alphas[2]).toBeCloseTo(0.5, 6);
     });
 
-    it('schedules CameraSystem3 ahead of InterpolationSystem, which is why the camera is not blended', async () => {
+    it('schedules CameraSystem ahead of InterpolationSystem, which is why the camera is not blended', async () => {
         const em = new EntityManager();
         em.attachDataset(new EntityComponentDataset());
 
         await em.addSystem(new InterpolationSystem());
         await em.addSystem(
-            new CameraSystem3({ isGraphicsEngine: true, camera: { camera: {} } } as never) as never
+            new CameraSystem({ isGraphicsEngine: true, camera: { camera: {} } } as never) as never
         );
 
         await started(em);
@@ -487,7 +502,7 @@ describe('the execution order phase 9 relies on', () => {
 
         /*
          Registered the other way round on purpose: the answer is the scheduler's,
-         not the registration order's. `CameraSystem3` references `Camera` and
+         not the registration order's. `CameraSystem` references `Camera` and
          `Transform` where `InterpolationSystem` references only `Interpolated`,
          and the score is a sum over referenced components -- so the camera is
          copied onto Shade's camera before anything has been blended into it.
@@ -495,6 +510,6 @@ describe('the execution order phase 9 relies on', () => {
          than smooth, which is why `PlayerSystem` writes the camera pose on the
          fixed step and leaves it there.
         */
-        expect(order.indexOf('CameraSystem3')).toBeLessThan(order.indexOf('InterpolationSystem'));
+        expect(positionOf(order, CameraSystem)).toBeLessThan(positionOf(order, InterpolationSystem));
     });
 });

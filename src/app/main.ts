@@ -59,7 +59,7 @@ import { SopraDefaultBus } from '@woosh/meep-engine/src/engine/sound/sopra/Sopra
 import { configureAcousticSimulation } from '@woosh/meep-engine/src/engine/sound/simulation/configureAcousticSimulation.js';
 import { ProbeReverbRenderer } from '@woosh/meep-engine/src/engine/sound/simulation/render/ProbeReverbRenderer.js';
 import { attachProbeField, loadProbeField } from '../client/Acoustics.ts';
-import type { GraphicsEngine3 } from '@woosh/meep-engine/src/engine/graphics3/GraphicsEngine3.js';
+import type { GraphicsEngine } from '@woosh/meep-engine/src/engine/graphics3/GraphicsEngine.js';
 import type { Scene } from '@woosh/meep-engine/src/shade/renderer/scene/Scene.js';
 import type { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { VolumetricLightMap } from '@woosh/meep-engine/src/engine/graphics3/VolumetricLightMap.js';
@@ -1445,7 +1445,7 @@ function firstGesture(element: HTMLElement, action: () => void): void {
  * un-awaited promise would only reach the console anyway.
  */
 async function runLightMapBake(
-    graphics: GraphicsEngine3,
+    graphics: GraphicsEngine,
     scene: Scene,
     ecd: EntityComponentDataset,
     mapName: string,
