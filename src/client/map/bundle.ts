@@ -44,9 +44,13 @@ export interface MaterialSource {
  *
  * - **`ColorSpace.None`.** `ShadeImage` defaults to `LinearSRGB`, which lands on
  *   the same `rgba8unorm` format -- but `texture_write_to_gpu` premultiplies
- *   anything that is not `None`. These maps are written with alpha at 255 so the
- *   multiply is by one either way; saying `None` states the intent rather than
- *   relying on that.
+ *   whatever the image's `alpha_mode` resolves to `Straight`, and an image that
+ *   has not been told one resolves it from the colour space: `None` gives
+ *   `Opaque` and everything else `Straight`. That is the same rule the upload
+ *   applied inline before `alpha_mode` existed, so `None` still means "do not
+ *   premultiply" -- it can now also be said directly. These maps are written
+ *   with alpha at 255 so the multiply is by one either way; saying `None` states
+ *   the intent rather than relying on that.
  * - **`LinearNormal` mip generation.** Averaging two unit normals gives a
  *   shorter one, so a colour filter down a mip chain flattens a normal map
  *   towards no perturbation at exactly the distances most of the surface is
