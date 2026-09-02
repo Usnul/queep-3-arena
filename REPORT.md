@@ -263,7 +263,9 @@ the strongest argument in this report for the maintainer's instinct over mine.
     read it is on the other side of that line. `brick4_bake_for_scene` takes a renderer as an
     argument and is unreachable for the same reason. Two forwarded properties in the shape
     `set_environment_map` already has would close it. This port cut its entire lighting phase here
-    (GAP-024).
+    (GAP-024). **Closed since, in 3.14.3, by a public `renderer` getter on the facade** — a wider
+    door than the two properties asked for, and the docblock says so in as many words. The cut
+    phase is not restored here; the obstacle is.
 
 12. **Nothing runnable ships, and no document says which systems you have to register.** The
     published package contains `samples/generation/**` and nothing else — no sample boots the
@@ -845,6 +847,20 @@ vocabulary — three had drifted onto an ad-hoc `high`/`medium`/`low` scale, whi
 unsortable and this document is meant to become a backlog — and then two of them were reduced
 again after review. Both reductions are visible below rather than edited away.
 
+**Re-checked against `@woosh/meep-engine@3.14.3`.** The register was written against 3.0.2–3.3.0
+and the engine has shipped eleven minor versions since, so every entry was re-run against the
+installed package. What changed is marked at the heading and in a `Status` bullet on the entry;
+everything not marked was verified still open at 3.14.3. Nothing is deleted — an entry that closed
+keeps its text, because the cost it records was paid whether or not the cause survives.
+
+| entry | status at 3.14.3 |
+|---|---|
+| **GAP-024** | **closed.** `GraphicsEngine` now has a public `renderer` getter. |
+| **GAP-007** | already withdrawn; the stale docblock it was left complaining about is **now fixed**. |
+| **GAP-014** | **partly closed.** `PhysicsSystem`'s docblock now carries the NOTE and the `@see`. |
+| **GAP-027** | **partly closed.** Its second half falls to the same getter as GAP-024. |
+| everything else | open, and verified open rather than assumed. |
+
 | severity | entries | what it means here |
 |---|---|---|
 | **blocker** | GAP-014, GAP-017 | the port could not ship with this unaddressed. Both are silent: the application builds, runs, reports success at every diagnostic, and does not work. |
@@ -1193,8 +1209,14 @@ Two smaller problems fell out of fixing GAP-004, both worth a line of their own:
   `test/presentation.test.ts`; the lightgrid route is `src/q3/bsp/LightGrid.ts` and
   `tools/pipeline/lightgrid.ts`, tested by `test/lightgrid.test.ts`, added in phase 7.
 
-### GAP-007 (withdrawn): `draw_side` works; its docblock is stale
+### GAP-007 (withdrawn; docblock since fixed in 3.14.3): `draw_side` works; its docblock is stale
 
+- **Re-checked at 3.14.3: the residue is closed too.** The entry was withdrawn because the field
+  worked; what it kept complaining about was the comment, and the comment is now right. 3.14.3
+  reads "Which faces of the geometry are drawn. Faces that are not drawn are culled, back faces
+  that are drawn are shaded with a flipped normal." (`ShadeMaterial.js:27-31`) — a description of
+  what the field does rather than of a limitation it no longer has. The paragraph below about what
+  a stale docblock costs a careful reader stands as written; it just no longer has this example.
 - **Status: withdrawn.** The original entry said `ShadeMaterial.draw_side` was a settable field
   that did nothing, quoted its docblock approvingly as the right way to document a non-functional
   property, and filed double-sided surfaces as unsupported. The docblock is out of date and I
@@ -1418,8 +1440,16 @@ the expensive way.
   surfaces in the consumer's own code rather than in the `.d.ts`. Related to GAP-001.
 - **Evidence:** `src/client/PhysicsWorld.ts`. Recorded during the physics swap.
 
-### GAP-014: `PhysicsSystem` needs a second system registered, and without it every body is intangible
+### GAP-014 (partly closed in 3.14.3): `PhysicsSystem` needs a second system registered, and without it every body is intangible
 
+- **Status: partly closed.** The first of the three fixes suggested below has landed.
+  `PhysicsSystem`'s class docblock now reads "NOTE: requires ColliderObserverSystem to be
+  registered together with this system." followed by `@see ColliderObserverSystem`
+  (`PhysicsSystem.js:117-119`). That is the half that matters most, because it puts the pairing in
+  front of the one class a consumer definitely opens. Still absent: the same `@see` on `Collider`,
+  the one-line warning for a `Collider` in a dataset with no observer, and a static
+  `PhysicsSystem.register(em)`. So the trap is now documented where it will be read, and is still
+  silent if you do not read it.
 - **Severity:** blocker -- the failure is total, silent, and presents as a bug in the consumer's own
   code.
 - **What happened:** 537 static bodies, built from a level's collision brushes, and every
@@ -1943,8 +1973,19 @@ is what `KinematicMover` does and what GAP-021 is about.
   `src/client/Effects.ts::mark`, `test/first-person.test.ts`, D-079. Found in phase 7, by being
   asked why there were no bullet holes.
 
-### GAP-024: a component-based application cannot turn on the two renderer features 3.3.0 shipped for it
+### GAP-024 (closed in 3.14.3): a component-based application cannot turn on the two renderer features 3.3.0 shipped for it
 
+- **Status: closed.** `GraphicsEngine` (the renamed `GraphicsEngine3`) now exposes
+  `get renderer()` — `GraphicsEngine.js:105`. All three things this entry wanted are reachable
+  through it: `feature_ssr_enabled`, `indirect_lighting_mode`, and a renderer to hand
+  `brick4_bake_for_scene`. The facade's docblock admits it in those terms and does not pretend the
+  line was not crossed: it is "the third, and much the widest: it hands the renderer straight out,
+  so everything the other two are shaped to avoid is reachable through it. It is an escape hatch
+  for callers that have no other route, not a migration target". So the answer went the other way
+  from the fix suggested below — an escape hatch rather than two forwarded properties — and the
+  entry closes either way, because the phase's lighting half is no longer blocked on reach. What
+  survives is the second finding at the bottom of this entry: SSR and Brick4 are still
+  alternatives rather than a stack.
 - **Needed:** `feature_ssr_enabled = true`, and `indirect_lighting_mode = ShadeIndirectLightingMode.Brick4` so a scene reads the volumetric lightmap it has been given. Also `brick4_bake_for_scene({scene, renderer, ...})`, which takes a renderer as an argument.
 - **meep offers:** all three, on `Renderer`. `GraphicsEngine3` constructs one privately (`GraphicsEngine3.js:572`) into a `#renderer` field and, by an explicit and well-argued design decision, never hands it out — its own docblock names the absence and counts the 44 callers a getter would have had. The sanctioned way in is a `RenderExtension`, whose `record(frame)` receives a `FrameContext` carrying `graph`, `view`, `phase` and `resolution` and no renderer; `GPUViewContext` exposes `camera` and `scene` and no renderer either. `EngineHarness.bootstrap({configuration})` configures the engine, not the renderer. No shipped system holds one: every one of them goes through an extension.
 - **Workaround:** none that is not a rewrite. An application can construct its own `Renderer` — the class is exported — and drive the same `Scene` through it, which would make the *bake* reachable. It would not make the *display* reachable, because the frame is drawn by the renderer inside the facade, and replacing that means abandoning `GraphicsEngine3` and with it `ShadedGeometrySystem3`, `LightSystem3`, `MeshSystem3`, `DecalSystem3`, `ParticleEmitterSystem3` and `AnimationSystem3`, all of which take the facade. Not attempted. The phase's lighting half is cut.
@@ -1988,15 +2029,22 @@ That is an accurate description of a component that cannot be used for its state
 - **Suggested fix:** either bind the hook on `addChild` rather than by traversal, or expose the attach so an application can call it after populating -- or both, since the second is the fix for load ordering and the first is the fix for late additions. A one-line assertion that the group is non-empty at attach time would have turned this from a silent failure into a startup warning.
 - **Evidence:** `node_modules/@woosh/meep-engine/src/engine/Engine.js:241,630`, `src/engine/options/OptionGroup.js:attachToStorage`, `src/client/ui/Settings.ts`, `test/settings.test.ts`
 
-### GAP-027: `pixelRatio` has an `onChanged` signal and nothing subscribed to it
+### GAP-027 (partly closed in 3.14.3): `pixelRatio` has an `onChanged` signal and nothing subscribed to it
 
+- **Status: partly closed.** The second half of this entry — "...which an application cannot reach
+  either", the complaint that `internal_resolution_scale` is behind a facade that hands out no
+  renderer — is closed by the `renderer` getter that closes GAP-024. A settings screen can now
+  reach the property the engine's own playground drives, through a sanctioned accessor rather than
+  by reaching around the facade into `dynamic_resolution`'s closures. The first half stands
+  unchanged: the constructor still binds `viewport.size.onChanged` and nothing else
+  (`GraphicsEngine.js:241`), so writing `pixelRatio` still does nothing until a resize.
 - **Needed:** a render-scale setting -- write `graphics.pixelRatio` and have the picture change.
 - **meep offers:** `GraphicsEngine3.pixelRatio` is a public `Vector1`, and `updateSize()` reads it (`const pixel_ratio = this.pixelRatio.getValue()`) to size the drawing buffer. A `Vector1` raises `onChanged` on every write.
 - **The gap:** the constructor binds `this.viewport.size.onChanged.add(this.updateSize, this)` and nothing binds `pixelRatio.onChanged`. So writing the ratio changes nothing until the window happens to be resized, which on a full-screen game is never. The first symptom is a setting that appears to do nothing and then works perfectly the moment the window is dragged.
 - **Workaround:** call `graphics.updateSize()` after writing the ratio — and then discover BUG-11, which is that `updateSize` throws for any ratio that is not a whole number. **Between the two, `pixelRatio` has no working use.** The port's render scale is `Renderer.internal_resolution_scale` instead, which floors internally, takes any positive number, and is upscaled back by the renderer's own TAA/NSS rather than by the browser stretching a smaller canvas — a better answer on quality grounds as well, and the one the engine's own playground presents as a percentage slider labelled "Scale" (`shade/playground/main.js:2637`).
 - **...which an application cannot reach either.** `GraphicsEngine3` hands out no renderer, and the only reference to that property outside `Renderer` is the pair of closures the facade assigns into the resolution controller (`GraphicsEngine3.js:260-262`). They are public properties on a public object, so calling `graphics.dynamic_resolution.set_scale(v)` is an API call rather than a monkey-patch — but they are the controller's plumbing, and using them as a settings screen's setter is reaching around a facade that deliberately hides what is behind them. It also makes the manual scale and the adaptive controller alternatives, since both write the same number; the menu greys each one out for the other.
 - **Severity:** papercut on its own; major together with BUG-11, because the pair removes the only sanctioned route to a resolution setting.
-- **Suggested fix:** one more `bindSignal` beside the one that is already there — both quantities feed the same computation and only one of them is live. And, separately, a `render_scale` property on the facade, forwarded to `internal_resolution_scale` the way `set_environment_map` is already forwarded. That is the same shape GAP-024 asks for and would settle both.
+- **Suggested fix:** one more `bindSignal` beside the one that is already there — both quantities feed the same computation and only one of them is live. And, separately, a `render_scale` property on the facade, forwarded to `internal_resolution_scale` the way `set_environment_map` is already forwarded. That is the same shape GAP-024 asks for and would settle both. *(3.14.3 settled the reach half of both, by exposing the renderer outright rather than by forwarding a property. A named `render_scale` would still be the better surface for a setting; the escape hatch means an application is no longer blocked without one.)*
 - **Evidence:** `node_modules/@woosh/meep-engine/src/engine/graphics3/GraphicsEngine3.js:209,227,260-262,691-693`, `src/shade/renderer/Renderer.js:394-435`, `src/client/ui/graphics.ts`, `test/settings.test.ts`
 
 ### GAP-028: `EngineHarness.addFpsCounter` returns nothing, so the panel it adds cannot be turned off
@@ -2322,7 +2370,9 @@ Observations that are not gaps — the facility exists and works — but cost ti
 - **~~`ShadeMaterial.draw_side` is the model to copy.~~ Withdrawn — it was the opposite.** I
   praised this field for a docblock that says it has no effect and spells out the workaround. The
   docblock is stale: `Front` and `Double` both work, and believing it cost the port double-sided
-  surfaces for its whole life (GAP-007). The two entries above and below this one are about
+  surfaces for its whole life (GAP-007). *(Fixed in 3.14.3 — the comment now describes what the
+  field does. The point below is about what a stale comment costs, and that is not undone by this
+  one being corrected.)* The two entries above and below this one are about
   documentation that is *right*; this one belongs with the `DESIGN.md` header instead, as
   documentation that is confidently wrong. A stale comment is worse than a missing one, because
   it is believed by exactly the reader who checks first.
@@ -3078,7 +3128,8 @@ The cost of this one is the clearest argument in the report for treating stale d
 defect: double-sided surfaces went unimplemented for the whole port on the strength of a comment,
 by a reader who checked before using the field. It was found only when a later pass questioned
 the note. `Back` is the value that genuinely misbehaves on a hand-built material, and the docblock
-does not say so. Filed, and withdrawn as a gap, as GAP-007.
+does not say so. Filed, and withdrawn as a gap, as GAP-007 — whose docblock 3.14.3 has since
+corrected.
 
 ### BUG-7 (fixed in 3.2.0): `raycast` reported an immediate hit for a ray starting inside a hull's AABB but outside the hull
 
@@ -3446,6 +3497,9 @@ to its `onChanged`, so even an integer ratio changes nothing until the window ha
 Between the two defects there is no usable route to an output-resolution scale, and the port's
 render scale is now `internal_resolution_scale` instead — reached, for want of anything else,
 through the closures `GraphicsEngine3` assigns into `DynamicResolutionScaling.set_scale`.
+*(3.14.3 gives the facade a public `renderer` getter, so that reach-around is no longer the only
+route — `graphics.renderer.internal_resolution_scale` is now a sanctioned call. The port has not
+been moved onto it. `pixelRatio` itself is unchanged and still inert.)*
 
 ### BUG-12: `StaticSceneBVH.raycast_nearest` and `.raycast` pass their arguments in the wrong order, and throw on every scene with geometry in it
 
@@ -4023,7 +4077,7 @@ is the counter-example, and it cost a feature.
 
 | | |
 |---|---|
-| meep | `@woosh/meep-engine@3.2.0` (peer dependency, never vendored). Findings recorded against 3.0.2 are dated as such; BUG-7 was fixed in 3.2.0. |
+| meep | `@woosh/meep-engine@3.14.3` (peer dependency, never vendored). Findings recorded against 3.0.2 and 3.2.0 are dated as such; BUG-7 was fixed in 3.2.0. The gap register was re-verified against 3.14.3 in full — see the status table at the top of section 3 for what closed. |
 | Node | v24.15.0 |
 | TypeScript | 5.9, `strict: true` |
 | Bundler | Vite 6 |
