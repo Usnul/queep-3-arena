@@ -9197,3 +9197,59 @@ points and bot goals; `Q_crandom` is untouched and still owns the spread itself 
 for no gain: what the wire needs is the pose, and a bot's pose is on `bot.pmove.ps` exactly as a
 slot's is on `slot.ps`. The cost is that a bot's `groundNormal` and jump latch go out as constants,
 which no client reads -- a remote character is drawn, not simulated.
+
+### D-171: joining a match in progress, and the loop that stands in for a number the packet already carries
+
+A client's session frame counter starts at 0. The host's is wherever the match has got to. Nothing
+in `engine/network` closes that gap, and the host is unforgiving about it: pending actions older
+than `sim_frame - frame_capacity + 1` are trimmed, so a client joining a host at frame 6,000 and
+tagging its inputs 0, 1, 2 has every one discarded -- **silently**. It moves on its own screen, it
+never moves on the host's, and no signal fires anywhere.
+
+The frustrating part is that the packet has the answer in it. INITIAL_SYNC carries the host's
+`frame_number`, `onInitialSync` is dispatched with it, and `NetworkSession`'s handler names the
+parameter `_frame_number` and ignores it. `#local_frame` is `#`-private with no accessor, so an
+application cannot set it either. GAP-042.
+
+**The workaround is the only lever a private field leaves:** tick the session forward with the input
+sampler silenced until its own counter catches up. No peer is connected yet, so the empty ack packet
+each step produces goes nowhere.
+
+**What it costs, measured rather than estimated**, because a loop that might run 28,801 times is
+worth a table:
+
+| host age | frames | calls | wall clock |
+|---|---:|---:|---:|
+| fresh | 0 | 1 | 0.1 ms |
+| 10 s | 600 | 81 | 0.3 ms |
+| 100 s | 6,000 | 801 | 3.0 ms |
+| 10 min | 36,000 | 4,801 | 12.3 ms |
+| 1 hour | 216,000 | 28,801 | 62.5 ms |
+
+`NETWORK_PLAN.md` §4.4 set 250 ms as the point at which the host should restart its frame count per
+match to cap the distance. An hour-old host costs a quarter of that, so **the host keeps one counter
+for its whole life** and the workaround stays a loop. A twelve-hour server would cost three quarters
+of a second, which is a real number and is the point at which this decision should be revisited
+rather than a reason to complicate it now.
+
+**The loop asks for eight frames a call and gets seven and a half**, which is D-167's six hundred
+picoseconds turning up a third time in a third subsystem: `8 * (1 / 60) * 1000` is
+133.33333333333331 and eight of the session's own periods is 133.33333333333333, so the
+accumulator falls one step short on every other call. It is why the call counts above are
+`age / 7.5` rather than `age / 8`, and it is asserted as such rather than left as a surprise.
+
+**A join is a burst and then a rate, and both are measured.** The first two seconds after joining a
+6,000-frame-old host cost about thirty reconciles; from five seconds on the rate is one per second,
+which is exactly the health bleed of D-170 and is the same rate a client that joined at frame zero
+pays. The burst has a cause rather than being noise: the client's first predicted frame loads the
+state INITIAL_SYNC delivered, which is several frames older than the frame being predicted, so the
+two disagree until the AUTH_STATE corrections have walked the client up to the present. Nothing
+compounds; the transient is bounded by the prediction lead.
+
+**And two clients joined three thousand frames apart see each other.** Each one's view of the other
+is the host's own numbers -- within 64 units, which is one frame of running -- because
+`OwnerAwareScope` on the host keeps a client's own slot out of its action stream (it gets AUTH_STATE
+instead) while sending it everybody else's, and `normalize_if_dirty` puts every remote component
+back to canonical at the end of a step so the comparison is against a value and not a render blend.
+The host's slot bookkeeping is asserted in the same file: two clients take slots 0 and 1, releasing
+one frees exactly that slot, and the host keeps running with a hole in the middle of its roster.

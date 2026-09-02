@@ -55,6 +55,8 @@ export interface RigClient {
     readonly hits: HitEventData[];
     readonly pickups: PickupEventData[];
     readonly predictedShots: number[];
+    /** What the frame-alignment workaround cost this client. See GAP-042. */
+    readonly align: { calls: number; milliseconds: number; target: number };
 }
 
 export interface RigOptions {
@@ -183,7 +185,9 @@ export class NetRig {
         */
         const lead = this.host.session.simulation_delay_ticks + 2;
         const target = Math.max(0, this.host.currentFrame + lead);
-        net.fastForward(target);
+        const alignStart = performance.now();
+        const calls = net.fastForward(target);
+        const align = { calls, milliseconds: performance.now() - alignStart, target };
 
         const hostSide = new LoopbackTransport();
         const clientSide = new LoopbackTransport();
@@ -201,6 +205,7 @@ export class NetRig {
             hits,
             pickups,
             predictedShots,
+            align,
         };
         this.clients.push(self);
 

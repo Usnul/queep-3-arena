@@ -779,7 +779,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 1 — protocol types | **done** |
 | 2 — `PlayerSlot` extraction, single-player unchanged | **done** |
 | 3 — headless host + client over loopback | **done** |
-| 4 — join in progress | not started |
+| 4 — join in progress | **done** |
 | 5 — WebSocket host, browser client | not started |
 | 6 — full match for every slot | not started |
 | 7 — latency, loss, bandwidth | not started |

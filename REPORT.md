@@ -2144,6 +2144,27 @@ That is an accurate description of a component that cannot be used for its state
 - **Severity:** minor as a gap and major as a missing feature: a jump pad on `oa_dm1` is how you reach half the map. Step 5 gives the host `PhysicsWorld.addMover` (or lifts the three body-building calls into a module both harnesses share) and this entry closes.
 - **Evidence:** `tools/pipeline/headless-physics.ts` (the model-0 comment), `src/server/Host.ts` (`buildPools`, the movers note), `src/net/components.ts` (`NetMover`)
 
+### GAP-042: a joining client's frame counter is never aligned to the host's, and there is no supported way to align it
+
+- **Needed:** joining a match in progress. The host is at frame 6,000; the client has to start tagging its inputs 6,006 rather than 0, or the host discards every one of them.
+- **meep offers:** everything except the number. INITIAL_SYNC is a complete world snapshot **and it carries the host's frame**: `NetworkPeer` writes `frame_number` into the packet and `onInitialSync` is dispatched with it, right there in the argument list.
+- **The gap is that the receiver drops it on the floor.** `NetworkSession`'s handler is `(_peer_id, session_token, _frame_number, buf, payload_end) => ...` — the frame is the third parameter and is named with a leading underscore. `#local_frame` is `#`-private, so an application cannot set it either; there is no `seek`, no constructor option, and no writable accessor. Meanwhile the far end is unforgiving: `ServerAuthoritativeServer.tick` trims pending actions older than `sim_frame - frame_capacity + 1`, so a client tagging frame 0 against a host at 6,000 has every input dropped **silently** — it moves on its own screen, never moves on the host's, and no signal fires. `onPendingActionDropped` covers the future-lead and capacity bounds, not this one.
+- **Workaround:** tick the session forward with the input sampler silenced until its own counter catches up, which is the only lever a `#private` field leaves. `NetClient.fastForward(target)` calls `session.tick(8 * period)` in a loop; no peer is connected yet, so the empty ack packets each step produces go nowhere.
+- **What the workaround costs, measured on `oa_dm1`:**
+
+  | host age | frames | calls | wall clock |
+  |---|---:|---:|---:|
+  | fresh | 0 | 1 | 0.1 ms |
+  | 10 s | 600 | 81 | 0.3 ms |
+  | 100 s | 6,000 | 801 | 3.0 ms |
+  | 10 min | 36,000 | 4,801 | 12.3 ms |
+  | 1 hour | 216,000 | 28,801 | 62.5 ms |
+
+  Against the 250 ms budget `NETWORK_PLAN.md` §4.4 set for "make the host restart its frame count per match instead", so the host keeps one counter for its whole life. The loop asks for eight frames a call and averages **seven and a half**, which is the same floating-point shortfall as D-167: `8 * (1 / 60) * 1000` is 133.33333333333331 and eight of the session's own periods is 133.33333333333333.
+- **Severity:** major. The failure is total for the feature (no late join at all), completely silent, and the fix is one line in a handler that already receives the value. Everything around it — the snapshot, the token, the ownership handshake, the input ring — works.
+- **Suggested fix:** honour `frame_number` in `#on_initial_sync` by seeding `#local_frame` from it plus a caller-supplied lead, or expose `session.seek_to_frame(n)` for callers that compute their own. Either removes the loop entirely.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/network/NetworkSession.js` (the `onInitialSync` subscription, `#local_frame`, `#simulate_one_step`), `orchestrator/ServerAuthoritativeServer.js:350-360` (the trim), `src/client/net/NetClient.ts` (`fastForward`), `test/net-join-late.test.ts`
+
 
 ## 4. Ergonomics
 
