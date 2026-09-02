@@ -8317,3 +8317,88 @@ chose — and pinning the old relationship, which fails. Neither is a test; what
 bolt's own two numbers, 400 lm and 150 units, which is what D-130 actually decided. The line comes
 back the day the flashes come back up or the bolt follows them down, and that is a decision for
 whoever is looking at the screen.
+
+### D-163: the flash where a shot lands is the weapon's colour, and a plasma bolt used to arrive orange
+
+Reported from the screen: a plasma impact lights the wall much warmer than anything else about
+the weapon. It did. Three lights live and die inside one plasma shot -- the muzzle flash, the
+bolt's own light in flight, and the flash where it lands -- and the first two are
+`0.6, 0.6, 1` because both read `muzzleFlash.ts`'s `flashDlightColor` table, which is
+`CG_RegisterWeapon`'s `case WP_PLASMAGUN` transcribed. The bolt's emissive surface reads the same
+line through `MissileView`'s `PLASMA_COLOR`. The third was not reading anything:
+`Effects.explosion` set `1, 0.72, 0.38` on every detonation in the game, whichever weapon arrived.
+
+`explosion` now takes the weapon and colours the flash from that one table. `Arena.explosion`
+already had the weapon in hand -- it has passed it to `impactMark` since the mark table was split
+out -- so the change at the call site is one argument.
+
+**The C's own evidence points at that table.** `CG_MissileHitWall` initialises `light = 0` and
+`lightColor = 1, 1, 0` above its switch, and exactly one arm assigns either: `WP_ROCKET_LAUNCHER`,
+at `light = 300` and `1, 0.75, 0`. That is `FLASHES.WP_ROCKET_LAUNCHER.color` to the digit. So for
+the single weapon Q3 has an opinion about the colour of an impact, reading the flash table *is*
+transcribing the C -- which is the argument for using it for the five it says nothing about,
+rather than authoring a second table of weapon colours beside the first. Two such tables drift;
+this line was the drift, and `muzzleFlashParticles` avoids it the same way.
+
+| weapon | `CG_MissileHitWall` | before | after | reach |
+| --- | --- | --- | --- | --- |
+| rocket launcher | `300`, `1, 0.75, 0` | `1, 0.72, 0.38` | **`1, 0.75, 0`** | 18.75 m |
+| grenade launcher | `300`, initialiser `1, 1, 0` | `1, 0.72, 0.38` | **`1, 0.7, 0`** | 23.44 m |
+| prox launcher | `300`, initialiser `1, 1, 0` | `1, 0.72, 0.38` | **`1, 0.7, 0`** | 23.44 m |
+| plasma gun | `light = 0` | `1, 0.72, 0.38` | **`0.6, 0.6, 1`** | 3.13 m |
+| BFG | `light = 0` | `1, 0.72, 0.38` | **`1, 0.7, 1`** | 18.75 m |
+| nailgun | `light = 0` | `1, 0.72, 0.38` | **`1, 0.75, 0`** | 15.63 m |
+| a death | not in the C at all | `1, 0.72, 0.38` | unchanged | 14.06 m |
+
+Six weapons rather than five: `stats.hitscan === true` is what makes a shot a ray, and the nailgun
+carries no `hitscan` field, so nails are missiles and land here with every other projectile. It
+also has no `splashRadius`, so `detonate`'s `?? 100` is what sizes its flash -- an oddity that
+predates this and is left alone.
+
+**Two of those rows are divergences and not transcriptions**, which is the part worth writing down
+rather than leaving to be rediscovered. The grenade and the prox mine *are* lit by the C and simply
+never assign a colour, so Q3 shows them the initialiser's `1, 1, 0` -- the same yellow a machinegun
+muzzle is, and a fallthrough rather than a decision about grenades. They now get the amber their own
+launcher throws. And the plasma gun, the BFG and the nailgun get no impact light at all in the C;
+this port lights every impact for the reason D-115 lights every muzzle, and once it does, it needs
+a per-weapon colour that Q3 declines to supply.
+
+**A death keeps the old orange.** `Arena.deathExplosion` is the one caller with no weapon to ask --
+nothing was fired -- so `DEATH_FLASH_COLOR` holds `1, 0.72, 0.38` and a body coming apart is still
+a fireball. That is also why the parameter is optional rather than nullable: it is absent in the
+same sense `normalQ3` is absent for a missile that stopped on a player.
+
+**Colour only.** `intensity`, `distance`, the 0.09 s life, the fireball and smoke emitters, the
+impact mark and the sound are all where they were. Against the previous fixed value, Rec. 709
+luminance of the colour vector moves -0.8% for the rocket, -5.5% for the grenade, +4.0% for the
+BFG and **-16.7%** for the plasma gun, which is the only row anyone will see as a brightness
+change and is the correct consequence of a blue light being blue.
+
+**What this does not fix, said plainly, because both will be reported eventually:**
+
+- **The fireball is still one warm ramp for all six weapons.** `explosion`'s particle layer runs
+  `1, 0.95, 0.7` -> `1, 0.5, 0.15` -> `0.4, 0.1, 0.05`, lives 0.18-0.35 s against the light's 0.09,
+  and is about a metre across at a plasma impact -- so it is the larger and longer-lived half of
+  what a player actually sees. It was left alone because the report was about the light and because
+  that ramp is not a function of `flashDlightColor`: no recipe recovers `1, 0.5, 0.15` from the
+  rocket's `1, 0.75, 0`, so tinting it per weapon is art direction across six weapons rather than a
+  table lookup, and it would move the rocket. The next report about a warm plasma impact is this.
+- **Brightness is per-explosion, not per-weapon.** 12,000 lm whatever detonated, so a plasma pop
+  with a 20-unit splash radius throws the same flux as a rocket with 120; only `distance` scales,
+  at `splashRadius * 5`. 12,000 lm is 955 cd, which is 955 lux at a metre against the 5.9 lux a
+  median `oa_dm1` fixture delivers at three (D-161's arithmetic), so the surface at the impact
+  point clips to white whatever the tint and the colour is read off the falloff around it. That is
+  why this fixes the complaint without making the flash read as dim, and it is also the number to
+  look at if a plasma impact still feels too big for what it did.
+
+**How it was checked, since it could not be looked at.** The preview browser cannot render this
+scene at all: its Chrome exposes no WebGPU immediate-data limit, so `ShaderDescriptor
+.validate_against_device` refuses every meep compute dispatch and `graphics.frameIndex` never
+leaves 0. So the flash was measured instead of photographed -- fire each weapon through
+`queep.arena.weapons.fire` in the live app, step `entityManager.simulate` and sample the `Light`
+components each frame for the one at 12,000 lm. That returns `0.6, 0.6, 1` at 3.125 m for the
+plasma gun, `1, 0.75, 0` at 18.75 m for the rocket, `1, 0.7, 0` at 23.4375 m for the grenade and
+`1, 0.7, 1` at 18.75 m for the BFG: the whole table, through the real
+`Weapons.detonate` -> `Arena.explosion` -> `Effects.explosion` path rather than a direct call.
+`muzzle-flash.test.ts` pins the same thing per weapon, and pins the two rows above that are this
+port's choice rather than the C's, so neither can be quietly undone.

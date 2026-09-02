@@ -566,6 +566,18 @@ const MISSILE_MARKS: Readonly<Record<string, ImpactMark>> = {
 const DEFAULT_MARK: ImpactMark = { texture: 'mark_hole', radiusQ3: 12 };
 
 /**
+ * The flash colour for a detonation that no weapon caused.
+ *
+ * {@link Effects.explosion}'s own number since it was written, and the colour
+ * every detonation used to get. It is now reached only by
+ * `Arena.deathExplosion`, which is the one caller with no weapon to ask -- a
+ * body coming apart is a fireball, nothing was fired, and there is no
+ * `flashDlightColor` behind it. Everything that *hit* something is coloured by
+ * what hit it.
+ */
+const DEATH_FLASH_COLOR: readonly [number, number, number] = [1, 0.72, 0.38];
+
+/**
  * A unit vector perpendicular to `n`, rotated `roll` radians about it.
  *
  * This is the `up` hint a look rotation needs, and rolling it is how a decal
@@ -750,8 +762,11 @@ export class Effects {
      * then call `CG_ImpactMark` with a mark chosen per weapon. Keeping it here
      * meant every detonation left a burn, and meant this function needed a
      * surface normal it otherwise had no use for and defaulted to straight up.
+     *
+     * `weapon` colours the flash, and is optional for the one caller that has
+     * none: a death is a detonation nothing fired. See {@link DEATH_FLASH_COLOR}.
      */
-    explosion(originQ3: ArrayLike<number>, radiusQ3: number): void {
+    explosion(originQ3: ArrayLike<number>, radiusQ3: number, weapon?: string): void {
         const [x, y, z] = toMeep(originQ3);
         const radius = radiusQ3 * WORLD_SCALE;
 
@@ -762,7 +777,42 @@ export class Effects {
         */
         const light = new Light();
         light.type.set(LightType.POINT);
-        light.color.setRGB(1, 0.72, 0.38);
+        /*
+         **The weapon's colour, not fire's.** This was a fixed warm
+         `1, 0.72, 0.38` for every detonation alike, which is why a *plasma* bolt
+         lit the wall it hit orange -- a weapon whose muzzle flash, whose bolt
+         and whose bolt-light are all `0.6, 0.6, 1`, because all three read the
+         one line of `CG_RegisterWeapon` that states a colour for it (see
+         `MissileView`'s `PLASMA_COLOR`). The impact was the last link in that
+         chain still guessing, and it guessed the far end of the spectrum.
+
+         `flashDlightColor` is the right table to ask even though it is named
+         for muzzles, because **the one impact colour Q3 ever chooses is that
+         weapon's own `flashDlightColor`, to the digit.** `CG_MissileHitWall`
+         initialises `light = 0` and `lightColor = 1, 1, 0` above its switch, and
+         exactly one arm overwrites either: `case WP_ROCKET_LAUNCHER`, at
+         `light = 300` and `1, 0.75, 0` -- which is
+         `FLASHES.WP_ROCKET_LAUNCHER.color` verbatim. So for the one weapon the C
+         has an opinion about, reading the flash table *is* transcribing the C.
+
+         It has no opinion about the other five this port sends through here. The
+         grenade and the prox mine are lit but assign no colour, so they take the
+         initialiser's yellow -- a fallthrough, not a decision about a grenade,
+         and the same `1, 1, 0` a machinegun's muzzle happens to be. The plasma
+         gun, the BFG and the nailgun get `light = 0` and no impact light at all.
+         Both of those cases are divergences this port had already made: it lights
+         every impact for the reason D-115 lights every muzzle -- an impact with
+         no light reads as an impact that did not happen -- and once it does, it
+         needs a colour per weapon that Q3 declines to give. That colour comes
+         out of the one table this port keeps of weapon colours rather than a
+         second one authored beside it, for the reason `muzzleFlashParticles`
+         gives: two tables of weapon colours drift, and this line was the drift.
+
+         See D-163, which has the whole table and the two things it does not fix.
+        */
+        const [r, g, b] =
+            weapon === undefined ? DEATH_FLASH_COLOR : muzzleFlashLight(weapon).color;
+        light.color.setRGB(r, g, b);
         /*
          12,000 lumens -- about eight household bulbs. The first attempt used
          60,000 on the reasoning that an explosion is bright, and it was: it

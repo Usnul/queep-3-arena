@@ -1258,3 +1258,98 @@ describe('every weapon OpenArena ships has a muzzle to be lit at', () => {
             .toBeCloseTo(flash.origin[0]!, 6);
     });
 });
+
+/*
+ * The third light that reads the same table, and the one that was not.
+ *
+ * `muzzleFlash.ts` says "one table so the two cannot drift apart", and the two
+ * are the gun in your hands and the gun in somebody else's. A shot has a third
+ * light at the far end of it -- the flash where it lands -- and that one was not
+ * reading the table at all: `Effects.explosion` lit every detonation in the game
+ * a fixed warm `1, 0.72, 0.38`. So a plasma bolt was blue at the muzzle, blue in
+ * flight, blue by `CG_RegisterWeapon`, and arrived orange.
+ *
+ * Not a colour invented for the impact, either. `CG_MissileHitWall` initialises
+ * `light = 0` and `lightColor = 1, 1, 0` above its switch and exactly one arm
+ * assigns either -- the rocket, `light = 300` and `1, 0.75, 0`, which is that
+ * weapon's `flashDlightColor` to the digit. That is the whole of Q3's evidence
+ * and it points at this table. For the other five the C either lights them and
+ * lets them keep the initialiser's yellow (grenade, prox mine) or does not light
+ * them at all (plasma, BFG, nailgun), and this port lights all six regardless,
+ * which is D-115's divergence arriving at the other end of the shot. See D-163.
+ */
+describe('an impact is lit the colour of the weapon that arrived', () => {
+    /** Every weapon this port sends through `Arena.explosion`. */
+    const PROJECTILES = [
+        'WP_ROCKET_LAUNCHER',
+        'WP_GRENADE_LAUNCHER',
+        'WP_PROX_LAUNCHER',
+        'WP_PLASMAGUN',
+        'WP_BFG',
+        'WP_NAILGUN',
+    ];
+
+    /** The one light a detonation raises, as three channels. */
+    function flashColor(weapon?: string): [number, number, number] {
+        const ecd = newDataset();
+        const effects = new Effects(ecd as never, new Shadows(null, 'off'));
+
+        // 20 is the plasma gun's `splashRadius`; nothing here reads the size.
+        effects.explosion([0, 0, 0], 20, weapon);
+
+        const { light } = onlyLight(ecd);
+        return [light.color.r, light.color.g, light.color.b];
+    }
+
+    /** The complaint, in the one weapon it was reported against. */
+    it('gives a plasma bolt the blue it was fired with', () => {
+        expect(flashColor('WP_PLASMAGUN')).toEqual([0.6, 0.6, 1]);
+    });
+
+    /*
+     And for every weapon that detonates, because a table read at one call site
+     and guessed at another is the failure this whole file exists about. Six of
+     them: `stats.hitscan === true` is what makes a shot a ray, and the nailgun
+     has no `hitscan` field at all, so nails are missiles and land here too.
+    */
+    it('agrees with the muzzle for every weapon that detonates', () => {
+        expect(
+            PROJECTILES.filter((w) => balance.weapons[w as keyof typeof balance.weapons]).length,
+            'the balance table stopped naming one of these'
+        ).toBe(6);
+
+        for (const weapon of PROJECTILES) {
+            const [r, g, b] = muzzleFlashLight(weapon).color;
+
+            expect(flashColor(weapon), `${weapon} lands a different colour than it leaves`).toEqual(
+                [r, g, b]
+            );
+        }
+    });
+
+    /** And for the one weapon the C states an impact colour for, it is the C's. */
+    it("is `CG_MissileHitWall`'s own `lightColor` for the rocket, which is the only arm that sets one", () => {
+        expect(flashColor('WP_ROCKET_LAUNCHER')).toEqual([1, 0.75, 0]);
+    });
+
+    /*
+     The grenade is where this diverges rather than transcribes, so it is pinned
+     rather than left to be discovered. `CG_MissileHitWall` lights it and never
+     assigns a colour, so the C's grenade explosion is the initialiser's `1, 1, 0`
+     -- the same yellow a machinegun muzzle is, and a fallthrough rather than a
+     choice about grenades. This port gives it the amber its own launcher throws.
+    */
+    it("gives the grenade its launcher's amber rather than the C's fallthrough yellow", () => {
+        expect(flashColor('WP_GRENADE_LAUNCHER')).toEqual([1, 0.7, 0]);
+    });
+
+    /*
+     A death is not a `CG_MissileHitWall`. Nothing was fired, so there is no
+     `flashDlightColor` to ask and the fireball keeps the colour a fireball had
+     before any of this -- see `Arena.deathExplosion`, which is the only caller
+     that passes no weapon.
+    */
+    it('keeps the fireball colour for a detonation nothing fired', () => {
+        expect(flashColor()).toEqual([1, 0.72, 0.38]);
+    });
+});

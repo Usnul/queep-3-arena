@@ -18,6 +18,14 @@
  * this light on the gun in your hands, and `Effects` puts one in the world for
  * everyone whose gun is not drawn. One table so the two cannot drift apart.
  *
+ * A third reads it at the far end of the shot. `Effects.explosion` colours the
+ * flash a detonation throws from `color` here, because the one impact colour
+ * `CG_MissileHitWall` ever chooses is that weapon's `flashDlightColor` verbatim
+ * -- the rocket's `1, 0.75, 0`, the only arm of that switch to assign one -- and
+ * because a fixed colour there was what made a plasma bolt blue at the muzzle,
+ * blue in flight and orange on arrival. The table is a weapon's colour; only its
+ * name is a muzzle's. See D-163.
+ *
  * **Total over strings, on purpose.** D-114's rule is that an outside string
  * becomes a `WeaponId` only through `isWeaponId`; there is no crossing to make
  * here because the C has a `default:` arm and so does this -- a weapon with no

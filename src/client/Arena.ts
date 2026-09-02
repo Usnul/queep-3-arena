@@ -382,7 +382,13 @@ export class Arena implements WeaponEvents {
         weapon: WeaponId,
         normalQ3?: ArrayLike<number>
     ): void {
-        this.effects.explosion(originQ3, radiusQ3);
+        /*
+         The weapon reaches the flash as well as the mark. It used to reach only
+         the mark, so every detonation in the game lit the wall the same warm
+         orange -- including a plasma bolt, whose muzzle, bolt and bolt-light are
+         all blue. See `Effects.explosion` and D-163.
+        */
+        this.effects.explosion(originQ3, radiusQ3, weapon);
 
         /*
          No surface, no mark. A missile that stopped on a player carries no
