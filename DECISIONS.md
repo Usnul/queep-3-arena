@@ -8959,3 +8959,74 @@ frame 6000 have to agree about what frame 6000 is worth without having agreed ab
 it, and only a closed form can do that. Sixty consecutive frames still sum to exactly 1000, at any
 starting frame, a million frames in -- asserted, because that is the property the whole timer layer
 rests on.
+
+### D-168: seven components, four actions, and one file that decides the order all three of them are in
+
+The protocol, and the four choices inside it that are not obvious.
+
+**Everything the shared step carries between frames is in `NetPlayerState`, including the four
+fields that are not in `playerState_t`.** `MoveState` -- `MeepMove`'s own record -- holds
+`groundNormal`, `jumpHeld`, `ducked` and `viewheight` outside `ps`, and `PlayerMovement` copies
+`ps` in, steps, and copies `ps` out around them. A rewind restores replicated components and
+nothing else, so any of those four left off the wire would survive a rollback *unchanged* while
+everything around it went back four frames, and the replay would run from a mixture of two
+different frames. That failure has no symptom except drift, which is the most expensive kind, so
+the component is defined by what the step reads and writes rather than by what Q3 puts in
+`playerState_t`.
+
+**Twelve weapons, not the plan's thirteen.** `balance.weaponOrder` has thirteen entries and
+`balance.weapons` has twelve: the odd one is `WP_GRAPPLING_HOOK`, which has no damage numbers,
+which `isWeaponId` therefore rejects, and which `PlayerController` has filtered out of the wheel
+since D-114 for exactly that reason. A wire slot for it would be two bytes of ammunition for a gun
+that cannot be held or fired. `NET_WEAPONS` is `WEAPON_ORDER.filter(isWeaponId)` -- derived, not
+retyped, so a weapon that gains numbers gains a wire slot without anyone editing a constant, which
+is the same rule the rest of the port applies to the balance tables.
+
+**The inventory is flattened, and that is what a `Set` and a `Map` cost on a wire.**
+`Inventory.ammo` is a `Record`, `weapons` a `Set` and `powerups` a `Map`: three iteration orders
+that are properties of pickup history rather than of the game. Two peers that picked the same items
+up in a different order would serialize the same inventory into different bytes. So ammunition is
+an array indexed by `NET_WEAPONS` and ownership is a `uint16` bitmask over the same list, and the
+`equals` that decides whether to republish compares numbers rather than collections.
+
+**An angle blend hands back a normalised angle, and the second wrap is the interesting half.**
+Shortest-path is the obvious part: without it a character walking past south spins a full circle,
+once, every time. The part worth writing down is that `BinaryInterpolationAdapter`'s docblock
+promises `t = 1` returns snapshot B, and a shortest-path lerp from 179.75 to -170 returns **190** --
+the same heading, a different number, not B. So the result is wrapped back into `[-180, 180)`,
+which costs two comparisons and makes the endpoint exact for any normalised input; and this port's
+input is always normalised, because an angle only reaches a component through
+`PM_UpdateViewAngles`, whose `SHORT2ANGLE` is in that range by construction. Found by asserting
+the contract rather than by reasoning about it: the first draft of the test failed on `t = 1` and
+was right to.
+
+**Discrete fields come from the newer snapshot, continuous ones lerp.** A death, a weapon change
+or a landing therefore arrives on the frame it happened rather than a frame late, at the cost of
+the opposite error -- the state changes at the *start* of the blend rather than the end. For a
+boolean at 60 Hz that is the better of the two, and there is no third option: the log holds two
+snapshots and a byte is one or the other.
+
+**Every action class is built per session by a factory, not shared.**
+`SimActionRegistry.register` writes `static type_id` onto the class object, so a class shared
+between two sessions in one process -- which is every test in `test/net/`, and both ends of the
+loopback rig -- has its id overwritten by whichever session started last, and the first session
+then decodes every packet as the wrong class. The engine does the same thing for its own
+`ReplaceComponentAction` and for the same reason. The factory pays for itself twice: it is also how
+`apply` reaches this peer's game objects without a module-level global.
+
+**`registerProtocol` is the only place any of the three orders is written.** Component wire order,
+action wire order and the dataset's component-type registration all happen in one function that
+both roles call, because nothing at runtime checks a peer's ordering against its own: a host that
+replicates `NetInventory` before `NetPlayerState` and a client that does the reverse exchange
+packets of exactly the right length and produce a player standing at coordinates made of health and
+armour. `test/net-protocol.test.ts` asserts that two independently constructed sessions come out
+with identical type ids, which is the only cheap check available -- the expensive one is a match
+that desyncs.
+
+Sizes, measured rather than estimated: `NetPlayerState` 70 B, `NetInventory` 33 B, `NetPlayerInfo`
+14 B with a five-character name, `NetMissile` 28 B, `NetItem` 3 B, `NetMover` 15 B, `NetMatch`
+10 B. AUTH_STATE concatenates all seven plus `NetworkIdentity` into the session's one 1024-byte
+scratch buffer, so the sum is the number that matters and it is 173 -- six times under. A name is
+truncated to 32 bytes at a **code-point** boundary rather than a code-unit one, because a lone
+surrogate half encodes as U+FFFD and a name cut mid-emoji would come back different on every peer,
+so `NetPlayerInfo.equals` would never settle and the component would republish for ever.
