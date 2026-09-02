@@ -8730,3 +8730,136 @@ branch. Reading the name after the loop is right whether or not the tokenizer is
 `materials.test.ts` pins both halves on synthetic sources -- so the failure is legible without the
 asset tree -- and then names the six real shaders, because "the parser recovers them" and "the
 parser recovers *these*" are different claims and only the second one fails when this regresses.
+
+### D-166: a detonation's colour is measured off Q3's artwork and its brightness goes with the square of its blast
+
+D-163 gave the impact flash the weapon's colour and named two things it did not fix. This is both
+of them. `Effects.explosion` answered two questions with one constant each, for every weapon alike:
+**12,000 lumens** of light, and **one warm particle ramp**. Both were authored against a rocket and
+neither said so, so a plasma bolt -- whose blast is a sixth of a rocket's across and whose every
+other colour is blue -- lit the room as hard as a rocket while throwing an orange fireball.
+
+## The fireball: Q3's hue, this port's brightness
+
+`CG_MissileHitWall` names a *different* explosion shader per weapon and the artwork is in the pk3s,
+so this is D-156's argument again -- the number is in the picture rather than in the C.
+`tools/extract-explosion-colors.ts` reads the **additive** stages of each shader, pools every lit
+texel, sorts by luminance and takes three bands as a chromaticity ramp. Additive-only is the
+like-for-like measurement (the port's fireball is one additive emitter) and it is also what keeps
+the rocket honest: `rocketExplosion`'s eight-frame `rlboom` `animmap` runs under
+`GL_ONE GL_SRC_ALPHA` and its last three frames are *smoke*, which this port draws separately and
+which would otherwise wash the measurement white.
+
+| weapon | shader | core | body | tail |
+| --- | --- | --- | --- | --- |
+| rocket launcher | `rocketExplosion` | 1, 0.60, 0.17 | 1, 0.41, 0.05 | 1, 0.20, 0.03 |
+| grenade launcher | `grenadeExplosion` | 1, 0.90, 0.48 | 1, 0.48, 0.24 | 1, 0.24, 0.08 |
+| prox launcher | `grenadeExplosion` | 1, 0.90, 0.48 | 1, 0.48, 0.24 | 1, 0.24, 0.08 |
+| plasma gun | `plasmaExplosion` | 0.62, 0.88, 1 | 0.39, 0.77, 1 | 0.29, 0.70, 1 |
+| BFG | `bfgExplosion` | 0.64, 1, 0.35 | 0.48, 1, 0.16 | 0.37, 1, 0.07 |
+
+**Only the hue is measured.** How bright a fireball is over its life stays the port's, for GAP-011's
+reason: photometric plausibility and reading well are different questions, and a ramp tuned against
+the screen is an answer to the second. So `Effects.fireballTrack` carries each measured
+chromaticity to the **luminance** the tuned ramp had at that stop -- scaling it down when it is
+already brighter, and adding white when it is not, because a chromaticity normalised to a top
+channel of 1 cannot be scaled up and because adding white is what stacking additive passes
+physically does. Q3 lays four over `rocketExplosion` and its centre clips white while no single
+texture in it is.
+
+Going through luminance rather than top channel is the part that matters: it makes a blue fireball
+and an orange one *equally bright*, which is what the tuned ramp was tuned to be. Matching top
+channels would have made the plasma gun's blue -- which carries almost no luminance -- far the
+brightest thing in the room.
+
+**The calibration is the rocket.** Nothing forces a measured ramp to agree with a hand-tuned one,
+and that it does for the weapon the hand-tuned one was authored against is the whole evidence that
+the measurement picks up what an eye picked up:
+
+| stop | tuned by eye | measured, at the tuned luminance |
+| --- | --- | --- |
+| core | 1, 0.95, 0.70 | 1, 0.934, 0.862 |
+| body | 1, 0.50, 0.15 | 1, 0.496, 0.189 |
+| tail | 0.40, 0.10, 0.05 | 0.448, 0.090, 0.013 |
+
+Body and tail land within 0.05 of a channel. The core disagrees by 0.16 of blue and both are a
+near-white hot centre, so that is not a colour anyone can name. `explosion.test.ts` pins all of it,
+which is what a later change to the band cuts has to face -- **and the band cuts are a choice, not
+a canon.** The brightest 1% and the brightest 5% of a glow are genuinely different colours; across
+that range the rocket's core moves 0.09 in blue and the grenade's 0.16 in green. What makes these
+three cuts defensible is that they are the same three for every weapon and that they reproduce the
+rocket. Claiming they were insensitive would have been easy and was checked and false.
+
+**Two detonations keep the tuned ramp whole**, because Q3 painted no picture for them: a nail, whose
+arm leaves `mod` at zero so the C draws it no explosion at all, and a death, which is not in the C
+anywhere. Borrowing another weapon's colours for them would be the same guess this replaces.
+
+**The BFG is now green where it detonates and magenta where it flashes**, and that is id's doing
+rather than a loose end: `bfgfiar` is a green burst and `CG_RegisterWeapon` gives the weapon
+`MAKERGB( flashDlightColor, 1, 0.7f, 1 )`. Each number is used where id used it. Anyone who wants
+them agreeing now has both written down next to each other.
+
+## The flash: flux goes with the square of the radius
+
+12,000 lm was the flux of *every* detonation, so a plasma bolt with a 20-unit splash radius threw as
+much light as a rocket with 120 -- 955 lux a metre out, against the 5.9 lux a median `oa_dm1`
+fixture delivers at three (D-161's arithmetic). It clipped every nearby surface to white whatever
+colour it was, which is why D-163 could correct that flash's hue and still leave it reading as a hot
+orange blowout.
+
+`explosionLumens` is `12,000 * (radius / 120)^2`. Two ways of seeing why the square:
+
+- a fireball radiates from its surface, and a sphere's area goes with the square of its radius, so
+  holding exitance fixed and growing the ball gives exactly this;
+- the reach is `radius * 5`, so illuminance at the edge of a flash is `flux / (4 pi (5 r)^2)` --
+  **constant under this rule and under no other.** Every explosion is then as bright as every other
+  *at its own scale*, and what the weapon changes is how much of the room it fills. That invariant
+  is the assertion in `explosion.test.ts`, not the six numbers.
+
+| weapon | blast | was | now | reach |
+| --- | --- | --- | --- | --- |
+| grenade / prox launcher | 150 | 12,000 lm | 18,750 lm | 23.44 m |
+| rocket launcher | 120 | 12,000 lm | **12,000 lm** | 18.75 m |
+| BFG | 120 | 12,000 lm | 12,000 lm | 18.75 m |
+| a death | 90 | 12,000 lm | 6,750 lm | 14.06 m |
+| plasma gun | 20 | 12,000 lm | 333 lm | 3.13 m |
+| nailgun | 12 | 12,000 lm | 120 lm | 1.88 m |
+
+**The rocket does not move, by construction**, and that is deliberate rather than lucky:
+`muzzleFlash.ts` scales its entire lumens column against "the explosion's 12,000 lm" and D-160 and
+D-161 each halved that column against the same reference. Moving the rocket would have silently
+moved the meaning of twelve muzzle flashes. Both of those files now say the 12,000 is a rocket's.
+
+**A plasma impact lands at 333 lm**, beside the 385 lm muzzle flash that launched it and the 400 lm
+the bolt carries in flight. Three lights in one shot's life, within a fifth of each other rather
+than a factor of thirty -- and, since D-163, all three the same colour.
+
+## The nailgun's blast radius was a fiction, and the rule made it matter
+
+`Weapons.detonate` sized every detonation by `stats.splashRadius ?? 100`, and `WP_NAILGUN` is the
+one projectile in the game with no splash radius -- a nail is a dart. So every nail striking a wall
+raised a 100-unit detonation: a three-metre fireball, its smoke, and a light reaching as far. That
+was merely oversized while the flash was a flat 12,000 lm. Under a rule that reads brightness off
+the radius, a made-up radius is a made-up brightness, and 100 would have made a nail the
+second-brightest impact in the game.
+
+The fallback is now 12, which is `CG_MissileHitWall`'s own number for this weapon -- `case
+WP_NAILGUN` sets `radius = 12` for the mark and leaves `mod` at zero. Damage is untouched and was
+never read from here: the splash arithmetic falls back to 0 separately, so a weapon with no blast
+still does no blast damage. This is the presentation's number alone, and `missiles.test.ts` fires a
+burst into a wall and asserts it.
+
+## What was checked, and what still needs eyes
+
+The preview browser cannot render this scene -- its Chrome exposes no WebGPU immediate-data limit,
+so `ShaderDescriptor.validate_against_device` refuses every meep compute dispatch and
+`graphics.frameIndex` never leaves 0. So this was measured rather than photographed, through the
+real `Weapons.detonate` -> `Arena.explosion` -> `Effects.explosion` path in the live app: fire each
+weapon, step `entityManager.simulate`, and read the `Light` and the fireball emitter's own colour
+track back off the components. Every row of both tables above came back as written, including the
+nail at 120 lm and 1.875 m and the death explosion at 6,750 lm in its unchanged `1, 0.72, 0.38`.
+
+What that does not settle is whether it *looks* right, and two things are worth a look before they
+are trusted. The plasma fireball's top channel is 0.82 rather than 1.0, because equal luminance in a
+blue costs peak; and the smoke emitter is still achromatic grey for all six weapons, which is
+defensible for anything that leaves a scorch mark but was never argued.

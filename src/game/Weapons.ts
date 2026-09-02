@@ -366,6 +366,16 @@ const t_hit = vec3();
 const t_barrel = vec3();
 const trace = createTrace();
 
+/**
+ * How big a detonation is when the weapon has no blast at all.
+ *
+ * `CG_MissileHitWall`'s `case WP_NAILGUN: radius = 12`, which is the size of the
+ * mark it leaves; the same arm leaves `mod` at zero, so Q3 draws no explosion
+ * for a nail and this is the only size statement it makes about one. See
+ * `detonate`, and D-166 for why the number this replaced mattered.
+ */
+const NO_SPLASH_RADIUS_Q3 = 12;
+
 export class WeaponSystem {
     private readonly cm: ClipMap;
     private readonly events: WeaponEvents;
@@ -754,7 +764,37 @@ export class WeaponSystem {
         const stats = weaponStats(projectile.weapon);
 
         this.events.projectileGone(projectile);
-        this.events.explosion(atQ3, stats.splashRadius ?? 100, projectile.weapon, surfaceQ3);
+        /*
+         The blast's own radius, and for a weapon with no blast the size of the
+         hole it leaves.
+
+         The fallback used to be 100, which is a number no weapon has and nothing
+         chose. `WP_NAILGUN` is the only projectile in the game with no
+         `splashRadius` -- a nail is a dart that damages what it hits -- so every
+         nail striking a wall raised a 100-unit detonation: a three-metre
+         fireball, its smoke, and a light reaching the same distance. That was
+         merely oversized while the flash was a flat 12,000 lm whatever
+         detonated. Since D-166 the flash scales with this radius, so a made-up
+         radius is a made-up brightness, and the fiction had to go before the
+         rule could be honest: 100 would have made a nail the second-brightest
+         impact in the game.
+
+         12 is `CG_MissileHitWall`'s own answer for this weapon -- `case
+         WP_NAILGUN` sets `radius = 12` and leaves `mod` at zero, so Q3 sizes a
+         nail's mark at 12 units and draws it no explosion whatsoever. This port
+         detonates nails because every missile goes down one path; taking the C's
+         radius makes that path draw something the size of what Q3 drew.
+
+         Damage is not read from here and never was: the splash arithmetic below
+         falls back to 0, so a weapon with no blast does no blast damage. This is
+         the presentation's number alone.
+        */
+        this.events.explosion(
+            atQ3,
+            stats.splashRadius ?? NO_SPLASH_RADIUS_Q3,
+            projectile.weapon,
+            surfaceQ3
+        );
 
         if (directHit !== null) {
             this.damage(directHit, stats.damage);

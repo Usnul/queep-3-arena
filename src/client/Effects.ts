@@ -53,6 +53,7 @@ import {
     MUZZLE_FLASH_SECONDS,
 } from './muzzleFlash.ts';
 import { coreWidthQ3, type MeasuredEffect } from './effectWidth.ts';
+import explosionColors from './explosionColors.generated.json' with { type: 'json' };
 import { makeHelixStroke } from './helixStroke.ts';
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
@@ -578,6 +579,179 @@ const DEFAULT_MARK: ImpactMark = { texture: 'mark_hole', radiusQ3: 12 };
 const DEATH_FLASH_COLOR: readonly [number, number, number] = [1, 0.72, 0.38];
 
 /**
+ * The fireball ramp this port authored by eye, and still the source of how
+ * bright a detonation is over its life.
+ *
+ * RGBA at {@link FIREBALL_TIMES}. Its *hue* is no longer used for the five
+ * weapons `explosionColors.generated.json` has a measurement for -- see
+ * {@link fireballTrack} -- but its **luminance** is used for all of them, and it
+ * is the whole ramp for a detonation with no picture behind it: a nail, which Q3
+ * draws no explosion for at all, and a death, which is not in the C anywhere.
+ *
+ * That split is GAP-011's. Photometric plausibility and reading well are
+ * different questions; how bright a particle is over 350 ms answers the second
+ * and belongs to whoever is looking at the screen. What colour a rocket's
+ * fireball is happens to be painted in the pk3, so it is measured instead.
+ */
+const TUNED_FIREBALL: readonly (readonly [number, number, number, number])[] = [
+    [1, 0.95, 0.7, 1],
+    [1, 0.5, 0.15, 0.9],
+    [0.4, 0.1, 0.05, 0],
+];
+
+/**
+ * Where those three stops sit in a particle's life.
+ *
+ * Parallel to {@link TUNED_FIREBALL} and has to stay the same length as it: the
+ * emitter takes positions and data as two arrays. `explosion.test.ts` reads both
+ * back off a built emitter, so a stop added to one and not the other fails there
+ * rather than silently truncating a ramp.
+ */
+const FIREBALL_TIMES: readonly number[] = [0, 0.3, 1];
+
+/**
+ * Rec. 709, the same weighting `extract-explosion-colors.ts` measures with.
+ *
+ * The two have to agree, or the substitution below is not brightness-preserving
+ * -- which is the one property that makes swapping a hue into a tuned ramp safe.
+ */
+function luminance(c: readonly [number, number, number]): number {
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+
+/**
+ * `hue` carried to `target` luminance, the way an additive stack gets there.
+ *
+ * `hue` arrives normalised to a top channel of 1, so there are two directions
+ * and only one of them is a scale:
+ *
+ *   - **Darker than the hue already is**: scale it. A dimmer fireball is the
+ *     same colour with less of it.
+ *   - **Brighter**: it cannot be scaled, because a channel is already at 1. Add
+ *     white until the luminance is reached, which is what stacking additive
+ *     passes physically does -- Q3 lays four over `rocketExplosion` and the
+ *     centre clips to white while no single texture in it is white.
+ *     `L(lerp(c, white, k))` is `(1 - k) L(c) + k`, so `k` is solved rather than
+ *     searched for.
+ *
+ * Going through luminance rather than scaling channels is what makes a blue
+ * fireball and an orange one read as *equally bright*, which is what the tuned
+ * ramp was tuned to be. Matching top channels instead would make the plasma
+ * gun's blue -- which carries almost no luminance -- far the brightest thing in
+ * the room.
+ */
+function atLuminance(
+    hue: readonly [number, number, number],
+    target: number
+): [number, number, number] {
+    const own = luminance(hue);
+
+    if (target <= own) {
+        const k = own === 0 ? 0 : target / own;
+
+        return [hue[0] * k, hue[1] * k, hue[2] * k];
+    }
+
+    // No division by zero: this arm has `own` strictly below `target`, and every
+    // target comes from `TUNED_FIREBALL`, whose brightest stop is 0.943.
+    const k = (target - own) / (1 - own);
+
+    return [hue[0] + (1 - hue[0]) * k, hue[1] + (1 - hue[1]) * k, hue[2] + (1 - hue[2]) * k];
+}
+
+/** One weapon's measured explosion, as `extract-explosion-colors.ts` writes it. */
+interface ExplosionColor {
+    readonly core: number[];
+    readonly body: number[];
+    readonly tail: number[];
+}
+
+const EXPLOSION_COLORS = explosionColors.explosions as Readonly<Record<string, ExplosionColor>>;
+
+/**
+ * The fireball's colour track: Q3's hue at this port's brightness.
+ *
+ * Three stops, and for a weapon with a row in the generated table each one is
+ * that band's measured chromaticity carried to the luminance
+ * {@link TUNED_FIREBALL} has at the same stop. So the ramp keeps the shape that
+ * was tuned against the screen -- a near-white core, a saturated body, a dark
+ * tail that fades out -- and stops asserting that every weapon in the game burns
+ * orange. A plasma impact is `plasmaExplosion`'s blue, a BFG's is
+ * `bfgExplosion`'s green, and a rocket's comes back within 0.05 of a channel of
+ * the ramp it was authored as, which is the check that the substitution is sound
+ * rather than merely different.
+ *
+ * **Two detonations have no row and take the tuned ramp whole.** A nail, because
+ * `CG_MissileHitWall` leaves `mod` at zero for `WP_NAILGUN` and draws it no
+ * explosion at all -- there is no picture to measure, and borrowing another
+ * weapon's would be the same guess this replaces. And a death, which has no
+ * weapon behind it.
+ */
+function fireballTrack(weapon: string | undefined): number[] {
+    const measured = weapon === undefined ? undefined : EXPLOSION_COLORS[weapon];
+
+    const data: number[] = [];
+
+    for (const [index, stop] of TUNED_FIREBALL.entries()) {
+        const tuned: [number, number, number] = [stop[0], stop[1], stop[2]];
+
+        const band =
+            measured === undefined
+                ? undefined
+                : ([measured.core, measured.body, measured.tail][index] as number[]);
+
+        const rgb =
+            band === undefined
+                ? tuned
+                : atLuminance([band[0]!, band[1]!, band[2]!], luminance(tuned));
+
+        data.push(rgb[0], rgb[1], rgb[2], stop[3]);
+    }
+
+    return data;
+}
+
+/**
+ * The rocket's `splashRadius`, and the detonation the 12,000 lm was chosen for.
+ *
+ * 12,000 is the number `muzzleFlash.ts` scales its whole column against and the
+ * one D-160 and D-161 measured two cuts of that column against, so it stays
+ * exactly where it is -- *for a rocket*. What changed is that it used to be the
+ * flux of every detonation alike, so a plasma bolt with a 20-unit splash radius
+ * lit the room as hard as a rocket with 120.
+ */
+const FLASH_REFERENCE_RADIUS_Q3 = 120;
+const FLASH_REFERENCE_LUMENS = 12000;
+
+/**
+ * How much light a detonation of this size throws, in lumens.
+ *
+ * **Flux goes with the square of the radius**, which is the one rule that scales
+ * the family without re-tuning six numbers by hand. Two ways of seeing why it is
+ * that power and not another:
+ *
+ *   - a fireball radiates from its surface, and a sphere's area goes with the
+ *     square of its radius, so holding exitance fixed and growing the ball gives
+ *     exactly this;
+ *   - the flash's reach is `radius * 5`, so illuminance at the edge of it is
+ *     `flux / (4 pi (5 r)^2)` -- constant under this rule and under no other.
+ *     Every explosion is then as bright as every other *at its own scale*, and
+ *     what the weapon changes is how much of the room it fills.
+ *
+ * Against the fixed 12,000 that was here, a rocket does not move by
+ * construction, a grenade rises to 18,750 because its blast really is bigger,
+ * and a plasma bolt falls to 333 -- which lands it beside the 385 lm muzzle
+ * flash that launched it and the 400 lm the bolt carries in flight
+ * (`MissileView`). Three lights in one shot's life, within a fifth of each other
+ * rather than a factor of thirty.
+ */
+function explosionLumens(radiusQ3: number): number {
+    const scale = radiusQ3 / FLASH_REFERENCE_RADIUS_Q3;
+
+    return FLASH_REFERENCE_LUMENS * scale * scale;
+}
+
+/**
  * A unit vector perpendicular to `n`, rotated `roll` radians about it.
  *
  * This is the `up` hint a look rotation needs, and rolling it is how a decal
@@ -814,14 +988,27 @@ export class Effects {
             weapon === undefined ? DEATH_FLASH_COLOR : muzzleFlashLight(weapon).color;
         light.color.setRGB(r, g, b);
         /*
-         12,000 lumens -- about eight household bulbs. The first attempt used
-         60,000 on the reasoning that an explosion is bright, and it was: it
-         saturated every surface in the corridor to white and hid the particle
-         effect it was supposed to be lighting. Photometric units make
+         12,000 lumens for a rocket -- about eight household bulbs. The first
+         attempt used 60,000 on the reasoning that an explosion is bright, and it
+         was: it saturated every surface in the corridor to white and hid the
+         particle effect it was supposed to be lighting. Photometric units make
          "physically plausible" and "reads well" different questions, and this is
          the second one.
+
+         **"For a rocket" is the part that is new**, and until D-166 there was no
+         such qualifier: 12,000 lm was the flux of every detonation in the game,
+         so a plasma bolt whose blast is 20 units across threw as much light as a
+         rocket whose blast is 120. Only `distance` scaled, which made a plasma
+         impact a rocket's worth of light crammed into a tenth of the room -- 955
+         lux a metre out, against the 5.9 lux a median `oa_dm1` fixture gives at
+         three (D-161's arithmetic). It clipped to white whatever colour it was
+         set to, which is why D-163 could correct the *hue* of that flash and
+         still leave it reading as a hot orange blowout.
+
+         `explosionLumens` is the rule and states its own derivation. The number
+         here is untouched for the weapon it was chosen against.
         */
-        light.intensity.set(12000 / (4 * Math.PI));
+        light.intensity.set(explosionLumens(radiusQ3) / (4 * Math.PI));
         light.distance.set(radius * 5);
         /*
          The one effect light worth the atlas slot: it is bright, it is large,
@@ -837,7 +1024,15 @@ export class Effects {
         lightEntity.add(lightTransform).add(light).build(this.ecd);
         this.expire(lightEntity.id, 0.09);
 
-        // Fireball: additive, fast, shrinking.
+        /*
+         Fireball: additive, fast, shrinking -- and Q3's colour since D-166.
+
+         `fireballTrack` is where the argument lives: the *hue* of these three
+         stops is measured off the artwork `CG_MissileHitWall` names for this
+         weapon, and their *brightness* is the ramp this port tuned by eye. Until
+         then the whole ramp was that tuned one, which had been authored against
+         a rocket and then handed to a plasma bolt and a BFG shot as well.
+        */
         this.emitter(
             [x, y, z],
             {
@@ -859,12 +1054,7 @@ export class Effects {
                         particleSpeed: { min: radius * 1.5, max: radius * 4 },
                         parameterTracks: [
                             track(SCALE, 1, [0, 0.25, 1], [0.35, 1.0, 0.15]),
-                            track(
-                                COLOR,
-                                4,
-                                [0, 0.3, 1],
-                                [1, 0.95, 0.7, 1, 1, 0.5, 0.15, 0.9, 0.4, 0.1, 0.05, 0]
-                            ),
+                            track(COLOR, 4, [...FIREBALL_TIMES], fireballTrack(weapon)),
                         ],
                     },
                 ],

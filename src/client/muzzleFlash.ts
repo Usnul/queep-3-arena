@@ -84,7 +84,12 @@ const DEFAULT_FLASH: MuzzleFlashLight = { color: [1, 1, 1], reachQ3: 300, lumens
  *   its reach differs. Photometric units make "physically plausible" and "reads
  *   well" different questions (GAP-011), and this column is the second one --
  *   scaled to the muzzle blast the weapon looks like it should have, against the
- *   explosion's 12,000 lm as the bright end of the scale. The whole column has
+ *   explosion's 12,000 lm as the bright end of the scale -- which since D-166 is
+ *   the *rocket's* 12,000 rather than every detonation's, the flash a detonation
+ *   throws now going with the square of its blast radius. The rocket is the row
+ *   that did not move, so the comparison this column was built on is the same
+ *   comparison; a grenade is now brighter than it and a plasma impact is a
+ *   thirty-sixth of it. The whole column has
  *   come down three times on the same complaint, and every time as one factor
  *   over the whole table rather than twelve separate judgements: 30% after the
  *   first set was seen in play, halved in D-160, and halved again in D-161 when

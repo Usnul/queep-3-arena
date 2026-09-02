@@ -195,7 +195,9 @@ const PLASMA_LUMINANCE = 300;
  * Q3 gives this weapon no `missileDlight` at all -- only the rocket (200) and
  * the BFG light their own flight -- so there is nothing to transcribe and the
  * question is what a travelling light should cost. `muzzleFlash.ts` set the
- * scale it was chosen against: 12,000 lm for an explosion, 1,540 for this gun's
+ * scale it was chosen against: 12,000 lm for an explosion -- a *rocket's* since
+ * D-166, which scaled that flux by the square of the blast radius and left the
+ * rocket where it was -- 1,540 for this gun's
  * muzzle pop, and 560 for the gauntlet, the dimmest of the three flashes that
  * light *continuously* rather than pulsing.
  *

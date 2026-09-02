@@ -549,6 +549,33 @@ describe('the nailgun', () => {
         expect(stats.splashRadius ?? 0).toBe(0);
     });
 
+    /*
+     A nail has no blast, so the size of its detonation is not a blast radius --
+     and for a long time it was 100, a number no weapon has and nothing chose.
+     That was merely oversized while every detonation threw a flat 12,000 lm;
+     since D-166 the flash scales with this radius, so a made-up radius is a
+     made-up brightness and 100 would have made a nail the second-brightest
+     impact in the game. 12 is `CG_MissileHitWall`'s own answer for `WP_NAILGUN`,
+     the size of the mark it leaves, on the arm that draws it no explosion at all.
+    */
+    it('detonates a nail at the size of the hole it leaves, not at a blast it has none of', async () => {
+        const r = await rig();
+
+        const from: Vec3 = vec3(spawn[0]!, spawn[1]!, spawn[2]! + 40);
+
+        r.weapons.fire('WP_NAILGUN', from, vec3(0, 0, 0), 999, 1);
+        r.step(400);
+
+        const nails = r.board.explosions;
+
+        expect(nails.length, 'no nail reached a wall').toBeGreaterThan(0);
+
+        for (const nail of nails) {
+            expect(nail.weapon).toBe('WP_NAILGUN');
+            expect(nail.radius, 'a dart raising a three-metre fireball').toBe(12);
+        }
+    });
+
     it('fires fifteen nails from one trigger pull', async () => {
         const r = await rig();
 
