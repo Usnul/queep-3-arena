@@ -616,11 +616,26 @@ cost and print it.
   `PickupSystem`/`BotSystem`/`WorldEffectSystem`; the systems of §3.3. `expose()` adds `net`.
 - Refuse cleanly on the console: version mismatch, server full, socket closed.
 
-*Exit:* two tabs in the preview browser (`tabs_create`) on `?map=oa_dm1&join=ws://localhost:5300`
-against `npm run host -- --map oa_dm1 --bots 2`: each tab's `window.queep.net.reconcileCount`
-stays flat while standing still, and a screenshot of tab A shows tab B's character where tab B's
-HUD says it is. The dev-server plugin needs nothing new (a WebSocket to another port is not subject
-to COEP).
+**Half of this is done. The host half.** `src/server/wsHost.ts`, `tools/host.ts` and
+`npm run host` all exist and are exercised end to end over a real socket by
+`test/net-websocket.test.ts` -- the hello, the refusals, slot release on close, and a Node client
+driving a `WebSocketTransport` whose input the host acts on (D-172). What is **not** built is the
+browser branch: `?join=` in `src/app/main.ts`, and the systems of §3.3 in place of
+`PlayerSystem`/`CombatSystem`/`PickupSystem`/`BotSystem`/`WorldEffectSystem`.
+
+**And the exit criterion below cannot be met by step 5 as written**, which is a mistake in this plan
+rather than in the code. "A screenshot of tab A shows tab B's character where tab B's HUD says it
+is" needs remote characters placed from `NetPlayerState`, `legsFor` from replicated velocity, and a
+HUD fed from `NetInventory` -- and every one of those is listed under **step 6**, "presentation of
+remote state". Step 5 can honestly end at "two tabs connect, neither throws, and each one's own
+player moves under its own input"; the screenshot of one player seeing another belongs to step 6 and
+should move there when this is picked up.
+
+*Exit (revised):* `npm run host -- --map oa_dm1 --bots 2`, then two tabs in the preview browser on
+`?map=oa_dm1&join=ws://localhost:5300`: both connect, both report `window.queep.net.synced`, each
+tab's `reconcileCount` stays flat while standing still, and the console is clean. The dev-server
+plugin needs nothing new (a WebSocket to another port is not subject to COEP). Seeing *each other*
+is step 6's exit.
 
 ### Step 6 — everything a match does, for every slot
 
@@ -780,7 +795,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 2 — `PlayerSlot` extraction, single-player unchanged | **done** |
 | 3 — headless host + client over loopback | **done** |
 | 4 — join in progress | **done** |
-| 5 — WebSocket host, browser client | not started |
+| 5 — WebSocket host, browser client | host, CLI and socket test **done**; browser `?join=` branch not started |
 | 6 — full match for every slot | not started |
 | 7 — latency, loss, bandwidth | not started |
 | 8 — robustness | not started |
