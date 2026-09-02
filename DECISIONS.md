@@ -9102,3 +9102,98 @@ built it for: `trap_Milliseconds` cited `src/client/PlayerController.ts::serverT
 `serverTime` had moved. It now cites `PlayerSlot.ts::timeMs` and `protocol.ts::frameMsec`, and the
 note says what the command time is now and why a replayed frame gets the millisecond it got the
 first time.
+
+### D-170: the host frame, and the four bugs between "it compiles" and 600 frames bit-exact
+
+A dedicated host (`src/server/Host.ts`) is `test/match.test.ts`'s arrangement -- collision, items,
+waypoints, bots, weapons, missiles, damage queries, headless on the shipping backend -- plus a
+`NetworkSession` in host role. A client (`src/client/net/NetClient.ts`) is a session, one
+`PlayerSlot` predicted forward, and a pool for the host's world. `test/net/rig.ts` runs both in one
+process over `LoopbackTransport`, which queues bytes and delivers them only when told to, so a
+whole netcode is a unit test with no timers and no sockets.
+
+**The result, measured: 600 of 600 frames bit-exact, worst position divergence 0.000000 units.**
+The comparison is the plan's own -- the host's authoritative state for frame F against what the
+client predicted *for frame F* -- over ten seconds of scripted circling, jumping and firing on real
+`oa_dm1` collision. The AUTH_STATE short-circuit hits 603 of 620, and both halves of the miss are
+accounted for below. `D-131`'s 1e-5 never appeared: the two peers build their broadphases in the
+same order and get the same answers, and the fallback gate the plan named ("≤ 1e-3 units, ≤ 5%
+rewinds") was not needed.
+
+**Three rules the engine forces, each of which is now a GAP.**
+
+*The world step runs only on the newest frame* (GAP-039). `onLocalSim` is the only place the action
+log is open, so the whole world step and the whole publish pass live in it -- and it re-runs for
+every frame in a rollback window, with a docblock asking for idempotence that a step where bots
+think and missiles fly cannot provide. A high-water mark is the whole defence, and the cost is
+named: a late input resolves against a world that has moved on, at most 67 ms of it.
+
+*Nothing is spawned* (GAP-038). Sixteen player slots, sixty-four missile slots, one entity per item
+and one match entity, all built before the first connect. A rocket is a pool slot whose `active`
+byte goes to 1, with a `generation` counter beside it so a client blending two ticks can tell a
+reused slot from a rocket that teleported across the room.
+
+*Ownership does not travel* (GAP-040). A client has to assign it before attaching, and needs
+`OwnerAwareScope` on its own replicator, which the engine documents only for the server.
+
+**Four bugs found by measuring, and every one of them presented as something else.**
+
+1. **The client echoed the host's world back at it.** The replicator logs every action it *applies*
+   into the local action log -- correctly, the client's own rewind needs those records -- and
+   `flush_outbound` then packs that log for every peer. With no scope filter the client returned the
+   host's entire state stream to the host, a few frames stale, and the host applied it. The host's
+   slot teleported 64 units down at the first echo and fell out of the level with the *client's*
+   numbers arriving as the host's authority. It reads as a physics bug for as long as you let it.
+
+2. **The client predicted four frames before the host had told it anything.** A session starts with
+   every component at its constructed default, and INITIAL_SYNC only goes out on the host tick after
+   `connect` -- which never came, because the host was still inside `simulation_delay_ticks` of
+   warmup, where `tick` returns early and `onTickComplete` does not fire. So the client stepped a
+   player at (0, 0, 0) and sent the host commands for frames it had simulated against nothing. Fixed
+   twice over: the client will not predict before INITIAL_SYNC lands, and the rig warms the host
+   past its input buffer before anyone joins, which is what a real host looks like anyway.
+
+3. **Sixteen slots on nine spawn points.** Every slot has a character body from the first frame,
+   because the pool must exist before anyone connects -- and a body is solid, so `MAX_CLIENTS` of 16
+   against `oa_dm1`'s nine spawns put two players' worth of collision on seven of them. A joining
+   player was depenetrated 30 units sideways out of an *empty slot's* body. Unconnected slots are
+   now parked a kilometre below the map, each at its own spot so they do not depenetrate each other.
+
+4. **`G_SelectSpawnPoint`'s nine-unit lift, missing from one of the three places that respawn.**
+   `createPmoveHost` applies it and `Bot.respawn` applies it; the host's own `spawnSlot` wrote the
+   raw point, putting the player nine units into the floor. The solver answered by shoving it 63
+   units *downward* on its first step -- out through the world, falling for ever with
+   `groundEntityNum` still reporting `ENTITYNUM_WORLD`, because on the way past it really was
+   standing on something. Three implementations of one rule is two too many, and the third one was
+   wrong.
+
+**Every reconcile is explained, and the explanation is not the netcode.** 17 misses over 620
+AUTH_STATEs: six frames the client never predicted (the join, before the first sync) and eleven
+genuine hash disagreements. Those eleven are `ClientTimerActions` -- Q3 bleeds one point a second
+off health above `maxHealth`, a player spawns with 125 against a max of 100, and that is 25 points
+of **host-only state a client has no way to predict**. Each tick costs exactly one AUTH_STATE that
+does not short-circuit and one rewind that corrects it. Measured across three run lengths: 11
+disagreements at 10 s, 23 at 20 s, 31 at 40 s, rising one per second while the bleed runs and
+stopping dead when health reaches 100. That is what says it is the bleed and not a drift, and it is
+why the counter is split into "never predicted" and "disagreed" rather than reported as one number
+-- a single hit rate would have looked like 97% of a mystery.
+
+**The hash is over bytes, not over a position**, and that is the difference between a short-circuit
+that works and one that lies. `onComputeExpected` peeks at the host's AUTH_STATE payload, skips
+`NetworkIdentity` (identical on both sides by construction), and hashes `NetPlayerState` plus
+`NetInventory` -- exactly what the prediction owns. A position comparison would have passed a client
+whose ammunition, cooldown, ground normal or jump latch had drifted, and those are precisely the
+fields that drift without showing.
+
+**The seed is the host's, and `Math.random` is out of the simulation.** Not because a
+server-authoritative game needs determinism -- clients are told what happened -- but because a test
+has to be able to run the same match twice, and with `Math.random` in the loop every measurement in
+this entry would be an anecdote. `mulberry32` in `src/server/random.ts` seeds weapon spread, respawn
+points and bot goals; `Q_crandom` is untouched and still owns the spread itself (D-026).
+
+**What a bot is on the wire, and the asymmetry that keeps.** A bot drives its own `pmove_t` through
+`Bot`, not a `PlayerSlot`, and the host copies its pose into `NetPlayerState` rather than calling
+`store`. Rebuilding `Bot` on `PlayerSlot` would be a rewrite of the thing `match.test.ts` measures,
+for no gain: what the wire needs is the pose, and a bot's pose is on `bot.pmove.ps` exactly as a
+slot's is on `slot.ps`. The cost is that a bot's `groundNormal` and jump latch go out as constants,
+which no client reads -- a remote character is drawn, not simulated.

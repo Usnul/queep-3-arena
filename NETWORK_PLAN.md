@@ -556,6 +556,36 @@ deliver, clients) so runs are reproducible; scripted input per client; counters 
 - `SyncTest.fingerprint_world` over the host's and the client's replicated components agree
   after `step(1)` with all traffic delivered (canonical, post-normalize).
 
+**What step 3 actually built, where it differs from the paragraphs above (D-170).**
+
+- **No movers on the host.** `HeadlessPhysics` builds BSP model 0 only, deliberately (D-036), so
+  `MoverSystem` is not wired and `NetMover` ships as a component with an adapter, a wire slot and no
+  producer — which keeps the protocol version stable for the day step 5 gives the host
+  `PhysicsWorld.addMover`. GAP-041.
+- **The bit-exactness comparison is per frame, and had to be.** Comparing the two peers' *current*
+  state measures the prediction lead, not the prediction: the client runs six frames ahead by
+  construction, which at 320 u/s is 32 units of "divergence" in a simulation that agrees to the last
+  bit. `NetClient.predictionTrace` records what was predicted for each frame and the test compares
+  that against the host's state for the same frame. The first version of the test read a player
+  falling out of the level as a 409-unit desync.
+- **The short-circuit hit rate is not 100 % and `reconcile_count` is not 0**, and the plan was wrong
+  to expect them to be. Q3's one-second health bleed is host-only state a client cannot predict, so
+  each of the 25 ticks between spawning at 125 and settling at `maxHealth` costs exactly one
+  reconcile. Measured: 11 disagreements at 10 s, 23 at 20 s, 31 at 40 s, stopping when health
+  reaches 100. The counter is split into "never predicted" and "disagreed" for exactly this reason.
+  Predicting the bleed is step 6's, and until then the gate is *bounded and explained*, not zero.
+- **A stationary client is not a smaller version of this test.** Bots get 0.4 s of line of sight to
+  a fixed point at `oa_dm1`'s first spawn over thirty seconds (`match.test.ts` measured it), so a
+  client that stands still produces a match in which the fight branch never honestly starts and no
+  bot ever fires a rocket. Every scripted client walks.
+- **`SyncTest.fingerprint_world` is not used.** The AUTH_STATE hash comparison is the same check
+  done continuously and per entity rather than once over the whole world, and it is already wired
+  because the reconciliation needs it. Left for step 7, where a fingerprint over a *lossy* link is
+  worth more than one over a loopback.
+- **Two engine facts the plan did not have** turned up here and are in the register: ownership never
+  travels (GAP-040) and a client needs `OwnerAwareScope` on its own replicator, without which it
+  echoes the host's world back at the host.
+
 *Exit:* every bullet above. DECISIONS: the host frame, the newest-frame gate on `onLocalSim`,
 side-effect keying, pools. REPORT: GAP for "no spawn/despawn replication", GAP for "`onLocalSim`
 re-runs under rollback and the docblock asks for idempotence the game cannot give".
@@ -748,7 +778,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 0 — reversal recorded, scaffold, clock test | **done** |
 | 1 — protocol types | **done** |
 | 2 — `PlayerSlot` extraction, single-player unchanged | **done** |
-| 3 — headless host + client over loopback | not started |
+| 3 — headless host + client over loopback | **done** |
 | 4 — join in progress | not started |
 | 5 — WebSocket host, browser client | not started |
 | 6 — full match for every slot | not started |
