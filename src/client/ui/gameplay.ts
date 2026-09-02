@@ -26,14 +26,19 @@
  * right answer per player and no right answer at all, which is what a gameplay
  * setting is.
  *
- * Field of view leads, because it is the one a player changes first and the one
- * they change with the arena in front of them -- the menu deliberately leaves
- * the game running behind it (see `Menu.ts`) and this is the row that pays for
- * that decision.
+ * Bot difficulty leads, and field of view is second. Field of view held the top
+ * of this page when it was the row a player changed first, and it lost the slot
+ * the day there was a row that decides whether they can play the match at all
+ * (D-162). Both are rows a player changes *with the arena in front of them* --
+ * the menu deliberately leaves the game running behind it, see `Menu.ts` -- and
+ * difficulty is the one where that matters most, because the only way to know
+ * whether "Hurt Me Plenty" is the right answer is to watch a bot at it.
  */
 
 import { CROSSHAIR_DEFAULT, type Hud } from '../Hud.ts';
 import { NUM_CROSSHAIRS } from '../crosshair.ts';
+import { DEFAULT_DIFFICULTY, DIFFICULTIES, difficulty } from '../../game/Difficulty.ts';
+import type { DifficultyId } from '../../game/Difficulty.ts';
 import type { Setting, SettingsPage } from './Settings.ts';
 
 /**
@@ -49,9 +54,24 @@ export interface CameraHost {
     readonly fov: { set(x: number): unknown; getValue(): number };
 }
 
+/**
+ * Where the difficulty goes when the row is written.
+ *
+ * A sink rather than the `BotRuntime` itself, and the indirection is not
+ * decoration: the menu is built before the map is loaded, so at the moment this
+ * page exists there is no roster to write to. `main.ts` holds the chosen level
+ * and hands it to `buildRoster` when there finally is one, and forwards later
+ * changes to the running match. It also keeps this page buildable in Node,
+ * which is what `settings.test.ts` needs.
+ */
+export interface DifficultyHost {
+    setDifficulty(id: DifficultyId): void;
+}
+
 export interface GameplayPageHosts {
     readonly camera: CameraHost;
     readonly hud: Hud;
+    readonly bots: DifficultyHost;
 }
 
 /**
@@ -73,9 +93,27 @@ export const FOV_DEFAULT = 90;
  * shell.
  */
 export function gameplayPage(hosts: GameplayPageHosts): SettingsPage {
-    const { camera, hud } = hosts;
+    const { camera, hud, bots } = hosts;
 
     const settings: Setting[] = [
+        {
+            kind: 'choice',
+            id: 'bot-difficulty',
+            section: 'Opponents',
+            /*
+             First on the page, above field of view, and that is a claim about
+             what this row is worth rather than an accident of the order it was
+             written in. Every other setting here changes how the game looks to
+             the player; this one changes whether they can play it. The port
+             shipped without one, which meant every match was at the setting
+             nobody would have chosen -- see `Difficulty.ts`.
+            */
+            label: 'Bot difficulty',
+            note: 'g_spSkill. Reaction, aim, and how long they stay interested.',
+            initial: DEFAULT_DIFFICULTY,
+            options: DIFFICULTIES.map((d) => ({ value: d.id, label: d.label })),
+            apply: (v) => bots.setDifficulty(difficulty(String(v)).id),
+        },
         {
             kind: 'slider',
             id: 'fov',

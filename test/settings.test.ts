@@ -55,6 +55,7 @@ import {
     FOV_DEFAULT,
     gameplayPage,
     type CameraHost,
+    type DifficultyHost,
 } from '../src/client/ui/gameplay.ts';
 import {
     VOLUME_DEFAULT,
@@ -548,6 +549,8 @@ function hosts(): {
     };
     camera: CameraHost & { value: number };
     hud: HudStub;
+    /** The difficulty sink, and what the last write to it was. */
+    bots: DifficultyHost & { readonly chosen: string };
     /**
      * The real policy rather than a stub, because it is the half of this row
      * that has anything in it -- the page's own job is to hand `setMode` a
@@ -618,7 +621,28 @@ function hosts(): {
     */
     const shade = { renderer: { feature_shadows_enabled: true } };
 
-    return { graphics, camera, hud, shadows: new Shadows(shade), shade };
+    /*
+     Where the difficulty row's writes land. `main.ts` sends them to a variable
+     and then on to a `BotRuntime`; here they only have to be observable, which
+     is what makes the row testable without a match to run it against.
+    */
+    const bots = { difficulty: '' };
+
+    return {
+        graphics,
+        camera,
+        hud,
+        bots: {
+            setDifficulty(id: string): void {
+                bots.difficulty = id;
+            },
+            get chosen(): string {
+                return bots.difficulty;
+            },
+        },
+        shadows: new Shadows(shade),
+        shade,
+    };
 }
 
 /** The graphics page, built against the stand-ins. */
@@ -632,7 +656,11 @@ function pageFor(h: ReturnType<typeof hosts>): SettingsPage {
 
 /** The gameplay page, over the same stand-ins. */
 function gameplayFor(h: ReturnType<typeof hosts>): SettingsPage {
-    return gameplayPage({ camera: h.camera, hud: h.hud as unknown as Hud });
+    return gameplayPage({
+        camera: h.camera,
+        hud: h.hud as unknown as Hud,
+        bots: h.bots,
+    });
 }
 
 describe('the graphics page', () => {

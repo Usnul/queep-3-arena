@@ -22,24 +22,42 @@
  * The equivalent in `ai_dmq3.c` is spread across a dozen functions and a
  * `ainode_t` function pointer.
  *
- *     Selector
- *       Sequence [ Condition(enemy visible)  -> Fight  ]
- *       Sequence [ Condition(has a route)    -> Travel ]
- *       Action   [ pick a goal and a route            ]
+ *     ActiveSelector
+ *       Conditional [ something to fight? -> Fight  ]
+ *       Conditional [ a route to walk?    -> Travel ]
+ *       Action      [ pick a goal and a route      ]
+ *
+ * **`ActiveSelector` and not `SelectorBehavior`, and the difference is not a
+ * detail.** A plain selector commits: it remembers the child it settled on and
+ * ticks that one until it fails, so "strict priority" above was a description of
+ * the first frame only. Two things followed, and both were reported as bugs
+ * before anyone read this file. A bot that had entered `Travel` walked its whole
+ * route past a visible enemy, because the fight branch was never reached again;
+ * and a bot that had entered `Fight` fought forever, because the guard in front
+ * of it lived in a `Sequence` whose cursor had already moved past it and
+ * `Fight` never failed -- so it stood there firing at a corner until its ammo
+ * ran out. See `ActiveSelector.ts` for the composite, and D-162 for the rest.
+ *
+ * **Perception is on this side of the line, and it is not the same question as
+ * line of sight.** `world.visible` says whether the trace clears; whether the
+ * bot has *noticed* is an accumulating quantity with a reaction time on it, and
+ * `perceive` below owns it. A bot inside its reaction delay can see the player
+ * perfectly well and is still walking to the rocket launcher.
  *
  * What is missing relative to botlib, and is missing on purpose: no chat, no
  * team play, no fuzzy weapon preference, no rocket jumping, no prediction of
  * where a target will be. Recorded in DECISIONS.md rather than implied.
  */
 
-import { SelectorBehavior } from '@woosh/meep-engine/src/engine/intelligence/behavior/SelectorBehavior.js';
-import { SequenceBehavior } from '@woosh/meep-engine/src/engine/intelligence/behavior/composite/SequenceBehavior.js';
 import { ConditionBehavior } from '@woosh/meep-engine/src/engine/intelligence/behavior/util/ConditionBehavior.js';
+import { ConditionalBehavior } from '@woosh/meep-engine/src/engine/intelligence/behavior/util/ConditionalBehavior.js';
 import { ActionBehavior } from '@woosh/meep-engine/src/engine/intelligence/behavior/primitive/ActionBehavior.js';
 import { Behavior } from '@woosh/meep-engine/src/engine/intelligence/behavior/Behavior.js';
 import { BehaviorStatus } from '@woosh/meep-engine/src/engine/intelligence/behavior/BehaviorStatus.js';
 
+import { ActiveSelectorBehavior } from './ActiveSelector.ts';
 import { Bot } from '../game/Bot.ts';
+import { DEFAULT_DIFFICULTY, difficulty, type BotSkill } from '../game/Difficulty.ts';
 import { Character, CHARACTERS, type LegsAnimation } from './Characters.ts';
 import { WaypointGraph } from '../game/Waypoints.ts';
 import { weaponStats, type WeaponId } from '../game/Weapons.ts';
@@ -48,14 +66,60 @@ import type { ItemInstance } from '../game/Items.ts';
 import { canBeGrabbed, touchesItem, type Inventory } from '../game/Items.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
 
-/** How far a bot will engage, in Q3 units. Beyond this it goes back to routing. */
-const ENGAGE_RANGE = 2200;
-
-/** How long a bot keeps chasing after losing sight, in seconds. */
-const MEMORY_SECONDS = 3;
-
 /** Re-plan at least this often, so a bot notices a door that opened. */
 const REPLAN_SECONDS = 8;
+
+/**
+ * How much attention a bot may bank beyond the reaction it needed, as a
+ * multiple of it.
+ *
+ * The ceiling is what turns "sight for N seconds" into a short grace period
+ * rather than an unbounded one. Without it a bot that had watched you for thirty
+ * seconds would carry thirty seconds of credit into the next corner and
+ * re-acquire instantly for the rest of the match; with it the credit is worth
+ * `0.5 * reactionSeconds / forgetRate` of lost sight and no more.
+ */
+const AWARENESS_CEILING = 1.5;
+
+/**
+ * How much of its detection rate a bot keeps for a target it is not facing.
+ *
+ * Q3's `BotFindEnemy` asks `BotEntityVisible(..., 360, ...)` -- its bots have no
+ * blind spot at all, and neither do these. What they have instead is eccentricity:
+ * the rate falls off as the cosine of the angle off the view axis, down to this
+ * floor directly behind. Detection *is* slower in the periphery in every study of
+ * it, and a soft falloff does that without the failure mode a hard cone has,
+ * which is a bot that can be walked up to and shot in the back forever.
+ *
+ * The reaction times in `Difficulty.ts` are therefore the on-axis figures; a
+ * target at 90 degrees costs four times as long to notice.
+ */
+export const AWARENESS_BEHIND = 0.25;
+
+/** How often the tracked position of a sighted enemy is recorded, in seconds. */
+const TRACK_SAMPLE_SECONDS = 0.02;
+
+/**
+ * How much of that history is kept, in seconds.
+ *
+ * Comfortably over the largest `BotSkill.trackingSeconds`, and no more: a
+ * sighting older than this is not a lag, it is a memory, and aiming at one would
+ * make a bot that re-acquires an enemy shoot at where they were a second ago.
+ */
+const TRACK_HISTORY_SECONDS = 0.7;
+
+/** How close to the last sighting counts as having searched it, in Q3 units. */
+const SEARCH_ARRIVE = 80;
+
+/**
+ * The shortest a hunt is allowed to be, in seconds.
+ *
+ * Without a floor, a player who breaks line of sight *near* the bot -- behind
+ * the pillar two metres away, which is the commonest way it happens -- is
+ * already at the searched-it radius, so the bot would give up on the frame it
+ * lost them and turn round. That reads as a bot with no object permanence.
+ */
+const MIN_PURSUIT_SECONDS = 0.75;
 
 export interface BotWorld {
     readonly graph: WaypointGraph;
@@ -81,15 +145,69 @@ export interface BotWorld {
     fire(bot: Bot, eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>, weapon: WeaponId): void;
 }
 
+/**
+ * One recorded sighting, for the tracking lag.
+ *
+ * A plain object rather than a flat array of numbers because there are at most
+ * `TRACK_HISTORY_SECONDS / TRACK_SAMPLE_SECONDS` of them per bot -- 35 -- and
+ * the readable version is worth more than the allocation.
+ */
+interface Sighting {
+    /** `Blackboard.clock` when it was taken. */
+    readonly t: number;
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+}
+
 /** The blackboard the tree reads and writes. */
 interface Blackboard {
     readonly bot: Bot;
     readonly world: BotWorld;
-    /** Seconds since the enemy was last seen. */
+    /** Seconds since the enemy was last *noticed*, which is not the same as seen. */
     sinceSeen: number;
     /** Seconds since the last route was planned. */
     sincePlan: number;
     delta: number;
+
+    /**
+     * Seconds of accumulated attention on the enemy.
+     *
+     * Builds while the enemy is in sight and drains at `BotSkill.forgetRate`
+     * while it is not, and the bot has noticed once it passes
+     * {@link Blackboard.reactionNeeded}. One number rather than a timer plus a
+     * flag, and the reason is the failure a timer has: a reaction timer that
+     * restarts whenever line of sight breaks is a timer a player can hold at
+     * zero by stepping in and out of a doorway. A meter that drains more slowly
+     * than it fills cannot be, and it says something true besides -- glimpses
+     * add up.
+     */
+    awareness: number;
+    /**
+     * What this engagement's reaction costs, drawn when awareness leaves zero.
+     *
+     * Per engagement rather than per bot, so that six bots coming round a corner
+     * do not fire on the same frame, and so that the same bot is not reliably
+     * the fast one.
+     */
+    reactionNeeded: number;
+
+    /** Monotonic seconds, for stamping {@link history}. */
+    clock: number;
+    /** Recent sightings, oldest first. The tracking lag reads from behind. */
+    readonly history: Sighting[];
+
+    /**
+     * The bot's health at the end of the previous frame.
+     *
+     * Being shot is perception too, and the cheapest kind: a bot that loses
+     * health has learned that somebody is looking at it, whatever its own eyes
+     * were pointed at. Compared here rather than plumbed through a damage
+     * callback because `Damageable` is deliberately plain data and a bot is one
+     * of several things `G_Damage` writes to -- the difference between two
+     * frames says the same thing and costs nothing to arrange.
+     */
+    lastHealth: number;
 }
 
 /* ------------------------------------------------------------------ *
@@ -102,6 +220,40 @@ interface Blackboard {
 
 const scratchEye = vec3();
 const scratchAngles = vec3();
+const scratchAim = vec3();
+
+/**
+ * Where the bot points, given how far behind it is tracking.
+ *
+ * The newest sighting at or before `now - lag`, which is the enemy's position
+ * `lag` seconds ago -- not an extrapolation of where it is going, which is the
+ * aim prediction D-055 rules out, and not its position now, which is what a
+ * machine does. Falls back to the last known position when the history is
+ * shorter than the lag, which is every re-acquisition: you cannot trail a target
+ * you have only just picked up.
+ */
+function aimPoint(board: Blackboard, lag: number, out: Vec3): Vec3 {
+    const history = board.history;
+
+    if (history.length === 0) {
+        out[0] = board.bot.lastSeen[0]!;
+        out[1] = board.bot.lastSeen[1]!;
+        out[2] = board.bot.lastSeen[2]!;
+        return out;
+    }
+
+    const want = board.clock - lag;
+    let chosen = history[0]!;
+    for (const sighting of history) {
+        if (sighting.t > want) break;
+        chosen = sighting;
+    }
+
+    out[0] = chosen.x;
+    out[1] = chosen.y;
+    out[2] = chosen.z;
+    return out;
+}
 
 /**
  * Walk the current path, one node at a time.
@@ -143,32 +295,51 @@ class TravelBehavior extends Behavior<Blackboard> {
         bot.moveToward(target);
 
         /*
-         Look where you are going, unless the enemy was just here. A bot that
-         turns its back the instant it loses sight is a bot that never fights;
-         `MEMORY_SECONDS` of holding the last-seen direction is the cheapest
-         version of Q3's own `lastenemyareanum` behaviour.
+         Look where you are going, and only that.
+
+         This used to hold the last-seen direction for a few seconds first, as
+         the cheapest version of Q3's `lastenemyareanum`. That job has moved: the
+         fight branch outranks this one and keeps running for the whole of
+         `BotSkill.searchSeconds`, so a bot that has recently lost an enemy is
+         hunting it in `FightBehavior.search` and never reaches this line. The
+         branch was not dead when it was written; it is dead now, and a
+         still-plausible branch that cannot execute is worse than none.
         */
-        if (board.sinceSeen < MEMORY_SECONDS) bot.lookAt(bot.lastSeen);
-        else bot.lookAt(target);
+        bot.lookAt(target);
 
         return BehaviorStatus.Running;
     }
 }
 
 /**
- * Face the enemy and shoot it.
+ * Fight what the bot has noticed, and hunt it when it goes.
  *
- * Runs while the enemy is visible; the enclosing sequence's condition drops it
- * as soon as it is not.
+ * Two states, and the split is the point: the bot shoots at an enemy it can
+ * *see*, and walks toward one it cannot. What it used to do instead was shoot at
+ * `lastSeen` regardless -- and because the guard in front of this branch was
+ * never re-evaluated (see the file header), "regardless" meant until the
+ * magazine was empty and then until it found more ammunition. That is the
+ * "keeps firing at the spot where they lost sight of you" report, and there is
+ * no amount of accuracy tuning that fixes it, because the bot was not missing.
+ *
+ * The one exception is deliberate: `BotSkill.blindFireSeconds` of shooting into
+ * the corner somebody has just gone round. A player does that. Its unit is
+ * tenths of a second at the difficulty a player is likely to be on, which is the
+ * difference between a reflex and a tantrum.
  */
 class FightBehavior extends Behavior<Blackboard> {
     override tick(_timeDelta: number): number {
         const board = this.context;
-        if (board === null) return BehaviorStatus.Failed;
+        if (board === null || board === undefined) return BehaviorStatus.Failed;
 
-        const { bot, world } = board;
+        return board.bot.enemyVisible ? this.engage(board) : this.search(board);
+    }
 
-        bot.lookAt(bot.lastSeen);
+    /** In sight: keep the preferred range, aim behind it, and shoot. */
+    private engage(board: Blackboard): number {
+        const bot = board.bot;
+
+        bot.aimAt(aimPoint(board, bot.skill.trackingSeconds, scratchAim));
 
         const dx = bot.lastSeen[0]! - bot.origin[0]!;
         const dy = bot.lastSeen[1]! - bot.origin[1]!;
@@ -197,8 +368,56 @@ class FightBehavior extends Behavior<Blackboard> {
             bot.fire(weaponStats(bot.weapon).fireRateMs, scratchEye, scratchAngles);
         }
 
-        void world;
         return BehaviorStatus.Running;
+    }
+
+    /**
+     * Out of sight: a short burst if it only just went, then walk over and look.
+     *
+     * Failing here is how the hunt ends, and it has to be able to end early --
+     * the guard's `searchSeconds` alone would have every bot spend the full
+     * window walking at a spot it can already see is empty. Arriving is the
+     * answer to "they have gone", and being wedged is the answer to "you cannot
+     * get there from here"; both hand the bot back to its route.
+     */
+    private search(board: Blackboard): number {
+        const bot = board.bot;
+
+        bot.aimAt(bot.lastSeen);
+
+        if (board.sinceSeen < bot.skill.blindFireSeconds) {
+            if (bot.aimed) {
+                bot.fire(weaponStats(bot.weapon).fireRateMs, scratchEye, scratchAngles);
+            }
+            return BehaviorStatus.Running;
+        }
+
+        if (bot.stuckFor > 1) return this.giveUp(board);
+
+        const dx = bot.lastSeen[0]! - bot.origin[0]!;
+        const dy = bot.lastSeen[1]! - bot.origin[1]!;
+
+        if (Math.hypot(dx, dy) < SEARCH_ARRIVE && board.sinceSeen > MIN_PURSUIT_SECONDS) {
+            return this.giveUp(board);
+        }
+
+        bot.moveToward(bot.lastSeen);
+        return BehaviorStatus.Running;
+    }
+
+    /**
+     * Stop believing there is anyone there.
+     *
+     * `sinceSeen` rather than a flag of its own, because it is already what the
+     * guard asks about and a second field saying the same thing is a second
+     * field to forget to clear. The sighting history goes with it: those samples
+     * are for trailing a target that is in front of the bot, and the next
+     * engagement must not aim at one of them.
+     */
+    private giveUp(board: Blackboard): number {
+        board.sinceSeen = Infinity;
+        board.history.length = 0;
+        return BehaviorStatus.Failed;
     }
 }
 
@@ -218,8 +437,11 @@ export class BotRuntime {
 
     private readonly world: BotWorld;
     private readonly boards = new Map<number, Blackboard>();
-    private readonly trees = new Map<number, SelectorBehavior>();
+    private readonly trees = new Map<number, ActiveSelectorBehavior<Blackboard>>();
     private readonly characters = new Map<number, Character>();
+
+    /** What the match is set to. See {@link setDifficulty}. */
+    private skill: BotSkill = difficulty(DEFAULT_DIFFICULTY);
 
     private readonly scratch: Vec3 = vec3();
     private readonly playerEye: Vec3 = vec3();
@@ -240,6 +462,26 @@ export class BotRuntime {
         this.audio = audio;
     }
 
+    /** What the match is currently set to. */
+    get difficulty(): BotSkill {
+        return this.skill;
+    }
+
+    /**
+     * Set the difficulty of every bot in the match, now and for any spawned
+     * later.
+     *
+     * Applied by assignment rather than by rebuilding anything, which is what
+     * lets the menu change it mid-match: every number difficulty owns is read
+     * out of `bot.skill` at the moment it is used, so the next frame is simply
+     * the next frame. A bot mid-swing turns at the new rate; a bot mid-reaction
+     * finishes the reaction it drew, because that draw is already spent.
+     */
+    setDifficulty(skill: BotSkill): void {
+        this.skill = skill;
+        for (const bot of this.bots) bot.skill = skill;
+    }
+
     /**
      * Add a bot, its tree and its model.
      *
@@ -249,6 +491,7 @@ export class BotRuntime {
      */
     spawn(bot: Bot, character: Character | null): void {
         this.bots.push(bot);
+        bot.skill = this.skill;
 
         const board: Blackboard = {
             bot,
@@ -256,30 +499,41 @@ export class BotRuntime {
             sinceSeen: Infinity,
             sincePlan: Infinity,
             delta: 0,
+            awareness: 0,
+            reactionNeeded: 0,
+            clock: 0,
+            history: [],
+            lastHealth: bot.health,
         };
         this.boards.set(bot.id, board);
 
         const travel = new TravelBehavior();
         const fight = new FightBehavior();
 
-        const tree = SelectorBehavior.from([
-            SequenceBehavior.from([
+        const tree = ActiveSelectorBehavior.from<Blackboard>([
+            /*
+             `ConditionalBehavior` and not `Sequence[Condition, ...]`, because
+             this decorator re-asks its condition on every tick where a sequence
+             asks once and then remembers the answer forever. The guard has to be
+             live: it is the only thing that ends a fight.
+
+             Noticed *or* lost within the search window. Dropping the branch the
+             instant line of sight breaks makes a bot that turns and walks away
+             mid-exchange whenever anyone steps behind a pillar, which reads as
+             the bot losing interest rather than as it losing sight; what happens
+             during the window is `FightBehavior.search`, and it is a hunt rather
+             than more shooting.
+            */
+            ConditionalBehavior.from(
                 new ConditionBehavior(
-                    /*
-                     Visible *or* seen within memory. Dropping the fight branch
-                     the instant line of sight breaks makes a bot that turns and
-                     walks away mid-exchange whenever anyone steps behind a
-                     pillar, which reads as the bot losing interest rather than
-                     as it losing sight.
-                    */
-                    () => bot.enemyVisible || board.sinceSeen < MEMORY_SECONDS
+                    () => bot.enemyVisible || board.sinceSeen < bot.skill.searchSeconds
                 ),
-                fight,
-            ]),
-            SequenceBehavior.from([
+                fight
+            ),
+            ConditionalBehavior.from(
                 new ConditionBehavior(() => bot.path.length > bot.pathAt),
-                travel,
-            ]),
+                travel
+            ),
             /*
              Planning is the fallback branch, so it runs on every frame the bot
              has nothing else to do -- which is every frame while it is stuck
@@ -293,11 +547,10 @@ export class BotRuntime {
         ]);
 
         /*
-         Composites initialize their own children as they reach them, so only
-         the root is initialized here. Initializing the leaves by hand as well
-         looks harmless and is not: `SequenceBehavior.initialize` resets its
-         cursor, so a leaf initialized out of band is a leaf whose parent thinks
-         it is somewhere else.
+         Only the root is initialized here. `ActiveSelector` initializes a child
+         at the moment it gives it the slot and finalizes it when it takes it
+         away, so a leaf initialized out of band is a leaf whose parent believes
+         it has not started yet.
         */
         tree.initialize(board);
 
@@ -420,6 +673,17 @@ export class BotRuntime {
                         this.world.spawns[(Math.random() * this.world.spawns.length) | 0] ??
                         [0, 0, 0];
                     bot.respawn(spawn);
+
+                    /*
+                     A respawn is a new bot wearing the same name. Everything it
+                     knew about the enemy was about a fight it lost somewhere
+                     else on the map, so it comes back owing a full reaction and
+                     with nothing to trail.
+                    */
+                    board.sinceSeen = Infinity;
+                    board.awareness = 0;
+                    board.history.length = 0;
+                    board.lastHealth = bot.health;
                 }
                 bot.think(deltaSeconds, deltaMilliseconds);
                 this.follow(bot);
@@ -454,6 +718,11 @@ export class BotRuntime {
      * was worth an hour: the bots planned routes, held them, and never moved,
      * because the *first* frame's plan branch succeeded and the tree was still
      * reporting that success 900 frames later.
+     *
+     * Still needed with an `ActiveSelector` root, and for a narrower reason: the
+     * root re-walks its children every tick on its own, so nothing is stuck
+     * *within* a frame, but it still has to be told that a finished plan is a
+     * finished plan rather than a slot somebody is holding.
      */
     private runTree(bot: Bot, board: Blackboard, deltaSeconds: number): void {
         const tree = this.trees.get(bot.id);
@@ -467,12 +736,96 @@ export class BotRuntime {
         }
     }
 
-    /** Line of sight to the player, and the weapon to hold. */
+    /**
+     * What the bot can see, what it has noticed, and the weapon to hold.
+     *
+     * Two questions, and separating them is the whole of the reaction-time fix.
+     * `sighted` is geometry: in range, alive, and the trace clears -- the same
+     * question `WeaponSystem.visible` answers for a bullet, which is what keeps
+     * a bot's sight and its shot honest (D-159). `bot.enemyVisible` is
+     * *attention*, and a bot that can see you and has not noticed you yet is
+     * the ordinary case for the first half-second of every encounter.
+     *
+     * The reaction is spent as an accumulating meter rather than as a countdown;
+     * `Blackboard.awareness` says why, and `AWARENESS_BEHIND` says why the rate
+     * depends on where you are standing.
+     */
     private perceive(bot: Bot, board: Blackboard, deltaSeconds: number): void {
+        const skill = bot.skill;
+
+        board.clock += deltaSeconds;
         board.sinceSeen += deltaSeconds;
         bot.enemyVisible = false;
 
-        if (!this.world.playerAlive()) return;
+        const hurt = bot.health < board.lastHealth;
+        board.lastHealth = bot.health;
+
+        const sighted = this.sighted(bot);
+
+        if (!sighted) {
+            board.awareness = Math.max(0, board.awareness - deltaSeconds * skill.forgetRate);
+            return;
+        }
+
+        if (board.awareness <= 0) {
+            /*
+             A fresh engagement. Drawn once here rather than per frame, because a
+             threshold that is re-rolled every frame is a threshold whose
+             *minimum* decides when the bot fires, and that minimum is the same
+             for every bot in the match.
+            */
+            board.reactionNeeded = Math.max(
+                0,
+                skill.reactionSeconds +
+                    (bot.random() * 2 - 1) * skill.reactionJitterSeconds
+            );
+        }
+
+        /*
+         Damage skips the queue. A bot that is being shot has been told where the
+         enemy is by the shot itself, and a reaction time that survived that
+         would be a bot that can be emptied a magazine into from behind while it
+         thinks about it -- which is the failure mode `AWARENESS_BEHIND` would
+         otherwise have introduced, and a worse one than the one it fixes.
+        */
+        board.awareness = hurt
+            ? board.reactionNeeded
+            : Math.min(
+                  board.awareness + deltaSeconds * this.attention(bot),
+                  board.reactionNeeded * AWARENESS_CEILING
+              );
+
+        if (board.awareness < board.reactionNeeded) return;
+
+        bot.enemyVisible = true;
+        board.sinceSeen = 0;
+        bot.lastSeen[0] = this.playerEye[0]!;
+        bot.lastSeen[1] = this.playerEye[1]!;
+        bot.lastSeen[2] = this.playerEye[2]!;
+
+        this.record(board);
+
+        // Hold the best weapon it has ammo for. Order is Q3's `weapon_t`, which
+        // is roughly increasing power.
+        for (const candidate of ['WP_ROCKET_LAUNCHER', 'WP_RAILGUN', 'WP_PLASMAGUN',
+            'WP_SHOTGUN', 'WP_MACHINEGUN'] as const) {
+            if (bot.inventory.weapons.has(candidate) && (bot.inventory.ammo[candidate] ?? 0) !== 0) {
+                bot.weapon = candidate;
+                break;
+            }
+        }
+    }
+
+    /**
+     * Can this bot see the player at all, ignoring whether it has noticed?
+     *
+     * Leaves the player's position in `this.playerEye` for the caller, which is
+     * a side effect and is why it is private and named as a question rather than
+     * as a getter: the alternative is tracing twice or allocating a vector per
+     * bot per frame.
+     */
+    private sighted(bot: Bot): boolean {
+        if (!this.world.playerAlive()) return false;
 
         const player = this.world.playerOrigin();
 
@@ -484,26 +837,58 @@ export class BotRuntime {
         const dy = this.playerEye[1]! - bot.origin[1]!;
         const dz = this.playerEye[2]! - bot.origin[2]!;
 
-        if (Math.hypot(dx, dy, dz) > ENGAGE_RANGE) return;
+        if (Math.hypot(dx, dy, dz) > bot.skill.sightRange) return false;
 
         bot.eye(this.scratch);
 
-        if (!this.world.visible(this.scratch, this.playerEye)) return;
+        return this.world.visible(this.scratch, this.playerEye);
+    }
 
-        bot.enemyVisible = true;
-        board.sinceSeen = 0;
-        bot.lastSeen[0] = this.playerEye[0]!;
-        bot.lastSeen[1] = this.playerEye[1]!;
-        bot.lastSeen[2] = this.playerEye[2]!;
+    /**
+     * How fast this bot builds awareness, given where the player is standing.
+     *
+     * A cosine falloff off the view axis between 1 and `AWARENESS_BEHIND`, on
+     * yaw only. Pitch is left out because it is nearly always small -- a bot
+     * looks along the floor it is walking on -- and because folding it in would
+     * make a bot slower to notice somebody it is already pointing its gun at, on
+     * a lift.
+     */
+    private attention(bot: Bot): number {
+        const dx = this.playerEye[0]! - bot.origin[0]!;
+        const dy = this.playerEye[1]! - bot.origin[1]!;
+        const distance = Math.hypot(dx, dy);
 
-        // Hold the best weapon it has ammo for. Order is Q3's `weapon_t`, which
-        // is roughly increasing power.
-        for (const candidate of ['WP_ROCKET_LAUNCHER', 'WP_RAILGUN', 'WP_PLASMAGUN',
-            'WP_SHOTGUN', 'WP_MACHINEGUN'] as const) {
-            if (bot.inventory.weapons.has(candidate) && (bot.inventory.ammo[candidate] ?? 0) !== 0) {
-                bot.weapon = candidate;
-                break;
-            }
+        if (distance < 1) return 1;
+
+        const yaw = (bot.viewYaw * Math.PI) / 180;
+        const facing = (dx * Math.cos(yaw) + dy * Math.sin(yaw)) / distance;
+
+        return AWARENESS_BEHIND + (1 - AWARENESS_BEHIND) * Math.max(0, facing);
+    }
+
+    /**
+     * Record where the enemy is, for the tracking lag to read from behind.
+     *
+     * Rate-limited to `TRACK_SAMPLE_SECONDS` rather than taken every frame, so
+     * the buffer is a fixed size in *seconds* whatever the tick rate is -- the
+     * lag a skill asks for has to mean the same thing at 60 Hz and at 125.
+     */
+    private record(board: Blackboard): void {
+        const history = board.history;
+        const last = history[history.length - 1];
+
+        if (last !== undefined && board.clock - last.t < TRACK_SAMPLE_SECONDS) return;
+
+        history.push({
+            t: board.clock,
+            x: this.playerEye[0]!,
+            y: this.playerEye[1]!,
+            z: this.playerEye[2]!,
+        });
+
+        // Anything older than the window is a memory rather than a lag.
+        while (history.length > 0 && board.clock - history[0]!.t > TRACK_HISTORY_SECONDS) {
+            history.shift();
         }
     }
 

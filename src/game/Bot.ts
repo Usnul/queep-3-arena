@@ -33,8 +33,16 @@
  * What is *not* here is anything botlib does: no AAS, no fuzzy weapon weights,
  * no chat, no character files. The decisions live in a behaviour tree
  * (`client/Bots.ts`), and this class is the interface between that tree and the
- * simulation -- "go here", "look there", "shoot" -- plus the state the tree
- * reads to decide.
+ * simulation -- "go here", "look there", "aim there", "shoot" -- plus the state
+ * the tree reads to decide.
+ *
+ * "Aim there" is a fourth verb and not a synonym for the third. A bot's *hand*
+ * lives on this side of the line -- how fast it swings, how wrong it is, and
+ * how that wrongness moves -- because those are properties of the body a
+ * `usercmd_t` comes out of, and every one of them is read from a `BotSkill`
+ * rather than written here. Its *attention* -- what it has noticed, how long
+ * ago, and whether that is still worth shooting at -- lives on the tree's side.
+ * D-162.
  */
 
 import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
@@ -47,15 +55,27 @@ import { PlayerMovement, type MoverHost } from '../client/MeepMove.ts';
 import { newInventory, type Inventory } from './Items.ts';
 import type { Damageable } from './Weapons.ts';
 import type { WeaponId } from './Weapons.ts';
+import { DEFAULT_DIFFICULTY, difficulty, gaussian, type BotSkill } from './Difficulty.ts';
 
 /** `usercmd_t.angles` is 16-bit fixed point over a full turn. */
 const ANGLE_TO_SHORT = 65536 / 360;
 
-/** How fast a bot turns, in degrees per second. Q3's `ai_main` uses similar rates. */
-const TURN_SPEED = 540;
-
-/** Fire when the aim is within this many degrees of the target. */
-const AIM_TOLERANCE = 8;
+/**
+ * How close the view has to have settled on the aim point before the trigger.
+ *
+ * This used to be 8 degrees of yaw and 16 of pitch, and it was doing two jobs:
+ * it was the only thing making a bot miss, and it was the thing that let a bot
+ * fire while still swinging. Once there is a modelled aim error (D-162) the
+ * first job is gone, and the second wants a *tight* number -- the error decides
+ * where the shot goes, and a loose gate here would add a second, unmodelled and
+ * uniformly-distributed error on top of it that no difficulty level could tune.
+ *
+ * Three degrees is "the swing has arrived". What it also buys, and is worth
+ * having on purpose: a bot cannot fire while it is being out-turned, so
+ * circle-strafing one at close range -- where the bearing rate exceeds
+ * `BotSkill.turnSpeed` -- takes it out of the fight.
+ */
+const AIM_TOLERANCE = 3;
 
 /** Arrival radius for a path node, in Q3 units. Half the grid spacing. */
 const NODE_RADIUS = 40;
@@ -71,6 +91,16 @@ export interface BotOptions extends PmoveHostOptions {
      * select.
      */
     readonly moverHost?: MoverHost | null;
+    /** How good this one is. Defaults to `DEFAULT_DIFFICULTY`. */
+    readonly skill?: BotSkill;
+    /**
+     * Where the aim error and the reaction jitter come from.
+     *
+     * Injectable so a test can hand over a sequence and read the consequence,
+     * which is the only way to assert anything about a distribution. Defaults to
+     * `Math.random`, which is what a match runs on.
+     */
+    readonly random?: () => number;
 }
 
 export class Bot implements Damageable {
@@ -135,7 +165,23 @@ export class Bot implements Damageable {
 
     /* ---- combat ---- */
 
-    /** Set by the tree each frame from a line-of-sight trace. */
+    /**
+     * How good this bot is, and the only place any of those numbers live.
+     *
+     * Mutable, because the menu can change difficulty mid-match and a bot that
+     * had to be rebuilt to hear about it would mean respawning the roster.
+     */
+    skill: BotSkill;
+
+    /**
+     * Set by the tree each frame: the enemy is in sight *and* the bot has
+     * noticed it.
+     *
+     * The two halves are deliberately not separable here. "Can trace to it" is
+     * perception and belongs to the tree; what the body needs to know is whether
+     * there is currently something to shoot at, and a bot inside its reaction
+     * delay does not have one. See `BotRuntime.perceive`.
+     */
     enemyVisible = false;
     /** Where the enemy was last seen, whether or not it is visible now. */
     readonly lastSeen: Vec3 = vec3();
@@ -145,6 +191,34 @@ export class Bot implements Damageable {
     /** Desired facing, which the bot turns toward rather than snapping to. */
     private desiredYaw = 0;
     private desiredPitch = 0;
+
+    /* ---- the hand ---- */
+
+    /**
+     * The aim error, in degrees, and the two draws it is crossing between.
+     *
+     * Held rather than drawn per shot, because a per-shot draw is an error a
+     * player cannot read: it makes every burst average out to the same
+     * accuracy and never sends one wide as a burst. See `BotSkill.aimDriftSeconds`.
+     */
+    private aimErrorYaw = 0;
+    private aimErrorPitch = 0;
+    private aimFromYaw = 0;
+    private aimFromPitch = 0;
+    private aimToYaw = 0;
+    private aimToPitch = 0;
+    /** Position within the current drift interval, 0..1. */
+    private aimPhase = 1;
+
+    /**
+     * This bot's randomness, and the only source any of its behaviour draws
+     * from -- the aim error here, the reaction jitter in `BotRuntime.perceive`.
+     *
+     * Public so the tree can share it. One stream per bot rather than one per
+     * concern, because a test that wants a bot with a known hand has to be able
+     * to supply it in one place.
+     */
+    readonly random: () => number;
 
     private yaw = 0;
     private pitch = 0;
@@ -164,6 +238,8 @@ export class Bot implements Damageable {
         this.id = options.id;
         this.name = options.name;
         this.character = options.character;
+        this.skill = options.skill ?? difficulty(DEFAULT_DIFFICULTY);
+        this.random = options.random ?? Math.random;
 
         this.pmove = createPmoveHost(options);
         this.origin = this.pmove.ps.origin;
@@ -234,7 +310,13 @@ export class Bot implements Damageable {
         this.moveRight = Math.max(-127, Math.min(127, Math.round((nx * rightX + ny * rightY) * 127)));
     }
 
-    /** Turn toward a world position, at a finite rate. */
+    /**
+     * Turn toward a world position, at a finite rate.
+     *
+     * Exact. This is the navigation call -- "look where you are going" -- and a
+     * bot that walks a corridor with a hand tremor on its view is not more
+     * human, it is seasick. What a shot goes through is {@link aimAt}.
+     */
     lookAt(targetQ3: ArrayLike<number>): void {
         const ps = this.pmove.ps;
 
@@ -247,16 +329,40 @@ export class Bot implements Damageable {
         this.desiredPitch = (-Math.atan2(dz, Math.hypot(dx, dy)) * 180) / Math.PI;
     }
 
+    /**
+     * Turn toward something the bot means to shoot, and miss it by the current
+     * aim error.
+     *
+     * The error lands on the *desired* angles rather than on the fired ray, and
+     * that placement is the decision. A bot that aimed true and then perturbed
+     * the bullet would be a bot pointed straight at you whose shots mysteriously
+     * did not arrive; this one is visibly pointed slightly wrong, its muzzle
+     * flash and its tracer agree with where it is looking, and a player can read
+     * "that one has lost me" off the model. It also means `aimed` measures the
+     * swing against the aim point the bot actually believes in, so the trigger
+     * gate and the error stay independent quantities.
+     */
+    aimAt(targetQ3: ArrayLike<number>): void {
+        this.lookAt(targetQ3);
+        this.desiredYaw += this.aimErrorYaw;
+        this.desiredPitch += this.aimErrorPitch;
+    }
+
+    /** The aim error this bot is carrying right now, in degrees. For tests. */
+    get aimError(): readonly [number, number] {
+        return [this.aimErrorYaw, this.aimErrorPitch];
+    }
+
     jump(): void {
         this.wantJump = true;
     }
 
-    /** True when the bot is pointed close enough at what it is looking at. */
+    /** True when the bot is pointed close enough at what it is aiming at. */
     get aimed(): boolean {
         const yawNow = this.yaw / ANGLE_TO_SHORT;
         let error = ((this.desiredYaw - yawNow + 540) % 360) - 180;
         error = Math.abs(error);
-        return error < AIM_TOLERANCE && Math.abs(this.desiredPitch - this.pitch) < AIM_TOLERANCE * 2;
+        return error < AIM_TOLERANCE && Math.abs(this.desiredPitch - this.pitch) < AIM_TOLERANCE;
     }
 
     /* ---- the simulation half ---- */
@@ -272,6 +378,7 @@ export class Bot implements Damageable {
      */
     think(deltaSeconds: number, deltaMilliseconds: number): void {
         this.turn(deltaSeconds);
+        this.driftAim(deltaSeconds);
 
         if (this.fireCooldown > 0) this.fireCooldown -= deltaSeconds;
 
@@ -423,14 +530,54 @@ export class Bot implements Damageable {
     }
 
     /**
-     * Rotate toward the desired angles at `TURN_SPEED`.
+     * Wander the aim error toward a fresh draw.
+     *
+     * Two independent normal draws -- yaw and pitch -- resampled every
+     * `aimDriftSeconds` and smoothstepped between, which gives an error with a
+     * continuous first derivative: the bot's aim slides across you rather than
+     * teleporting from one offset to the next. Smoothstep and not a straight
+     * lerp because a lerp has a corner at every sample, and a corner in an aim
+     * curve is visible as a twitch.
+     *
+     * Driven off the wall clock rather than off firing, so an error the bot
+     * carries is the same error whether it is shooting or not. A bot whose hand
+     * only shakes while the trigger is down would be tuning the *weapon*.
+     */
+    private driftAim(deltaSeconds: number): void {
+        const drift = this.skill.aimDriftSeconds;
+
+        if (drift <= 0 || this.skill.aimErrorDegrees <= 0) {
+            this.aimErrorYaw = 0;
+            this.aimErrorPitch = 0;
+            return;
+        }
+
+        this.aimPhase += deltaSeconds / drift;
+
+        while (this.aimPhase >= 1) {
+            this.aimPhase -= 1;
+            this.aimFromYaw = this.aimToYaw;
+            this.aimFromPitch = this.aimToPitch;
+            this.aimToYaw = gaussian(this.random) * this.skill.aimErrorDegrees;
+            this.aimToPitch = gaussian(this.random) * this.skill.aimErrorDegrees;
+        }
+
+        const t = this.aimPhase * this.aimPhase * (3 - 2 * this.aimPhase);
+        this.aimErrorYaw = this.aimFromYaw + (this.aimToYaw - this.aimFromYaw) * t;
+        this.aimErrorPitch = this.aimFromPitch + (this.aimToPitch - this.aimFromPitch) * t;
+    }
+
+    /**
+     * Rotate toward the desired angles at the skill's turn rate.
      *
      * A finite turn rate is what makes a bot beatable. Snapping the yaw makes a
      * bot that is aimed at you on the frame it decides to be, which is not
-     * difficulty -- it is a different game.
+     * difficulty -- it is a different game. The rate is per skill (D-162)
+     * because it was 540 degrees a second for everybody, which is faster than a
+     * player can flick and therefore not a rate at all.
      */
     private turn(deltaSeconds: number): void {
-        const step = TURN_SPEED * deltaSeconds;
+        const step = this.skill.turnSpeed * deltaSeconds;
 
         const yawNow = this.yaw / ANGLE_TO_SHORT;
         let yawError = ((this.desiredYaw - yawNow + 540) % 360) - 180;

@@ -8318,6 +8318,161 @@ bolt's own two numbers, 400 lm and 150 units, which is what D-130 actually decid
 back the day the flashes come back up or the bolt follows them down, and that is a decision for
 whoever is looking at the screen.
 
+### D-162: the bots had no difficulty setting, which is not the same as having an easy one
+
+Three complaints, reported from playing: the bots have perfect aim; they notice you the instant you
+are visible and fire immediately; and once they have lost you they keep shooting at the place where
+they last saw you until the ammunition runs out.
+
+All three are the same omission. The port had no concept of *how good a bot is*, and every quantity
+that would have carried one was left at whatever costs least to write. Free is not neutral. A bot
+with no reaction time reacts on the frame the trace clears; a bot with no aim error puts every round
+through one point; and a bot with no continuous guard on its fight branch fights forever. Not having
+a difficulty setting is not shipping the middle of the range — it is shipping the top of it, by
+default, to everyone.
+
+**`Difficulty.ts` is the whole of the answer's data**, and nothing else in the port is allowed to
+hard-code any of it. Five levels named after Q3's own (`g_spSkill` 1..5, "I Can Win" through
+"Nightmare!"), because a player who has seen a Quake menu already knows what those mean. The default
+is `bring-it-on`, which is Q3's own `g_spSkill` default and the second of five, and every column is
+monotonic down the table so that no level is better at one thing and worse at another.
+
+The numbers are not botlib's. Q3 ships `CHARACTERISTIC_AIM_ACCURACY`, `CHARACTERISTIC_AIM_SKILL` and
+`CHARACTERISTIC_REACTIONTIME` as five sets of fuzzy weights per bot in character files this port
+deliberately does not have (D-055). What it has instead is the shape those characteristics describe,
+fixed against measured human numbers:
+
+- **Reaction.** Simple visual reaction time sits near 250 ms, and a *choice* reaction — see it,
+  decide it is a target, act — runs 350 to 500 ms; trained players reach 150 to 200 ms. So the top
+  level is 180 ms because that is roughly the human floor, and the bottom is 900 ms because a
+  distracted human is that slow.
+- **Aim error.** *Angular*, and that is the load-bearing choice. A fixed offset at the target keeps a
+  bot equally deadly at 2,000 units as at 100; an angle makes hit probability fall with range the way
+  a human's does, so distance becomes a thing a player can use. Q3's machinegun cone is ±1.4° for
+  comparison, which puts the default level's 4.5° at a hand three times looser than the gun it holds.
+- **Tracking.** A *lag*, not a lead. The bot aims where the target was `trackingSeconds` ago, which is
+  what a tracking hand does and the exact opposite of the aim prediction D-055 rules out. It is also
+  why strafing works: the shots trail behind you instead of following you.
+
+**Aim error is drawn as a correlated wander, not per shot.** Two normal draws — yaw and pitch —
+resampled every `aimDriftSeconds` and smoothstepped between. A per-shot draw would have been simpler
+and is wrong for a reason worth writing down: an error that resamples every frame is a fair coin, and
+a fair coin at ten rounds a second hits about as often as its average and never misses you
+*consistently*. Correlated error is what sends a burst wide as a burst, which is the thing a player
+can see and move against. The draw is a truncated normal rather than uniform-in-a-disc, because a
+disc has most of its area at the rim — a bot drawing from one is reliably *off* target — and it is
+truncated at 2.5σ because the one draw in a thousand that comes back at four sigma reads as a bug
+rather than as a miss.
+
+The error lands on the bot's *desired view angles* and not on the fired ray. A bot that aimed true
+and then perturbed the bullet would be pointed straight at you with shots that mysteriously did not
+arrive; this one is visibly pointed slightly wrong, its muzzle flash and its tracer agree with where
+it is looking, and a player can read "that one has lost me" off the model.
+
+`AIM_TOLERANCE` came down from 8° of yaw and 16° of pitch to 3° of each, and that is a consequence
+rather than a separate tuning. The old gate was doing two jobs — it was the only thing making a bot
+miss, and it was what let a bot fire while still swinging — and once the error is modelled the first
+job is gone. A loose gate would now add a second, uniformly-distributed error that no difficulty
+level could tune. What the tight one also buys, deliberately: a bot cannot fire while it is being
+out-turned, so circle-strafing one at close range, where the bearing rate exceeds its `turnSpeed`,
+takes it out of the fight.
+
+**Reaction is an accumulating meter, not a countdown.** `Blackboard.awareness` builds while the enemy
+is in sight and drains at `forgetRate` while it is not, and the bot has noticed once it passes a
+threshold drawn per engagement. A countdown that restarts whenever line of sight breaks is a
+countdown a player can hold at zero by stepping in and out of a doorway; a meter that drains more
+slowly than it fills cannot be, and it says something true besides — glimpses add up. The threshold
+is drawn once per engagement rather than per frame, because a threshold re-rolled every frame is one
+whose *minimum* decides when the bot fires, and that minimum is the same for every bot in the match.
+
+Two riders on the meter:
+
+- **Eccentricity.** The rate falls off as the cosine of the angle off the bot's view axis, to a
+  quarter directly behind. Detection is slower in the periphery in every study of it. A soft falloff
+  rather than a cone, because Q3's own `BotFindEnemy` asks `BotEntityVisible(..., 360, ...)` and a
+  hard blind spot is a bot that can be walked up to and shot in the back forever. The reaction times
+  in the table are therefore the on-axis figures.
+- **Damage skips the queue.** A bot that loses health has been told where the enemy is by the shot
+  itself. Without this, eccentricity would have introduced exactly the failure it was written to
+  avoid. Read as a health difference between frames rather than plumbed through a damage callback,
+  because `Damageable` is deliberately plain data and the difference says the same thing.
+
+**The third complaint was not a tuning problem at all, and no amount of accuracy work would have
+touched it.** A bot firing at a wall for thirty rounds was not missing; it was a structural defect in
+the tree, and there were two of them, both in the same place.
+
+meep's `SelectorBehavior` is the textbook selector: it remembers the child it settled on and ticks
+that one until it fails. So the file header's "three things in strict priority" was a description of
+the first frame only. Once `Travel` reported `Running` the fight branch was never reached again — a
+bot walked its whole route past a visible enemy — and once `Fight` was entered, the guard in front of
+it lived in a `Sequence` whose cursor had already moved past it while `Fight` never returned anything
+but `Running`. The guard was a one-shot admission test. The bot fought forever.
+
+`client/ActiveSelector.ts` is the composite the literature already names: "The Behavior Tree Starter
+Kit" — which meep's own `Behavior` docblock cites — calls it `ActiveSelector`, and it re-walks its
+children from the highest priority every tick, aborting a lower-priority running child when a higher
+one is willing to run. The guards moved to meep's `ConditionalBehavior`, which re-asks its condition
+on every tick where a sequence asks once. Between them, the tree now means what it was always
+documented to mean.
+
+With a live guard, `FightBehavior` splits into the two states it always needed: **engage** what it can
+see, and **search** for what it cannot. Searching walks to the last sighting and does not shoot; it
+ends early on arrival — after a `MIN_PURSUIT_SECONDS` floor, so that a player who ducks behind a
+pillar two metres away does not get a bot with no object permanence — or on being wedged, and at the
+latest when `searchSeconds` runs out. `blindFireSeconds` of shooting into the corner somebody just
+went round survives on purpose, because a player does that; at the default level it is 0.2 s, which
+is the difference between a reflex and a tantrum.
+
+**`match.test.ts` lost its floor of 100 shots, and this is the part worth reading twice.** That floor
+was measuring the bug. Against the stationary dummy the file used, bots on `oa_dm1` get *0.4 seconds*
+of line of sight in thirty seconds — the hundred shots came from a bot that had entered the fight
+branch on one glimpse and could never leave it. A test calibrated against a defect passes when the
+defect does.
+
+Its history had already said so twice. D-072 split it 374/110 and 10/420 across the two collision
+paths, and the answer at the time was a per-map floor of 5, which turned "bots have stopped fighting
+on this map" into a passing test; BUG-7 turned out to be the cause and the floor went back to 100.
+Both times the number was fitted to what the build did rather than to what the game should do.
+
+What replaced it is three properties that do not depend on how the run came out, and a scenario that
+can honestly produce them:
+
+- **The player walks.** It is a `Bot` — a body that moves through the same solver everything else
+  moves through, D-072's whole point — driven along the waypoint graph with `moveToward` and given no
+  tree, so it never fights back. The first version of this walker lerped a bare position and dragged
+  the collision body after it, and launched a bot through the floor about one run in five: a
+  kinematic body pulled in a straight line through a wall arrives inside whatever is on the other
+  side. That failure is worth recording because the fix is the same principle the port keeps
+  reaching for — if you want something to move like a player, move it the way the player moves.
+- **A bot that gets a long enough look engages**, where "long enough" is the worst case the table
+  allows: `(reactionSeconds + jitter) / AWARENESS_BEHIND`.
+- **A bot that never gets a look never fires.**
+- **A bot that has lost its target stops shooting**, measured exactly: the harness records the oldest
+  sighting any bot ever pulled a trigger on, and asserts it is inside `blindFireSeconds`. Four
+  sixty-second runs put it at 0.168 to 0.192 s against a bound of 0.2. Before this change the same
+  number was however long a magazine lasts.
+
+The run went from thirty seconds to sixty, and that is not slack for slower bots: at thirty, a whole
+run could pass with the player's random route never crossing a bot's, and "the player took damage"
+would have been a coin toss rather than an assertion. Shot counts across four consecutive
+sixty-second runs on `oa_dm1` were 139, 29, 143 and 219 — a sevenfold spread that no absolute floor
+could sit under honestly, which is the other half of why the floor is gone rather than lowered.
+
+**What deliberately did not change.** No aim prediction, no leading a target, no fuzzy weapon
+weights, no chat, no team play, and still no bot-versus-bot target selection — D-055's cuts stand,
+and the test that asserts them still passes. Difficulty does not touch health, damage, item respawn
+or movement speed: a bot at "Nightmare!" is the same physical object as a bot at "I Can Win", which
+is the property `game/Bot.ts` opens by claiming and the one worth protecting. What difficulty owns is
+attention and the hand, and nothing else.
+
+**The menu row leads the gameplay page**, above field of view, which held that slot since D-126. Every
+other row on that page changes how the game looks to the player; this one changes whether they can
+play it. It is also the row that most needs the menu to leave the game running behind it (D-097),
+because the only way to know whether "Hurt Me Plenty" is the right answer is to watch a bot at it.
+Changing it mid-match is an assignment and nothing more — every number difficulty owns is read out of
+`bot.skill` at the moment it is used — so a bot mid-swing turns at the new rate, and a bot mid-reaction
+finishes the reaction it had already drawn.
+
 ### D-163: the flash where a shot lands is the weapon's colour, and a plasma bolt used to arrive orange
 
 Reported from the screen: a plasma impact lights the wall much warmer than anything else about

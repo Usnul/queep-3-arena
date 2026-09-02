@@ -48,6 +48,7 @@ import { AudioBank, LOOP_BUDGET } from '../client/Audio.ts';
 import { MapSound } from '../client/MapSound.ts';
 import { Bot } from '../game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../client/Bots.ts';
+import { DEFAULT_DIFFICULTY, difficulty } from '../game/Difficulty.ts';
 import { buildWaypoints, linkMapPortals } from '../game/Waypoints.ts';
 import { spawnPoints } from '../game/Spawns.ts';
 import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
@@ -825,8 +826,31 @@ async function main(): Promise<void> {
      real accessor over the master gain node that `SoundEngine.d.ts` -- which
      declares only the fields assigned through `this` -- cannot see. GAP-034.
     */
+    /*
+     Difficulty, which the menu can set before there is a match to set it on.
+
+     The pages are built here, before the map is loaded and long before there is
+     a roster; `settings.applyAll()` a few lines down therefore writes the stored
+     level into this variable and nowhere else. `buildRoster` reads it when there
+     finally are bots, and every later change goes straight through to the
+     running match. Two sinks for one value, and the alternative -- deferring the
+     whole gameplay page until the arena exists -- would mean a menu that has no
+     field of view row while a map is loading. See D-162.
+    */
+    let botSkill = difficulty(DEFAULT_DIFFICULTY);
+    let botRuntime: BotRuntime | null = null;
+
     const settings = new Settings([
-        gameplayPage({ camera: lens, hud }),
+        gameplayPage({
+            camera: lens,
+            hud,
+            bots: {
+                setDifficulty: (id) => {
+                    botSkill = difficulty(id);
+                    botRuntime?.setDifficulty(botSkill);
+                },
+            },
+        }),
         graphicsPage({ graphics, frameRateCounter, shadows }),
         audioPage({
             master: sound as unknown as MasterHost | null,
@@ -1266,10 +1290,16 @@ async function main(): Promise<void> {
 
         /* ---- bots ---- */
 
-        const { botRuntime, characters, botSpawns } = buildRoster({
+        const roster = buildRoster({
             ecd, clipMap, physicsWorld, moverHost, graph, items, movers, arena, audio, player,
-            entrances, bodies,
+            entrances, bodies, skill: botSkill,
         });
+
+        const { characters, botSpawns } = roster;
+
+        // The menu's sink, from here on: a difficulty changed mid-match reaches
+        // the bots that are already standing in the level.
+        botRuntime = roster.botRuntime;
 
         /*
          Once, before the first step. Every body is at the world origin until its

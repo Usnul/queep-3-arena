@@ -40,7 +40,8 @@ import { ItemSystem, type DropTrace, type ItemInstance } from '../src/game/Items
 import { buildWaypoints, linkMapPortals, type WaypointGraph } from '../src/game/Waypoints.ts';
 import { spawnPoints } from '../src/game/Spawns.ts';
 import { Bot } from '../src/game/Bot.ts';
-import { BotRuntime, type BotWorld } from '../src/client/Bots.ts';
+import { AWARENESS_BEHIND, BotRuntime, type BotWorld } from '../src/client/Bots.ts';
+import { DEFAULT_DIFFICULTY, difficulty } from '../src/game/Difficulty.ts';
 import { CharacterBodies, type CharacterSlot } from '../src/client/CharacterBody.ts';
 import { Missiles } from '../src/client/Missiles.ts';
 import { DamageQueries } from '../src/client/DamageQueries.ts';
@@ -149,8 +150,17 @@ class Scoreboard implements WeaponEvents {
     kills = 0;
     projectiles = 0;
 
-    muzzleFlash(): void {
+    /** How many trigger pulls each shooter is responsible for. */
+    readonly shotsBy = new Map<number, number>();
+
+    muzzleFlash(
+        _muzzleQ3: ArrayLike<number>,
+        _forwardQ3: ArrayLike<number>,
+        _weapon: WeaponId,
+        ownerId: number
+    ): void {
         this.shots += 1;
+        this.shotsBy.set(ownerId, (this.shotsBy.get(ownerId) ?? 0) + 1);
     }
     bulletImpact(): void {
         this.impacts += 1;
@@ -182,9 +192,31 @@ interface MatchResult {
     readonly visited: number[];
     readonly pickups: number;
     readonly deaths: number;
-    /** Damage the standing player absorbed, and how many bots ever aimed at it. */
+    /** Damage the walking player absorbed, and how many bots ever engaged it. */
     readonly playerDamage: number;
     readonly engagedBots: number;
+    /** Which of them did, in `bots` order. */
+    readonly engaged: readonly boolean[];
+    /**
+     * The longest unbroken look each bot got at the player, in seconds.
+     *
+     * Line of sight, not attention: a bot with a long look here and no
+     * engagement is a reaction time, and a bot with a short one and an
+     * engagement would be a reaction time that is not being paid.
+     */
+    readonly longestLook: readonly number[];
+    /** Every bot's look time added together, in seconds. */
+    readonly totalLook: number;
+    /**
+     * The oldest a bot's last clear look at the player has ever been at the
+     * moment it pulled the trigger, in seconds.
+     *
+     * Zero when nobody has ever fired blind. This is the number D-162 was
+     * opened for: it used to be however long a magazine lasts, because a bot
+     * that had lost you kept shooting where you were until the ammunition ran
+     * out. It is now bounded by `BotSkill.blindFireSeconds`.
+     */
+    readonly worstBlindShot: number;
 }
 
 /**
@@ -242,28 +274,113 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     };
 
     /*
-     The player: a target at the first spawn point that never moves. Health is
-     kept above zero for the whole run, because a dead player makes every bot
-     drop the fight branch and the point of the run is to exercise it.
+     The player: a body that starts at the first spawn point and walks the level.
+     Health is kept above zero for the whole run, because a dead player makes
+     every bot drop the fight branch and the point of the run is to exercise it.
+
+     It used to stand still, and that was measuring the wrong thing. Bots on
+     `oa_dm1` get *0.4 seconds* of line of sight to a fixed point at that spawn
+     over thirty seconds -- so the hundred shots the old floor asked for were not
+     a fight, they were the blind-fire bug (D-162) turning one glimpse into an
+     emptied magazine. A player who does not move is not the smallest arrangement
+     in which the fight branch runs; it is an arrangement in which the fight
+     branch cannot honestly start. Moving is also the half of the new behaviour a
+     statue cannot reach: the tracking lag aims where the target *was*, and
+     against something that is not going anywhere that is the same as aiming at
+     it.
+
+     It is a `Bot`, and that is not laziness. The first version of this walker
+     lerped a bare position along the graph and pushed the collision body after
+     it, and it launched bots through the floor about one run in five: a
+     kinematic body dragged in a straight line through a wall arrives inside
+     whatever is on the other side. A `Bot` is precisely "a body that moves
+     through the solver the player moves through" -- D-072's whole point -- so
+     driving one with `moveToward` is the harness saying the same thing the
+     shipping code says. Nothing gives it a tree, so it never fights back; that
+     is still `BotRuntime`'s job and this one is not in it.
     */
-    const snappedPlayer = snap(spawns[0]!);
-    const playerOrigin = vec3(snappedPlayer[0]!, snappedPlayer[1]!, snappedPlayer[2]! + 9);
+    const playerSlot = bodies?.create(0) ?? null;
+
+    const player = new Bot({
+        id: 0,
+        name: 'player',
+        character: 'player',
+        cm,
+        spawnQ3: snap(spawns[0]!),
+        physics,
+        movers: () => ({ movers: [] }),
+        moverHost:
+            playerSlot?.host ??
+            (physics === null ? null : { system: physics.system, ecd: physics.ecd }),
+    });
+
+    const playerOrigin = player.origin;
     let playerDamage = 0;
 
-    const player: Damageable = {
-        id: 0,
-        origin: playerOrigin,
-        mins: vec3(-15, -15, -24),
-        maxs: vec3(15, 15, 32),
-        health: 1e9,
-        armor: 0,
-        dead: false,
-    };
-
+    playerSlot?.track(() => player.origin);
     weapons.targets.push(player);
 
-    const playerSlot = bodies?.create(0) ?? null;
-    playerSlot?.track(() => playerOrigin);
+    // Before the first step, so the first `before - after` in the loop measures
+    // damage rather than the gap between a bot's 125 and this dummy's ceiling.
+    player.health = 1e9;
+
+    /*
+     Where it is going: a random tour of the graph's main body, re-planned on
+     arrival and whenever it stops making progress. `Bot.advancePath` and the
+     stuck detection already do all of this for the bots, and reusing them here
+     would have this test's player share a code path with the thing it is meant
+     to be independent of -- so the four lines are written out instead.
+    */
+    let playerRoute: number[] = [];
+    let playerAt = 0;
+    let playerStuck = 0;
+
+    const walkPlayer = (dt: number): void => {
+        const node = graph.nodes[playerRoute[playerAt] ?? -1]?.origin;
+
+        if (node === undefined) {
+            const from = graph.nearestInMainBody(player.origin);
+            if (from >= 0) {
+                const reachable = graph.reachableFrom(from);
+                const candidates: number[] = [];
+                for (let i = 0; i < reachable.length; i++) {
+                    if (reachable[i] === 1) candidates.push(i);
+                }
+                if (candidates.length > 0) {
+                    playerRoute = graph.path(
+                        from,
+                        candidates[(Math.random() * candidates.length) | 0]!
+                    );
+                    playerAt = 0;
+                    playerStuck = 0;
+                }
+            }
+            player.think(dt, dt * 1000);
+            return;
+        }
+
+        const reached =
+            Math.hypot(node[0]! - player.origin[0]!, node[1]! - player.origin[1]!) < 40;
+
+        if (reached) {
+            playerAt += 1;
+            playerStuck = 0;
+        } else {
+            player.moveToward(node);
+            player.lookAt(node);
+
+            // Wedged on a step or a doorframe: take another route rather than
+            // leaning on it for the rest of the match.
+            playerStuck = player.speed < 80 ? playerStuck + dt : 0;
+            if (playerStuck > 1) {
+                playerRoute = [];
+                playerAt = 0;
+                playerStuck = 0;
+            }
+        }
+
+        player.think(dt, dt * 1000);
+    };
 
     const world: BotWorld = {
         graph,
@@ -311,6 +428,12 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     bodies?.sync();
 
     const travelled = runtime.bots.map(() => 0);
+    const look = runtime.bots.map(() => 0);
+    const longestLook = runtime.bots.map(() => 0);
+    const sinceLook = runtime.bots.map(() => Infinity);
+    const firedBefore = runtime.bots.map(() => 0);
+    let totalLook = 0;
+    let worstBlindShot = 0;
     const visited = runtime.bots.map(() => new Set<number>());
     const last = runtime.bots.map((b) => [b.origin[0]!, b.origin[1]!, b.origin[2]!]);
     const wasDead = runtime.bots.map(() => false);
@@ -322,7 +445,42 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     for (let step = 0; step * TICK < seconds; step++) {
         const before = player.health;
 
+        walkPlayer(TICK);
+
+        /*
+         Raw line of sight, taken *before* the bots run and therefore off exactly
+         the positions `BotRuntime.perceive` is about to trace from. Measured by
+         the test rather than read off the bot, because the whole of D-162's
+         reaction model is the difference between the two: `enemyVisible` is what
+         a bot has *noticed*, and this is what it could have.
+        */
+        for (let i = 0; i < runtime.bots.length; i++) {
+            const bot = runtime.bots[i]!;
+            const eye = vec3();
+            bot.eye(eye);
+
+            const clear = !bot.dead && weapons.visible(eye, playerOrigin);
+
+            look[i] = clear ? look[i]! + TICK : 0;
+            longestLook[i] = Math.max(longestLook[i]!, look[i]!);
+            sinceLook[i] = clear ? 0 : sinceLook[i]! + TICK;
+            if (clear) totalLook += TICK;
+
+            firedBefore[i] = board.shotsBy.get(bot.id) ?? 0;
+        }
+
         runtime.update(TICK, TICK * 1000, items.items);
+
+        // Anything fired on a step with no line of sight is a blind shot, and
+        // how blind it was is how long ago the bot last had one.
+        for (let i = 0; i < runtime.bots.length; i++) {
+            const bot = runtime.bots[i]!;
+            const fired = (board.shotsBy.get(bot.id) ?? 0) - firedBefore[i]!;
+
+            if (fired > 0 && sinceLook[i]! > 0) {
+                worstBlindShot = Math.max(worstBlindShot, sinceLook[i]!);
+            }
+        }
 
         /*
          The engine's step, then the game's -- the order `EntityManager` runs
@@ -377,6 +535,10 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
         deaths,
         playerDamage,
         engagedBots: engaged.size,
+        engaged: runtime.bots.map((b) => engaged.has(b.id)),
+        longestLook,
+        totalLook,
+        worstBlindShot,
     };
 }
 
@@ -441,7 +603,7 @@ describe.each(['oa_dm1', 'aggressor'])('a match runs unattended [%s]', (mapName)
      spread and respawn choice, which is why every threshold below is set well
      under what the build achieves rather than at it.
     */
-    const result = play(mapName, 30, 6);
+    const result = play(mapName, 60, 6);
 
     it('puts bots in the level and keeps their state finite', () => {
         expect(result.bots.length).toBe(6);
@@ -473,28 +635,80 @@ describe.each(['oa_dm1', 'aggressor'])('a match runs unattended [%s]', (mapName)
     });
 
     it('has bots find the player, open fire and land hits', () => {
-        expect(result.engagedBots, 'bots that ever saw the player').toBeGreaterThan(0);
+        expect(result.engagedBots, 'bots that ever engaged the player').toBeGreaterThan(0);
+        expect(result.board.shots, `shots fired on ${mapName}`).toBeGreaterThan(0);
+        expect(result.playerDamage, 'damage taken by the player').toBeGreaterThan(0);
+    });
+
+    /*
+     The floor of 100 shots that used to live in the case above is gone, and it
+     is worth saying what it was and why it went rather than quietly loosening
+     it.
+
+     Its history was already a warning. Migrating the bots onto meep's solver
+     (D-072) split it -- 374 shots on `oa_dm1` against the ported path's 110, 10
+     on `aggressor` against 420 -- and I answered that with a per-map floor of 5,
+     which turned "bots have stopped fighting on this map" into a passing test.
+     BUG-7 was the cause, meep 3.2.0 fixed it, and one floor of 100 went back.
+
+     What the floor was actually counting, it turns out, was the bug D-162 fixed.
+     Against the stationary dummy this file used to use, bots on `oa_dm1` get
+     *0.4 seconds* of line of sight in thirty seconds; the hundred shots came
+     from a bot that had entered the fight branch on one glimpse and could never
+     leave it, firing at a corner until it ran dry. With a walking player and a
+     fight branch that ends, the same run fires 18 to 71 shots depending on where
+     the player's random route takes it -- a fourfold spread that no absolute
+     floor can sit under honestly.
+
+     So the count is not asserted at all any more. What is asserted instead is
+     the shape of the behaviour, in three properties that do not depend on how
+     the route came out: a bot that gets a long enough look engages, a bot that
+     gets no look never fires, and a bot that has lost its target stops shooting.
+     Each of them fails loudly for a real regression, which is more than the
+     floor ever did.
+    */
+    it('makes a bot pay a reaction time before it engages', () => {
+        const skill = difficulty(DEFAULT_DIFFICULTY);
 
         /*
-         One threshold for every map, and the history is worth keeping.
+         The worst case, not the mean: `reactionSeconds` is the on-axis figure
+         and a bot looking away from the player builds awareness at
+         `AWARENESS_BEHIND` of the rate, so this is the longest a look can be
+         and still be excused.
+        */
+        const notice =
+            (skill.reactionSeconds + skill.reactionJitterSeconds) / AWARENESS_BEHIND;
 
-         Migrating the bots onto meep's solver (D-072) briefly split this: 374
-         shots on `oa_dm1` against the ported path's 110, and 10 on `aggressor`
-         against 420, with bots there grounded 51.6% of the time and reading as
-         stuck 23.3% of it. I wrote a per-map floor of 5 so the suite stayed
-         green, which was wrong -- it turned "bots have stopped fighting on this
-         map" into a passing test.
+        for (let i = 0; i < result.bots.length; i++) {
+            const look = result.longestLook[i]!;
 
-         The cause was BUG-7, and meep 3.2.0 fixes it: `aggressor` is back to
-         220 shots with bots grounded 89.4% and stuck 4.4%. One floor, both maps,
-         and if either regresses the suite says so.
+            if (look > notice) {
+                expect(
+                    result.engaged[i],
+                    `bot ${i} had a clear ${look.toFixed(2)} s look and never engaged`
+                ).toBe(true);
+            }
+
+            if (look === 0) {
+                expect(result.engaged[i], `bot ${i} engaged a player it never saw`).toBe(false);
+            }
+        }
+    });
+
+    it('stops shooting when it loses sight, rather than emptying the magazine', () => {
+        const skill = difficulty(DEFAULT_DIFFICULTY);
+
+        /*
+         Two ticks of slack, and no more, because the sight this is measured
+         against is sampled one step before the shot it is compared with. The
+         quantity itself is bounded by the difficulty table: a bot may keep
+         firing at the corner somebody went round for `blindFireSeconds` and not
+         one frame longer.
         */
         expect(
-            result.board.shots,
-            `${result.board.shots} shots fired on ${mapName}`
-        ).toBeGreaterThan(100);
-
-        expect(result.playerDamage, 'damage taken by the player').toBeGreaterThan(0);
+            result.worstBlindShot,
+            `oldest sighting a bot on ${mapName} pulled the trigger on, in seconds`
+        ).toBeLessThanOrEqual(skill.blindFireSeconds + 2 * TICK);
     });
 
     it('brings the dead back', () => {

@@ -21,6 +21,7 @@
  */
 
 import { Bot } from '../game/Bot.ts';
+import type { BotSkill } from '../game/Difficulty.ts';
 import { BotRuntime, type BotWorld } from '../client/Bots.ts';
 import { Character, CHARACTERS, type EcsDataset } from '../client/Characters.ts';
 import type { CharacterBodies } from '../client/CharacterBody.ts';
@@ -58,10 +59,18 @@ export function buildRoster(options: {
     entrances: { readonly points: readonly { readonly _originQ3: number[] }[] };
     /** Null on the backends with no meep physics to put a body in. */
     bodies: CharacterBodies | null;
+    /**
+     * How good the opposition is.
+     *
+     * Passed in rather than read from a module default, because the menu owns it
+     * and the menu exists before the roster does -- `main.ts` builds its pages
+     * long before it knows which map it is loading. See D-162.
+     */
+    skill: BotSkill;
 }): Roster {
     const {
         ecd, clipMap, physicsWorld, moverHost, graph, items, movers, arena, audio, player,
-        entrances, bodies,
+        entrances, bodies, skill,
     } = options;
 
     const botSpawns = entrances.points.map((e) => e._originQ3);
@@ -137,6 +146,10 @@ export function buildRoster(options: {
     arena.weapons.targets.push(playerTarget);
 
     const botRuntime = new BotRuntime(botWorld, audio);
+
+    // Before the first `spawn`, which is what stamps it onto each bot.
+    botRuntime.setDifficulty(skill);
+
     const characters: Character[] = [];
 
     /*
