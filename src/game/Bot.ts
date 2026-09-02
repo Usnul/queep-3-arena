@@ -91,7 +91,14 @@ export interface BotOptions extends PmoveHostOptions {
      * select.
      */
     readonly moverHost?: MoverHost | null;
-    /** How good this one is. Defaults to `DEFAULT_DIFFICULTY`. */
+    /**
+     * How good this one is. Defaults to `DEFAULT_DIFFICULTY`.
+     *
+     * For a bot built outside a runtime, which is what a test does.
+     * `BotRuntime.spawn` stamps the *match's* difficulty over this, because a
+     * roster where one bot is at a level the menu never chose is a roster nobody
+     * can reason about.
+     */
     readonly skill?: BotSkill;
     /**
      * Where the aim error and the reaction jitter come from.
@@ -345,7 +352,15 @@ export class Bot implements Damageable {
     aimAt(targetQ3: ArrayLike<number>): void {
         this.lookAt(targetQ3);
         this.desiredYaw += this.aimErrorYaw;
-        this.desiredPitch += this.aimErrorPitch;
+
+        /*
+         Clamped to the range `turn` can actually reach. `pitch` is held inside
+         +/-89 the way Q3 holds a player's, so a desired pitch outside it is one
+         the swing can never arrive at -- and `aimed` compares the two, so the
+         bot would stand there never firing. Reachable only for a target almost
+         directly overhead or underfoot, and cheaper to prevent than to explain.
+        */
+        this.desiredPitch = Math.max(-89, Math.min(89, this.desiredPitch + this.aimErrorPitch));
     }
 
     /** The aim error this bot is carrying right now, in degrees. For tests. */

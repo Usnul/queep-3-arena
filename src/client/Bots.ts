@@ -762,18 +762,14 @@ export class BotRuntime {
 
         const sighted = this.sighted(bot);
 
-        if (!sighted) {
-            board.awareness = Math.max(0, board.awareness - deltaSeconds * skill.forgetRate);
-            return;
-        }
-
-        if (board.awareness <= 0) {
-            /*
-             A fresh engagement. Drawn once here rather than per frame, because a
-             threshold that is re-rolled every frame is a threshold whose
-             *minimum* decides when the bot fires, and that minimum is the same
-             for every bot in the match.
-            */
+        /*
+         A fresh engagement's reaction, drawn once as attention leaves zero --
+         whether it left because the bot saw something or because something hit
+         it. Once rather than per frame, because a threshold re-rolled every
+         frame is a threshold whose *minimum* decides when the bot fires, and
+         that minimum is the same for every bot in the match.
+        */
+        if (board.awareness <= 0 && (sighted || hurt)) {
             board.reactionNeeded = Math.max(
                 0,
                 skill.reactionSeconds +
@@ -781,21 +777,30 @@ export class BotRuntime {
             );
         }
 
-        /*
-         Damage skips the queue. A bot that is being shot has been told where the
-         enemy is by the shot itself, and a reaction time that survived that
-         would be a bot that can be emptied a magazine into from behind while it
-         thinks about it -- which is the failure mode `AWARENESS_BEHIND` would
-         otherwise have introduced, and a worse one than the one it fixes.
-        */
-        board.awareness = hurt
-            ? board.reactionNeeded
-            : Math.min(
-                  board.awareness + deltaSeconds * this.attention(bot),
-                  board.reactionNeeded * AWARENESS_CEILING
-              );
+        if (hurt) {
+            /*
+             Damage skips the queue, and it skips it whether or not the bot can
+             see who did it. A bot that is being shot has been told that
+             *something* is looking at it, which is the half of the news that
+             does not need line of sight; a reaction time that survived it would
+             be a bot that can be emptied a magazine into from behind while it
+             thinks about it, which is the failure `AWARENESS_BEHIND` would
+             otherwise have introduced and a worse one than the one it fixes. It
+             does not tell the bot *where* -- that still needs the trace below --
+             so a bot caught by a stray rocket comes out of it alert rather than
+             informed.
+            */
+            board.awareness = Math.max(board.awareness, board.reactionNeeded);
+        } else if (sighted) {
+            board.awareness = Math.min(
+                board.awareness + deltaSeconds * this.attention(bot),
+                board.reactionNeeded * AWARENESS_CEILING
+            );
+        } else {
+            board.awareness = Math.max(0, board.awareness - deltaSeconds * skill.forgetRate);
+        }
 
-        if (board.awareness < board.reactionNeeded) return;
+        if (!sighted || board.awareness < board.reactionNeeded) return;
 
         bot.enemyVisible = true;
         board.sinceSeen = 0;

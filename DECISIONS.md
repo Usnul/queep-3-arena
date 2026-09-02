@@ -8458,6 +8458,23 @@ would have been a coin toss rather than an assertion. Shot counts across four co
 sixty-second runs on `oa_dm1` were 139, 29, 143 and 219 — a sevenfold spread that no absolute floor
 could sit under honestly, which is the other half of why the floor is gone rather than lowered.
 
+**Two things the adversarial pass found, and both are now cases in `bots.test.ts`.** Damage was
+being read as perception only on frames where the bot could already see the player, which left the
+one hole `AWARENESS_BEHIND` had opened — a bot shot from behind by somebody it has no trace to banks
+nothing and is still slow. It now banks the reaction it owes whether or not the trace clears, and
+still needs the trace before there is anything to fight: an ambushed bot comes out of it alert
+rather than informed. And `aimAt` was adding pitch error to an angle the swing cannot reach, because
+`turn` holds pitch inside ±89 the way Q3 holds a player's; a target almost directly overhead would
+have produced a bot that stood there with `aimed` false forever. Both were reachable, neither was
+reached by any test that existed, and that is the argument for the second file.
+
+`test/bots.test.ts` is that file. `match.test.ts` answers "did a deathmatch happen" and is the wrong
+instrument for "how long after the trace clears": one bot, one target, and `BotWorld.visible` as a
+*variable* is what makes the seconds either side of a sighting assertable at all. Twenty-five cases,
+including the three complaints stated directly — no shot before the reaction is paid, shots that come
+off the true bearing and wander rather than re-roll, and firing that stops inside `blindFireSeconds`
+of losing sight.
+
 **What deliberately did not change.** No aim prediction, no leading a target, no fuzzy weapon
 weights, no chat, no team play, and still no bot-versus-bot target selection — D-055's cuts stand,
 and the test that asserts them still passes. Difficulty does not touch health, damage, item respawn
