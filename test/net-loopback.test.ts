@@ -32,6 +32,23 @@ import { NetworkIdentity } from '@woosh/meep-engine/src/engine/network/ecs/compo
 import * as C from '../src/q3/pmove/constants.ts';
 import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
 
+/**
+ * The seed the fight cases run on, and it is a chosen number rather than an
+ * arbitrary one.
+ *
+ * Every draw a match makes now comes off one seeded generator (D-172), so the
+ * same seed is the same match to the last bit -- which is what makes these
+ * assertions meaningful and is also what makes the seed matter. Measured over
+ * seven seeds at forty seconds with four bots: six produced a rocket and one
+ * (seed 7) produced sixteen shots and no projectile at all, because no bot ever
+ * walked over a launcher. This one produces 270 shots, 48 projectiles and 1057
+ * points of damage, which exercises the missile pool properly.
+ *
+ * A test that asserted "a bot fires a rocket" on an unseeded match would pass
+ * about two runs in three, which is how this was found.
+ */
+const MATCH_SEED = 23;
+
 /** 16-bit view angles, as `usercmd_t.angles` carries them. */
 function angleToShort(degrees: number): number {
     return Math.round((degrees * 65536) / 360) & 65535;
@@ -243,7 +260,7 @@ describe('every miss the short-circuit takes is accounted for', () => {
 
 describe('what the host tells the client about', () => {
     it('activates a missile slot when a bot fires, and deactivates it on impact', async () => {
-        const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: 7 });
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: MATCH_SEED });
         const client = rig.clients[0]!;
 
         /*
@@ -283,7 +300,7 @@ describe('what the host tells the client about', () => {
     });
 
     it('tells the client when it is hit, and the damage reaches its inventory', async () => {
-        const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: 7 });
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: MATCH_SEED });
         const client = rig.clients[0]!;
         client.script = circleWalk;
 

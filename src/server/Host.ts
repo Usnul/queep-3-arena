@@ -316,6 +316,14 @@ export class Host {
 
         const bots = new BotRuntime(botWorld, null);
         bots.setDifficulty(difficulty(options.difficulty ?? DEFAULT_DIFFICULTY));
+        /*
+         Every draw the match makes comes off one seeded generator, so the same
+         seed is the same match. `BotRuntime.random` covers the two choices a
+         bot makes for itself; `botWorld.fire` above seeds the weapon spread
+         from the same source, and `mortality` picks respawn points from it.
+         `Q_crandom` is untouched and still lays out the pellets (D-026).
+        */
+        bots.random = random;
 
         const entityManager = new EntityManager();
         const world = new EntityComponentDataset();
@@ -515,6 +523,15 @@ export class Host {
             physics: this.physics,
             movers: () => ({ movers: [] }),
             moverHost: record.body?.host ?? { system: this.physics.system, ecd: this.physics.ecd },
+            /*
+             The third of a bot's three draws, and the last `Math.random` left
+             in a networked match: `Bot.random` is the aim error's correlated
+             wander and the per-engagement awareness threshold (D-162). Without
+             it here the same seed produced a different fight every run --
+             measured as a loopback test that asked whether any bot had fired a
+             rocket in forty seconds and answered yes about two times in three.
+            */
+            random: this.random,
         });
 
         this.bots.spawn(bot, null);

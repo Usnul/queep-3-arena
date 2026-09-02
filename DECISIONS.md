@@ -9253,3 +9253,57 @@ instead) while sending it everybody else's, and `normalize_if_dirty` puts every 
 back to canonical at the end of a step so the comparison is against a value and not a render blend.
 The host's slot bookkeeping is asserted in the same file: two clients take slots 0 and 1, releasing
 one frees exactly that slot, and the host keeps running with a hole in the middle of its roster.
+
+### D-172: a real socket, and the three `Math.random` calls that made a seeded match unrepeatable
+
+`src/server/wsHost.ts` is a `ws` server, the hello of `NETWORK_PLAN.md` §4.3, and a loop;
+`tools/host.ts` is `npm run host`. `ws` satisfies `WebSocketTransport`'s duck-typed interface with
+no adapter -- `binaryType`, `addEventListener` for message/close/error/open, `send`, `close`,
+`readyState` -- and the one thing to watch is that a server-side binary frame arrives as a Node
+`Buffer` rather than an `ArrayBuffer`, which the adapter drops **silently**; setting
+`socket.binaryType = 'arraybuffer'` on the accepted socket, which `ws` honours, is the whole fix.
+
+**The hello is one text frame, sent before the transport exists**, and the ordering is forced from
+both ends. The host has to pick a slot and write `owner_peer_id` before it calls `session.connect`,
+because INITIAL_SYNC goes out on the host tick after that and ownership is decided at attach time
+(GAP-040) -- a join message arriving later is too late. And the client cannot tag an input until it
+knows what frame it is (GAP-042), and the only place to tell it is a message it reads *before*
+handing the socket to `WebSocketTransport`, because once the transport is listening every frame is a
+packet and a JSON one is a `MalformedPacketError` on the first byte of a session.
+
+**The loop is `setTimeout(1)` and an accumulator, not `setInterval`.** An interval that cannot keep
+up queues its callbacks and then runs them back to back, turning a hitch into a burst; a timeout
+plus an accumulator degrades by *dropping* time instead, and says so in the log. The catch-up budget
+is twelve steps, which is a fifth of a second -- `PmoveSingle`'s own 200 ms ceiling and the same
+number `PlayerController` clamps a step to.
+
+**`test/net-websocket.test.ts` drives the host by hand rather than starting its timer**, yielding to
+the event loop between steps, so it asserts an outcome -- the bytes arrived and meant the right
+thing -- rather than a frame count that depends on how busy the machine is. Measured over a real
+socket: INITIAL_SYNC lands, the client predicts 352 of 360 frames, the host walks 1,902 units on the
+client's input, and the short-circuit holds 343 of 360 against the loopback's 603 of 620. The socket
+costs a little more reconciliation than a loopback and it is a *little*, not a class change.
+
+**And then the flake, which was worth more than the feature.** Running the whole suite in parallel
+turned up an assertion -- "a bot fired a rocket in forty seconds" -- that passed about two runs in
+three. The host had a seeded PRNG from the start and used it for weapon seeds and respawn points,
+and a match still was not repeatable, because a bot makes **three** draws and only one of them was
+mine:
+
+- `BotRuntime`'s goal choice, `Bots.ts:622` -- which corridor a bot walks down;
+- `BotRuntime`'s respawn point, `Bots.ts:673`;
+- `Bot.random`, the aim error's correlated wander and the per-engagement awareness threshold
+  (D-162), which defaults to `Math.random` and which the host never overrode.
+
+All three are injected now and the match is bit-repeatable: three consecutive runs of the loopback
+suite give identical shot, projectile, damage and effect counts. `Q_crandom` is untouched and still
+lays the shotgun pellets out (D-026); this is what seeds it.
+
+**Determinism here is not a netcode requirement and that is worth being clear about.** The game is
+server-authoritative: clients are told what happened and never have to re-derive it, so a bot that
+chose differently would not desync anything. It is a *test* requirement -- with `Math.random` in the
+loop, every number in D-170 and D-171 would be an anecdote rather than a measurement, and an
+assertion about a rocket would be a coin toss. The seed is now load-bearing in one visible way:
+measured across seven seeds at forty seconds with four bots, six produce a rocket and one (seed 7)
+produces sixteen shots and no projectile at all, because no bot happens to walk over a launcher.
+The fight cases name their seed and say why.

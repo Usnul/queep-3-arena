@@ -457,6 +457,23 @@ export class BotRuntime {
      */
     private readonly weaponLoops = new Map<number, { loop: SoundLoop; name: string }>();
 
+    /**
+     * Where a bot's choices come from.
+     *
+     * `Math.random` in single-player, which is what a match has always run on
+     * and is fine there. A networked host injects its own seeded generator
+     * instead, and the reason is not that a server-authoritative game needs
+     * determinism -- clients are told what happened -- but that a *test* has to
+     * be able to run the same match twice. Two of the three draws a bot makes
+     * live here (which goal it walks to, and which spawn it comes back at); the
+     * third is the weapon seed, which `BotWorld.fire` owns.
+     *
+     * Found by a flaky assertion rather than by reading: `net-loopback.test.ts`
+     * asked whether any bot had fired a rocket in forty seconds, and the answer
+     * depended on which corridors the bots had happened to choose.
+     */
+    random: () => number = Math.random;
+
     constructor(world: BotWorld, audio: AudioBank | null = null) {
         this.world = world;
         this.audio = audio;
@@ -619,7 +636,7 @@ export class BotRuntime {
             const candidates: number[] = [];
             for (let i = 0; i < reachable.length; i++) if (reachable[i] === 1) candidates.push(i);
             if (candidates.length === 0) return;
-            bestNode = candidates[(Math.random() * candidates.length) | 0]!;
+            bestNode = candidates[(this.random() * candidates.length) | 0]!;
         }
 
         const path = world.graph.path(from, bestNode);
@@ -670,7 +687,7 @@ export class BotRuntime {
                 bot.respawnIn -= deltaSeconds;
                 if (bot.respawnIn <= 0) {
                     const spawn =
-                        this.world.spawns[(Math.random() * this.world.spawns.length) | 0] ??
+                        this.world.spawns[(this.random() * this.world.spawns.length) | 0] ??
                         [0, 0, 0];
                     bot.respawn(spawn);
 
