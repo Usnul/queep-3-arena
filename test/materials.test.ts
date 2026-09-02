@@ -2205,3 +2205,111 @@ describe('the built maps carry the transmissive surfaces', () => {
         }
     });
 });
+
+/*
+ * A shader whose declaration follows a comment that ran over a line.
+ *
+ * `parseShaderScript` reads line by line and tokenizes each line on its own, so
+ * a block comment that opens and closes on one line is stripped and one that
+ * does not leaks its closing line into the token stream as prose. The reader
+ * already coped with that -- a second bare token before any brace means the
+ * first was not a name -- but it read the name off the *first* line before the
+ * correction ran, so the entry was filed under the prose. It parsed perfectly,
+ * in full, under a key nobody would ever ask for, which is a shader that
+ * silently does not exist: `ShaderIndex.material` falls through to the
+ * implicit-texture branch, and the surface loses its stages, its glow and its
+ * transparency without anything being logged.
+ *
+ * Five of OpenArena's 2,226 shaders were in that state and a sixth was lost on
+ * the same line for a second reason -- its corrected name carried its own brace,
+ * which the correction did not look for. All six are named below, because "the
+ * parser recovers them" and "the parser recovers *these*" are different claims
+ * and only the second one fails when the fix regresses.
+ */
+describe('a shader declared under a comment that ran over a line', () => {
+    const NL = String.fromCharCode(10);
+    const OPEN = '/' + '*';
+    const CLOSE = '*' + '/';
+
+    it('is named by its declaration and not by the comment prose', () => {
+        const source = [
+            OPEN + ' Rocket explosion: take care',
+            '   when using it ' + CLOSE,
+            'rocketExplosion',
+            '{',
+            '    {',
+            '        clampmap textures/oa/fiar.tga',
+            '        blendfunc add',
+            '    }',
+            '}',
+        ].join(NL);
+
+        const entries = parseShaderScript(source, 'synthetic.shader');
+
+        expect(entries.map((e) => e.name)).toEqual(['rocketexplosion']);
+        expect(entries[0]!.stages.length).toBe(1);
+    });
+
+    it('is named by its declaration when the comment closes on a line of its own', () => {
+        const source = [
+            OPEN,
+            'a long commented-out shader',
+            CLOSE,
+            'powerups/quad',
+            '{',
+            '}',
+        ].join(NL);
+
+        expect(parseShaderScript(source, 'synthetic.shader').map((e) => e.name)).toEqual([
+            'powerups/quad',
+        ]);
+    });
+
+    /*
+     The second half of the same line, and the second reason a shader went
+     missing: the corrected name can open its own block. `sawOpen` was answered
+     for the line that was discarded, so `menu/art/skill1 {` was passed over, the
+     reader kept looking, and the entry ended up named for the comment with its
+     first stage eaten as the shader body.
+    */
+    it('sees the brace on the line it adopts as the name', () => {
+        const source = [
+            OPEN + ' ======',
+            'botskill icons',
+            '====== ' + CLOSE,
+            'menu/art/skill1 {',
+            '    nopicmip',
+            '    {',
+            '        clampmap menu/art/skill1',
+            '        blendFunc blend',
+            '    }',
+            '}',
+        ].join(NL);
+
+        const entries = parseShaderScript(source, 'synthetic.shader');
+
+        expect(entries.map((e) => e.name)).toEqual(['menu/art/skill1']);
+        expect(entries[0]!.stages.length, 'the stage was eaten as the shader body').toBe(1);
+    });
+
+    /** And the six real ones, against the scripts they were found in. */
+    it('recovers the six OpenArena shaders this lost', () => {
+        const index = new ShaderIndex(EXTRACTED).load();
+
+        for (const name of [
+            'rocketExplosion',
+            'grenadeExplosion',
+            'bfgExplosion',
+            'powerups/quad',
+            'powerups/battlesuit',
+            'menu/art/skill1',
+        ]) {
+            expect(index.entry(name), name + ' is missing from the index').not.toBeNull();
+        }
+
+        // ...and the prose they used to be filed under is not a shader.
+        expect(index.entry('take'), 'a comment is not a shader').toBeNull();
+        expect(index.entry(CLOSE), 'nor is a comment terminator').toBeNull();
+        expect(index.entry('botskill')).toBeNull();
+    });
+});

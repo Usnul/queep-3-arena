@@ -8669,3 +8669,64 @@ beam each where a flash collapses, and that all three refusals -- a bot, a corps
 weapon -- still draw from the point the simulation gave. Four of its ten fail against the code this
 entry replaces. `first-person.test.ts` keeps what a beam *is* -- width, colour, fade, both ends --
 and is untouched.
+
+### D-165: six shaders were filed under the comment above them, and the name was read before the line that decides it
+
+Found while reaching for `rocketExplosion` to measure what colour Q3 paints an explosion (D-166):
+`ShaderIndex.entry('rocketExplosion')` is `null`, and so are `grenadeExplosion` and `bfgExplosion`
+-- three of the five explosion shaders in the game, in a file whose other entries load.
+
+**They parse. They are filed under the wrong name.** `parseShaderScript` reads line by line and
+tokenizes each line on its own, which the note above `directiveLines` explains and defends. The
+tokenizer understands block comments, so one that opens and closes on a single line disappears; one
+that runs over a line has its closing line tokenized as prose. The reader already coped with that --
+"a second bare token before any brace means the previous one was not a shader name after all" -- but
+it had already read `name` off the *first* line, at the top of the loop, and never re-read it after
+deciding the name was something else.
+
+`weaponhits.shader` writes this above three of its explosions:
+
+```
+/* Rocket explosion: inversesawtooth can be glitchy when seen from faraway (especially with 0 baseline value)
+   take care when using it */
+rocketExplosion
+```
+
+The second line tokenizes as `take care when using it` plus a terminator, so all three were filed
+as `take`, one overwriting the next. `shells.shader` ends a 40-line commented-out block with the
+terminator alone on the line above `powerups/quad` and `powerups/battlesuit`, so both were filed
+under the terminator.
+
+**A sixth was lost on the same line for a second reason.** `sawOpen` was answered for the line the
+reader threw away and never re-asked of the line it adopted, so a corrected name carrying its own
+brace -- `menu/art/skill1 {`, under a three-line banner comment in `iconsprites.shader` -- was
+passed over, the reader kept looking, and the entry came out named `botskill` with its only stage
+eaten as the shader body.
+
+Both are one line each: ask `sawOpen` of the adopted line, and read `name` after the loop that
+decides what the name is rather than before it. Measured across all 104 scripts, the entry count is
+unchanged at 2,226 and exactly six names move:
+
+| was | is |
+| --- | --- |
+| `take` (x3) | `rocketexplosion`, `grenadeexplosion`, `bfgexplosion` |
+| the terminator (x2) | `powerups/quad`, `powerups/battlesuit` |
+| `botskill`, 0 stages | `menu/art/skill1`, 1 stage |
+
+**What it cost while it was broken.** A shader that is not in the index is not an error anywhere:
+`ShaderIndex.material` falls through to its implicit-texture branch, which has no stages, and so no
+transparency, no glow, no alpha test and no `tcGen`. Nothing is logged, because a name with no
+script is the ordinary case for most of a map. None of the six is a BSP surface on a converted map,
+so no map material moved -- `material-matrix --check` and `extract-effect-widths --check` both pass
+unchanged -- and the practical cost was the three explosion shaders being unreachable, which is what
+surfaced it. The powerup shells are the visual on a player holding Quad or Battle Suit, which this
+port does not draw yet; when it does, they are now there.
+
+**The tokenizer was left alone deliberately.** Carrying comment state across lines is the deeper
+repair and it is a different change: the line-oriented reader is a documented choice, and a block
+comment that *ended* mid-line rather than at the end of one would still arrive at the correction
+branch. Reading the name after the loop is right whether or not the tokenizer is ever made stateful.
+
+`materials.test.ts` pins both halves on synthetic sources -- so the failure is legible without the
+asset tree -- and then names the six real shaders, because "the parser recovers them" and "the
+parser recovers *these*" are different claims and only the second one fails when this regresses.

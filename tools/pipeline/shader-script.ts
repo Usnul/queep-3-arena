@@ -157,8 +157,6 @@ export function parseShaderScript(
         if (nameTokens.length === 0) continue;
         if (nameTokens[0] === '{' || nameTokens[0] === '}') continue;
 
-        const name = nameTokens[0]!.replace(/\\/g, '/').toLowerCase();
-
         // The opening brace may be on the name line or the next non-blank line.
         let sawOpen = nameTokens.includes('{');
 
@@ -170,10 +168,45 @@ export function parseShaderScript(
                 sawOpen = true;
                 break;
             }
-            // A second bare token before any brace means the previous one was not
-            // a shader name after all -- treat this one as the name instead.
+            /*
+             A second bare token before any brace means the previous one was not
+             a shader name after all -- treat this one as the name instead, and
+             then ask the replacement the same question the first line was asked.
+             `sawOpen` used to be answered for the discarded line only, so a
+             corrected name that opened its own block -- `foo {` -- fell through
+             to the next line and lost its brace.
+            */
             nameTokens = t;
+            sawOpen = t.includes('{');
         }
+
+        /*
+         **The name is read after the loop that decides what the name is**, and
+         used to be read before it. A shader reached by the correction above was
+         filed under the token that was thrown away: the entry parsed correctly,
+         in full, under the wrong key -- which is a shader that silently does not
+         exist, and whose surfaces fall through `ShaderIndex.material` to the
+         implicit-texture branch with no stages, no glow and no transparency.
+
+         Five of OA's 2,226 were in that state and all five for one reason: a
+         block comment more than one line long sitting directly above the
+         declaration. The tokenizer does understand block comments, but it is
+         applied *per line* here -- see the note above `directiveLines` -- so it
+         strips one that opens and closes on a single line and never sees the
+         continuation of one that does not. `weaponhits.shader` writes
+         `take care when using it` on the closing line of a two-line comment
+         above three of its explosions, which reads as a shader named `take`;
+         `shells.shader` closes a 40-line commented-out block with a terminator
+         alone on the line above `powerups/quad`, which reads as a shader whose
+         name is that terminator. Both then hit the correction above, and both
+         were filed under the prose.
+
+         Carrying comment state across lines would be the deeper repair and is
+         deliberately not this one: the line-oriented reader is a documented
+         choice, and a block comment that *ended* mid-line would still land here.
+         Reading the name after the loop costs nothing and is right either way.
+        */
+        const name = nameTokens[0]!.replace(/\\/g, '/').toLowerCase();
 
         if (!sawOpen) {
             onWarning(`${filename}: '${name}' has no opening brace; skipped`);
