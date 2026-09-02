@@ -1,324 +1,413 @@
 {
  "generator": "queep-3-arena tools/convert-sounds.ts",
+ "encoder": "ffmpeg version 8.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers, libvorbis -q:a 5",
  "sounds": {
   "weapon/WP_GAUNTLET": [
-   "weapons_melee_fstatck.wav"
+   "weapons_melee_fstatck.ogg"
   ],
   "weapon/WP_MACHINEGUN": [
-   "weapons_machinegun_machgf1b.wav",
-   "weapons_machinegun_machgf2b.wav",
-   "weapons_machinegun_machgf3b.wav",
-   "weapons_machinegun_machgf4b.wav"
+   "weapons_machinegun_machgf1b.ogg",
+   "weapons_machinegun_machgf2b.ogg",
+   "weapons_machinegun_machgf3b.ogg",
+   "weapons_machinegun_machgf4b.ogg"
   ],
   "weapon/WP_SHOTGUN": [
-   "weapons_shotgun_sshotf1b.wav"
+   "weapons_shotgun_sshotf1b.ogg"
   ],
   "weapon/WP_GRENADE_LAUNCHER": [
-   "weapons_grenade_grenlf1a.wav"
+   "weapons_grenade_grenlf1a.ogg"
   ],
   "weapon/WP_ROCKET_LAUNCHER": [
-   "weapons_rocket_rocklf1a.wav"
+   "weapons_rocket_rocklf1a.ogg"
   ],
   "weapon/WP_LIGHTNING": [
-   "weapons_lightning_lg_fire.wav"
+   "weapons_lightning_lg_fire.ogg"
   ],
   "weapon/WP_RAILGUN": [
-   "weapons_railgun_railgf1a.wav"
+   "weapons_railgun_railgf1a.ogg"
   ],
   "weapon/WP_PLASMAGUN": [
-   "weapons_plasma_hyprbf1a.wav"
+   "weapons_plasma_hyprbf1a.ogg"
   ],
   "weapon/WP_BFG": [
-   "weapons_bfg_bfg_fire.wav"
+   "weapons_bfg_bfg_fire.ogg"
   ],
   "weapon/WP_CHAINGUN": [
-   "weapons_vulcan_vulcanf1b.wav",
-   "weapons_vulcan_vulcanf2b.wav",
-   "weapons_vulcan_vulcanf3b.wav",
-   "weapons_vulcan_vulcanf4b.wav"
+   "weapons_vulcan_vulcanf1b.ogg",
+   "weapons_vulcan_vulcanf2b.ogg",
+   "weapons_vulcan_vulcanf3b.ogg",
+   "weapons_vulcan_vulcanf4b.ogg"
   ],
   "weapon/WP_NAILGUN": [
-   "weapons_nailgun_wnalfire.wav"
+   "weapons_nailgun_wnalfire.ogg"
   ],
   "weapon/WP_PROX_LAUNCHER": [
-   "weapons_proxmine_wstbfire.wav"
+   "weapons_proxmine_wstbfire.ogg"
   ],
   "weapon/empty": [
-   "weapons_noammo.wav"
+   "weapons_noammo.ogg"
   ],
   "weapon/change": [
-   "weapons_change.wav"
+   "weapons_change.ogg"
   ],
   "impact/bullet": [
-   "weapons_machinegun_ric1.wav",
-   "weapons_machinegun_ric2.wav",
-   "weapons_machinegun_ric3.wav"
+   "weapons_machinegun_ric1.ogg",
+   "weapons_machinegun_ric2.ogg",
+   "weapons_machinegun_ric3.ogg"
   ],
   "impact/rocket": [
-   "weapons_rocket_rocklx1a.wav"
+   "weapons_rocket_rocklx1a.ogg"
   ],
   "impact/plasma": [
-   "weapons_plasma_plasmx1a.wav"
+   "weapons_plasma_plasmx1a.ogg"
   ],
   "impact/lightning": [
-   "weapons_lightning_lg_hit.wav",
-   "weapons_lightning_lg_hit2.wav",
-   "weapons_lightning_lg_hit3.wav"
+   "weapons_lightning_lg_hit.ogg",
+   "weapons_lightning_lg_hit2.ogg",
+   "weapons_lightning_lg_hit3.ogg"
   ],
   "impact/prox": [
-   "weapons_proxmine_wstbexpl.wav"
+   "weapons_proxmine_wstbexpl.ogg"
   ],
   "impact/nail": [
-   "weapons_nailgun_wnalimpm.wav"
+   "weapons_nailgun_wnalimpm.ogg"
   ],
   "impact/flesh": [
-   "player_gibimp1.wav",
-   "player_gibimp2.wav",
-   "player_gibimp3.wav"
+   "player_gibimp1.ogg",
+   "player_gibimp2.ogg",
+   "player_gibimp3.ogg"
   ],
   "feedback/hit": [
-   "feedback_hit.wav"
+   "feedback_hit.ogg"
   ],
   "player/footstep": [
-   "player_footsteps_step1.wav",
-   "player_footsteps_step2.wav",
-   "player_footsteps_step3.wav",
-   "player_footsteps_step4.wav"
+   "player_footsteps_step1.ogg",
+   "player_footsteps_step2.ogg",
+   "player_footsteps_step3.ogg",
+   "player_footsteps_step4.ogg"
   ],
   "player/land": [
-   "player_land1.wav"
+   "player_land1.ogg"
   ],
   "player/jump": [
-   "player_sarge_jump1.wav"
+   "player_sarge_jump1.ogg"
   ],
   "mover/door_start": [
-   "movers_doors_dr1_strt.wav"
+   "movers_doors_dr1_strt.ogg"
   ],
   "mover/door_stop": [
-   "movers_doors_dr1_end.wav"
+   "movers_doors_dr1_end.ogg"
   ],
   "mover/plat_start": [
-   "movers_plats_pt1_strt.wav"
+   "movers_plats_pt1_strt.ogg"
   ],
   "mover/plat_stop": [
-   "movers_plats_pt1_end.wav"
+   "movers_plats_pt1_end.ogg"
   ],
   "mover/button": [
-   "movers_switches_butn2.wav"
+   "movers_switches_butn2.ogg"
   ],
   "world/jumppad": [
-   "world_jumppad.wav"
+   "world_jumppad.ogg"
   ],
   "world/telein": [
-   "world_telein.wav"
+   "world_telein.ogg"
   ],
   "world/teleout": [
-   "world_teleout.wav"
+   "world_teleout.ogg"
   ],
   "missile/WP_ROCKET_LAUNCHER": [
-   "weapons_rocket_rockfly.wav"
+   "weapons_rocket_rockfly.ogg"
   ],
   "missile/WP_PLASMAGUN": [
-   "weapons_plasma_lasfly.wav"
+   "weapons_plasma_lasfly.ogg"
   ],
   "missile/WP_BFG": [
-   "weapons_rocket_rockfly.wav"
+   "weapons_rocket_rockfly.ogg"
   ],
   "firing/WP_GAUNTLET": [
-   "weapons_melee_fstrun.wav"
+   "weapons_melee_fstrun.ogg"
   ],
   "firing/WP_LIGHTNING": [
-   "weapons_lightning_lg_hum.wav"
+   "weapons_lightning_lg_hum.ogg"
   ],
   "firing/WP_CHAINGUN": [
-   "weapons_vulcan_wvulfire.wav"
+   "weapons_vulcan_wvulfire.ogg"
   ],
   "ready/WP_GAUNTLET": [
-   "weapons_melee_fsthum.wav"
+   "weapons_melee_fsthum.ogg"
   ],
   "ready/WP_RAILGUN": [
-   "weapons_railgun_rg_hum.wav"
+   "weapons_railgun_rg_hum.ogg"
   ],
   "ready/WP_BFG": [
-   "weapons_bfg_bfg_hum.wav"
+   "weapons_bfg_bfg_hum.ogg"
   ],
   "item/hover": [
-   "weapons_weapon_hover.wav"
+   "weapons_weapon_hover.ogg"
   ],
   "item/item_armor_shard": [
-   "misc_ar1_pkup.wav"
+   "misc_ar1_pkup.ogg"
   ],
   "item/item_armor_combat": [
-   "misc_ar2_pkup.wav"
+   "misc_ar2_pkup.ogg"
   ],
   "item/item_armor_body": [
-   "misc_ar2_pkup.wav"
+   "misc_ar2_pkup.ogg"
   ],
   "item/item_health_small": [
-   "items_s_health.wav"
+   "items_s_health.ogg"
   ],
   "item/item_health": [
-   "items_n_health.wav"
+   "items_n_health.ogg"
   ],
   "item/item_health_large": [
-   "items_l_health.wav"
+   "items_l_health.ogg"
   ],
   "item/item_health_mega": [
-   "items_m_health.wav"
+   "items_m_health.ogg"
   ],
   "item/weapon_gauntlet": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_shotgun": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_machinegun": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_grenadelauncher": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_rocketlauncher": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_lightning": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_railgun": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_plasmagun": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_bfg": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_grapplinghook": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/ammo_shells": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_bullets": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_grenades": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_cells": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_lightning": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_rockets": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_slugs": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_bfg": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/holdable_teleporter": [
-   "items_holdable.wav"
+   "items_holdable.ogg"
   ],
   "item/holdable_medkit": [
-   "items_holdable.wav"
+   "items_holdable.ogg"
   ],
   "item/item_quad": [
-   "items_quaddamage.wav"
+   "items_quaddamage.ogg"
   ],
   "item/item_enviro": [
-   "items_protect.wav"
+   "items_protect.ogg"
   ],
   "item/item_haste": [
-   "items_haste.wav"
+   "items_haste.ogg"
   ],
   "item/item_invis": [
-   "items_invisibility.wav"
+   "items_invisibility.ogg"
   ],
   "item/item_regen": [
-   "items_regeneration.wav"
+   "items_regeneration.ogg"
   ],
   "item/item_flight": [
-   "items_flight.wav"
+   "items_flight.ogg"
   ],
   "item/holdable_kamikaze": [
-   "items_holdable.wav"
+   "items_holdable.ogg"
   ],
   "item/holdable_portal": [
-   "items_holdable.wav"
+   "items_holdable.ogg"
   ],
   "item/holdable_invulnerability": [
-   "items_holdable.wav"
+   "items_holdable.ogg"
   ],
   "item/ammo_nails": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_mines": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/ammo_belt": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/item_scout": [
-   "items_scout.wav"
+   "items_scout.ogg"
   ],
   "item/item_guard": [
-   "items_guard.wav"
+   "items_guard.ogg"
   ],
   "item/item_doubler": [
-   "items_doubler.wav"
+   "items_doubler.ogg"
   ],
   "item/item_ammoregen": [
-   "items_ammoregen.wav"
+   "items_ammoregen.ogg"
   ],
   "item/item_redcube": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/item_bluecube": [
-   "misc_am_pkup.wav"
+   "misc_am_pkup.ogg"
   ],
   "item/weapon_nailgun": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_prox_launcher": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "item/weapon_chaingun": [
-   "misc_w_pkup.wav"
+   "misc_w_pkup.ogg"
   ],
   "music/OA14": [
    "music_OA14.ogg"
   ],
   "world/wind1": [
-   "world_wind1.wav"
+   "world_wind1.ogg"
   ],
   "world/lava_amb_01_quiet": [
-   "world_lava_amb_01_quiet.wav"
+   "world_lava_amb_01_quiet.ogg"
   ],
   "world/ambient/x_ominous": [
-   "world_ambient_x_ominous.wav"
+   "world_ambient_x_ominous.ogg"
   ],
   "world/suck1": [
-   "world_suck1.wav"
+   "world_suck1.ogg"
   ],
   "world/ambient/x_forbidden": [
-   "world_ambient_x_forbidden.wav"
+   "world_ambient_x_forbidden.ogg"
   ],
   "world/growl1": [
-   "world_growl1.wav"
+   "world_growl1.ogg"
   ],
   "world/firesoft": [
-   "world_firesoft.wav"
+   "world_firesoft.ogg"
   ],
   "world/waterfall": [
-   "world_waterfall.wav"
+   "world_waterfall.ogg"
   ],
   "world/drops": [
-   "world_drops.wav"
+   "world_drops.ogg"
   ]
+ },
+ "durations": {
+  "weapons_melee_fstatck.ogg": 0.9803174603174604,
+  "weapons_machinegun_machgf1b.ogg": 0.4593424036281179,
+  "weapons_machinegun_machgf2b.ogg": 0.5392743764172335,
+  "weapons_machinegun_machgf3b.ogg": 0.515827664399093,
+  "weapons_machinegun_machgf4b.ogg": 0.5301360544217687,
+  "weapons_shotgun_sshotf1b.ogg": 0.9748299319727891,
+  "weapons_grenade_grenlf1a.ogg": 0.6129705215419501,
+  "weapons_rocket_rocklf1a.ogg": 1.7501587301587302,
+  "weapons_lightning_lg_fire.ogg": 0.9171882086167801,
+  "weapons_railgun_railgf1a.ogg": 1.6105215419501133,
+  "weapons_plasma_hyprbf1a.ogg": 0.3134920634920635,
+  "weapons_bfg_bfg_fire.ogg": 0.770249433106576,
+  "weapons_vulcan_vulcanf1b.ogg": 1.1736281179138321,
+  "weapons_vulcan_vulcanf2b.ogg": 0.8432199546485261,
+  "weapons_vulcan_vulcanf3b.ogg": 0.8140362811791383,
+  "weapons_vulcan_vulcanf4b.ogg": 1.0496371882086168,
+  "weapons_nailgun_wnalfire.ogg": 0.9650793650793651,
+  "weapons_proxmine_wstbfire.ogg": 1.213469387755102,
+  "weapons_noammo.ogg": 0.46514739229024943,
+  "weapons_change.ogg": 0.7124716553287982,
+  "weapons_machinegun_ric1.ogg": 0.5,
+  "weapons_machinegun_ric2.ogg": 0.5,
+  "weapons_machinegun_ric3.ogg": 0.25,
+  "weapons_rocket_rocklx1a.ogg": 1.4607936507936508,
+  "weapons_plasma_plasmx1a.ogg": 1.5678004535147392,
+  "weapons_lightning_lg_hit.ogg": 0.3600453514739229,
+  "weapons_lightning_lg_hit2.ogg": 0.46,
+  "weapons_lightning_lg_hit3.ogg": 0.35560090702947844,
+  "weapons_proxmine_wstbexpl.ogg": 1.0352154195011338,
+  "weapons_nailgun_wnalimpm.ogg": 0.9803174603174604,
+  "player_gibimp1.ogg": 0.75,
+  "player_gibimp2.ogg": 0.8965986394557823,
+  "player_gibimp3.ogg": 0.8904535147392291,
+  "feedback_hit.ogg": 0.5324489795918367,
+  "player_footsteps_step1.ogg": 0.09315192743764172,
+  "player_footsteps_step2.ogg": 0.152562358276644,
+  "player_footsteps_step3.ogg": 0.09619047619047619,
+  "player_footsteps_step4.ogg": 0.09619047619047619,
+  "player_land1.ogg": 0.5411791383219955,
+  "player_sarge_jump1.ogg": 0.3851700680272109,
+  "movers_doors_dr1_strt.ogg": 1.3298185941043084,
+  "movers_doors_dr1_end.ogg": 1.8099092970521542,
+  "movers_plats_pt1_strt.ogg": 2.3779138321995466,
+  "movers_plats_pt1_end.ogg": 0.5262585034013605,
+  "movers_switches_butn2.ogg": 0.7479138321995464,
+  "world_jumppad.ogg": 1.1096598639455781,
+  "world_telein.ogg": 1.384716553287982,
+  "world_teleout.ogg": 0.5486167800453515,
+  "weapons_rocket_rockfly.ogg": 2.426031746031746,
+  "weapons_plasma_lasfly.ogg": 1.0000907029478459,
+  "weapons_melee_fstrun.ogg": 1.4729024943310658,
+  "weapons_lightning_lg_hum.ogg": 2.780498866213152,
+  "weapons_vulcan_wvulfire.ogg": 0.776485260770975,
+  "weapons_melee_fsthum.ogg": 1.3025850340136054,
+  "weapons_railgun_rg_hum.ogg": 7.213424036281179,
+  "weapons_bfg_bfg_hum.ogg": 2.0001814058956917,
+  "weapons_weapon_hover.ogg": 0.46058956916099775,
+  "misc_ar1_pkup.ogg": 0.1627747466874513,
+  "misc_ar2_pkup.ogg": 0.6335600907029478,
+  "items_s_health.ogg": 0.20099773242630387,
+  "items_n_health.ogg": 0.16625850340136056,
+  "items_l_health.ogg": 0.3325170068027211,
+  "items_m_health.ogg": 1.25,
+  "misc_w_pkup.ogg": 0.830952380952381,
+  "misc_am_pkup.ogg": 0.4652607709750567,
+  "items_holdable.ogg": 0.3212925170068027,
+  "items_quaddamage.ogg": 1.740453514739229,
+  "items_protect.ogg": 1.2084807256235828,
+  "items_haste.ogg": 0.5460997732426304,
+  "items_invisibility.ogg": 1.3134013605442176,
+  "items_regeneration.ogg": 1.0502947845804989,
+  "items_flight.ogg": 0.5066213151927438,
+  "items_scout.ogg": 0.5601814058956917,
+  "items_guard.ogg": 0.5601814058956917,
+  "items_doubler.ogg": 0.5601814058956917,
+  "items_ammoregen.ogg": 0.5601814058956917,
+  "music_OA14.ogg": 105.5115,
+  "world_wind1.ogg": 5.74827664399093,
+  "world_lava_amb_01_quiet.ogg": 5.9399546485260775,
+  "world_ambient_x_ominous.ogg": 10,
+  "world_suck1.ogg": 2,
+  "world_ambient_x_forbidden.ogg": 8.749297052154194,
+  "world_growl1.ogg": 3.5401814058956917,
+  "world_firesoft.ogg": 6.5790702947845805,
+  "world_waterfall.ogg": 1.359092970521542,
+  "world_drops.ogg": 18.001269841269842
  },
  "missing": [
   "music/sonic6: music/sonic6.ogg",
@@ -327,7 +416,8 @@
  "stats": {
   "names": 101,
   "files": 86,
-  "kilobytes": 8833,
+  "kilobytes": 2324,
+  "sourceKilobytes": 8833,
   "missing": 2,
   "maps": 6,
   "fromMaps": 12

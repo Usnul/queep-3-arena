@@ -895,9 +895,10 @@ with, so a map's string and the copied file cannot drift apart. Two names come b
 every run -- `oa_dm1` and `oa_dm5` ask for `music/sonic6.ogg` and `music/sonic3.ogg`, Q3-original
 tracks OA does not ship -- and that is the manifest doing its job rather than a fault to fix.
 
-Copied rather than transcoded: OA's WAVs are PCM, every browser decodes them through
-`decodeAudioData`, and re-encoding would trade a real quality loss against a saving on assets that
-are not committed anyway.
+Copied rather than transcoded, which lasted until someone checked the premise: "assets that are
+not committed anyway" was wrong -- `assets/` is committed, and only `ml/` and `download/` are not.
+The bank is Ogg Vorbis now, at a sixth of the size, and the quality argument was measured rather
+than assumed. See D-175.
 
 ---
 
@@ -9600,4 +9601,121 @@ parameters as writable arrays rather than as something read-only, so `ArrayLike<
 acceptable argument; the port introduced `Vec3Like` and widened five signatures rather than
 casting. Written up as an ergonomics note in the report rather than as a gap -- the functions work,
 they just make a consumer give up a read-only type.
-"""
+
+### D-175: the sound bank is Ogg Vorbis, and the browser's decoder is not the file's decoder
+
+The bank was 85 PCM WAVs, 7.6 MB, copied byte for byte out of OpenArena's pk3. D-049 recorded the
+reason for not transcoding them as a quality loss traded against "a saving on assets that are not
+committed anyway", and the second half of that was simply false: `assets/` *is* committed -- only
+`ml/` and `download/` are not -- so the 7.6 MB was 7.6 MB in the repository and 7.6 MB down the
+wire on every load. It is now 1.2 MB.
+
+**Vorbis rather than Opus, and not for the reason you would expect.** Opus is the better codec at
+low bitrates, and here it is not better. Measured over the whole bank:
+
+| | total | of WAV |
+|---|---|---|
+| source WAV | 7,768 KB | |
+| Vorbis `-q:a 4` | 1,136 KB | 14.6% |
+| Vorbis `-q:a 5` | 1,260 KB | 16.2% |
+| Opus 64 kbps VBR | 1,116 KB | 14.4% |
+
+Vorbis q4 and Opus at 64 kbps land within 2% of each other, so Opus's bitrate advantage buys
+nothing on this material: 85 short mono files at 11 to 44.1 kHz, most of them under a second. What
+separates the two is how close each stays to the source. Decoded back at the 48 kHz an
+`AudioContext` actually runs at, and compared with the WAV sample for sample:
+
+| | mean | median | worst |
+|---|---|---|---|
+| Vorbis q4 | 22.7 dB | 22.1 dB | 10.1 dB |
+| Vorbis q5 | 24.3 dB | 23.9 dB | 11.4 dB |
+| Opus 64 kbps | 15.4 dB | 16.6 dB | 0.2 dB |
+
+Signal-to-noise is a poor stand-in for what a listener hears, and Opus spends its bits on things
+this measurement does not reward, so the gap is smaller than it looks. The 0.2 dB is still worth
+looking at: it is `weapons/bfg/bfg_hum.wav`, an 11 kHz sustained tone that plays as a *loop*, and
+Opus resamples every input to 48 kHz whether the input wants it or not. At identical size, a codec
+that keeps the sample rate it was handed and stays measurably nearer the waveform is the better
+fit for a port whose whole argument is faithfulness. `-q:a 5` over q4 costs 124 KB and returns a
+uniform 1.6 dB on a bank that is 1.2 MB either way, so it is bought; q6 costs another 156 KB for
+1.4 dB and is not.
+
+Vorbis has one real weakness here and it should be named: its codebook setup header is about 4 KB,
+which across 85 short files is roughly a third of the output. Three of them come out *larger* than
+the WAV they replaced, all footsteps and all under 100 ms -- `player/footsteps/step1` is 4,713
+bytes against 4,152. Opus's headers are a few dozen bytes and would have saved that ~300 KB. Paid,
+for the fidelity. What actually shipped: 7,768 KB of WAV became 1,259 KB of Ogg, 16.2%.
+
+**It is not a new format dependency either.** The bank already carried a Vorbis file before any of
+this: `music/OA14.ogg` is OpenArena's own music, copied out of the pk3 and played through the same
+`decodeAudioData` as everything else. A source that is already Ogg is still copied rather than
+re-encoded, because lossy to lossy is a second generation of loss bought for nothing.
+
+**The finding: two decoders, two lengths, and neither of them is the file's.** The converter was
+written to verify each transcode by decoding it back, the way `bake-audio.ts` reads its own output
+back. The first version compared lengths and failed thirteen files, reporting up to 256 samples
+lost at -6 dBFS -- audible content chopped off the end of a pickup. It was wrong, and the way it
+was wrong is the interesting part:
+
+- **ffmpeg's decoder stops short.** Over the 85 files it returns up to 256 samples fewer than the
+  file holds. `items/holdable` decodes to 14,041 samples where the source had 14,169.
+- **The file is right.** That same file's last Ogg packet sits at granule 14,144 with a duration of
+  25, which ends at exactly 14,169; `ffprobe` reads the duration back as 0.321293 s, which at
+  44.1 kHz is 14,169 samples. Every one of the 85 declares its source's length exactly.
+- **Chrome's decoder overshoots.** It hands back whole blocks and ignores the end trim entirely:
+  between 14 and 1,111 samples *more* than declared, on every file in the bank. Nothing is lost --
+  the worst lost peak across all 85 is 0.0000 -- and nothing is shifted, because all 85 correlate
+  best at offset zero.
+
+So a length check against a decoder is a check on the decoder. What the encoder is answerable for
+is the file, and the file says how long it is: `convert-sounds.ts` now checks the declared length
+against the source's sample count, to within the sample that reading a duration back as seconds
+can round away, and uses the decode only to check that the signal still correlates with the one
+that went in -- a wiring check with a floor at 3 dB, far below the 11.4 dB worst case, because its
+job is to catch the wrong file or a dropped channel and not to grade the encoder.
+
+Both gates were checked to fail on real faults rather than assumed to work, the way D-174's
+suites were. Truncating every encode to 50 ms (`-af atrim=end=0.05`) fails the length gate on all
+85. Reversing every encode (`-af areverse`), which keeps the length exactly and destroys nothing
+else, fails the correlation gate on 81 of 85 at -3.0 dB -- the -3 dB two uncorrelated signals of
+equal power give. The four it lets through are short enough to be nearly symmetric, which is the
+honest limit of the gate: it catches a file wired to the wrong sound, not every way audio can be
+wrong.
+
+**What Chrome's overshoot costs, and what it cost to fix.** For a one-shot it is a decoder tail
+nobody notices. For a loop it plays every cycle. Measured on `world/waterfall`, a 1.36-second map
+ambience: the decoded buffer runs 10.87 ms past the audio, and an `AudioBufferSourceNode` looping
+at the end of its buffer renders six windows below a quarter of the median RMS across five
+seconds -- at 1360, 1365, 2730, 2735, 4100 and 4105 ms. A hole at the seam, every 1.4 seconds, in
+a sound whose entire job is to be continuous. WAV never had this, because PCM has no blocks.
+
+The fix is meep's, which is the priority order D-110 set: `SampleAudioClip` already takes
+`loopStart`/`loopEnd` and hands them to the source node, so the converter writes the true duration
+of every file into the manifest and `Audio.ts` spends it on `loopEnd` for looping routings only.
+Re-rendered with it, the same five seconds has zero quiet windows. One-shots keep `loopEnd` at 0
+-- meep's "end of buffer" -- because for them the tail is the codec ringing out and is worth
+hearing.
+
+Worth noting how narrowly this was nearly missed: the loops were the *good* news in the first
+round of measurements. Every looping ambience round-tripped through ffmpeg sample-exact, which
+read as "the case where a length change would be audible is the case that does not change". It was
+true of ffmpeg and false of the browser, and the only way to find that out was to ask the browser.
+
+**A committed tree has to rebuild to the same bytes.** ffmpeg gives each Ogg stream a random
+serial number, so the first working version of this produced 85 files with fresh checksums on
+every run -- identical audio, 24 different bytes each: the serial, and the page CRCs that follow
+from it. In a repository where `assets/` is committed and the README tells you to re-run this
+after converting a map, that is 85 binary files of churn for no change. `-fflags +bitexact` and
+`-flags:a +bitexact` fix it, and drop the encoder's vendor string from the comment header as
+well -- the other thing in the file that was a property of the tool rather than of the sound.
+Checked: two consecutive runs now produce byte-identical output, manifest included. This is the
+same concern `.gitattributes` states for the extracted tree, arriving at the built one.
+
+**Where it sits in the pipeline.** `tools/convert-sounds.ts`, which is already what `npm run
+assets` runs and already what has to run again after a new map is converted, so new Q3 data
+arrives through the encoder by default rather than by anyone remembering. It needs `ffmpeg` on
+PATH with libvorbis, checked for by name at startup with a message that says why, and recorded in
+the manifest alongside the quality setting -- a Vorbis file is a function of its encoder, and a
+rebuild under a different one will produce different bytes for the same audio. Two tests hold the
+line: one that every name in the manifest is `.ogg` and that nothing else is left under
+`built/sound`, and one that every file has a duration for `loopEnd` to use.

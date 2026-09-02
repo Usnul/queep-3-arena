@@ -111,6 +111,21 @@ const BUS_AMBIENT = 'ambient';
 
 interface Manifest {
     readonly sounds: Readonly<Record<string, string[]>>;
+    /**
+     * Filename -> how much audio is really in it, in seconds.
+     *
+     * Written by `convert-sounds.ts`, and only interesting because the bank is
+     * Vorbis. A browser decoding Vorbis hands back whole blocks rather than the
+     * length the file declares -- measured across the bank, Chrome overshoots
+     * by 14 to 1,111 samples -- so an `AudioBufferSourceNode` left to loop at
+     * the end of its buffer loops through up to 23 ms of decoder tail every
+     * time round. On `world/waterfall`, a 1.36-second loop, that is a hole 20 dB
+     * down every 1.4 seconds. `loopEnd` is where this is spent.
+     *
+     * Optional so that a bank built before D-175 still loads, in which case
+     * `loopEnd` stays 0 and Web Audio uses the buffer's end, exactly as before.
+     */
+    readonly durations?: Readonly<Record<string, number>>;
     readonly missing: readonly string[];
     readonly stats: Readonly<Record<string, number>>;
 }
@@ -425,6 +440,14 @@ export class AudioBank {
 
         const clip = SampleAudioClip.from(`${this.baseUrl}/${file}`, {
             loop: routing.loop,
+            /*
+             Where the audio actually ends, rather than where the decoder's last
+             block does. Zero is meep's "end of buffer" and is what a one-shot
+             wants -- the tail is the codec ringing out and is worth hearing --
+             but a loop that runs to the end of the buffer runs through it every
+             cycle. See `Manifest.durations`.
+            */
+            loopEnd: routing.loop ? (this.manifest.durations?.[file] ?? 0) : 0,
             /*
              A little pitch variation on every sample. Q3 does not do this and
              does not need to -- it ships four machinegun flashes and four

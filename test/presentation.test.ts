@@ -34,7 +34,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { impactSound } from '../src/client/impactSound.ts';
@@ -687,6 +687,7 @@ describe('the sound bank covers what the game plays', () => {
         readFileSync(join(BUILT, 'sound', 'sounds.json'), 'utf8')
     ) as {
         sounds: Record<string, string[]>;
+        durations: Record<string, number>;
         missing: string[];
         stats: Record<string, number>;
     };
@@ -696,6 +697,41 @@ describe('the sound bank covers what the game plays', () => {
             expect(files.length, `${name} lists no files`).toBeGreaterThan(0);
             for (const file of files) {
                 expect(existsSync(join(BUILT, 'sound', file)), `${name} -> ${file}`).toBe(true);
+            }
+        }
+    });
+
+    /*
+     The bank is Ogg Vorbis and nothing in the built tree is still PCM (D-175).
+     Checked on both sides -- what the manifest names and what is on disk --
+     because the failure this exists to catch is a source arriving in a format
+     `convert-sounds.ts` copies past its encoder rather than through it, and
+     that shows up as a `.wav` in one or the other.
+    */
+    it('ships every sound as Ogg, with nothing left in the built tree that is not', () => {
+        for (const [name, files] of Object.entries(manifest.sounds)) {
+            for (const file of files) {
+                expect(file.endsWith('.ogg'), `${name} -> ${file} is not Ogg`).toBe(true);
+            }
+        }
+
+        const strays = readdirSync(join(BUILT, 'sound'))
+            .filter((f) => f !== 'sounds.json' && !f.endsWith('.ogg'));
+
+        expect(strays, 'files under built/sound that are neither Ogg nor the manifest').toEqual([]);
+    });
+
+    /*
+     Every file's real length, which is what `Audio.ts` gives `loopEnd`. A
+     browser decoding Vorbis returns whole blocks and overshoots the declared
+     length, so a loop without this runs through up to 23 ms of decoder tail
+     every cycle -- see D-175. A missing entry is silent: the loop simply goes
+     back to running off the end of the buffer.
+    */
+    it('carries the true duration of every file it lists', () => {
+        for (const files of Object.values(manifest.sounds)) {
+            for (const file of files) {
+                expect(manifest.durations[file], `${file} has no duration`).toBeGreaterThan(0);
             }
         }
     });

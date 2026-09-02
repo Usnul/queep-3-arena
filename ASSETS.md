@@ -93,6 +93,16 @@ than copied in. It is a build-time tool that produces images, in the same way
 `sharp` produces images, and none of its code enters this repository or anything
 this repository ships.
 
+### ffmpeg
+
+Not fetched and not vendored: `convert-sounds.ts` calls whatever `ffmpeg` is on
+PATH, and refuses to run if it is absent or was built without libvorbis. It is a
+build-time tool that produces audio, on the same footing as `sharp` and Cosmos
+above — none of its code enters this repository, and what it emits is Ogg Vorbis,
+whose own reference implementation is BSD-licensed. The version and quality
+setting are recorded in `sounds.json`, because a Vorbis file is a function of its
+encoder and a rebuild under a different one will not be byte-identical.
+
 `cosmos_predict1` is Linux-first and reaches for `transformer-engine`, which has
 no Windows build. Rather than patch it, `tools/cosmos/te_shim/` supplies the three
 functions its diffusion path actually calls, written from their definitions;
@@ -164,7 +174,7 @@ which is how it happened once already. D-104 has the mechanism.
 | `assets/built/<map>/lightmap.svlm` | `?bake=lightmap` in the browser | the map's baked indirect lighting: brick4's sparse voxel hierarchy of irradiance probes, which Shade samples per shading point instead of the single distant environment map. Not a Node tool and cannot be one -- the bake is a compute shader that traces the loaded scene several bounces deep -- so it runs in the dev server's browser and posts its result back through `/__bake/`. See `src/client/VolumetricLight.ts` |
 | `assets/built/models/` | `convert-models.ts` | one bundle of every static prop -- pickups, weapon world models, ammo, gibs -- as `models.json` plus `models.bin`, plus the weapons' `*_hand.md3`, which carry no geometry and are converted for the `tag_weapon` that places a first-person weapon (D-080) |
 | `assets/built/characters/<name>/` | `convert-characters.ts` | player models as skinned glTF: `<name>.gltf`, `<name>.bin`, textures. The skeleton is *inferred* from MD3's vertex-morph frames (DECISIONS.md D-042) and is not present in the source data |
-| `assets/built/sound/` | `convert-sounds.ts` | the WAVs the port triggers and the OGG music the maps name, path-flattened, plus `sounds.json`. Copied byte-for-byte rather than transcoded. Half the list comes from the gamecode and half is read out of the built maps' `target_speaker` and `worldspawn` keys, so this runs *after* `convert-map.ts` |
+| `assets/built/sound/` | `convert-sounds.ts` | every sound the port triggers, transcoded from OpenArena's WAV to Ogg Vorbis at `-q:a 5` — 7.6 MB becomes 1.2 MB — plus `sounds.json`, which carries the flattened names, each file's true duration and what was missing. Music the maps name is already Ogg and is copied rather than re-encoded. Half the list comes from the gamecode and half is read out of the built maps' `target_speaker` and `worldspawn` keys, so this runs *after* `convert-map.ts`. Needs `ffmpeg`; see D-175 |
 | `assets/built/fx/` | `convert-fx.ts` | effect textures for particles and decals, plus the 2D art the HUD draws: `gfx/2d/crosshair[a-j]` and the `iconw_*` weapon icons. Each is converted for the Q3 blend it was authored against rather than copied, which for an impact mark means discarding the colour and keeping the luminance as coverage (D-079). The icon list is read out of `balance.generated.json` rather than written here, so the set converted and the set the HUD asks for cannot disagree (D-102) |
 | `assets/generated/raw/` | `tools/cosmos/inverse_render.py` | the inverse renderer's own output, one image per G-buffer pass. Kept so `build_maps.py` can be re-run without re-inferring, which is 80 minutes of GPU |
 | `assets/generated/materials/` | `tools/cosmos/build_maps.py` | what a bundle actually binds: `<image>.albedo.png` (de-lit and re-tinted), `<image>.normal.png` (only where it survived the checks) and `<image>.orm.png`. The converters pick these up automatically; with the directory empty they write exactly the bundles they wrote before the material phase |

@@ -22,7 +22,9 @@ argument actually lives.
 ## Setup
 
 Requires Node 24+, a WebGPU-capable browser, and your own licensed copy of `@woosh/meep-engine`,
-which is a peer dependency — `package.json` holds the version range.
+which is a peer dependency — `package.json` holds the version range. `ffmpeg` on PATH, built with
+libvorbis, for the sound bank: `convert-sounds.ts` transcodes it to Ogg Vorbis (D-175) and says so
+if it cannot find one.
 
 ```bash
 npm install
@@ -40,6 +42,8 @@ provenance and licensing of every input.
 `npm run assets` converts the static props, the 15 player characters and the sound bank, once for
 the whole game rather than once per map. One ordering caveat: a map names its own ambience and
 music, so `npm run convert-sounds` wants running again after a new map is converted, and says so.
+The sound bank comes out as Ogg Vorbis — 7.6 MB of OpenArena WAV becomes 1.2 MB, and every
+transcode is checked against the source it came from before the manifest is written.
 
 ### Material maps, optionally
 
@@ -144,7 +148,8 @@ Three findings in the report reproduce on their own:
   skeleton the source data does not contain.
 - **Audio** on meep's `AudioEmitter` components, one path for all four of Q3's sound calls:
   positional one-shots, looping sources that follow what owns them, and the map's own background
-  track.
+  track. Ogg Vorbis, looped at the length the file declares rather than the length the browser's
+  decoder returns — those differ, and the difference is a hole at the seam (D-175).
 - **Bots** on meep's behaviour trees, running the *same* movement the player does — they route,
   fight, take items, and one has been observed strafe-jumping. On meep 3.2.0, grounded 89–94% of
   a match against the ported path's 86–93% (D-073).

@@ -14,12 +14,26 @@
  * Output, under `assets/built/sound/`:
  *
  *   sounds.json     logical name -> file, plus what was missing
- *   *.wav           the files themselves, path-flattened
+ *   *.ogg           the files themselves, path-flattened
  *
- * Copied rather than transcoded. OA's sounds are 22.05 kHz mono PCM WAV, which
- * every browser decodes natively through `decodeAudioData`, and re-encoding to
- * Opus would trade a real quality loss for a saving on 3 MB of assets that are
- * not committed anyway.
+ * Transcoded to Ogg Vorbis, which is what a web target wants and what this tree
+ * can afford: OA ships these as 11-44.1 kHz mono PCM WAV, 7.6 MB of it, and
+ * `assets/` is committed. Vorbis brings that to 1.2 MB. It is not a new format
+ * dependency either -- the bank already carried one Vorbis file, `music/OA14.ogg`,
+ * OA's own music, through the same `decodeAudioData` path every other sound
+ * takes. Opus was measured against it and is not better here; see D-175.
+ *
+ * A source that is already Ogg is copied rather than re-encoded, because lossy
+ * to lossy is generation loss bought for nothing.
+ *
+ * Every transcode is verified by decoding it back and comparing it against the
+ * source, sample for sample. A lapped transform does not have to return the
+ * length it was given, and most of the failures worth catching here -- the wrong
+ * file, a leading delay, a channel dropped -- show up as a signal that no longer
+ * correlates with the one that went in. Same reason `bake-audio.ts` reads its
+ * own output back rather than trusting a serializer.
+ *
+ * Needs `ffmpeg` on PATH, built with libvorbis. See README's Setup.
  *
  * The list is curated rather than "everything under `sound/`": OA ships 40 MB of
  * audio, most of it announcer lines, taunts and per-character voice for modes
@@ -36,7 +50,8 @@
  * Usage:  node tools/convert-sounds.ts
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -45,6 +60,51 @@ import { soundName, speakerNoisePath } from '../src/q3/soundName.ts';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EXTRACTED = join(ROOT, 'assets', 'extracted');
 const BUILT = join(ROOT, 'assets', 'built');
+
+/**
+ * Vorbis quality, as ffmpeg's `-q:a`.
+ *
+ * Measured over the whole bank against 7,768 KB of source WAV: q3 is 1,075 KB,
+ * q4 is 1,136 KB, q5 is 1,260 KB and q6 is 1,416 KB. The 124 KB between q4 and
+ * q5 buys a uniform 1.6 dB across every file, on a bank that is 1.2 MB either
+ * way, so it is bought. Above q5 the curve stops paying: q6 costs another
+ * 156 KB for 1.4 dB on material that was 11-44.1 kHz mono to begin with.
+ */
+const VORBIS_QUALITY = 5;
+
+/**
+ * How far the Ogg's declared length may sit from the source's, in samples.
+ *
+ * One, for the rounding in reading a duration back as seconds. It is otherwise
+ * exact, and it is checked *here* rather than by decoding, because the two
+ * decoders to hand disagree about what a Vorbis file's length even is: over
+ * these 85 files ffmpeg's returns up to 256 samples fewer than the granule
+ * positions declare, and Chrome's returns between 14 and 1,111 samples more,
+ * padding out to whole blocks. Neither is losing or inventing audio -- the
+ * signals correlate at offset zero and the declared lengths are exact -- so a
+ * check against either decoder's idea of length would be a check on the
+ * decoder. What the encoder is answerable for is the file, and the file says
+ * how long it is.
+ *
+ * The padding is not free at the runtime end, though: it is why the bank
+ * carries a duration per file and why `Audio.ts` hands it to `loopEnd`. See
+ * D-175.
+ */
+const LENGTH_TOLERANCE = 1;
+
+/**
+ * How poorly a decoded file may correlate with its source before the transcode
+ * is treated as broken rather than merely lossy, in dB.
+ *
+ * Deliberately far below the measured worst, which is 11.4 dB on
+ * `item/item_quad` -- a loud noisy pickup, where a perceptual codec substitutes
+ * noise it does not have to reproduce and signal-to-noise stops meaning very
+ * much. This is not a quality gate and would be a bad one: it is a wiring
+ * check, and the failures it exists to catch -- the wrong file encoded, a
+ * leading delay shifting every sample, a stereo source silently collapsed, an
+ * encoder that wrote nothing -- all land at or below zero.
+ */
+const CORRELATION_FLOOR = 3;
 
 /**
  * Logical name -> Q3 path, or a list of paths Q3 picks between at random.
@@ -189,8 +249,19 @@ const SOUNDS: Readonly<Record<string, string | string[]>> = {
 
 interface Manifest {
     readonly generator: string;
+    /** What encoded the bank, because a Vorbis file is a function of its encoder. */
+    readonly encoder: string;
     /** Logical name -> written filenames, in the order Q3 would pick between. */
     readonly sounds: Readonly<Record<string, string[]>>;
+    /**
+     * Written filename -> how much audio is really in it, in seconds.
+     *
+     * The source's length, not the decoder's. A browser decoding Vorbis hands
+     * back whole blocks and so overshoots by up to 23 ms, which for a one-shot
+     * is a decay tail nobody notices and for a loop is a hole at the seam once
+     * a second. `Audio.ts` spends this on `loopEnd`.
+     */
+    readonly durations: Readonly<Record<string, number>>;
     readonly missing: readonly string[];
     readonly stats: Readonly<Record<string, number>>;
 }
@@ -294,7 +365,195 @@ function resolveSource(path: string): string | null {
     return existsSync(lowered) ? lowered : null;
 }
 
+/**
+ * The written filename for a Q3 path.
+ *
+ * Flattened, because the manifest is one directory: `sound/world/wind1.wav`
+ * becomes `world_wind1.ogg`. The extension moves with the encoding and the
+ * *name* does not -- `soundName` strips the extension for exactly this reason,
+ * so nothing downstream has to know which of the two a sound arrived as.
+ */
+function flatName(path: string): string {
+    return path
+        .replace(/^sound\//, '')
+        .replace(/[\\/]/g, '_')
+        .replace(/\.wav$/i, '.ogg');
+}
+
+/** ffmpeg's version line, and the check that it is there to give one. */
+function ffmpegVersion(): string {
+    let out: string;
+    try {
+        out = execFileSync('ffmpeg', ['-version'], {
+            stdio: ['ignore', 'pipe', 'ignore'],
+        }).toString();
+    } catch {
+        throw new Error(
+            'ffmpeg is not on PATH. The sound bank is transcoded to Ogg Vorbis, so this ' +
+            'converter needs it -- see README, Setup.'
+        );
+    }
+
+    if (!out.includes('--enable-libvorbis')) {
+        throw new Error(
+            'this ffmpeg was built without libvorbis, which is what encodes the bank. ' +
+            'Its configuration line is in `ffmpeg -version`.'
+        );
+    }
+
+    return out.split('\n', 1)[0]!.trim();
+}
+
+/** Transcode one file to Ogg Vorbis, preserving its sample rate and channels. */
+function encode(source: string, out: string): void {
+    execFileSync(
+        'ffmpeg',
+        [
+            '-y',
+            '-v', 'error',
+            '-i', source,
+            // Nothing in a Q3 WAV's chunks is worth carrying, and dropping it
+            // keeps the output a function of the audio alone.
+            '-map_metadata', '-1',
+            /*
+             The same input has to produce the same bytes, because `assets/` is
+             committed and the README tells you to run this again every time a
+             map is converted. Without these the audio is identical and the file
+             is not: ffmpeg gives each Ogg stream a random serial number, so all
+             85 files came out with different checksums on every run -- 24 bytes
+             each, the serial and the page CRCs that follow from it. `bitexact`
+             also drops the encoder's vendor string from the comment header,
+             which is the other thing in here that is a property of the tool
+             rather than of the sound.
+            */
+            '-fflags', '+bitexact',
+            '-flags:a', '+bitexact',
+            '-c:a', 'libvorbis',
+            '-q:a', String(VORBIS_QUALITY),
+            out,
+        ],
+        { stdio: ['ignore', 'ignore', 'inherit'] }
+    );
+}
+
+/**
+ * Decode a file to mono float samples at its own sample rate.
+ *
+ * No `-ar`: the encoder does not resample, so the source and its transcode come
+ * back at the same rate and are directly comparable. Asking for a rate here
+ * would put a resampler between the two and measure that instead.
+ */
+function decode(path: string): Float32Array {
+    const raw = execFileSync(
+        'ffmpeg',
+        ['-v', 'error', '-i', path, '-f', 'f32le', '-ac', '1', '-'],
+        { stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 1 << 28 }
+    );
+
+    if ((raw.byteLength & 3) !== 0) {
+        throw new Error(`${path}: decoded to ${raw.byteLength} bytes, which is not whole f32 samples`);
+    }
+
+    // Copied into an array of its own: `execFileSync` hands back a Buffer that
+    // may be a view into a pool at an offset `Float32Array` cannot start at.
+    const bytes = new Uint8Array(raw.byteLength);
+    bytes.set(raw);
+
+    return new Float32Array(bytes.buffer);
+}
+
+/**
+ * The sample rate in a RIFF/WAVE header.
+ *
+ * Only so the round-trip report can speak in milliseconds; a delta counted in
+ * samples says nothing about whether a loop will click. The chunks are walked
+ * rather than assumed, because `fmt ` is only *usually* the first one.
+ */
+function wavSampleRate(source: string): number {
+    const wav = readFileSync(source);
+
+    if (wav.length < 12 || wav.toString('ascii', 0, 4) !== 'RIFF' ||
+        wav.toString('ascii', 8, 12) !== 'WAVE') {
+        throw new Error(`${source}: not a RIFF/WAVE file`);
+    }
+
+    for (let at = 12; at + 8 <= wav.length;) {
+        const size = wav.readUInt32LE(at + 4);
+
+        // The rate is bytes 12..15 of the chunk body, so 16 have to be there.
+        if (wav.toString('ascii', at, at + 4) === 'fmt ' && at + 16 <= wav.length) {
+            return wav.readUInt32LE(at + 12);
+        }
+
+        // Chunks are word-aligned, and an odd size carries a pad byte.
+        at += 8 + size + (size & 1);
+    }
+
+    throw new Error(`${source}: RIFF/WAVE with no \`fmt \` chunk`);
+}
+
+/** How long a file says it is, in seconds, from its container. */
+function declaredSeconds(path: string): number {
+    const out = execFileSync(
+        'ffprobe',
+        ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path],
+        { stdio: ['ignore', 'pipe', 'inherit'] }
+    ).toString().trim();
+
+    const seconds = Number(out);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new Error(`${path}: no usable duration (\`ffprobe\` said ${JSON.stringify(out)})`);
+    }
+
+    return seconds;
+}
+
+interface RoundTrip {
+    readonly samples: number;
+    readonly rate: number;
+    /** What the Ogg's granule positions say it holds, in samples. */
+    readonly declared: number;
+    /** How well the transcode correlates with its source, in dB. */
+    readonly decibels: number;
+}
+
+/** Read a transcode back and measure it against the source it came from. */
+function verify(source: string, out: string): RoundTrip {
+    const rate = wavSampleRate(source);
+
+    const before = decode(source);
+    const after = decode(out);
+
+    /*
+     Over what the two decoders agree exists. ffmpeg stops short of the declared
+     end by up to a block, so the last few milliseconds are simply not on offer
+     here; `LENGTH_TOLERANCE` is what covers that end, and this covers whether
+     the samples in between are the same sound at the same offset.
+    */
+    const overlap = Math.min(before.length, after.length);
+
+    let error = 0;
+    let signal = 0;
+
+    for (let i = 0; i < overlap; i++) {
+        const difference = before[i]! - after[i]!;
+        error += difference * difference;
+        signal += before[i]! * before[i]!;
+    }
+
+    return {
+        samples: before.length,
+        rate,
+        declared: Math.round(declaredSeconds(out) * rate),
+        // A silent source correlates with a silent transcode; say so rather
+        // than dividing by zero and calling a legitimate file broken.
+        decibels: signal === 0 ? Infinity : 10 * Math.log10(signal / (error || Number.MIN_VALUE)),
+    };
+}
+
 function convertSounds(): void {
+    const encoder = ffmpegVersion();
+
     const outDir = join(BUILT, 'sound');
     mkdirSync(outDir, { recursive: true });
 
@@ -306,9 +565,15 @@ function convertSounds(): void {
     };
 
     const sounds: Record<string, string[]> = {};
+    const durations: Record<string, number> = {};
     const missing: string[] = [];
     const written = new Map<string, string>();
+    const damaged: string[] = [];
+
     let bytes = 0;
+    let sourceBytes = 0;
+    let copied = 0;
+    let worstCorrelation: { file: string; trip: RoundTrip } | null = null;
 
     for (const [name, value] of Object.entries(all)) {
         const paths = Array.isArray(value) ? value : [value];
@@ -327,10 +592,51 @@ function convertSounds(): void {
                 continue;
             }
 
-            const flat = path.replace(/^sound\//, '').replace(/[\\/]/g, '_');
-            copyFileSync(source, join(outDir, flat));
+            const flat = flatName(path);
+            const out = join(outDir, flat);
 
-            bytes += readFileSync(source).byteLength;
+            /*
+             Two Q3 paths cannot share one written name. They could not before
+             either -- `a/b.wav` and `a_b.wav` flatten alike -- but moving every
+             extension to `.ogg` adds a way for it to happen that was not there
+             before: `x/y.wav` and `x/y.ogg` are two distinct files upstream and
+             one file here. The second would silently overwrite the first and
+             both manifest entries would point at whichever won.
+            */
+            const clash = [...written].find(([, name]) => name === flat);
+            if (clash !== undefined) {
+                throw new Error(`${path} and ${clash[0]} both flatten to ${flat}`);
+            }
+
+            if (/\.wav$/i.test(path)) {
+                encode(source, out);
+
+                const trip = verify(source, out);
+
+                if (Math.abs(trip.declared - trip.samples) > LENGTH_TOLERANCE) {
+                    damaged.push(
+                        `${flat}: ${trip.samples} samples went in and the file says ${trip.declared}`
+                    );
+                } else if (trip.decibels < CORRELATION_FLOOR) {
+                    damaged.push(`${flat}: decodes to ${trip.decibels.toFixed(1)} dB of its source`);
+                }
+
+                if (worstCorrelation === null || trip.decibels < worstCorrelation.trip.decibels) {
+                    worstCorrelation = { file: flat, trip };
+                }
+
+                durations[flat] = trip.samples / trip.rate;
+            } else {
+                // Already Ogg -- OA's music. Re-encoding it would be a second
+                // generation of loss for nothing.
+                copyFileSync(source, out);
+                copied += 1;
+
+                durations[flat] = declaredSeconds(out);
+            }
+
+            bytes += statSync(out).size;
+            sourceBytes += statSync(source).size;
             written.set(path, flat);
             files.push(flat);
         }
@@ -338,14 +644,24 @@ function convertSounds(): void {
         if (files.length > 0) sounds[name] = files;
     }
 
+    if (damaged.length > 0) {
+        throw new Error(
+            `the round trip damaged ${damaged.length} of ${written.size} files:\n  ` +
+            damaged.join('\n  ')
+        );
+    }
+
     const manifest: Manifest = {
         generator: 'queep-3-arena tools/convert-sounds.ts',
+        encoder: `${encoder}, libvorbis -q:a ${VORBIS_QUALITY}`,
         sounds,
+        durations,
         missing,
         stats: {
             names: Object.keys(sounds).length,
             files: written.size,
             kilobytes: Math.round(bytes / 1024),
+            sourceKilobytes: Math.round(sourceBytes / 1024),
             missing: missing.length,
             maps: fromMaps.maps,
             fromMaps: Object.keys(fromMaps.sounds).length,
@@ -356,7 +672,14 @@ function convertSounds(): void {
 
     console.log(
         `sounds: ${manifest.stats['names']} names, ${manifest.stats['files']} files, ` +
-        `${manifest.stats['kilobytes']} KB` +
+        `${manifest.stats['kilobytes']} KB ` +
+        `(from ${manifest.stats['sourceKilobytes']} KB; ` +
+        `${written.size - copied} transcoded to Vorbis -q:a ${VORBIS_QUALITY}, ` +
+        `${copied} already Ogg and copied)` +
+        (worstCorrelation === null
+            ? ''
+            : `\n  every transcode declares its source's length; the weakest correlation is ` +
+              `${worstCorrelation.file} at ${worstCorrelation.trip.decibels.toFixed(1)} dB`) +
         `\n  ${manifest.stats['fromMaps']} named by ${manifest.stats['maps']} built maps ` +
         `(run this again after converting a map)` +
         (missing.length > 0 ? `\n  missing: ${missing.join(', ')}` : '')

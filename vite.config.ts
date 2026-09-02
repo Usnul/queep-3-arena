@@ -410,7 +410,10 @@ export default defineConfig({
         },
         fs: {
             // `assets/built/` is produced by the pipeline and lives outside `public/`
-            // because it is large, gitignored, and regenerated.
+            // because it is large and regenerated. Not gitignored, which this
+            // comment used to claim: only `assets/ml/` and `assets/download/`
+            // are. The same wrong premise is what left the sound bank as 7.6 MB
+            // of PCM until D-175.
             allow: ['..'],
         },
     },
