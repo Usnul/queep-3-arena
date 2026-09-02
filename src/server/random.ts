@@ -1,5 +1,5 @@
 /*
- * random.ts -- the host's one source of chance.
+ * random.ts -- the host's one source of chance, which is the engine's.
  *
  * Copyright (C) 2026 queep-3-arena contributors
  *
@@ -11,37 +11,56 @@
  * ---
  *
  * `Math.random` has to leave the simulation, and the reason is not that a
- * networked game must be deterministic -- this one is server-authoritative, so
- * clients are told what happened rather than deriving it. The reason is that a
- * *test* has to be able to run the same match twice.
+ * server-authoritative game needs determinism -- clients are told what happened
+ * rather than deriving it. The reason is that a *test* has to be able to run the
+ * same match twice: with `Math.random` in the loop every measurement in D-170,
+ * D-171 and D-172 is an anecdote, and an assertion about a bot firing a rocket
+ * is a coin toss.
  *
- * A rollback replays the newest frame's inputs against a world the host has
- * already stepped, and a divergence between "what the host did" and "what the
- * host would do again" is exactly what the loopback test measures. With
- * `Math.random` in the loop the two runs differ for reasons that have nothing
- * to do with the netcode, and every measurement in `REPORT.md` becomes an
- * anecdote.
+ * **This file first contained a hand-written mulberry32, and that was the
+ * mistake this repository exists to find.** meep ships
+ * `core/math/random/seededRandom.js`, which is `seededRandom_Mulberry32`, which
+ * is the same algorithm to the line -- the same `0x6D2B79F5` increment, the same
+ * three `Math.imul` rounds, the same `>>> 14` and the same divisor. Nineteen
+ * lines re-derived from memory instead of `ls`ing a directory whose name is
+ * `random`. The port's whole priority order is "exercise meep well first"
+ * (D-110) and the first thing a hand-rolled PRNG does is exercise nothing.
  *
- * mulberry32 rather than anything better: it is nine lines, it has no
- * dependencies, its period is 2^32 which is eleven hours of 60 Hz frames, and
- * the quality demanded of it is "a bot picks a different corridor" rather than
- * anything cryptographic. `Q_crandom` is untouched and still owns weapon spread
- * (D-026); this is what seeds it.
+ * The engine's version is also **better than what it replaced**, and in a way
+ * that matters here rather than in general: `setCurrentSeed` / `getCurrentSeed`
+ * make the generator's position readable and restorable, which is exactly what a
+ * rollback wants. The host does not need it yet -- the world step runs once per
+ * frame behind the newest-frame gate (GAP-039), so no draw is ever replayed --
+ * but the day a draw has to happen inside a replayed frame, the state to save
+ * and restore is one number and the engine already exposes it.
+ *
+ * So what is left here is an adapter and its reason, which is the `.d.ts`:
+ * `seededRandom`'s JSDoc `@returns` uses `|` where it means `&`, so the
+ * generated type is a union of "a function" and "an object with two methods",
+ * and TypeScript refuses to call it -- `TS2349: not all constituents of type
+ * ... are callable`. One cast, once, with the finding attached. See REPORT.md
+ * section 4.
  */
 
+import { seededRandom } from '@woosh/meep-engine/src/core/math/random/seededRandom.js';
+
 /**
- * A seeded PRNG returning `[0, 1)`.
+ * A seeded generator returning `[0, 1)`, whose position can be read and written.
+ *
+ * The shape the engine's function actually returns, as opposed to the shape its
+ * declaration describes.
+ */
+export interface SeededRandom {
+    (): number;
+    setCurrentSeed(value: number): void;
+    getCurrentSeed(): number;
+}
+
+/**
+ * meep's `seededRandom`, callable.
  *
  * @param seed any 32-bit integer; the same seed is the same match.
  */
-export function mulberry32(seed: number): () => number {
-    let state = seed | 0;
-
-    return function next(): number {
-        state = (state + 0x6d2b79f5) | 0;
-        let t = state;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
+export function makeRandom(seed: number): SeededRandom {
+    return seededRandom(seed) as unknown as SeededRandom;
 }

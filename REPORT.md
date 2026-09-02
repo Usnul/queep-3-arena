@@ -2389,6 +2389,29 @@ Observations that are not gaps — the facility exists and works — but cost ti
   This port routes every construction through `src/net/session.ts` so the cast lives once with its
   reason attached. The fix is one line in the `.d.ts` and the `.js` needs no change at all.
 
+- **`NetworkSession.normalize_if_dirty` is tagged `@private` in its JSDoc and is not.** The method
+  restores every remote-owned component from the interpolation log after the render pass has left
+  blended bytes in it, and an application has to call it: `session.tick()` *ends* with that render
+  write, so anything reading a remote component on the next fixed step -- a tracked body origin, a
+  mover position, an item's presence -- reads a value that was interpolated for a picture. The
+  class's own docblock lists the three places it is called from and `NETWORK_PLAN.md` §3.3 names it
+  as the call an application makes at exactly that point. But the `@private` tag propagates into the
+  generated declaration as `private normalize_if_dirty;`, so TypeScript refuses it and the caller
+  needs a cast. Same class of defect as `frame_capacity` above and the same one-line fix: the tag
+  means "internal to the framework", and the declaration reads it as "internal to the class".
+
+- **The engine's own seeded PRNG cannot be called from TypeScript.**
+  `core/math/random/seededRandom.js` returns a function that also carries `setCurrentSeed` and
+  `getCurrentSeed`, and its JSDoc `@returns` writes that as
+  `{(function():number)|{setCurrentSeed:...,getCurrentSeed:...}}` -- a union where it means an
+  intersection. The generated declaration is faithful to the JSDoc, so
+  `const random = seededRandom(1234); random();` is `TS2349: This expression is not callable. Not
+  all constituents of type ... are callable`. The runtime object is a function with two properties
+  on it and always has been; only the type says otherwise. One character in the JSDoc (`|` to `&`)
+  fixes it, and the cost of not fixing it is more than a cast: reaching for `Math.random` or writing
+  a nine-line mulberry32 is what a consumer does when the supported thing does not compile, and this
+  port did exactly that before the duplication was pointed out (D-172).
+
 
 ## 5. Performance
 

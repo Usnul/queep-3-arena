@@ -9299,6 +9299,36 @@ All three are injected now and the match is bit-repeatable: three consecutive ru
 suite give identical shot, projectile, damage and effect counts. `Q_crandom` is untouched and still
 lays the shotgun pellets out (D-026); this is what seeds it.
 
+**And the generator itself was a re-invention, which is the more useful half of this entry.** The
+first version of `src/server/random.ts` was a hand-written mulberry32. meep ships
+`core/math/random/seededRandom.js`, which is `seededRandom_Mulberry32`, which is **the same
+algorithm to the line** -- the same `0x6D2B79F5` increment, the same three `Math.imul` rounds, the
+same `>>> 14`, the same divisor. Nineteen lines re-derived from memory instead of listing a
+directory called `random`. The port's stated priority order is "exercise meep well first" (D-110),
+and a hand-rolled PRNG exercises nothing; it is the exact failure this repository exists to
+surface, committed by the person writing the report about it. Swapped, and the seeded outcomes are
+unchanged to the last count -- 270 shots, 48 projectiles, 1057 damage on seed 23 before and after --
+because the two implementations agree for any `_seed` short of 2^53.
+
+The engine's is also better in a way that will matter later: `setCurrentSeed` / `getCurrentSeed`
+make the generator's position readable and restorable, which is what a draw inside a *replayed*
+frame would need. Nothing needs it yet, because the newest-frame gate (GAP-039) means no draw is
+ever replayed -- but the state to save is one number and it is already exposed.
+
+**There is a reason the wrong path was the easy one, and it is worth separating from the excuse.**
+`seededRandom`'s JSDoc `@returns` writes a union where it means an intersection, so the generated
+declaration is not callable and `const r = seededRandom(seed); r();` is a compile error
+(`TS2349`). A consumer whose first attempt at the supported API does not typecheck reaches for
+`Math.random` or writes their own; that is a one-character bug in a docblock with an outsized
+consequence, and it is filed in REPORT section 4. It explains the mistake. It does not excuse it:
+the file was never opened.
+
+**What was checked and is *not* a duplicate:** `Difficulty.gaussian` against meep's
+`randomGaussian`. They are different distributions -- the engine's is a sum of six uniforms
+returning `[0, 1]` centred on 0.5, and D-162's is Box-Muller rejected at 2.5σ returning a truncated
+standard normal, chosen so a bot's burst goes wide as a burst rather than as one absurd shot. That
+one stays.
+
 **Determinism here is not a netcode requirement and that is worth being clear about.** The game is
 server-authoritative: clients are told what happened and never have to re-derive it, so a bot that
 chose differently would not desync anything. It is a *test* requirement -- with `Math.random` in the

@@ -94,7 +94,7 @@ import {
     frameMsec,
     frameTimeMs,
 } from '../net/protocol.ts';
-import { mulberry32 } from './random.ts';
+import { makeRandom } from './random.ts';
 
 /** The solver's step. A constant, so every peer integrates with the same one. */
 const SOLVER_DT = SESSION_TICK_SECONDS;
@@ -278,7 +278,7 @@ export class Host {
         const spawns = entrances.points.map((e) => e._originQ3);
         if (spawns.length === 0) throw new Error(`${mapName} has no spawn points`);
 
-        const random = mulberry32(options.seed ?? 0x5eed);
+        const random = makeRandom(options.seed ?? 0x5eed);
 
         /*
          The waypoint graph's node origins are standing positions; a spawn is
