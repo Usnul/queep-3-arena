@@ -9785,3 +9785,85 @@ transport *reorders by nature*, and reordering is precisely what the remaining h
 events on. Switching transports without that fix trades head-of-line blocking for missing muzzle
 flashes. The 40 ms / 8 ms / 1% row says the current stack already tolerates real loss perfectly, so
 the honest order is: fix or work around `#applied_through`, then switch.
+
+### D-177: meep 3.14.5 closes the event loss, and the mechanism was three things where the report named one
+
+`NETWORK_PLAN.md`'s remaining blocker is gone. Both halves of GAP-043 are fixed and a third defect
+was found and fixed in the same release, by meep, while reproducing the second.
+
+**What the report got right and what it missed.** It named the watermark (H1) and the ring (H3) and
+could not join them, and its standalone reproduction passed — which is what got filed, honestly, as
+"this may not be an engine defect at all". Both hypotheses were right and neither was sufficient:
+
+1. **A throughput ceiling.** `flush_outbound` packed a tick's whole owed range,
+   `[last_acked + 1, current]`, into **one** MTU-bounded packet and re-sent that same range every
+   tick until its ack came back. The baseline therefore advanced by at most one packet of frames per
+   round trip while the simulation produced one frame per tick: with `K` frames to a packet and a
+   round trip of `R` ticks, the owed range grows by `R - K` per round trip whenever `K < R`. At
+   60 Hz and 150 ms, `R = 10` and any frame over about **118 bytes of actions** crosses it.
+2. **Pinning.** The pack start is `max(last_acked + 1, current - frame_capacity + 1)`; once the owed
+   range is a ring wide the floor wins and each frame rides only `K` consecutive packets — one, when
+   a frame is more than half a packet.
+3. **The swap**, which is H1: the older of two reordered packets falls below the client's watermark
+   and is skipped for good, while its channel-level ack still credits the frames as delivered.
+
+So the ring was the *trigger* and the watermark the *drop*, and the thing joining them — the
+one-packet-a-tick ceiling — was in neither hypothesis. It is also why the standalone reproduction
+passed: it never left the regime where every packet still carried every owed frame, so its reversed
+burst was a burst of duplicates and the newest packet applied them all.
+
+**The fix** is the action stream sending a tick's owed range as several slices, applied and credited
+in order (`max_packets_per_tick`, default 8). The ceiling rises eightfold, to about 940 bytes of
+actions per frame at 150 ms, and a frame rides eight consecutive ticks' packets once pinned.
+
+**Verified here rather than taken on trust**, same rig, same seed, 20 s, one client, four bots:
+
+| link | events, 3.14.4 | events, 3.14.5 | short-circuit 3.14.4 → 3.14.5 |
+|---|---:|---:|---:|
+| 40 ms, 8 ms jitter, 1% | 516 / 516 | 516 / 516 | 4.4% → 91.1% |
+| 80 ms, 20 ms jitter, 2% | 403 / 474 | **474 / 474** | 59.2% → 92.1% |
+| 150 ms, 40 ms jitter, 5% | 305 / 516 | **506 / 516** | 71.2% → 19.8% |
+
+The prediction-coherence suite is unchanged at 97.6 / 97.5 / 97.3 / 97.2 per cent across 0, 10, 40
+and 80 ms of clean delay with zero host rewinds, so 3.14.4's fix is intact.
+
+**The number this port now tracks, because it is what the ceiling is on.** meep's one request was
+the bytes of actions a frame costs per client, which the report never stated. Measured on a loopback
+— where the ack returns inside the same step, so an ACTION_STREAM packet carries exactly one frame:
+
+| bots | mean | p99 | max |
+|---|---:|---:|---:|
+| 0 | 62 B | 377 | 377 |
+| 4 | **523 B** | 691 | 1005 |
+| 8 | **776 B** | 939 | 1159 |
+
+Against 3.14.4's ~118 B threshold at 150 ms this port was four and a half times over with four bots,
+which is exactly why it saw 41% and meep's own one-action-per-frame reproduction had to be built to
+700 B to see it at all. Against 3.14.5's ~940 B it is under the ceiling on average and a burst of
+explosions still crosses it — which is the whole of the residual 10 of 516 on the worst link.
+`test/net-latency.test.ts` censuses it every run and fails if the mean approaches the ceiling, so the
+next time this port's per-frame cost grows it presents as a bandwidth number rather than as missing
+gunshots. **Eight bots at 150 ms sits at the ceiling**; that is a real constraint on how this port
+can be configured for high-latency play, and it is now written down rather than waiting to be
+rediscovered.
+
+**The standalone reproduction is now a real regression test, and it took a second mistake to get
+there.** It is rewritten around a fixed-delay link with 700-byte actions and a 32-frame ring, so the
+back-fill pins early, and it swaps two queued **action-stream** packets deliberately — the first
+version swapped whichever two packets were at the front of the queue, which were usually AUTH_STATE
+and TIME_DILATION, and so it passed even with the send path forced back to one packet a tick. With
+the swap aimed properly: `max_packets_per_tick: 1` loses exactly three frames to three swaps
+(265, 285, 305), and the 3.14.5 default of 8 loses none. That is meep's own result reproduced
+locally, and it means a future engine bump that regresses this is caught here.
+
+**What stays open**, and it is worth keeping in view because a setting still exposes it: the skip is
+silent and the credit is channel-level, so `max_packets_per_tick: 1` restores the old loss exactly.
+A frame skipped unapplied, and a frame retired from the ring unsent, are still counted nowhere a
+game can read them.
+
+**And the answer to the question the report actually asked.** Event actions are *not* best-effort by
+design and the docblocks are right that the stream always sends them; what it does not promise is
+delivery under sustained overload. Muzzle flashes and impacts belong on the action stream. Anything
+that must arrive regardless — round state, a kill that scores — belongs on
+`ReliableCommandPipeline`, which this port has not needed yet and which step 6 should revisit when
+scores go on the wire.

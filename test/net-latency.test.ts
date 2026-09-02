@@ -264,13 +264,15 @@ describe('the netcode over a link that behaves like UDP', () => {
         expect(outcomes[4]!.droppedPackets).toBeGreaterThan(outcomes[3]!.droppedPackets);
     });
 
-    it('delivers every event until reordering starts, and then does not', async () => {
-        const losing = await run('40 ms, 8 ms jitter, 1% loss', {
-            latency_ms: 40,
-            jitter_ms: 8,
-            loss_pct: 1,
-        });
-        const reordering = await run('150 ms, 40 ms jitter, 5% loss', {
+    it('delivers every event a reordering link can reach it with', async () => {
+        const cases: Array<[string, Link]> = [
+            ['40 ms, 8 ms jitter, 1% loss', { latency_ms: 40, jitter_ms: 8, loss_pct: 1 }],
+            ['80 ms, 20 ms jitter, 2% loss', { latency_ms: 80, jitter_ms: 20, loss_pct: 2 }],
+        ];
+        const outcomes: Outcome[] = [];
+        for (const [label, link] of cases) outcomes.push(await run(label, link));
+
+        const worst = await run('150 ms, 40 ms jitter, 5% loss', {
             latency_ms: 150,
             jitter_ms: 40,
             loss_pct: 5,
@@ -278,40 +280,111 @@ describe('the netcode over a link that behaves like UDP', () => {
 
         // eslint-disable-next-line no-console
         console.log(
-            `[net-latency] events: ${losing.label} ${losing.received}/${losing.dispatched} ` +
-                `(${losing.droppedPackets} packets lost); ` +
-                `${reordering.label} ${reordering.received}/${reordering.dispatched} ` +
-                `(${reordering.droppedPackets} packets lost) ` +
-                `-- TARGET NOT MET, GAP-043 second half`
+            '[net-latency] events delivered: ' +
+                [...outcomes, worst]
+                    .map(
+                        (o) =>
+                            `${o.label} ${o.received}/${o.dispatched} ` +
+                            `(${o.droppedPackets} packets lost)`
+                    )
+                    .join('; ')
         );
 
         /*
-         Every event arrives while packets are merely *lost*, and that is the
-         action stream's redundancy doing its job: `flush_outbound` re-sends
-         every unacked frame, so a dropped packet costs latency rather than
-         content. Measured at 44 packets lost and zero events lost.
+         GAP-043's second half, fixed in meep 3.14.5 (D-177).
+         Before: 516/516, then 403/474 and 305/516 -- 15% and 41% of muzzle
+         flashes, impacts and explosions never happening on the client. The
+         cause was not the watermark on its own: the action stream sent a tick's
+         whole owed range as ONE MTU-bounded packet and re-sent it until acked,
+         so above roughly 118 bytes of actions per frame at 150 ms the owed
+         range outgrew a packet, pinned to the ring floor, and every frame then
+         rode exactly one packet. One reordered pair lost it for good, because
+         its channel-level ack still credited it. 3.14.5 slices a tick's owed
+         range across up to `max_packets_per_tick` packets (default 8), which
+         raises the ceiling roughly eightfold and puts a frame on eight
+         consecutive ticks' packets.
         */
-        expect(losing.received, 'events went missing on a link that only loses').toBe(
-            losing.dispatched
+        for (const o of outcomes) {
+            expect(o.received, `${o.label}: events went missing`).toBe(o.dispatched);
+        }
+
+        /*
+         The worst link is a bound rather than an equality, and the target is
+         still zero. This port's load is 529 bytes of actions per frame with
+         four bots (see the byte census below), against 3.14.5's ceiling of
+         about 940 at 150 ms -- so it sits under the ceiling on average and a
+         burst of explosions can still cross it. Measured at 506 of 516. The
+         bound is here to catch a regression to 41%, not to bless the residual.
+        */
+        const lost = 1 - worst.received / worst.dispatched;
+        expect(lost, 'the worst link regressed towards the 41% of 3.14.4').toBeLessThan(0.05);
+    });
+
+    it('measures the bytes of actions a frame costs, which is what the ceiling is on', async () => {
+        /*
+         The one number meep asked for, because it is what the whole mechanism
+         turns on: the action stream pins whenever a round trip's frames do not
+         fit one packet. On 3.14.4 that threshold was about 118 bytes per frame
+         at 150 ms and 236 at 80 ms; 3.14.5 raises it roughly eightfold, to
+         about 940 at 150 ms.
+
+         Measured on a loopback deliberately: the ack returns inside the same
+         step, so the owed range is one frame and an ACTION_STREAM packet
+         carries exactly that frame's actions.
+        */
+        const census: Array<{ bots: number; mean: number; p99: number; max: number }> = [];
+
+        for (const bots of [0, 4, 8]) {
+            const rig = await NetRig.create({ map: 'oa_dm1', bots, clients: 1, seed: 23 });
+            const client = rig.clients[0]!;
+            client.script = circleWalk;
+
+            const hostSide = rig.rawHostTransports[0] as {
+                send(bytes: Uint8Array, length: number): number;
+            };
+            const sizes: number[] = [];
+            const original = hostSide.send.bind(hostSide);
+            hostSide.send = (bytes: Uint8Array, length: number): number => {
+                // 9-byte Channel header, then the packet type; 0 is ACTION_STREAM.
+                if (length > 10 && bytes[9] === 0) sizes.push(length - 10);
+                return original(bytes, length);
+            };
+
+            rig.step(60 * 10);
+            sizes.sort((a, b) => a - b);
+
+            census.push({
+                bots,
+                mean: sizes.reduce((x, y) => x + y, 0) / Math.max(1, sizes.length),
+                p99: sizes[Math.floor(sizes.length * 0.99)] ?? 0,
+                max: sizes[sizes.length - 1] ?? 0,
+            });
+        }
+
+        // eslint-disable-next-line no-console
+        console.log(
+            '[net-latency] action bytes per frame per client: ' +
+                census
+                    .map(
+                        (c) =>
+                            `${c.bots} bots mean ${c.mean.toFixed(0)} p99 ${c.p99} max ${c.max}`
+                    )
+                    .join('; ') +
+                ' — 3.14.5 ceiling ≈940 B at 150 ms, ≈1880 B at 80 ms'
         );
 
         /*
-         They stop arriving once the link *reorders*, which is GAP-043's second
-         half and is untouched in 3.14.4. `Replicator` keeps a per-peer
-         `#applied_through` watermark and skips any frame group at or below it,
-         so a packet carrying frames 95..105 that arrives after one carrying
-         100..110 has 95..99 discarded wholesale -- with every event action in
-         them. Replicated state survives that because the next tick re-sends it;
-         an event has only the one chance. Measured: 302 of 516 at 150 ms with
-         40 ms of jitter.
-
-         Reported against its target rather than asserted at the broken value,
-         and the *shape* is asserted so a fix breaks this test instead of
-         passing quietly.
+         Asserted against the ceiling rather than against a fixed size, so this
+         fails on the day the port's per-frame cost grows enough to pin the
+         stream again — which is the failure that used to present as missing
+         gunshots rather than as a bandwidth number.
         */
-        expect(
-            reordering.received,
-            'reordering stopped eating events -- tighten this to an equality'
-        ).toBeLessThan(reordering.dispatched);
+        const CEILING_AT_150MS = 940;
+        for (const c of census) {
+            expect(
+                c.mean,
+                `${c.bots} bots: mean action bytes per frame is at the 150 ms ceiling`
+            ).toBeLessThan(CEILING_AT_150MS);
+        }
     });
 });

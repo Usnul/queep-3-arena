@@ -726,12 +726,14 @@ is refused before any session exists. `test/net-robustness.test.ts` covers the i
   rather than a bespoke side-channel** -- at-least-once with dedup, ~1189 B per command, unordered
   (so key them with a counter) and unfragmented (so an SDP offer needs chunking; ICE candidates fit).
   `NodeUDPTransport` covers a Node-to-Node link and cannot reach a browser at all. Removes
-  head-of-line blocking; measure before and after with the latency rig. The rollback loop that used
-  to block this is fixed (D-176), but **the remaining half of GAP-043 is a prerequisite**: a
-  UDP-style transport reorders by nature, and reordering is exactly what still eats event actions --
-  measured at 41% of muzzle flashes, impacts and explosions lost on a 150 ms / 40 ms-jitter link,
-  while a link that only *loses* packets loses no events at all. Switching transports before that is
-  fixed trades head-of-line blocking for missing gunshots.
+  head-of-line blocking; measure before and after with the latency rig. **Both blockers are now
+  gone**: the rollback loop in 3.14.4 (D-176) and the event loss under reordering in 3.14.5
+  (D-177). A UDP-style transport reorders by nature and the stack now tolerates that -- 474 of 474
+  events at 80 ms with 20 ms of jitter and 2% loss, against 403 before. Two things to carry into the
+  work: this port costs **523 bytes of actions per frame with four bots and 776 with eight**,
+  against a ceiling of about 940 at 150 ms, so eight bots on a long link is already at the limit;
+  and `max_packets_per_tick: 1` still restores the old loss, so the setting is a trap rather than a
+  tuning knob.
 - **Browser listen server** over WebRTC: the host tab owns slot 0 with no prediction.
 - **Predict static triggers**: `trigger_push` and `trigger_teleport` boxes are map constants, so the
   shared step can evaluate them on both sides (`BG_TouchJumpPad` is predicted in Q3).
@@ -814,6 +816,6 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 4 — join in progress | **done** |
 | 5 — WebSocket host, browser client | host, CLI and socket test **done**; browser `?join=` branch not started |
 | 6 — full match for every slot | not started |
-| 7 — latency, loss, bandwidth | rig + `SimulatedTransport` + `test/net-latency.test.ts` **done**; prediction target **met on 3.14.4** (D-176), event delivery under reordering **not met** (GAP-043 second half); bandwidth table still to write |
+| 7 — latency, loss, bandwidth | rig + `SimulatedTransport` + `test/net-latency.test.ts` **done**; prediction target met on 3.14.4 (D-176), event delivery met on 3.14.5 (D-177); action-bytes-per-frame census in place; bandwidth table still to write |
 | 8 — robustness | not started |
 | 9 — documentation, report, trap matrix | not started |

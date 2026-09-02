@@ -2218,7 +2218,10 @@ That is an accurate description of a component that cannot be used for its state
 
 ### GAP-043: the action stream's own redundancy forces a host rollback every tick, and reordering silently eats event actions
 
-**Status: the first half is fixed in 3.14.4. The second half is not.**
+**Status: both halves fixed — the first in 3.14.4, the second in 3.14.5. A third defect was
+found by meep while reproducing the second, and is fixed in 3.14.5 too. What stays open is the rule
+underneath: a frame skipped unapplied, or retired from the ring unsent, is still counted nowhere a
+game can read.**
 
 Two findings from one measurement, sharing a cause: the replicator's send path is designed around
 "re-send everything unacked", and two other parts of the stack were not written to expect it.
@@ -2279,8 +2282,10 @@ thousand. Loss and jitter are not involved. `NETWORK_PLAN.md` §7's prescribed r
   predict. `test/net-latency.test.ts`'s first suite is the regression test and asserts the flatness
   as well as the level.
 
-**2. Event-style actions are lost under reordering. NOT fixed in 3.14.4** -- the
-`#applied_through` skip is unchanged. The design leans on "an action with no affected components is
+**2. Event-style actions are lost under reordering. FIXED IN 3.14.5**, and the mechanism was
+three things rather than the one this entry originally named -- see the diagnosis below the
+measurements. On 3.14.4 the `#applied_through` skip was unchanged and the loss was as measured
+here. The design leans on "an action with no affected components is
 one the replicator always sends and the receiver applies exactly once", which is true for loss and
 false for reordering. `Replicator.unpack_from_peer` keeps a per-peer `#applied_through` watermark and
 skips any frame group at or below it, so a packet carrying frames 95..105 that arrives *after* one
@@ -2322,11 +2327,72 @@ the host dispatched by frame C, keep both peers running until the client has app
 past C, then compare. Under that method a clean link loses exactly zero and the bad link loses 41%,
 so the original entry was wrong in both directions.
 
+**The diagnosis, which came back from meep and which this report had only a third of.** The
+watermark is where the frames are dropped, and it is only reachable after two other things have
+happened:
+
+1. **A throughput ceiling in the sender.** `flush_outbound` packed `[last_acked + 1, current]` into
+   **one** MTU-bounded packet per tick and re-sent that same range every tick until its ack
+   returned. So the baseline advanced by at most one packet of frames per round trip while the
+   simulation produced one frame per tick: with `K` frames to a packet and a round trip of `R`
+   ticks, the owed range grows by `R - K` frames per round trip whenever `K < R`. At 60 Hz and
+   150 ms, `R = 10`, and any frame over about **118 bytes of actions** makes `K < R`. This port's
+   load is 523 B/frame with four bots — four and a half times over.
+2. **Pinning.** The pack start is `max(last_acked + 1, current - frame_capacity + 1)`. Once the owed
+   range is a ring wide the floor wins, every tick's pack starts one frame later than the last, and
+   a frame is on the wire in only `K` consecutive packets — **one**, when a frame is more than half
+   a packet. That is the state a 20-second match spends almost all of its time in.
+3. **The swap.** Two neighbouring packets reorder, the newer is applied first, the older falls below
+   the client's watermark and is skipped for good — and its channel-level ack still returns, so the
+   host credits the frames as delivered and nothing re-sends them. Every swap costs a frame, and so
+   does every dropped packet once a frame rides only one.
+
+That is why loss alone looked innocent and why GAP-042's `pack_for_peer` silent credit was a red
+herring: meep instrumented every server→client packet on the wire and **"never on the wire" was zero
+in every run**. It is also why the standalone reproduction filed with the original report passed —
+it never left the regime where every packet still carried every owed frame, so its reversed burst
+was a burst of duplicates.
+
+**The fix (3.14.5)** is the action stream sending a tick's owed range as several slices, applied and
+credited in order: up to `max_packets_per_tick` (default 8) action-stream packets a tick, each the
+next slice, each confirmed on its own and credited only in order, with the receiver holding a later
+slice until the ones before it land. The ceiling rises eightfold — about **940 bytes of actions per
+frame at 150 ms** instead of 118 — and a frame rides eight consecutive ticks' packets once pinned,
+so a swap or a drop has to beat all eight.
+
+**A third defect, found by meep while reproducing this one and fixed in the same release.** Frames
+above the MTU lost 12–15% *on a link that loses nothing*, new with the slicing: a frame over
+~1150 B goes out as one slice of two fragments, and `FragmentAssembler` kept at most eight partial
+messages, evicting the oldest when a ninth began. Eight slices a tick, with jitter putting a
+message's second fragment a tick behind its first, started eight new messages while the previous
+tick's eight were still pending — and both fragments were acked, so the sender credited the slice.
+Sized from the burst and pinned.
+
+**Verified here on 3.14.5**, same rig, same seed, 20 s, one client and four bots:
+
+| link | events, 3.14.4 | events, 3.14.5 |
+|---|---:|---:|
+| 40 ms, 8 ms jitter, 1% loss | 516 / 516 | 516 / 516 |
+| 80 ms, 20 ms jitter, 2% loss | 403 / 474 (15% lost) | **474 / 474** |
+| 150 ms, 40 ms jitter, 5% loss | 305 / 516 (41% lost) | **506 / 516 (2% lost)** |
+
+The residual on the worst link is this port's own load rather than the engine's: 523 B of actions
+per frame with four bots, 691 at p99 and 1005 at peak, against the 940 ceiling — so a burst of
+explosions can still cross it. `test/net-latency.test.ts` now censuses that number every run and
+fails if the mean approaches the ceiling, which turns a future regression into a bandwidth figure
+instead of into missing gunshots.
+
+**What is still open**, in meep's words rather than mine: the skip is silent and the credit is still
+channel-level. Setting `max_packets_per_tick: 1` reproduces the old loss exactly — verified locally
+at three deliberate swaps costing exactly three frames. Closing it properly means either a bounded
+receiver-side hold for an out-of-order head, or crediting from the receiver's applied watermark
+rather than from the channel; and either way, a frame skipped unapplied and a frame retired unsent
+should each be counted somewhere a game can read them.
+
 **A note on reproducing these.** The rig pins every seed and injects the transport's clock, so the
 loopback and clean-latency cases reproduce exactly. The lossy cases do not: the engine reads
 `performance.now()` on its fragment-retention and render-delay paths, so *which* packets are lost
-varies between runs on one machine. The shortfall appears on every run; its size moves. The test
-asserts the deterministic cases and prints the rest.
+varies between runs on one machine. Neither affects this loss.
 
 
 ## 4. Ergonomics
