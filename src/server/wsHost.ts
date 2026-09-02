@@ -59,6 +59,18 @@ export interface Hello {
     frame: number;
     map: string;
     bots: number;
+    /**
+     * How many items the host's `ItemSystem` spawned.
+     *
+     * The client loads the same map and could count them itself, and that is
+     * exactly why this is here: `ItemSystem.spawn` *rejects* an item whose drop
+     * trace starts in a solid, so the count is a function of the collision
+     * backend as well as of the map, and the two ends do not have to be running
+     * the same one. The pools are built from this number on both sides and a
+     * silent disagreement is a corrupt wire rather than a missing shard, so the
+     * client checks it against its own and refuses the join if they differ.
+     */
+    items: number;
     /** The protocol the host speaks; the client has already sent its own. */
     v: number;
 }
@@ -158,6 +170,7 @@ export class WsHost {
             frame: this.host.currentFrame,
             map: this.host.cm.name,
             bots: this.host.slots.filter((s) => s.bot !== null).length,
+            items: this.host.items.items.length,
             v: PROTOCOL_VERSION,
         };
 

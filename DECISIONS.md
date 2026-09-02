@@ -9867,3 +9867,68 @@ delivery under sustained overload. Muzzle flashes and impacts belong on the acti
 that must arrive regardless — round state, a kill that scores — belongs on
 `ReliableCommandPipeline`, which this port has not needed yet and which step 6 should revisit when
 scores go on the wire.
+
+### D-178: the browser branch of step 5, and the unbounded weapon cooldown only a real host could show
+
+`?join=ws://host:port` in `src/app/main.ts` takes the networked branch: the same map, `PhysicsWorld`,
+movers and items as single-player, no waypoint graph and no bot roster, `NetClient` in place of
+`PlayerSystem`/`CombatSystem`/`PickupSystem`/`BotSystem`/`WorldEffectSystem`, and the systems of
+section 3.3 -- `NetClientSystem`, `NetWorldSystem`, `NetRenderSystem` -- in `src/app/netSystems.ts`.
+`src/client/net/join.ts` is the handshake, out of band on the socket before `WebSocketTransport`
+exists, and turns every refusal into a sentence rather than a `SyntaxError` out of `WebSocket`'s
+constructor.
+
+Three seams were needed and each is worth naming.
+
+**`PlayerController` takes a `PlayerSlot` instead of always building one.** The simulation is the
+slot; who owns it depends on who is simulating. On the networked branch `NetClient` builds it and the
+session steps it, and the controller becomes input and presentation over it -- which is what makes
+the HUD, the view weapon and the camera work on a predicted player without any of them knowing there
+is a network. `update` split into `advanceClock` + `sampleCommand` + `slot.step` + `presentationTick`,
+and `updatePresentation` is the same minus the step.
+
+**The hello carries the item count.** `ItemSystem.spawn` rejects an item whose drop trace starts in a
+solid, so the count is a function of the collision backend as well as of the map, and the two ends
+need not be running the same one. Both peers build replicated pools from it and match them *by
+position*, so a disagreement is not a missing shard -- it is every item after the first difference
+reading as the wrong one, silently. The client checks it and refuses the join.
+
+**`NetClient.bodies` is public and shared.** The client builds a `CharacterSlot` for every slot in the
+host's order; a second `CharacterBodies` on the same physics world would put two boxes on every
+player.
+
+**And then the finding, which is why this entry is long.** Measured against a real `npm run host`
+over a real socket, standing still: **300 reconciles in 300 frames**, every one of them a genuine
+hash disagreement rather than a missing ring entry. `origin`, `velocity`, `viewangles`,
+`deltaAngles`, `groundNormal`, `bobCycle`, `pmFlags`, `viewheight` and the rest were identical to the
+last bit. **`weaponTime` alone drifted**, about one frame of milliseconds at a time, and had reached
+-1917 on the host against -1867 on the client.
+
+`PM_Weapon` guards the decrement and this port did not:
+
+    if ( pm->ps->weaponTime > 0 ) {
+        pm->ps->weaponTime -= pml.msec;
+    }
+
+-- `bg_pmove.c:1575`. Unguarded it fires identically, because the gate that decides whether a shot
+comes out is `> 0` either way. What it costs is the floor. Two things followed. `clampInt16`
+saturated the wire value at -32768 after about thirty-three seconds of not shooting. And, far worse,
+the counter acquired infinite memory: a host and a client that ever ran a different number of frames
+could never agree about it again, because nothing in the arithmetic ever returned to a common value.
+So the client rewound and replayed its whole lead sixty times a second for a simulation that agreed
+about everything a player can see.
+
+**No existing test could have caught it**, and that is the part worth keeping. `NetRig` steps host and
+client in lockstep inside one process, so their frame counts never diverge and the unbounded counter
+stayed in step; `test/net-loopback.test.ts` reported 97.3% short-circuited before the fix and 97.3%
+after. It takes a real host on a real clock, where `TimeDilation` makes the client run two simulation
+steps in about 5% of its calls, for the two counts to come apart. The measurement that found it was a
+field-by-field diff of the client's own ring entry against the host's authority for the same frame,
+which is worth reaching for the moment a hash disagrees and nothing visible does.
+
+`test/player-slot.test.ts` gains two tests for it, both confirmed to fail without the guard: the
+counter stays inside int16 over a minute of not firing (-60000 without), and two slots that have been
+idle for different lengths of time hold the same cooldown after the same shot (-1666 against -1000
+without). `ReferenceController` -- the transcription that is the control for the extraction -- takes
+the guard too, with a note saying why it is a correction to the control rather than a hole in it:
+a control that encodes the defect would hold the port to it for ever.

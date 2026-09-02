@@ -105,9 +105,11 @@ const BOBMOVE_DUCKED = 0.5;
  * The pre-extraction step, transcribed.
  *
  * Deliberately a transcription rather than a call: it is the control, and a
- * control that shares code with the subject is not one. The only thing changed
- * from the original is that the command arrives as an argument instead of being
- * built from a keyboard, which is the split under test.
+ * control that shares code with the subject is not one. Two things are changed
+ * from the original. The command arrives as an argument instead of being built
+ * from a keyboard, which is the split under test. And `fireIfReady` carries
+ * `PM_Weapon`'s `weaponTime > 0` guard, which the original did not -- see there
+ * for why that is a correction to the control rather than a hole in it.
  */
 class ReferenceController {
     readonly pmove = createPmoveHost({
@@ -170,7 +172,22 @@ class ReferenceController {
     }
 
     private fireIfReady(msec: number): void {
-        this.cooldownMs -= msec;
+        /*
+         `bg_pmove.c:1575`, which the pre-extraction code did not have:
+
+             if ( pm->ps->weaponTime > 0 ) {
+                 pm->ps->weaponTime -= pml.msec;
+             }
+
+         So this line is not a transcription of what was here before, and that
+         is deliberate: what was here before was wrong against the C, and a
+         control that encodes the defect would hold the port to it for ever.
+         The behaviour under test -- when a shot comes out -- is identical
+         either way, because the gate below is `> 0` in both. What changes is
+         that the counter has a floor. See D-178 and `weaponTime stays inside
+         the range the wire can carry` below.
+        */
+        if (this.cooldownMs > 0) this.cooldownMs -= msec;
 
         if ((this.pmove.cmd.buttons & C.BUTTON_ATTACK) === 0) return;
         if (this.cooldownMs > 0) return;
@@ -540,5 +557,109 @@ describe('the two clocks', () => {
         const closedTotal = closed.reduce((x, y) => x + y, 0);
         expect(closedTotal).toBe(1000);
         expect(carriedTotal).toBe(999);
+    });
+});
+
+describe('the weapon cooldown', () => {
+    /**
+     * `bg_pmove.c:1575` guards the decrement with `weaponTime > 0`, and this
+     * port did not.
+     *
+     * It looks like a formality -- the gate that decides whether a shot comes
+     * out is `> 0` either way -- and it is the difference between a bounded
+     * counter and an unbounded one. Two things follow from unbounded, and the
+     * second is what made this worth finding.
+     *
+     * `NetPlayerState.weaponTime` is an `int16`, so `clampInt16` saturates it
+     * at -32768 after about thirty-three seconds of not shooting: the wire then
+     * carries a number that no longer means anything.
+     *
+     * And an unbounded counter has infinite memory. A predicted client compares
+     * a hash of its own slot against a hash of the host's for the same frame,
+     * and reconciles when they differ. With no floor, a host and a client that
+     * ever disagreed about how many frames had passed could never agree again,
+     * so *every* comparison failed for ever. Measured against a real host over
+     * a real socket before the guard went back: 300 reconciles in 300 frames,
+     * with `origin`, `velocity`, `viewangles`, `bobCycle` and every other field
+     * bit-identical and `weaponTime` alone drifting. See D-178.
+     */
+    it('stays inside the range the wire can carry, however long nobody fires', () => {
+        const slot = newSlot();
+        const sink = recordingSink();
+        const cmd = createUserCmd();
+
+        // A minute of standing still, which is twice what int16 needs to
+        // saturate at one frame of milliseconds per frame.
+        for (let frame = 0; frame < 60 * 60; frame++) {
+            cmd.angles.fill(0);
+            cmd.moves.fill(0);
+            cmd.buttons = 0;
+            cmd.weapon = 0;
+            slot.step(cmd, netClock(frame), sink);
+        }
+
+        /*
+         `PM_Weapon` can take it one frame below zero -- the frame it crosses --
+         and never further, because the guard sees a non-positive value on the
+         next one.
+        */
+        expect(slot.weaponTime).toBeLessThanOrEqual(0);
+        expect(slot.weaponTime).toBeGreaterThan(-20);
+
+        const state = new NetPlayerState();
+        const inventory = new NetInventory();
+        slot.store(state, inventory);
+        expect(state.weaponTime).toBe(slot.weaponTime);
+    });
+
+    it('forgets how long it has been idle, so two peers can agree about it', () => {
+        /*
+         The property the network needs, stated without a network.
+
+         Two slots reach the same frame having been idle for different lengths
+         of time -- which is every client and host that ever ran a different
+         number of frames, and under time dilation that is all of them. Then
+         both fire the same shot on the same frame. They have to hold the same
+         cooldown afterwards, because a client whose slot disagrees with the
+         host's about *any* byte reconciles, and one that disagrees about a byte
+         nothing ever resets reconciles for ever.
+
+         A floored counter forgets: both are sitting at the floor before the
+         shot, so both land on `fireRateMs` after it. An unfloored one
+         remembers every frame it has ever seen, and the gap between these two
+         -- 40 frames, about 667 ms -- would survive the shot and every shot
+         after it. That is the defect this pair of tests exists for.
+        */
+        const early = newSlot();
+        const late = newSlot();
+        const sink = recordingSink();
+        const cmd = createUserCmd();
+
+        const idle = (slot: PlayerSlot, from: number, to: number): void => {
+            for (let frame = from; frame < to; frame++) {
+                cmd.angles.fill(0);
+                cmd.moves.fill(0);
+                cmd.buttons = 0;
+                cmd.weapon = 0;
+                slot.step(cmd, netClock(frame), sink);
+            }
+        };
+
+        // 100 frames of idling against 60: the same instant, different histories.
+        idle(early, 0, 100);
+        idle(late, 40, 100);
+
+        expect(early.weaponTime, 'the idle counters already disagree').toBe(late.weaponTime);
+
+        // And the same shot on the same frame leaves them on the same cooldown.
+        cmd.angles.fill(0);
+        cmd.moves.fill(0);
+        cmd.weapon = 0;
+        cmd.buttons = C.BUTTON_ATTACK;
+        early.step(cmd, netClock(100), sink);
+        late.step(cmd, netClock(100), sink);
+
+        expect(early.weaponTime).toBe(weaponStats(early.weapon).fireRateMs);
+        expect(late.weaponTime).toBe(early.weaponTime);
     });
 });

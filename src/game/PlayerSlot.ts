@@ -351,7 +351,31 @@ export class PlayerSlot {
      * of them spend the same round of ammunition on the same frame.
      */
     private fireIfReady(clock: StepClock, sink: StepSink): void {
-        this.cooldownMs -= clock.msec;
+        /*
+         `PM_Weapon`'s guard, and it is not decoration:
+
+             if ( pm->ps->weaponTime > 0 ) {
+                 pm->ps->weaponTime -= pml.msec;
+             }
+
+         This port decremented unconditionally, which fires identically -- the
+         test below is `> 0` either way -- and turns the cooldown into an
+         unbounded accumulator. Two things came of that. It saturated
+         `clampInt16` at -32768 after about half a minute of not shooting, so
+         the wire carried a number that no longer meant anything. And, much
+         worse, it gave the value infinite memory: a host and a client that ever
+         disagreed about how many frames had passed could never agree again,
+         because nothing in the arithmetic ever returned to a common floor.
+
+         Measured before the guard went back in, against a real host over a real
+         socket: **every** AUTH_STATE disagreed -- 300 of 300 -- with `origin`,
+         `velocity`, `viewangles`, `bobCycle` and the rest identical to the last
+         bit and `weaponTime` alone drifting, one frame's worth at a time. So
+         the client rewound and replayed its whole lead sixty times a second for
+         a simulation that agreed about everything a player can see. With the
+         guard, that is 92% short-circuited. See D-178.
+        */
+        if (this.cooldownMs > 0) this.cooldownMs -= clock.msec;
 
         if ((this.pmove.cmd.buttons & C.BUTTON_ATTACK) === 0) return;
         if (this.cooldownMs > 0) return;

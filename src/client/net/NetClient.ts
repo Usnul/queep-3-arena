@@ -41,8 +41,9 @@ import { BinaryBuffer } from '@woosh/meep-engine/src/core/binary/BinaryBuffer.js
 import type { SimAction } from '@woosh/meep-engine/src/engine/network/sim/SimAction.js';
 
 import type { ClipMap } from '../../q3/cm/ClipMap.ts';
-import type { HeadlessPhysics } from '../../../tools/pipeline/headless-physics.ts';
-import { CharacterBodies, type CharacterSlot } from '../CharacterBody.ts';
+import type { PhysicsTraceBackend } from '../../game/PmoveHost.ts';
+import type { MoverHost } from '../MeepMove.ts';
+import { CharacterBodies, type BodyDataset, type CharacterSlot } from '../CharacterBody.ts';
 import { PlayerSlot, type StepSink } from '../../game/PlayerSlot.ts';
 import {
     NetInventory,
@@ -93,9 +94,27 @@ export interface ClientHooks {
     pickup?(event: PickupEventData): void;
 }
 
+/**
+ * As much of a physics world as a joined client needs.
+ *
+ * Structural rather than either concrete class, because both ends of this port
+ * hand it something different and neither is wrong: the rig and the host pass
+ * `HeadlessPhysics`, the browser passes its `PhysicsWorld`'s system beside the
+ * render world's own dataset -- which is the dataset the character bodies have
+ * always gone in on that side. The four members here are the whole of what is
+ * used: the trace the player's sweeps run on, the system the bodies live in,
+ * the dataset their components are registered against, and the ignore set that
+ * keeps a character from sweeping against itself.
+ */
+export interface ClientPhysics extends PhysicsTraceBackend {
+    readonly system: MoverHost['system'];
+    readonly ecd: BodyDataset;
+    readonly traceIgnores: Set<number>;
+}
+
 export interface NetClientOptions {
     cm: ClipMap;
-    physics: HeadlessPhysics;
+    physics: ClientPhysics;
     /** Peer id the host handed out in the hello. */
     peerId: number;
     /** Player slot the host put this client in. */
@@ -165,7 +184,14 @@ export class NetClient {
      */
     private readonly ring = new Map<number, number>();
 
-    private readonly bodies: CharacterBodies;
+    /**
+     * Every slot's body, the local player's included.
+     *
+     * Public because the application shares them: the browser's
+     * `CharacterBodySystem` places its characters from this set, and building a
+     * second one on the same physics world would put two boxes on every player.
+     */
+    readonly bodies: CharacterBodies;
     private readonly hooks: ClientHooks;
     private readonly matchEntity: number;
     private readonly cmScratch: BinaryBuffer;
@@ -702,6 +728,20 @@ export class NetClient {
 
     /** Overridden by the rig; the browser drives physics through `EntityManager`. */
     physicsStep: () => void = () => {};
+
+    /**
+     * Put every slot's body where its replicated origin now says it is.
+     *
+     * `stepSlot` already does this after the local player's own prediction, but
+     * a remote slot moves without this client stepping anything -- its origin
+     * arrives in an AUTH_STATE and changes under the tracked closure with
+     * nothing to notice. `NetWorldSystem` calls this once a fixed step, after
+     * the session has normalized, which is the point at which every replicated
+     * origin is canonical and none of them is a render-time blend.
+     */
+    syncBodies(): void {
+        this.bodies.sync();
+    }
 
     private trimRing(): void {
         const oldest = this.session.current_frame - FRAME_CAPACITY;

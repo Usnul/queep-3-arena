@@ -474,7 +474,8 @@ export class PlayerController {
         devices: InputDevices,
         spawnQ3: readonly number[],
         physics: PhysicsTraceBackend | null = null,
-        moverHost: MoverHost | null = null
+        moverHost: MoverHost | null = null,
+        slot: PlayerSlot | null = null
     ) {
         this.element = element;
         this.devices = devices;
@@ -485,8 +486,17 @@ export class PlayerController {
          builds one of for itself. `?move=q3` is `moverHost === null`, which
          runs the ported `bg_pmove` whole; both solvers write the same
          `playerState_t`, so nothing downstream can tell which one ran.
+
+         Passed in on the networked branch, where `NetClient` built it first and
+         the session -- not this class -- decides when it steps. Everything
+         downstream reads the simulation through `ps`, `inventory`, `weapon` and
+         `movers`, which are forwards to whichever slot this is; sharing the one
+         object is what makes the HUD, the view weapon and the camera work on a
+         predicted player without any of them knowing there is a network. The
+         other four arguments are then unused, which is why they keep their
+         defaults: a caller with a slot has already given them to `PlayerSlot`.
         */
-        this.slot = new PlayerSlot({ cm, spawnQ3, physics, moverHost });
+        this.slot = slot ?? new PlayerSlot({ cm, spawnQ3, physics, moverHost });
     }
 
     attach(): void {
@@ -685,20 +695,53 @@ export class PlayerController {
      * that method for why.
      */
     update(deltaSeconds: number): void {
-        /*
-         Q3 works in integer milliseconds, so the fractional part of a step is
-         carried rather than rounded away. `MoverSystem` has always done this;
-         this used to round instead, and on the engine's 60 Hz fixed step
-         rounding gives 17 ms for a 16.667 ms step -- every step, for ever, so
-         the player's clock runs two percent fast against the world's. Carrying
-         gives 17, 16, 17, 17, 16 ... which sums exactly and is identical from
-         one run to the next, which is the property that matters.
+        const msec = this.advanceClock(deltaSeconds);
 
-         Clamping matches `PmoveSingle`'s own 200 ms ceiling, so a backgrounded
-         tab resumes without a teleport. Clamped time is time thrown away, and
-         the accumulator is dropped with it -- resuming is a discontinuity by
-         definition and carrying a second of arrears into it would be worse.
-        */
+        this.sampleCommand();
+
+        this.slot.step(
+            this.command,
+            { frame: this.frameNumber++, msec, dt: deltaSeconds, timeMs: this.time },
+            this.sink
+        );
+
+        this.presentationTick(msec);
+    }
+
+    /**
+     * Everything {@link update} does except the step, for a client whose slot
+     * somebody else owns.
+     *
+     * On the networked branch the simulation runs inside the session: it calls
+     * {@link sampleCommand} through the input sampler, executes the command as
+     * a `UserCmdAction` at the frame it is tagged with, and replays it whenever
+     * the host disagrees -- so a step from here would be a second, unowned copy
+     * of the same player. What is left is the presentation clock, and it stays
+     * on the render-side accumulator rather than the session's frame number
+     * because the weapon rack and the view kick are measured in wall-clock
+     * milliseconds and neither is rolled back by a reconciliation.
+     */
+    updatePresentation(deltaSeconds: number): void {
+        this.presentationTick(this.advanceClock(deltaSeconds));
+    }
+
+    /**
+     * The fixed step in integer milliseconds, with the remainder carried.
+     *
+     * Q3 works in integer milliseconds, so the fractional part of a step is
+     * carried rather than rounded away. `MoverSystem` has always done this;
+     * this used to round instead, and on the engine's 60 Hz fixed step
+     * rounding gives 17 ms for a 16.667 ms step -- every step, for ever, so the
+     * player's clock runs two percent fast against the world's. Carrying gives
+     * 17, 16, 17, 17, 16 ... which sums exactly and is identical from one run
+     * to the next, which is the property that matters.
+     *
+     * Clamping matches `PmoveSingle`'s own 200 ms ceiling, so a backgrounded tab
+     * resumes without a teleport. Clamped time is time thrown away, and the
+     * accumulator is dropped with it -- resuming is a discontinuity by
+     * definition and carrying a second of arrears into it would be worse.
+     */
+    private advanceClock(deltaSeconds: number): number {
         this.msecCarry += deltaSeconds * 1000;
         let msec = Math.floor(this.msecCarry);
         this.msecCarry -= msec;
@@ -711,17 +754,12 @@ export class PlayerController {
         }
 
         this.time += msec;
+        return msec;
+    }
 
-        this.sampleCommand();
-
-        this.slot.step(
-            this.command,
-            { frame: this.frameNumber++, msec, dt: deltaSeconds, timeMs: this.time },
-            this.sink
-        );
-
+    /** The weapon rack's countdown and the eye-pose history, on the fixed step. */
+    private presentationTick(msec: number): void {
         this.weaponSelectMs = Math.max(0, this.weaponSelectMs - msec);
-
         this.recordView(msec);
     }
 

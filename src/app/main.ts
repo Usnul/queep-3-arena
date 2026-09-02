@@ -100,6 +100,12 @@ import { CAMERA_CLIP_FAR, CAMERA_CLIP_NEAR, CameraLens } from '../client/lens.ts
 import { audioPage, type MasterHost, type MixerHost } from '../client/ui/audio.ts';
 import { addFrameRateCounter } from '../client/ui/frameRateCounter.ts';
 import { buildRoster } from './roster.ts';
+import { WebSocketTransport } from '@woosh/meep-engine/src/engine/network/transport/adapters/WebSocketTransport.js';
+import { NetClient, type ClientPhysics } from '../client/net/NetClient.ts';
+import { JoinRefused, joinHost } from '../client/net/join.ts';
+import { NetClientSystem, NetRenderSystem, NetWorldSystem } from './netSystems.ts';
+import { HOST_PEER_ID, SIMULATION_DELAY_TICKS } from '../net/protocol.ts';
+import type { UserCmd } from '../q3/pmove/types.ts';
 import { CHARACTER_HEIGHT, CharacterBodies } from '../client/CharacterBody.ts';
 import {
     BotSystem,
@@ -176,6 +182,58 @@ function requestedCrosshair(): number | null {
 /** `?fly=1` swaps the player for a noclip camera, for inspecting conversions. */
 function flyMode(): boolean {
     return new URLSearchParams(window.location.search).get('fly') === '1';
+}
+
+/**
+ * `?join=ws://host:port` joins a match instead of running one.
+ *
+ * The whole switch between the two halves of this port: with it set there are
+ * no bots, no local combat and no local pickups, because a host somewhere else
+ * owns all three, and this browser predicts exactly one player. Without it
+ * nothing below changes at all.
+ */
+function joinTarget(): string | null {
+    const raw = new URLSearchParams(window.location.search).get('join');
+    if (raw === null || raw === '') return null;
+
+    /*
+     Rejected here rather than handed to `WebSocket`, which throws a
+     `SyntaxError` naming neither the parameter nor the value. `wss:` is as
+     valid as `ws:` and is what a page served over https must use.
+    */
+    if (!raw.startsWith('ws://') && !raw.startsWith('wss://')) {
+        throw new Error(`?join= must be a ws:// or wss:// URL, not ${raw}`);
+    }
+
+    return raw;
+}
+
+/**
+ * The input sampler, as a function rather than a non-null assertion.
+ *
+ * `NetClient`'s sampler is installed before the `PlayerController` it reads
+ * exists -- see the `let` in the networked branch -- and every call to it comes
+ * from inside a `session.tick` this file starts, all of which happen long
+ * after. A `!` would say that too, and say it without saying which of the two
+ * possible mistakes it is ruling out.
+ */
+function netInput(controller: PlayerController | null): UserCmd {
+    if (controller === null) {
+        throw new Error('the session sampled input before the player controller existed');
+    }
+
+    return controller.sampleCommand();
+}
+
+/** `?name=` and `?character=`, which the host stores against the slot. */
+function joinIdentity(): { name: string; character: number } {
+    const query = new URLSearchParams(window.location.search);
+    const character = Number(query.get('character') ?? '0');
+
+    return {
+        name: query.get('name') ?? '',
+        character: Number.isFinite(character) ? character | 0 : 0,
+    };
 }
 
 /** The four `GPUProfileLevel`s, by the name `?profile=` calls each one. */
@@ -1004,16 +1062,173 @@ async function main(): Promise<void> {
                 : { system: physicsWorld.system, ecd: physicsWorld.ecd };
 
         /*
+         Items drop to the floor through the same backend movement uses, so a
+         pickup rests on the surface the player will actually stand on. Using
+         the clipmap here regardless would be simpler and subtly wrong: with the
+         physics backend the two disagree by up to the surface epsilon, which is
+         enough to leave a shard visibly sunk into a ramp.
+        */
+        const dropTrace: DropTrace = (start, mins, maxs, end, mask) => {
+            const out = createTrace();
+            if (physicsWorld !== null) {
+                physicsWorld.trace(out, start, end, mins, maxs, mask);
+            } else {
+                boxTrace(out, clipMap, start, end, mins, maxs, mask);
+            }
+            return out;
+        };
+
+        const items = new ItemSystem();
+        items.spawn(loaded.bundle.entities, dropTrace);
+
+        /*
+         The join, before anything expensive that a refused connection would
+         waste: the waypoint graph and the bot roster below are seconds of work
+         and neither is built on this branch at all.
+
+         `joinHost` returns once the host's hello has been read off the socket,
+         and never gives back a socket that has had a packet on it -- the text
+         frame is out of band, before `WebSocketTransport` exists, because that
+         class parses everything it sees as a packet.
+        */
+        /*
+         Events that arrived and were not presented. Both are step 6's -- an
+         explosion is `Effects` and a pickup is a sound off `ItemsView` -- and
+         both are worth counting in the meantime, because "the effect actions
+         are arriving" and "the effect actions are being drawn" are separate
+         claims and only the first one is step 5's to make.
+        */
+        const netEvents = { effects: 0, pickups: 0 };
+
+        const joinUrl = joinTarget();
+        const joined =
+            joinUrl === null ? null : await joinHost({ url: joinUrl, ...joinIdentity() });
+
+        if (joined !== null) {
+            const { hello } = joined;
+
+            /*
+             Two facts the wire cannot recover from a disagreement about, checked
+             while there is still a sentence to print. The map decides every
+             collision the client predicts against; the item count decides the
+             size of a replicated pool, and pools are matched by *position* on
+             both peers -- so an off-by-one there is every item after it reading
+             as the wrong one, silently and for ever.
+            */
+            if (hello.map !== mapName) {
+                throw new JoinRefused(
+                    `the host is running ${hello.map} and this tab loaded ${mapName}; ` +
+                        `open ?map=${hello.map}&join=${joinUrl}`
+                );
+            }
+
+            if (hello.items !== items.items.length) {
+                throw new JoinRefused(
+                    `the host spawned ${hello.items} items on ${hello.map} and this client ` +
+                        `spawned ${items.items.length}; the two are not the same build`
+                );
+            }
+
+            console.log(
+                `[queep] joined ${joinUrl} as peer ${hello.peer} in slot ${hello.slot}, ` +
+                    `at the host's frame ${hello.frame}, with ${hello.bots} bots in the level`
+            );
+        }
+
+        /*
+         The controller, once the client that owns its simulation exists.
+         `NetClient` builds the `PlayerSlot` and the session steps it; the
+         sampler below is the one thing it needs from this side, and it is
+         called from inside `session.tick` once for every frame this client
+         predicts.
+
+         The `let` is the knot: the client needs a sampler that reads the
+         controller, and the controller needs the client's slot. One of the two
+         has to be reachable before it is built, and a sampler only ever called
+         from inside a tick this file starts is the safe half.
+        */
+        let controller: PlayerController | null = null;
+
+        const netClient =
+            joined === null
+                ? null
+                : await NetClient.create({
+                      cm: clipMap,
+
+                      /*
+                       The system from the physics world and the dataset from the
+                       render world, which is the pairing the single-player
+                       branch has always given `CharacterBodies` two lines below.
+                      */
+                      physics: {
+                          system: physicsWorld.system,
+                          ecd,
+                          traceIgnores: physicsWorld.traceIgnores,
+                          trace: (out, start, end, mins, maxs, mask): void => {
+                              physicsWorld.trace(out, start, end, mins, maxs, mask);
+                          },
+                      } satisfies ClientPhysics,
+                      peerId: joined.hello.peer,
+                      slotIndex: joined.hello.slot,
+
+                      /*
+                       The host's own rule for which point a slot starts on
+                       (`Host.admit` is `index % spawns.length` over the same
+                       `spawnPoints` list off the same map), so the few frames
+                       before INITIAL_SYNC are spent in roughly the right place
+                       rather than on top of whoever holds slot zero.
+                      */
+                      spawnQ3:
+                          entrances.points[joined.hello.slot % entrances.points.length]
+                              ?._originQ3 ??
+                          spawn?._originQ3 ?? [0, 0, 0],
+                      itemCount: items.items.length,
+                      hooks: {
+                          sample: () => netInput(controller),
+
+                          /*
+                           The view kick, which is the one part of taking damage
+                           a client can act on with nothing else built -- the
+                           health it happened to arrives in the same AUTH_STATE.
+                           Everything else an event carries (the explosion, the
+                           impact mark, the pickup sound) is presentation of
+                           somebody else's state and belongs to step 6, so for
+                           now they are counted and dropped, which is how
+                           `window.queep.net` can show that they arrive at all.
+                          */
+                          hit: (event): void => {
+                              if (event.victim === joined.hello.slot) {
+                                  controller?.damaged(event.damage);
+                              }
+                          },
+                          effect: (): void => {
+                              netEvents.effects += 1;
+                          },
+                          pickup: (): void => {
+                              netEvents.pickups += 1;
+                          },
+                      },
+                  });
+
+        /*
          Players and bots as bodies the broadphase can see, which is what makes a
          rocket able to hit one and two of them able to stand in each other's way.
          Null on the ported/clipmap backends, which have no meep physics at all.
+
+         On the networked branch they are the client's: it built one for every
+         slot in the host's own order, each following that slot's replicated
+         origin, and a second set here would put two boxes on every player.
         */
         const bodies =
-            moverHost === null
-                ? null
-                : new CharacterBodies(moverHost, ecd, physicsWorld.traceIgnores);
-        // Client id 0, matching the `Damageable` the roster builds for the player.
-        const playerBody = bodies?.create(0) ?? null;
+            netClient !== null
+                ? netClient.bodies
+                : moverHost === null
+                  ? null
+                  : new CharacterBodies(moverHost, ecd, physicsWorld.traceIgnores);
+
+        // Client id 0, matching the `Damageable` the roster builds for the
+        // player. Null when the client made it, which it did for every slot.
+        const playerBody = netClient !== null ? null : (bodies?.create(0) ?? null);
 
         const player = new PlayerController(
             clipMap,
@@ -1021,12 +1236,50 @@ async function main(): Promise<void> {
             engine.devices,
             spawn?._originQ3 ?? [0, 0, 0],
             physicsWorld,
-            playerBody?.host ?? moverHost
+            playerBody?.host ?? moverHost,
+            netClient?.slot ?? null
         );
+
+        controller = player;
 
         // After the controller, because the body's filter had to name itself
         // before the controller that owns it existed. See `CharacterSlot`.
         playerBody?.track(() => player.ps.origin);
+
+        if (netClient !== null && joined !== null) {
+            /*
+             Align, then connect, and in that order: the hello's frame is what
+             makes this client's first command land inside the host's ring
+             rather than however many frames behind its oldest slot the page
+             took to load. `fastForward` runs the session forward with the
+             sampler held quiet, so nothing is predicted and nothing is sent.
+
+             The two frames past the delay are the host's own lead: it buffers
+             input for `SIMULATION_DELAY_TICKS` before executing it, and a
+             command that arrives for a frame it has already run is a command it
+             drops.
+            */
+            const aligned = netClient.fastForward(
+                joined.hello.frame + SIMULATION_DELAY_TICKS + 2
+            );
+
+            netClient.session.connect(
+                HOST_PEER_ID,
+                new WebSocketTransport({ socket: joined.socket as never })
+            );
+
+            joined.socket.addEventListener('close', (event) => {
+                console.warn(
+                    `[queep] the host closed the connection (code ${event.code}); ` +
+                        'this tab is now predicting a match nobody is running'
+                );
+            });
+
+            console.log(
+                `[queep] net: aligned to frame ${netClient.currentFrame} in ${aligned} ticks, ` +
+                    `socket open to ${joinUrl ?? ''}`
+            );
+        }
 
         console.log(
             `[queep] movement: ${moverHost === null ? 'ported bg_pmove' : "Q3's motor on meep KinematicMover"}`
@@ -1058,26 +1311,6 @@ async function main(): Promise<void> {
         arena.onLocalDamage = (damage): void => {
             player.damaged(damage);
         };
-
-        /*
-         Items drop to the floor through the same backend movement uses, so a
-         pickup rests on the surface the player will actually stand on. Using
-         the clipmap here regardless would be simpler and subtly wrong: with the
-         physics backend the two disagree by up to the surface epsilon, which is
-         enough to leave a shard visibly sunk into a ramp.
-        */
-        const dropTrace: DropTrace = (start, mins, maxs, end, mask) => {
-            const out = createTrace();
-            if (physicsWorld !== null) {
-                physicsWorld.trace(out, start, end, mins, maxs, mask);
-            } else {
-                boxTrace(out, clipMap, start, end, mins, maxs, mask);
-            }
-            return out;
-        };
-
-        const items = new ItemSystem();
-        items.spawn(loaded.bundle.entities, dropTrace);
 
         const itemsView = new ItemsView(ecd, models, audio);
         itemsView.build(items.items);
@@ -1267,39 +1500,53 @@ async function main(): Promise<void> {
             `(${(performance.now() - t0Bvh).toFixed(0)} ms)`
         );
 
-        /* ---- navigation ---- */
+        /*
+         ---- navigation and bots ----
 
+         Both are the host's on the networked branch, and both are expensive:
+         the waypoint graph is a second of tracing and the roster is six
+         characters, six bodies and six `Damageable`s. A joined client has
+         nobody to path and nothing to shoot at locally, so it builds neither
+         and `roster` stays null.
+        */
         const t0Nav = performance.now();
-        const graph = buildWaypoints(loaded.bundle.submodels?.[0] ?? {
-            minsQ3: [-4096, -4096, -4096],
-            maxsQ3: [4096, 4096, 4096],
-        }, dropTrace);
-        const portals = linkMapPortals(
-            graph,
-            loaded.bundle.entities,
-            loaded.bundle.submodels ?? []
-        );
+        const graph =
+            netClient !== null
+                ? null
+                : buildWaypoints(loaded.bundle.submodels?.[0] ?? {
+                      minsQ3: [-4096, -4096, -4096],
+                      maxsQ3: [4096, 4096, 4096],
+                  }, dropTrace);
 
-        console.log(
-            `[queep] nav: ${graph.stats.nodes} nodes, ${graph.stats.links} links, ` +
-            `${graph.stats.drops} drops, ${portals.teleports} teleports, ` +
-            `${portals.jumppads} jump pads, ` +
-            `largest component ${(graph.stats.largestComponent * 100).toFixed(0)}% ` +
-            `(${(performance.now() - t0Nav).toFixed(0)} ms)`
-        );
+        if (graph !== null) {
+            const portals = linkMapPortals(
+                graph,
+                loaded.bundle.entities,
+                loaded.bundle.submodels ?? []
+            );
 
-        /* ---- bots ---- */
+            console.log(
+                `[queep] nav: ${graph.stats.nodes} nodes, ${graph.stats.links} links, ` +
+                `${graph.stats.drops} drops, ${portals.teleports} teleports, ` +
+                `${portals.jumppads} jump pads, ` +
+                `largest component ${(graph.stats.largestComponent * 100).toFixed(0)}% ` +
+                `(${(performance.now() - t0Nav).toFixed(0)} ms)`
+            );
+        }
 
-        const roster = buildRoster({
-            ecd, clipMap, physicsWorld, moverHost, graph, items, movers, arena, audio, player,
-            entrances, bodies, skill: botSkill,
-        });
+        const roster =
+            graph === null
+                ? null
+                : buildRoster({
+                      ecd, clipMap, physicsWorld, moverHost, graph, items, movers, arena,
+                      audio, player, entrances, bodies, skill: botSkill,
+                  });
 
-        const { characters, botSpawns } = roster;
+        const characters = roster?.characters ?? null;
 
         // The menu's sink, from here on: a difficulty changed mid-match reaches
         // the bots that are already standing in the level.
-        botRuntime = roster.botRuntime;
+        botRuntime = roster?.botRuntime ?? null;
 
         /*
          Once, before the first step. Every body is at the world origin until its
@@ -1366,14 +1613,25 @@ async function main(): Promise<void> {
         */
         const pickups = new PickupSystem({ items, itemsView, player, audio });
 
-        await em.addSystem(
-            new PlayerSystem({
-                player,
-                arena,
-                audio,
-                spawns: botSpawns,
-            })
-        );
+        if (netClient === null) {
+            await em.addSystem(
+                new PlayerSystem({
+                    player,
+                    arena,
+                    audio,
+                    spawns: roster?.botSpawns ?? [spawn?._originQ3 ?? [0, 0, 0]],
+                })
+            );
+        } else {
+            /*
+             The networked frame of `NETWORK_PLAN.md` section 3.3, in place of
+             `PlayerSystem`. The session steps this player and the presentation
+             clock rides beside it; the world copy runs after, while every
+             replicated component is still canonical.
+            */
+            await em.addSystem(new NetClientSystem({ client: netClient, player }));
+            await em.addSystem(new NetWorldSystem({ client: netClient, items }));
+        }
 
         /*
          The camera, and the one system here that asks the scheduler for a
@@ -1391,11 +1649,25 @@ async function main(): Promise<void> {
                 surface: graphics.camera.camera,
             })
         );
-        await em.addSystem(new CombatSystem(arena));
-        await em.addSystem(pickups);
-        await em.addSystem(new BotSystem(botRuntime, items));
-        if (bodies !== null) await em.addSystem(new CharacterBodySystem(bodies));
-        await em.addSystem(new WorldEffectSystem({ effects, player, movers, moversView }));
+        /*
+         Combat, pickups, bots and world effects are the host's on the networked
+         branch, and running any of them here would be a second, disagreeing
+         copy: local rockets nobody else can see, an item this client believes
+         it took, six bots on a level that already has some. Movers are the
+         host's too in principle, and are simulated locally for now because a
+         headless host has no kinematic brush entities to replicate -- GAP-041,
+         and the reason `NetWorldSystem` has two loops rather than three.
+        */
+        if (netClient === null) {
+            await em.addSystem(new CombatSystem(arena));
+            await em.addSystem(pickups);
+            if (botRuntime !== null) await em.addSystem(new BotSystem(botRuntime, items));
+            if (bodies !== null) await em.addSystem(new CharacterBodySystem(bodies));
+            await em.addSystem(new WorldEffectSystem({ effects, player, movers, moversView }));
+        } else {
+            if (bodies !== null) await em.addSystem(new CharacterBodySystem(bodies));
+            await em.addSystem(new NetRenderSystem({ client: netClient }));
+        }
 
         // Last of the simulation systems, because it snapshots what they wrote.
         const poses = new PoseRecorderSystem();
@@ -1425,6 +1697,38 @@ async function main(): Promise<void> {
             loaded, clipMap, player, arena, physicsWorld, items, models,
             movers, moversView, characters, audio, mapSound, graph, botRuntime,
             viewWeapon, hud, menu, settings, camera, profile,
+
+            /*
+             The networked branch's whole observable surface, and what step 5's
+             exit criterion is read off: `synced` says INITIAL_SYNC arrived,
+             `reconcileCount` staying flat says the prediction agrees with the
+             host, and the two event counters say the action stream is carrying
+             more than state. Null when this tab is running its own match.
+            */
+            net:
+                netClient === null
+                    ? null
+                    : {
+                          client: netClient,
+                          events: netEvents,
+                          get synced(): boolean {
+                              return netClient.synced;
+                          },
+                          get frame(): number {
+                              return netClient.currentFrame;
+                          },
+                          get reconcileCount(): number {
+                              return netClient.reconcileCount;
+                          },
+                          get predictedFrames(): number {
+                              return netClient.predictedFrames;
+                          },
+                          get shortCircuit(): string {
+                              const hits = netClient.shortCircuitHits;
+                              const total = hits + netClient.shortCircuitMisses;
+                              return `${hits}/${total}`;
+                          },
+                      },
         });
     }
 
