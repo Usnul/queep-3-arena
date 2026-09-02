@@ -44,6 +44,7 @@ import { join } from 'node:path';
 
 import { BspFile } from '../src/q3/bsp/BspFile.ts';
 import { ClipMap } from '../src/q3/cm/ClipMap.ts';
+import type { Vec3Like } from '../src/q3/math.ts';
 import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
 import { spawnPoints } from '../src/game/Spawns.ts';
 import { createPmoveHost } from '../src/game/PmoveHost.ts';
@@ -274,7 +275,7 @@ function recordingSink(): StepSink & { shots: number[]; landings: number[]; dry:
         shots: [] as number[],
         landings: [] as number[],
         dry: 0,
-        fired(_w: WeaponId, eye: ArrayLike<number>) {
+        fired(_w: WeaponId, eye: Vec3Like) {
             out.shots.push(eye[2]!);
         },
         dryFired() {

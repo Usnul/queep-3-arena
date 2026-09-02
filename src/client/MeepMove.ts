@@ -43,8 +43,9 @@
  * What does not survive is listed in D-071 and measured in
  * `test/meepmove.test.ts`. The short version: contact fractions differ, so a
  * ramp jump launches at a slightly different angle and a corner is rounded
- * rather than clipped. `bg_pmove` is still here, still bit-exact against the C,
- * and still reachable with `?move=q3` -- as a reference and an A/B, not as the
+ * rather than clipped. `bg_pmove` is still here, still measured against the C
+ * step by step (D-174 traded its bit-exactness for meep's own vector maths), and
+ * still reachable with `?move=q3` -- as a reference and an A/B, not as the
  * shipping path.
  */
 

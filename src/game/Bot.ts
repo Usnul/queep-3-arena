@@ -49,7 +49,7 @@ import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
 import type { Pmove } from '../q3/pmove/types.ts';
 import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
-import { vec3, type Vec3 } from '../q3/math.ts';
+import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import { createPmoveHost, type PmoveHostOptions } from './PmoveHost.ts';
 import { PlayerMovement, type MoverHost } from '../client/MeepMove.ts';
 import { newInventory, type Inventory } from './Items.ts';
@@ -238,7 +238,7 @@ export class Bot implements Damageable {
     private timeMs = 0;
 
     /** Raised when the bot's weapon should fire. */
-    onFire: ((eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>, weapon: WeaponId) => void) | null =
+    onFire: ((eyeQ3: Vec3Like, anglesQ3: ArrayLike<number>, weapon: WeaponId) => void) | null =
         null;
 
     constructor(options: BotOptions) {

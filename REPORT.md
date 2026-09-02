@@ -314,8 +314,10 @@ the strongest argument in this report for the maintainer's instinct over mine.
     into the bridge instead of leaving it split across callers, which is why the two callers had
     diverged and why one of them was wrong -- plus a parity suite comparing the two paths on the
     `playerState_t` **fields** rather than on behaviour, which is deliberately different now. That
-    suite is only possible because the ported `bg_pmove` is still in the tree and still bit-exact
-    against the C; retiring it entirely would have removed the only oracle for this class of bug.
+    suite is only possible because the ported `bg_pmove` is still in the tree; retiring it
+    entirely would have removed the only oracle for this class of bug. It compares the two paths
+    against each other rather than against the C, so D-174 dropping bit-exactness does not reach
+    it.
     Verified to catch it: removing the fix fails three of the five new tests. D-072, D-074.
 
 
@@ -416,7 +418,7 @@ finding, not a footnote to it.
 |---|---|---|
 | 0 — setup | complete | `tsc --noEmit` clean; engine rendering |
 | 1 — asset pipeline | complete | 6 maps, 76 props, 15 characters, 97 sound names; `npm run check` |
-| 2 — collision and movement | complete | ported `cm_trace` **bit-exact** against a WASM oracle; shipping backend is meep physics measured against it, median divergence now exactly zero (`npm run divergence`) |
+| 2 — collision and movement | complete | ported `cm_trace` measured against a WASM oracle — bit-exact until D-174, and since then exact on every discrete answer over 100,000 sweeps with `fraction` inside 1e-5; shipping backend is meep physics measured against it, median divergence now exactly zero (`npm run divergence`) |
 | 3 — game simulation | complete | weapons, damage, items, movers, triggers, jump pads, teleporters; 27 unit tests against the OA gamecode's own numbers |
 | 4 — presentation | complete | particles, decals, lights, HUD, characters, positional audio; `test/presentation.test.ts` (40 tests) and `test/first-person.test.ts` (30). Signed off twice on things that were not true, and both are now tests: the lighting reconstruction failed outright on 2 of 6 maps until the BSP lightgrid closed it (item 7, GAP-006, D-078), and **the decals had never once been drawn** — rejected on the GPU by an inverted projection axis, with every CPU-side observable reporting success (GAP-023, D-079). The crosshair and the first-person weapon did not exist at all until they were asked for (D-080) |
 | 5 — bots | complete, with the cuts in D-055 | behaviour trees on a floor-sampled navigation graph; `test/match.test.ts` runs a 30-second six-bot match headlessly on the shipping backend |
@@ -822,9 +824,9 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_SetPbClStatus` | 4 | q3_ui, ui | not needed | - | -- | PunkBuster. |
 | `trap_SetUserCmdValue` | 3 | cgame | mapped | own usercmd_t builder | `src/client/PlayerController.ts` | Weapon selection, which in Q3 rides on the usercmd rather than being a command of its own. |
 | `trap_SetUserinfo` | 9 | game | not needed | - | -- | Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields. |
-| `trap_SnapVector` | 6 | cgame, game | ported | - | `src/q3/pmove/pmove.ts` | Q3 rounds velocity to 1/8 unit per frame, and the ported `PmoveSingle` still does. Where that runs is the thing to read carefully: since D-071 the shipping motor is `MeepMove` on `KinematicMover`, which does not snap, and `pmove.ts` is the reference path behind `?trace=clipmap` and the divergence harness. So this preserves the arithmetic the oracle needs to stay bit-exact against the C -- not the shipping game's strafe-jump speed, which since D-110 runs on the engine's 60 Hz step rather than Q3's 125 Hz `sv_fps` anyway. |
+| `trap_SnapVector` | 6 | cgame, game | ported | - | `src/q3/pmove/pmove.ts` | Q3 rounds velocity to 1/8 unit per frame, and the ported `PmoveSingle` still does. Where that runs is the thing to read carefully: since D-071 the shipping motor is `MeepMove` on `KinematicMover`, which does not snap, and `pmove.ts` is the reference path behind `?trace=clipmap` and the divergence harness. So this preserves the arithmetic the oracle is measured against -- and, since D-174, is the reason a float64 `bg_pmove` stays as close to the C as it does, because a velocity truncated to whole units cannot carry a one-ULP disagreement into the next frame -- not the shipping game's strafe-jump speed, which since D-110 runs on the engine's 60 Hz step rather than Q3's 125 Hz `sv_fps` anyway. |
 | `trap_StringContains` | 2 | game | not needed | String.includes | -- | botlib string helper. |
-| `trap_Trace` | 29 | game | hybrid | PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush | `src/client/PhysicsTrace.ts`<br>`src/q3/cm/trace.ts`<br>`src/game/PmoveHost.ts` | The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019). The standoff is not an engine gap -- meep's own KinematicMover carries one as a `skin` option, which GAP-020 asserted otherwise and is withdrawn for; see GAP-021. `?trace=clipmap` swaps in the pure ported path, which is bit-exact against the C oracle and is what the physics path is measured against. |
+| `trap_Trace` | 29 | game | hybrid | PhysicsSystem shape_cast + overlap_shape, in front of the ported CM_TraceThroughBrush | `src/client/PhysicsTrace.ts`<br>`src/q3/cm/trace.ts`<br>`src/game/PmoveHost.ts` | The shipping backend is meep physics (D-029), and it does not replace the ported code -- it fronts it. `shape_cast` finds the nearest body and `overlap_shape` finds its neighbours; whether those brushes block the sweep, at what fraction, against which plane, and whether the start was solid are all decided by the ported `traceBrushList`, because the meep query cannot express Q3's per-brush interval rule (GAP-019). The standoff is not an engine gap -- meep's own KinematicMover carries one as a `skin` option, which GAP-020 asserted otherwise and is withdrawn for; see GAP-021. `?trace=clipmap` swaps in the pure ported path, which is measured against the C oracle and is what the physics path is measured against. |
 | `trap_TraceCapsule` | 1 | game | not needed | - | -- | OpenArena traces the player as a bounding box -- `CM_BoxTrace` is called with `capsule = qfalse` everywhere in the movement path -- so the capsule branches are dead code for this port and were not ported. See D-018. |
 | `trap_UnifyWhiteSpaces` | 4 | game | not needed | - | -- | botlib chat helper. |
 | `trap_UnlinkEntity` | 17 | game | mapped | ECS entity removal | `src/client/Effects.ts`<br>`src/client/Audio.ts` | Removal is the unlink -- for the renderer, the physics broadphase and the audio emitter set alike -- which is why an expired decal, a finished one-shot and a detonated rocket are all retired the same way, one frame late, out of the owning system's update. |
@@ -2349,6 +2351,32 @@ Observations that are not gaps — the facility exists and works — but cost ti
   — the standard way for tooling to locate a package root — throws
   `ERR_PACKAGE_PATH_NOT_EXPORTED`. Found by crashing a Vite config. One line to fix.
 
+- **`v3_displace_in_direction` normalizes and `v3_displace_in_direction_array` does not, and they
+  carry the same docblock sentence.** Both say "Direction vector must be normalized". The scalar
+  one enforces it — it computes `m = distance / direction_length`, so a non-unit direction still
+  lands `distance` away. The `_array` one is a plain `result = origin + direction * distance` and
+  cannot tell. Quake III's `VectorMA` is the second of those and is called with velocities as
+  often as with directions, so the `_array` form is the exact primitive this port wants — but only
+  by relying on it *not* doing what its own documentation says. This port therefore uses it only
+  where the vector really is a unit direction and `vector_axpy_offset` elsewhere, which costs a
+  copy at one site. Worth either making the two agree, or dropping the sentence from the `_array`
+  one and naming it for the affine combination it computes. Found by porting `VectorMA` onto it
+  (D-174).
+
+- **`core/geom/vec3`'s array forms type their read-only inputs as writable, and inconsistently.**
+  `v3_dot_array(a, a_offset, b, b_offset)` only ever reads `a` and `b`, but its generated `.d.ts`
+  types them `number[]|Float32Array|Float64Array`, so `ArrayLike<number>` — the natural type for a
+  parameter a function only indexes — is not an acceptable argument. Moving this port's vector
+  maths onto the package (D-174) meant widening five signatures that had correctly been
+  `ArrayLike<number>` for years, and introducing a `Vec3Like` alias to name the engine's shape.
+  The set also varies between neighbours for no reason a caller can see: `v3_copy_array` accepts
+  `Uint32Array|Int32Array` as well, `v3_dot_array` accepts `Float64Array` but not the integer
+  arrays, and `v3_scale_array` and `v3_displace_in_direction_array` accept neither — so the
+  narrowest common denominator across four functions doing the same kind of work is
+  `number[]|Float32Array`. A `@param {ArrayLike<number>}` on the pure readers, and one shared
+  typedef for the writable destinations, would cost nothing and let a consumer keep read-only
+  types read-only. Found by porting ~100 call sites onto it.
+
 - **The engine's own performance log is `console.warn`.** `FPS: 238.12, RENDER: 1.58ms,
   SIMULATION: 0.06ms` once a second, at warn level, on by default. During the GAP-003/GAP-004
   diagnosis the real errors scrolled out of the console behind it. `console.debug`, or off by
@@ -2640,7 +2668,7 @@ Not meep's numbers — this is the port's own arithmetic, and it does not use me
 (D-007). Included because the maintainer will reasonably ask what a fixed-physics shooter costs
 in pure JavaScript, and because it bears on GAP-009.
 
-Everything runs in `Math.fround`-wrapped float32 to match the C bit-for-bit, which is the
+Everything ran in `Math.fround`-wrapped float32 to match the C bit-for-bit until D-174, which is the
 slowest reasonable way to write it:
 
 | suite | work | wall clock |
@@ -2661,9 +2689,11 @@ crashing.
 ### Phase 2b — meep physics as the collision backend
 
 Same levels, same input, three configurations: the C oracle under Emscripten, the ported
-`cm_trace`, and meep's `PhysicsSystem`. The ported clipmap is bit-exact against the oracle
-(control divergence reads exactly `0.0e+0`), so every figure below is attributable to the
-physics backend. Distances are Q3 units — one unit is about 3 cm, a player is 56 units tall.
+`cm_trace`, and meep's `PhysicsSystem`. The ported clipmap was bit-exact against the oracle when
+these were taken (control divergence reads exactly `0.0e+0`), so every figure below is
+attributable to the physics backend. Since D-174 the control's own worst single-step disagreement
+with the C is 1e-3 units, against a backend divergence measured in whole units, so the attribution
+still holds by three orders of magnitude. Distances are Q3 units — one unit is about 3 cm, a player is 56 units tall.
 
 **These are the phase 6 numbers, after the standoff and the per-brush rule were corrected**
 (GAP-020, GAP-019). The phase 2b figures they replace are kept below them, because the delta is
@@ -2718,7 +2748,7 @@ the engine's own solver read rather than assumed absent. The first fourteen hour
 played; the last six are what made it playable, and they arrived as four separate bug reports
 from someone in front of the screen rather than from any number in the table above.
 
-The harness is still why the whole thing was possible — without a bit-exact control, "close
+The harness is still why the whole thing was possible — without a control that close, "close
 enough" is a matter of opinion — but the harness measured 88% agreement and called it acceptable
 while a player was frozen in an open corridor. The lesson is not that measurement failed. It is
 that *sweep agreement* was the wrong summary statistic: the disagreements were rare, and every

@@ -46,20 +46,35 @@ const PLAYER_MINS = [-15, -15, -24] as const;
 const PLAYER_MAXS = [15, 15, 32] as const;
 
 /**
- * Divergence thresholds -- **zero**.
+ * Divergence thresholds.
  *
- * The port reproduces the C's `float` rounding step for step (see the `f32`
- * note in `src/q3/cm/trace.ts`), so the two agree bit-for-bit and there is no
- * reason to allow slack. A tolerance here would hide exactly the class of bug
- * this suite exists to catch: a trace that picks a different plane at a grazing
- * contact produces a small position error on the frame it happens and a large
- * one twenty frames later.
+ * They were both **zero** until D-174: the port reproduced the C's `float`
+ * rounding step for step, so the two agreed bit for bit and there was no reason
+ * to allow slack. The arithmetic is float64 now, and these are the measured cost
+ * of that -- 100,000 sweeps over the five maps below, the port before the change
+ * against the port after it, which is the same comparison as against the C
+ * because the before was bit-exact:
  *
- * Before the float32 work, with a 1e-5 fraction tolerance, this suite reported
- * 2 divergences in 4000 sweeps.
+ * | quantity                              | worst of 100,000 |
+ * |---------------------------------------|------------------|
+ * | `fraction`                            | 1.0e-5           |
+ * | `endpos`, any component               | 1.6e-2 units     |
+ * | `allsolid` / `startsolid` disagreeing | 0                |
+ * | hit vs miss disagreeing               | 0                |
+ * | `contents` disagreeing                | 0                |
+ * | plane normal off by > 1e-4            | 0                |
+ *
+ * So the *discrete* answers -- did it hit, what did it hit, is the box inside
+ * something -- are still compared exactly, and are the assertions that matter:
+ * a trace bug changes which brush was hit, not the fifth decimal of where.
+ * `endpos` gets the looser bound of the two because it is
+ * `start + fraction * (end - start)`, so a fraction error is multiplied by the
+ * sweep length, and `islanddm` is 20,000 units across.
+ *
+ * Both are still four orders of magnitude below anything a real bug produces.
  */
-const FRACTION_TOLERANCE = 0;
-const POSITION_TOLERANCE = 0;
+const FRACTION_TOLERANCE = 1e-4;
+const POSITION_TOLERANCE = 0.1;
 
 /**
  * Inputs are rounded to float32 before either side sees them.
@@ -67,8 +82,10 @@ const POSITION_TOLERANCE = 0;
  * The oracle receives its coordinates through `HEAPF32`, so whatever the
  * generator produced arrives there already rounded to 32 bits. Handing the
  * TypeScript port the unrounded float64 would mean the two are not being given
- * the same trace, and the last few digits of `endpos` would differ for a reason
- * that has nothing to do with the port.
+ * the same trace, and `endpos` would differ for a reason that has nothing to do
+ * with the port. This survives D-174 because it is about the *inputs*: the
+ * port's arithmetic is float64 now, but both sides still have to start from the
+ * same numbers.
  */
 const asF32 = (v: number): number => Math.fround(v);
 
@@ -165,6 +182,14 @@ describe.each(MAPS)('CM_BoxTrace differential [%s]', (MAP) => {
             }
             if (out.startsolid !== expected.startsolid) {
                 problems.push(`startsolid ${out.startsolid} != ${expected.startsolid}`);
+            }
+            // Exact, and before the tolerance: "stopped at 0.99999" and "went
+            // all the way" are different answers, not nearly-equal ones, and a
+            // tolerance on `fraction` alone would read them as agreement.
+            if ((out.fraction === 1) !== (expected.fraction === 1)) {
+                problems.push(
+                    `hit/miss: fraction ${out.fraction} vs ${expected.fraction}`
+                );
             }
             if (Math.abs(out.fraction - expected.fraction) > FRACTION_TOLERANCE) {
                 problems.push(`fraction ${out.fraction} != ${expected.fraction}`);

@@ -271,24 +271,29 @@ ioquake3, which is server-side entity code this port replaces with meep's BVH an
 (`trap_EntitiesInBox` in the matrix). Porting ~400 lines of dead code to have it agree with an
 oracle that never exercises it is not worth the reading burden on `trace.ts`.
 
-### D-019: The port reproduces the C's float32 rounding, rather than tolerating divergence
+### D-019: The port reproduced the C's float32 rounding, rather than tolerating divergence
 
-`cm_trace.c` computes in `float`. JavaScript computes in `float64`, which is *more* precise —
-and that is a problem, not a benefit, because the trace's decisions are exact comparisons on
-near-cancelling quantities (`d1 > 0 && d2 >= d1`, `enterFrac < leaveFrac`, `t1 >= offset + 1`).
-Being more precise than the oracle produces a *different* answer, not a better one.
+**Struck by D-174.** Kept because the argument is still the right one for a port whose goal is
+bit-exactness, and because two of the bugs below were found by the exactness it bought. What
+changed is the goal, not the reasoning.
 
-Measured: 4,000 randomised player-sized sweeps against `oa_dm1` in double precision produced 2
-divergences — one a 1.4e-5 fraction difference, one a grazing contact the port missed entirely
-because a tie broke the other way.
+`cm_trace.c` computes in `float`. JavaScript computes in `float64`, which is *more* precise --
+and that was treated as a problem, not a benefit, because the trace's decisions are exact
+comparisons on near-cancelling quantities (`d1 > 0 && d2 >= d1`, `enterFrac < leaveFrac`,
+`t1 >= offset + 1`). Being more precise than the oracle produces a *different* answer, not a
+better one.
 
-So `src/q3/cm/trace.ts` wraps every arithmetic step in `Math.fround`, and `dot3` reproduces
-`DotProduct`'s left-to-right association exactly. `Math.fround` compiles to a single machine
-instruction under V8, so the runtime cost is negligible; the cost is readability, paid down with
-a block comment explaining why.
+Measured at the time: 4,000 randomised player-sized sweeps against `oa_dm1` in double precision
+produced 2 divergences -- one a 1.4e-5 fraction difference, one a grazing contact the port missed
+entirely because a tie broke the other way.
 
-The payoff is that the differential test can demand **exact** equality. A tolerance would have
-hidden precisely the class of bug this exercise exists to catch — and did: see D-020.
+So `src/q3/cm/trace.ts` wrapped every arithmetic step in `Math.fround`, `src/q3/math.ts` was a
+float32 vec3 library, and `dot3` reproduced `DotProduct`'s left-to-right association exactly.
+`Math.fround` compiles to a single machine instruction under V8, so the runtime cost was
+negligible; the cost was readability, paid down with a block comment explaining why.
+
+The payoff was that the differential tests could demand **exact** equality. A tolerance would have
+hidden precisely the class of bug this exercise exists to catch -- and did: see D-020.
 
 ### D-020: Two real bugs the oracle caught that review would not have
 
@@ -351,6 +356,11 @@ options:
 Option 2 is what the suite does.
 
 ### D-023: Four real bugs the pmove oracle caught
+
+**Bugs 1 and 2 are float32-fidelity findings and are no longer live requirements** -- D-174 struck
+the rounding they are about, and `OVERCLIP` is the decimal `1.001` again. They stay because they
+are the evidence for what exactness bought while the port had it, and because bugs 3 and 4 are
+transcription bugs that the suite still catches.
 
 None of these were visible by reading the port next to the C. All four produced *plausible*
 behaviour — a player who moves, jumps and collides — and would have been found, if at all, as
@@ -474,9 +484,12 @@ and do not draw, and detail brushes that draw and do not block.
 **The oracle became the tuning instrument rather than a pass/fail gate.** "As closely as
 possible" is not actionable without a number. `tools/measure-divergence.ts` runs identical input
 through three configurations - the C oracle, the port on the ported clipmap, and the port on
-meep physics - and reports how far the third drifts from the first. Because the second is
-bit-exact, any divergence in the third is attributable to the collision backend and nothing
-else. The clipmap backend still ships behind `?trace=clipmap` so an A/B is a refresh rather than
+meep physics - and reports how far the third drifts from the first. The attribution argument was
+"the second is bit-exact, so any divergence in the third is the collision backend and nothing
+else"; since D-174 the second is not bit-exact, and the argument is the measured one instead --
+the clipmap's own worst single-step disagreement with the C is 1e-3 units against a backend
+divergence measured in whole units, three orders of magnitude apart, so the attribution holds
+with room to spare. The clipmap backend still ships behind `?trace=clipmap` so an A/B is a refresh rather than
 a rebuild.
 
 Measured on `oa_dm1` and `aggressor`, in Q3 units (one unit is roughly 3 cm):
@@ -538,7 +551,7 @@ Honest about the remainder rather than quiet about it.
   separate then explore different parts of a level produce arbitrarily large position errors.
   The median and the early-frame behaviour are the meaningful figures; the max is chaos.
 
-### D-032: `cm_trace` stays, and stays bit-exact
+### D-032: `cm_trace` stays, and stays the reference
 
 The ported clipmap is not dead code. It is:
 
@@ -550,7 +563,8 @@ The ported clipmap is not dead code. It is:
   the same brush planes;
 - a **shipping A/B**, behind `?trace=clipmap`.
 
-Its differential suites still demand bit-exactness and still pass.
+Its differential suites still run against the C. They stopped demanding bit-exactness at D-174
+and demand measured agreement instead; the heading used to say "and stays bit-exact".
 
 ---
 
@@ -9452,3 +9466,138 @@ wasted rollback, or whether the rollback also produces a different answer. The h
 `weaponTime` differs on 890 of 891 frames, which is the signature of the slot being stepped a
 different number of times on the two sides rather than of a small numeric drift. That is the next
 thing to find, and it is a correctness question rather than a performance one.
+
+### D-174: D-019 is struck, the vector library is meep's, and what that costs is measured rather than argued
+
+The priority order set in D-110 -- exercise meep first, port Quake III second -- had one place it had
+never been applied, and it was the most expensive place in the tree. D-019 made the port reproduce
+`float` rounding step for step so the differential suites could demand bit-exactness against the C.
+That is a fine goal for a *port*. It is the wrong goal for a showcase, and it was buying its
+exactness with:
+
+- 226 `Math.fround` calls across `cm/trace.ts` and `pmove/pmove.ts`, one around every multiply,
+  add, subtract and divide, in the two files a reader most needs to be able to follow;
+- a 263-line float32 vec3 library in `src/q3/math.ts`, reimplementing dot, cross, scale, length,
+  normalise, copy and `VectorMA` -- every one of which meep ships in `core/geom/vec3/`;
+- three constants written `F(1.001)` so the port multiplied by 1.0010000467300415.
+
+JavaScript's float64 is a guaranteed, consistently-rounded type across every engine the port will
+ever run on. That is good enough. Where relying on meep gives different arithmetic from Q3, the
+departure is accepted.
+
+**What changed.** `f32` is gone from `math.ts`, `trace.ts`, `pmove.ts` and `constants.ts`.
+`math.ts` is 199 lines and contains no vector arithmetic at all: `dot`, `copy`, `scale`, `cross`,
+`length`, `add`, `subtract` and `vectorMA` are deleted and the ~100 call sites go straight to
+`v3_dot_array`, `v3_copy_array`, `v3_scale_array`, `v3_cross`, `v3_length`, `v3_add_array`,
+`v3_subtract` and `v3_displace_in_direction_array`. `trace.ts`'s local `dot3` had exactly
+`v3_dot`'s signature and is now that function. `clear` became `Float32Array.fill(0)`; `vec3()` is
+meep's bucketed `v3_allocate`.
+
+What stayed, and why it is not an inconsistency:
+
+- **`Vec3` is still a `Float32Array`.** That is `vec3_t`'s width in the C, the width the network
+  protocol writes, and the width meep's own buffers use. D-019 was about arithmetic, and this is
+  storage. It also turns out to be load-bearing -- see the measurements.
+- **`AngleVectors`, `SHORT2ANGLE`, `AngleNormalize*`.** Q3's angle convention in Q3's frame; meep
+  has no opinion about pitch/yaw/roll degrees in an x-forward z-up world. The `-1*sr*sp*cy` form
+  is folded to `-sr*sp*cy` now: the `-1`s were kept verbatim because in float32 each was another
+  rounding step, and in float64 they are exact sign flips.
+- **`SnapVector`.** A gameplay rule, not a rounding choice: Q3 truncates velocity to whole units
+  every frame and strafe-jump speed depends on it.
+- **`VectorNormalize`**, only because Q3's returns the length it divided by -- half its uses are
+  `wishspeed = VectorNormalize( wishdir )` -- and `v3_normalize_array` returns nothing. Both halves
+  of the two-line body are `v3_length` and `v3_scale_array`.
+
+**How the cost was measured, given no emcc on this machine.** The tree before the change was
+bit-exact against the C, so `divergence(after, C) == divergence(after, before)`, and the second is
+measurable with no oracle at all. The pre-change `src/q3` was snapshotted and both trees were run
+side by side over the differential suites' own maps, seeds, box sizes and input patterns. As a
+control, the same measurement was run first against a copy whose `f32` was simply the identity
+function; the hand-rewritten tree reproduces that copy's output figure for figure on all five maps,
+which is what says the ~100 call-site rewrites are faithful and not merely plausible.
+
+**Sweeps -- 100,000 randomised player-box sweeps, five maps:**
+
+| quantity | result |
+|---|---|
+| hit vs miss disagreeing | **0** |
+| `allsolid` / `startsolid` disagreeing | **0** |
+| `contents` disagreeing | **0** |
+| plane normal off by more than 1e-4 | **0** |
+| `fraction` | median 3e-9, worst 1.0e-5 |
+| `endpos`, any component | median 2e-5, worst 1.6e-2 units |
+| position tests (`start == end`), 100,000 | **0 disagreements** |
+
+Every *discrete* answer a trace gives is unchanged. What moved is the fifth decimal place of where
+along the sweep it stopped. `endpos` moves further than `fraction` because it is
+`start + fraction * (end - start)` and `islanddm` is 20,000 units across.
+
+**Movement -- 172,800 single `Pmove` steps, three maps, six input patterns:**
+
+| map | steps differing by > 1e-3 units | steps disagreeing on a whole-number field |
+|---|---|---|
+| `oa_dm1` | 0.0052% | 0.0000% |
+| `aggressor` | 0.0990% | 0.0017% |
+| `oa_dm2` | 0.3385% | 0.0104% |
+
+**`SnapVector` is why those numbers are that small**, and it was a surprise. Velocity is truncated
+to whole units at the end of every frame, so a one-ULP disagreement in the middle of a frame cannot
+survive into the next one -- across every free-running episode on four of the five maps, the two
+velocities never differed at all. Q3's own bandwidth-era hack is what keeps a float64 `bg_pmove`
+walking next to a float32 one.
+
+**What was genuinely lost, stated plainly.** A free-running 240-frame episode no longer stays in
+lockstep: measured, the two part company at frame 22 on `islanddm`, and 4 of 32 episodes there
+end up more than a tenth of a unit apart. That is not drift, it is bifurcation -- a tie in
+`d1 > 0 && d2 >= d1` breaking the other way, a ground trace catching on one side and not the other
+-- and no tolerance absorbs it, because the two players genuinely did different things. The port
+is no longer the same *game* as the C over a long enough run. That is the departure D-110's
+priority order accepts.
+
+**So the suites changed shape rather than loosening.**
+
+- `cm-trace.diff` keeps every discrete comparison exact and adds an explicit hit/miss check that
+  the old zero tolerance made implicit -- "stopped at 0.99999" and "went all the way" are different
+  answers, and a `fraction` tolerance alone would read them as agreement. `fraction` and `endpos`
+  get 1e-4 and 0.1, ten and six times the measured worst.
+- `pmove.diff` is **step-locked**: the C drives, and after every frame the port's `playerState_t` is
+  overwritten with the oracle's, so each frame is an independent single-step comparison from a
+  shared state. This compares 57,600 steps per map instead of abandoning an episode at its first
+  bifurcation, and it still walks the trajectory the C actually takes. The gate is a *rate* --
+  at most 1% of steps beyond 1e-3 units, at most 0.1% disagreeing on an integer field -- roughly
+  three and ten times the measured worst.
+
+The resync has to be exhaustive or it is worse than useless: a field left out keeps the port's own
+value across the frame boundary, which is the accumulation the step-lock exists to remove,
+reintroduced silently and for that field only. It is written as the whole `playerState_t`, driven
+off `oracle.ts`'s own `PS_FIELDS`, rather than as the fields somebody thought `Pmove` writes.
+
+**Both suites were checked to still fail on real bugs**, because a differential test that has been
+given a tolerance is exactly the kind that quietly stops testing. With no emcc, they were run
+against a stand-in oracle backed by the snapshotted float32 tree -- which was bit-exact against the
+C, so it is a faithful stand-in for the suites' own logic even though it is not a substitute for
+running them against the real thing:
+
+- `OVERCLIP` changed from `1.001` to `1.002` -- a plausible transcription slip, and the smallest
+  one D-023 records -- fails **all 18** pmove cases, with 247 to 4,505 divergent steps per case
+  against a ceiling of 96.
+- D-020's own bug, the missing `SURFACE_CLIP_EPSILON` in `CM_BoundsIntersect`, still fails
+  `cm-trace.diff` on every map. That one produced 1 divergence in 4,000 sweeps when it was found,
+  and it is the hardest thing either suite has ever had to catch; the loosened tolerances still
+  catch it.
+
+**What did not change.** 1,045 tests pass, unchanged in count from before. `MeepMove` is still the
+shipping movement path and never went through any of this. The oracle, the WASM build and both
+suites stay: D-032's four reasons for keeping `cm_trace` were reference, `CONTENTS_*` queries,
+contact-plane derivation and a shipping A/B, and only the first was ever phrased in terms of
+bit-exactness.
+
+**One thing this does not fix, and one type-quality note.** `Effects.coneAxis` still has to snap a
+near-axial cone direction to the pole (D-147); the residue `AngleVectors` leaves at ninety degrees
+shrinks from 4.4e-8 to 6.1e-17, which is smaller but still not zero, and `POLE_EPSILON` of 1e-6
+covers both. Separately, meep's `core/geom/vec3` declarations type their read-only source
+parameters as writable arrays rather than as something read-only, so `ArrayLike<number>` is not an
+acceptable argument; the port introduced `Vec3Like` and widened five signatures rather than
+casting. Written up as an ergonomics note in the report rather than as a gap -- the functions work,
+they just make a consumer give up a read-only type.
+"""

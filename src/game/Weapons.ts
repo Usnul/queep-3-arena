@@ -23,7 +23,9 @@
 
 import { boxTrace, pointContents, createTrace, type TraceResult } from '../q3/cm/trace.ts';
 import { ClipMap, MASK_SOLID, CONTENTS, SURF } from '../q3/cm/ClipMap.ts';
-import { vec3, angleVectors, vectorMA, normalize, copy, type Vec3 } from '../q3/math.ts';
+import { vec3, angleVectors, normalize, type Vec3, type Vec3Like } from '../q3/math.ts';
+import { v3_copy_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_copy_array.js';
+import { v3_displace_in_direction_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_displace_in_direction_array.js';
 import balance from './balance.generated.json' with { type: 'json' };
 
 export type WeaponId = keyof typeof balance.weapons;
@@ -443,7 +445,7 @@ export class WeaponSystem {
      */
     fire(
         weapon: WeaponId,
-        eyeQ3: ArrayLike<number>,
+        eyeQ3: Vec3Like,
         anglesQ3: ArrayLike<number>,
         ownerId: number,
         seed: number,
@@ -454,8 +456,8 @@ export class WeaponSystem {
         angleVectors(anglesQ3, t_forward, t_right, t_up);
 
         // `CalcMuzzlePoint`: 14 units forward of the eye.
-        copy(t_muzzle, eyeQ3);
-        vectorMA(t_muzzle, t_muzzle, 14, t_forward);
+        v3_copy_array(t_muzzle, 0, eyeQ3, 0);
+        v3_displace_in_direction_array(t_muzzle, 0, t_muzzle, 0, t_forward, 0, 14);
 
         this.events.muzzleFlash(t_muzzle, t_forward, weapon, ownerId);
 
@@ -500,7 +502,7 @@ export class WeaponSystem {
         const origin = this.projectileOrigin(eyeQ3, barrelQ3);
 
         for (let i = 0; i < shots; i++) {
-            copy(t_dir, t_forward);
+            v3_copy_array(t_dir, 0, t_forward, 0);
 
             if (spread > 0) {
                 // `Bullet_Fire` and `fire_nail` alike: r and u are scaled by
@@ -508,9 +510,9 @@ export class WeaponSystem {
                 const r = crandom(seedRef) * spread * 16;
                 const u = crandom(seedRef) * spread * 16;
 
-                vectorMA(t_end, t_muzzle, 8192 * 16, t_forward);
-                vectorMA(t_end, t_end, r, t_right);
-                vectorMA(t_end, t_end, u, t_up);
+                v3_displace_in_direction_array(t_end, 0, t_muzzle, 0, t_forward, 0, 8192 * 16);
+                v3_displace_in_direction_array(t_end, 0, t_end, 0, t_right, 0, r);
+                v3_displace_in_direction_array(t_end, 0, t_end, 0, t_up, 0, u);
 
                 t_dir[0] = t_end[0]! - t_muzzle[0]!;
                 t_dir[1] = t_end[1]! - t_muzzle[1]!;
@@ -520,7 +522,7 @@ export class WeaponSystem {
 
             if (stats.hitscan === true) {
                 const range = stats.range ?? 8192;
-                vectorMA(t_end, t_muzzle, range, t_dir);
+                v3_displace_in_direction_array(t_end, 0, t_muzzle, 0, t_dir, 0, range);
 
                 this.hitscanShot(weapon, t_muzzle, t_end, stats.damage, ownerId);
 
@@ -605,17 +607,17 @@ export class WeaponSystem {
      * is about to hit that wall anyway.
      */
     private projectileOrigin(
-        eyeQ3: ArrayLike<number>,
+        eyeQ3: Vec3Like,
         barrelQ3: readonly [number, number, number] | null
     ): Vec3 {
         const fallback = (): Vec3 => vec3(t_muzzle[0]!, t_muzzle[1]!, t_muzzle[2]!);
 
         if (barrelQ3 === null) return fallback();
 
-        copy(t_barrel, eyeQ3);
-        vectorMA(t_barrel, t_barrel, barrelQ3[0]!, t_forward);
-        vectorMA(t_barrel, t_barrel, barrelQ3[1]!, t_right);
-        vectorMA(t_barrel, t_barrel, barrelQ3[2]!, t_up);
+        v3_copy_array(t_barrel, 0, eyeQ3, 0);
+        v3_displace_in_direction_array(t_barrel, 0, t_barrel, 0, t_forward, 0, barrelQ3[0]!);
+        v3_displace_in_direction_array(t_barrel, 0, t_barrel, 0, t_right, 0, barrelQ3[1]!);
+        v3_displace_in_direction_array(t_barrel, 0, t_barrel, 0, t_up, 0, barrelQ3[2]!);
 
         boxTrace(trace, this.cm, t_muzzle, t_barrel, ZERO, ZERO, MASK_SHOT);
 
@@ -633,8 +635,8 @@ export class WeaponSystem {
         ownerId: number
     ): void {
         /*
-         The world through the ported `cm_trace`, which is bit-exact and is the
-         only thing that carries Q3's surface flags -- `SURF_NOIMPACT` is what
+         The world through the ported `cm_trace`, which is the only thing that
+         carries Q3's surface flags -- `SURF_NOIMPACT` is what
          decides whether a bullet leaves a mark, and the broadphase has no
          opinion about it. The clients come from the collision the game actually
          runs on; the nearer answer wins.

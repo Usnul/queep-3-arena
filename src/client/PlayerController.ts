@@ -32,7 +32,7 @@
  */
 
 import { ClipMap } from '../q3/cm/ClipMap.ts';
-import { angleVectors, vec3, type Vec3 } from '../q3/math.ts';
+import { angleVectors, vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import { PM_PreviewViewAngles } from '../q3/pmove/pmove.ts';
 import {
     createUserCmd,
@@ -411,7 +411,7 @@ export class PlayerController {
     }
 
     /** Raised when the weapon should fire; the arena wires this to `WeaponSystem`. */
-    onFire: ((eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>) => void) | null = null;
+    onFire: ((eyeQ3: Vec3Like, anglesQ3: ArrayLike<number>) => void) | null = null;
 
     /** Raised when the attack button is held on an empty weapon. */
     onDryFire: (() => void) | null = null;
@@ -460,8 +460,8 @@ export class PlayerController {
     /**
      * @param traceBackend `'physics'` runs `pm->trace` on meep's physics
      *   (D-029, the shipping configuration); `'clipmap'` runs the ported
-     *   `cm_trace`, which is bit-exact against the C and is what the physics
-     *   backend is tuned against.
+     *   `cm_trace`, which is the path measured against the C and is what the
+     *   physics backend is tuned against.
      */
     /**
      * @param element the element that owns pointer lock. Must be the one meep's

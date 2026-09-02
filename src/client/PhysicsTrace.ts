@@ -16,8 +16,9 @@
  *
  * The harness used to carry its own duplicate, deliberately, so that a mistake
  * in the coordinate conversion could not cancel itself out of the measurement.
- * That reasoning was thin -- the real independence comes from the bit-exact
- * clipmap control, which is a genuinely separate path -- and the duplication
+ * That reasoning was thin -- the real independence comes from the clipmap
+ * control, which is a genuinely separate path held against the C -- and the
+ * duplication
  * cost real bugs twice. It hid the browser build running with no colliders at
  * all (D-036), and then it hid a contact-plane fix by reporting numbers for the
  * unfixed copy (D-061). Body *construction* still differs between the two --

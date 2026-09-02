@@ -10,8 +10,10 @@ Q3 by design (D-071). Everything else — particles, decals, animation, audio, m
 UI, bots — uses meep's systems and looks and behaves differently as a result. That drift is the
 point of the exercise, not a shortfall in it.
 
-The ported `bg_pmove.c` and `cm_*` are still here, bit-exact against the C, as the reference the
-shipping path is measured against.
+The ported `bg_pmove.c` and `cm_*` are still here as the reference the shipping path is measured
+against. They agreed with the C bit-for-bit until D-174 traded that for meep's own vector maths:
+every discrete answer a trace gives is still identical over 100,000 sweeps, and the price is a
+fifth-decimal difference in where along one it stopped.
 
 **The point of the exercise is the engineering report in [REPORT.md](REPORT.md).** This file is an
 index: every reasoned choice below is a pointer into the documents at the bottom, where the
@@ -105,15 +107,18 @@ node oracle/build.mjs
 ```
 
 which compiles OpenArena's `bg_pmove.c` and ioquake3's `cm_*` **unmodified** to WASM. The
-TypeScript port is then run against it frame by frame and must agree bit-for-bit — 100,000
-randomised traces and roughly 50,000 simulated movement frames, tolerance zero. Emscripten is
-expected at `.refs/emsdk`; `oracle/build.mjs` prints the install commands if it is missing.
+TypeScript port is then run against it — 100,000 randomised traces, and roughly 170,000 movement
+frames compared one step at a time. Traces must agree *exactly* on every discrete answer (hit or
+miss, which plane, what contents, whether the box started solid) and to 1e-4 on the fraction;
+movement is held to a divergence rate rather than to equality. D-174 says what changed, what it
+measured, and why the suites still fail on a 0.001 change to `OVERCLIP`. Emscripten is expected at
+`.refs/emsdk`; `oracle/build.mjs` prints the install commands if it is missing.
 
 Three findings in the report reproduce on their own:
 
 | command | what it shows |
 |---|---|
-| `npm run divergence` | identical input through the C oracle, the ported clipmap and meep's physics, and how far the third drifts from the first — with the second as a bit-exact control |
+| `npm run divergence` | identical input through the C oracle, the ported clipmap and meep's physics, and how far the third drifts from the first — the second is the control, and its own worst disagreement with the C is three orders of magnitude below the third's |
 | `npm run bench-match` | a six-bot deathmatch played headlessly on both movement paths, then the cost of a single trace decomposed. Section 5's numbers come from here: the shipping path needs 6.0 traces a frame where driving `bg_pmove` through meep's physics needed 30.4, and in that older arrangement the ported Q3 rule that decides the answer cost 0.22 µs against the 3.06 of the `shape_cast` in front of it |
 | `npm run navmesh-probe` | meep's `NavigationMesh` built from a Quake III level three ways — solid brushes, render surfaces, and an extracted walkable surface — each repaired with the engine's topology toolkit. 5%, 0% and 48% of spawn-point pairs are routable, against 100% for the waypoint graph this port ships. GAP-016 explains what that difference is, and includes a claim I got wrong twice before getting it right |
 
@@ -127,8 +132,8 @@ Three findings in the report reproduce on their own:
 - **Movement**: Q3's motor on meep's kinematic solver. Strafe jumping survives because it lives
   entirely in the acceleration function and never touches a trace — flat headings top out at
   exactly 320 u/s and a scripted strafe chain reaches 354 (D-071).
-- **The ported `bg_pmove.c`**, bit-exact against the C and reachable with `?move=q3`. It is the
-  reference the new path is judged against rather than the shipping path.
+- **The ported `bg_pmove.c`**, measured against the C step by step and reachable with `?move=q3`.
+  It is the reference the new path is judged against rather than the shipping path.
 - **Weapons** with Q3's own damage numbers and fire rates, extracted from the sources rather than
   transcribed.
 - **Items** that spawn, drop to the floor, bob, spin, obey `BG_CanItemBeGrabbed` and respawn on

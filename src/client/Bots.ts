@@ -61,7 +61,7 @@ import { DEFAULT_DIFFICULTY, difficulty, type BotSkill } from '../game/Difficult
 import { Character, CHARACTERS, type LegsAnimation } from './Characters.ts';
 import { WaypointGraph } from '../game/Waypoints.ts';
 import { weaponStats, type WeaponId } from '../game/Weapons.ts';
-import { vec3, type Vec3 } from '../q3/math.ts';
+import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import type { ItemInstance } from '../game/Items.ts';
 import { canBeGrabbed, touchesItem, type Inventory } from '../game/Items.ts';
 import type { AudioBank, SoundLoop } from './Audio.ts';
@@ -142,7 +142,7 @@ export interface BotWorld {
     playerAlive(): boolean;
     /** Spawn points, for respawning. */
     readonly spawns: readonly number[][];
-    fire(bot: Bot, eyeQ3: ArrayLike<number>, anglesQ3: ArrayLike<number>, weapon: WeaponId): void;
+    fire(bot: Bot, eyeQ3: Vec3Like, anglesQ3: ArrayLike<number>, weapon: WeaponId): void;
 }
 
 /**

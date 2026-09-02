@@ -279,9 +279,9 @@ export function patchToHulls(patch: ClipMapPatch): PatchFacets {
     const height = tess.height;
     if (width < 2 || height < 2) return { hulls: [], unbounded: 0, dropped: 0 };
 
-    // Positions only, in double precision: every dot product below is a
-    // comparison against a tolerance, not a Q3 trace decision, so there is
-    // nothing here to match float32 for.
+    // Positions only, in a Float64Array: every dot product below is a comparison
+    // against a tolerance rather than a Q3 trace decision, so unlike the `vec3_t`
+    // storage elsewhere in `cm/` there is no reason to narrow these to 32 bits.
     const pos = new Float64Array(width * height * 3);
     for (let i = 0; i < tess.vertices.length; i++) {
         const v = tess.vertices[i]!;

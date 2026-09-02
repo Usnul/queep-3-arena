@@ -61,6 +61,7 @@ import { clamp } from '@woosh/meep-engine/src/core/math/clamp.js';
 
 import { PlayerMovement, type MoverHost } from '../client/MeepMove.ts';
 import type { ClipMap } from '../q3/cm/ClipMap.ts';
+import { vec3, type Vec3Like } from '../q3/math.ts';
 import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
 import * as C from '../q3/pmove/constants.ts';
 import {
@@ -141,7 +142,7 @@ export interface StepSink {
      */
     fired(
         weapon: WeaponId,
-        eyeQ3: ArrayLike<number>,
+        eyeQ3: Vec3Like,
         anglesQ3: ArrayLike<number>,
         frame: number
     ): void;
@@ -546,5 +547,12 @@ function clampInt16(value: number): number {
     return clamp(Math.trunc(value), -32768, 32767);
 }
 
-/** Reused so a shot allocates nothing; the sink must not retain it. */
-const SCRATCH_EYE = new Float64Array(3);
+/**
+ * Reused so a shot allocates nothing; the sink must not retain it.
+ *
+ * A `Vec3` rather than the `Float64Array` it was: every number written into it
+ * is a `ps.origin` component plus an integer view height, so the wider buffer
+ * held no more information, and this is the width the rest of the port's
+ * vectors -- and meep's array forms -- expect.
+ */
+const SCRATCH_EYE = vec3();

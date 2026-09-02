@@ -14,17 +14,18 @@
  *
  * ---
  *
- * **This is the one file in the port where nothing may drift.** Strafe-jumping,
- * air control, ramp jumps and stair stepping are emergent from the exact
- * arithmetic here and in `cm/trace.ts`; the brief makes movement fidelity
- * non-negotiable and everything else replaceable, and this is the everything
- * else's foundation.
+ * Strafe-jumping, air control, ramp jumps and stair stepping are emergent from
+ * the arithmetic here and in `cm/trace.ts`, so this file is where a transcription
+ * slip is most expensive -- not because it must match the C bit for bit, which
+ * it no longer does, but because none of those behaviours is written down
+ * anywhere except as the interaction of these functions.
  *
  * So it is a transcription, not a reimplementation. Same function names, same
- * order, same branch structure, same epsilons, float32 arithmetic throughout
- * (DECISIONS.md D-019). Where the C looks wrong or redundant it is copied
- * anyway, with a comment saying so. `test/pmove.diff.test.ts` runs it against
- * the same code compiled to WebAssembly and demands they agree.
+ * order, same branch structure, same epsilons. Where the C looks wrong or
+ * redundant it is copied anyway, with a comment saying so. Vector arithmetic is
+ * meep's `core/geom/vec3` rather than this port's own, in float64 rather than
+ * the C's float32 -- D-174 -- and `test/pmove.diff.test.ts` runs it against the
+ * same code compiled to WebAssembly and reports what that costs.
  *
  * What is **not** ported, and why:
  *
@@ -37,18 +38,8 @@
  */
 
 import {
-    f32,
     vec3,
-    dot,
-    copy,
     set,
-    clear,
-    add,
-    subtract,
-    scale as vscale,
-    vectorMA,
-    cross,
-    length as vlength,
     normalize,
     normalize2,
     angleVectors,
@@ -56,7 +47,18 @@ import {
     snapVector,
     PITCH,
     type Vec3,
+    type Vec3Like,
 } from '../math.ts';
+
+import { v3_add_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_add_array.js';
+import { v3_copy_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_copy_array.js';
+import { v3_cross } from '@woosh/meep-engine/src/core/geom/vec3/v3_cross.js';
+import { v3_displace_in_direction_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_displace_in_direction_array.js';
+import { vector_axpy_offset } from '@woosh/meep-engine/src/core/geom/vec/vector_axpy_offset.js';
+import { v3_dot_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_dot_array.js';
+import { v3_length } from '@woosh/meep-engine/src/core/geom/vec3/v3_length.js';
+import { v3_scale_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_scale_array.js';
+import { v3_subtract } from '@woosh/meep-engine/src/core/geom/vec3/v3_subtract.js';
 
 import { createTrace, type TraceResult } from '../cm/trace.ts';
 import { CONTENTS, SURF, MASK_WATER } from '../cm/ClipMap.ts';
@@ -113,16 +115,16 @@ const t_trace = createTrace();
 const t_trace2 = createTrace();
 
 function resetLocals(): void {
-    clear(pml.forward);
-    clear(pml.right);
-    clear(pml.up);
+    pml.forward.fill(0);
+    pml.right.fill(0);
+    pml.up.fill(0);
     pml.frametime = 0;
     pml.msec = 0;
     pml.walking = false;
     pml.groundPlane = false;
     pml.impactSpeed = 0;
-    clear(pml.previous_origin);
-    clear(pml.previous_velocity);
+    pml.previous_origin.fill(0);
+    pml.previous_velocity.fill(0);
     pml.previous_waterlevel = 0;
 
     const g = pml.groundTrace;
@@ -205,22 +207,22 @@ function PM_ForceLegsAnim(anim: number): void {
  * into a floor over successive frames, and is part of why ramp jumps work.
  */
 function PM_ClipVelocity(
-    inVec: ArrayLike<number>,
-    normal: ArrayLike<number>,
+    inVec: Vec3Like,
+    normal: Vec3Like,
     out: Vec3,
     overbounce: number
 ): void {
-    let backoff = dot(inVec, normal);
+    let backoff = v3_dot_array(inVec, 0, normal, 0);
 
     if (backoff < 0) {
-        backoff = f32(backoff * overbounce);
+        backoff = backoff * overbounce;
     } else {
-        backoff = f32(backoff / overbounce);
+        backoff = backoff / overbounce;
     }
 
     for (let i = 0; i < 3; i++) {
-        const change = f32(normal[i]! * backoff);
-        out[i] = f32(inVec[i]! - change);
+        const change = normal[i]! * backoff;
+        out[i] = inVec[i]! - change;
     }
 }
 
@@ -231,12 +233,12 @@ function PM_ClipVelocity(
 function PM_Friction(): void {
     const vel = pm.ps.velocity;
 
-    copy(t_vec, vel);
+    v3_copy_array(t_vec, 0, vel, 0);
     if (pml.walking) {
         t_vec[2] = 0; // ignore slope movement
     }
 
-    const speed = vlength(t_vec);
+    const speed = v3_length(t_vec[0]!, t_vec[1]!, t_vec[2]!);
     if (speed < 1) {
         vel[0] = 0;
         vel[1] = 0; // allow sinking underwater
@@ -251,33 +253,31 @@ function PM_Friction(): void {
             // If getting knocked back, no friction.
             if ((pm.ps.pm_flags & C.PMF_TIME_KNOCKBACK) === 0) {
                 const control = speed < C.pm_stopspeed ? C.pm_stopspeed : speed;
-                drop = f32(drop + f32(f32(control * C.pm_friction) * pml.frametime));
+                drop = drop + ((control * C.pm_friction) * pml.frametime);
             }
         }
     }
 
     // Water friction applies even when just wading.
     if (pm.waterlevel !== 0) {
-        drop = f32(
-            drop + f32(f32(f32(speed * C.pm_waterfriction) * pm.waterlevel) * pml.frametime)
-        );
+        drop = drop + (((speed * C.pm_waterfriction) * pm.waterlevel) * pml.frametime);
     }
 
     if (pm.ps.powerups[C.PW_FLIGHT] !== 0) {
-        drop = f32(drop + f32(f32(speed * C.pm_flightfriction) * pml.frametime));
+        drop = drop + ((speed * C.pm_flightfriction) * pml.frametime);
     }
 
     if (pm.ps.pm_type === C.PM_SPECTATOR) {
-        drop = f32(drop + f32(f32(speed * C.pm_spectatorfriction) * pml.frametime));
+        drop = drop + ((speed * C.pm_spectatorfriction) * pml.frametime);
     }
 
-    let newspeed = f32(speed - drop);
+    let newspeed = speed - drop;
     if (newspeed < 0) newspeed = 0;
-    newspeed = f32(newspeed / speed);
+    newspeed = newspeed / speed;
 
-    vel[0] = f32(vel[0]! * newspeed);
-    vel[1] = f32(vel[1]! * newspeed);
-    vel[2] = f32(vel[2]! * newspeed);
+    vel[0] = vel[0]! * newspeed;
+    vel[1] = vel[1]! * newspeed;
+    vel[2] = vel[2]! * newspeed;
 }
 
 /* ------------------------------------------------------------------ *
@@ -296,30 +296,30 @@ function PM_Friction(): void {
  * OpenArena's `DF_NO_BUNNY` branch is the "proper" formulation that removes it.
  * Both are ported because the differential test exercises both.
  */
-function PM_Accelerate(wishdir: ArrayLike<number>, wishspeed: number, accel: number): void {
+function PM_Accelerate(wishdir: Vec3Like, wishspeed: number, accel: number): void {
     if ((pm.pmove_flags & C.DF_NO_BUNNY) === 0) {
-        const currentspeed = dot(pm.ps.velocity, wishdir);
-        const addspeed = f32(wishspeed - currentspeed);
+        const currentspeed = v3_dot_array(pm.ps.velocity, 0, wishdir, 0);
+        const addspeed = wishspeed - currentspeed;
         if (addspeed <= 0) return;
 
-        let accelspeed = f32(f32(accel * pml.frametime) * wishspeed);
+        let accelspeed = (accel * pml.frametime) * wishspeed;
         if (accelspeed > addspeed) accelspeed = addspeed;
 
         for (let i = 0; i < 3; i++) {
-            pm.ps.velocity[i] = f32(pm.ps.velocity[i]! + f32(accelspeed * wishdir[i]!));
+            pm.ps.velocity[i] = pm.ps.velocity[i]! + (accelspeed * wishdir[i]!);
         }
     } else {
         const wishVelocity = t_vec;
-        vscale(wishVelocity, wishdir, wishspeed);
+        v3_scale_array(wishVelocity, 0, wishdir, 0, wishspeed);
 
         const pushDir = t_dir;
-        subtract(pushDir, wishVelocity, pm.ps.velocity);
+        v3_subtract(pushDir, 0, wishVelocity[0]!, wishVelocity[1]!, wishVelocity[2]!, pm.ps.velocity[0]!, pm.ps.velocity[1]!, pm.ps.velocity[2]!);
         const pushLen = normalize(pushDir);
 
-        let canPush = f32(f32(accel * pml.frametime) * wishspeed);
+        let canPush = (accel * pml.frametime) * wishspeed;
         if (canPush > pushLen) canPush = pushLen;
 
-        vectorMA(pm.ps.velocity, pm.ps.velocity, canPush, pushDir);
+        v3_displace_in_direction_array(pm.ps.velocity, 0, pm.ps.velocity, 0, pushDir, 0, canPush);
     }
 }
 
@@ -345,7 +345,7 @@ function PM_CmdScale(moves: Int8Array): number {
     if (max === 0) return 0;
 
     // The C computes `total` with a double `sqrt` into a `float`.
-    const total = f32(Math.sqrt(fm * fm + rm * rm + um * um));
+    const total = Math.sqrt(fm * fm + rm * rm + um * um);
 
     /*
      `(float)pm->ps->speed * max / ( 127.0 * total )`.
@@ -353,7 +353,7 @@ function PM_CmdScale(moves: Int8Array): number {
      literal, so the denominator is computed in double and the division rounds
      once more into the float result.
     */
-    return f32(f32(pm.ps.speed * max) / (127.0 * total));
+    return (pm.ps.speed * max) / (127.0 * total);
 }
 
 /* ------------------------------------------------------------------ *
@@ -444,20 +444,20 @@ function PM_CheckWaterJump(): boolean {
     t_flatforward[2] = 0;
     normalize(t_flatforward);
 
-    vectorMA(t_spot, pm.ps.origin, 30, t_flatforward);
-    t_spot[2] = f32(t_spot[2]! + 4);
+    v3_displace_in_direction_array(t_spot, 0, pm.ps.origin, 0, t_flatforward, 0, 30);
+    t_spot[2] = t_spot[2]! + 4;
 
     let cont = pm.pointcontents(t_spot, pm.ps.clientNum);
     if ((cont & CONTENTS.SOLID) === 0) return false;
 
-    t_spot[2] = f32(t_spot[2]! + 16);
+    t_spot[2] = t_spot[2]! + 16;
     cont = pm.pointcontents(t_spot, pm.ps.clientNum);
     if ((cont & (CONTENTS.SOLID | CONTENTS.PLAYERCLIP | CONTENTS.BODY)) !== 0) {
         return false;
     }
 
     // Jump out of water.
-    vscale(pm.ps.velocity, pml.forward, 200);
+    v3_scale_array(pm.ps.velocity, 0, pml.forward, 0, 200);
     pm.ps.velocity[2] = 350;
 
     pm.ps.pm_flags |= C.PMF_TIME_WATERJUMP;
@@ -470,7 +470,7 @@ function PM_WaterJumpMove(): void {
     // Waterjump has no control, but falls.
     PM_StepSlideMove(true);
 
-    pm.ps.velocity[2] = f32(pm.ps.velocity[2]! - f32(pm.ps.gravity * pml.frametime));
+    pm.ps.velocity[2] = pm.ps.velocity[2]! - (pm.ps.gravity * pml.frametime);
     if (pm.ps.velocity[2]! < 0) {
         // Cancel as soon as we are falling down again.
         pm.ps.pm_flags &= ~C.PMF_ALL_TIMES;
@@ -494,15 +494,13 @@ function PM_WaterMove(): void {
         t_wishvel[2] = -60; // sink towards bottom
     } else {
         for (let i = 0; i < 3; i++) {
-            t_wishvel[i] = f32(
-                f32(f32(scale * pml.forward[i]!) * pm.cmd.moves[FORWARDMOVE]!) +
-                f32(f32(scale * pml.right[i]!) * pm.cmd.moves[RIGHTMOVE]!)
-            );
+            t_wishvel[i] = ((scale * pml.forward[i]!) * pm.cmd.moves[FORWARDMOVE]!) +
+                ((scale * pml.right[i]!) * pm.cmd.moves[RIGHTMOVE]!);
         }
-        t_wishvel[2] = f32(t_wishvel[2]! + f32(scale * pm.cmd.moves[UPMOVE]!));
+        t_wishvel[2] = t_wishvel[2]! + (scale * pm.cmd.moves[UPMOVE]!);
     }
 
-    copy(t_wishdir, t_wishvel);
+    v3_copy_array(t_wishdir, 0, t_wishvel, 0);
     let wishspeed = normalize(t_wishdir);
 
     let swimScale = C.pm_swimScale;
@@ -510,15 +508,15 @@ function PM_WaterMove(): void {
         swimScale = C.pm_swimFastScale;
     }
 
-    if (wishspeed > f32(pm.ps.speed * swimScale)) {
-        wishspeed = f32(pm.ps.speed * swimScale);
+    if (wishspeed > (pm.ps.speed * swimScale)) {
+        wishspeed = pm.ps.speed * swimScale;
     }
 
     PM_Accelerate(t_wishdir, wishspeed, C.pm_wateraccelerate);
 
     // Make sure we can go up slopes easily under water.
-    if (pml.groundPlane && dot(pm.ps.velocity, pml.groundTrace.planeNormal) < 0) {
-        const vel = vlength(pm.ps.velocity);
+    if (pml.groundPlane && v3_dot_array(pm.ps.velocity, 0, pml.groundTrace.planeNormal, 0) < 0) {
+        const vel = v3_length(pm.ps.velocity[0]!, pm.ps.velocity[1]!, pm.ps.velocity[2]!);
         PM_ClipVelocity(
             pm.ps.velocity,
             pml.groundTrace.planeNormal,
@@ -526,7 +524,7 @@ function PM_WaterMove(): void {
             C.OVERCLIP
         );
         normalize(pm.ps.velocity);
-        vscale(pm.ps.velocity, pm.ps.velocity, vel);
+        v3_scale_array(pm.ps.velocity, 0, pm.ps.velocity, 0, vel);
     }
 
     PM_SlideMove(false);
@@ -540,7 +538,7 @@ function PM_InvulnerabilityMove(): void {
     pm.cmd.moves[FORWARDMOVE] = 0;
     pm.cmd.moves[RIGHTMOVE] = 0;
     pm.cmd.moves[UPMOVE] = 0;
-    clear(pm.ps.velocity);
+    pm.ps.velocity.fill(0);
 }
 
 function PM_FlyMove(): void {
@@ -554,15 +552,13 @@ function PM_FlyMove(): void {
         t_wishvel[2] = 0;
     } else {
         for (let i = 0; i < 3; i++) {
-            t_wishvel[i] = f32(
-                f32(f32(scale * pml.forward[i]!) * pm.cmd.moves[FORWARDMOVE]!) +
-                f32(f32(scale * pml.right[i]!) * pm.cmd.moves[RIGHTMOVE]!)
-            );
+            t_wishvel[i] = ((scale * pml.forward[i]!) * pm.cmd.moves[FORWARDMOVE]!) +
+                ((scale * pml.right[i]!) * pm.cmd.moves[RIGHTMOVE]!);
         }
-        t_wishvel[2] = f32(t_wishvel[2]! + f32(scale * pm.cmd.moves[UPMOVE]!));
+        t_wishvel[2] = t_wishvel[2]! + (scale * pm.cmd.moves[UPMOVE]!);
     }
 
-    copy(t_wishdir, t_wishvel);
+    v3_copy_array(t_wishdir, 0, t_wishvel, 0);
     const wishspeed = normalize(t_wishdir);
 
     PM_Accelerate(t_wishdir, wishspeed, C.pm_flyaccelerate);
@@ -594,15 +590,13 @@ function PM_AirMove(): void {
     normalize(pml.right);
 
     for (let i = 0; i < 2; i++) {
-        t_wishvel[i] = f32(
-            f32(pml.forward[i]! * fmove) + f32(pml.right[i]! * smove)
-        );
+        t_wishvel[i] = (pml.forward[i]! * fmove) + (pml.right[i]! * smove);
     }
     t_wishvel[2] = 0;
 
-    copy(t_wishdir, t_wishvel);
+    v3_copy_array(t_wishdir, 0, t_wishvel, 0);
     let wishspeed = normalize(t_wishdir);
-    wishspeed = f32(wishspeed * scale);
+    wishspeed = wishspeed * scale;
 
     // Not on ground, so little effect on velocity.
     PM_Accelerate(t_wishdir, wishspeed, C.pm_airaccelerate);
@@ -626,7 +620,7 @@ function PM_AirMove(): void {
  * ------------------------------------------------------------------ */
 
 function PM_WalkMove(): void {
-    if (pm.waterlevel > 2 && dot(pml.forward, pml.groundTrace.planeNormal) > 0) {
+    if (pm.waterlevel > 2 && v3_dot_array(pml.forward, 0, pml.groundTrace.planeNormal, 0) > 0) {
         PM_WaterMove();
         return;
     }
@@ -662,19 +656,17 @@ function PM_WalkMove(): void {
     normalize(pml.right);
 
     for (let i = 0; i < 3; i++) {
-        t_wishvel[i] = f32(
-            f32(pml.forward[i]! * fmove) + f32(pml.right[i]! * smove)
-        );
+        t_wishvel[i] = (pml.forward[i]! * fmove) + (pml.right[i]! * smove);
     }
 
-    copy(t_wishdir, t_wishvel);
+    v3_copy_array(t_wishdir, 0, t_wishvel, 0);
     let wishspeed = normalize(t_wishdir);
-    wishspeed = f32(wishspeed * scale);
+    wishspeed = wishspeed * scale;
 
     // Clamp the speed lower if ducking.
     if ((pm.ps.pm_flags & C.PMF_DUCKED) !== 0) {
-        if (wishspeed > f32(pm.ps.speed * C.pm_duckScale)) {
-            wishspeed = f32(pm.ps.speed * C.pm_duckScale);
+        if (wishspeed > (pm.ps.speed * C.pm_duckScale)) {
+            wishspeed = pm.ps.speed * C.pm_duckScale;
         }
     }
 
@@ -683,9 +675,9 @@ function PM_WalkMove(): void {
         // `pm->waterlevel / 3.0` and `1.0 - (1.0 - pm_swimScale) * waterScale`
         // are double expressions in the C, landing in a float local.
         let waterScale = pm.waterlevel / 3.0;
-        waterScale = f32(1.0 - (1.0 - C.pm_swimScale) * waterScale);
-        if (wishspeed > f32(pm.ps.speed * waterScale)) {
-            wishspeed = f32(pm.ps.speed * waterScale);
+        waterScale = 1.0 - (1.0 - C.pm_swimScale) * waterScale;
+        if (wishspeed > (pm.ps.speed * waterScale)) {
+            wishspeed = pm.ps.speed * waterScale;
         }
     }
 
@@ -706,17 +698,17 @@ function PM_WalkMove(): void {
         (pml.groundTrace.surfaceFlags & SURF.SLICK) !== 0 ||
         (pm.ps.pm_flags & C.PMF_TIME_KNOCKBACK) !== 0
     ) {
-        pm.ps.velocity[2] = f32(pm.ps.velocity[2]! - f32(pm.ps.gravity * pml.frametime));
+        pm.ps.velocity[2] = pm.ps.velocity[2]! - (pm.ps.gravity * pml.frametime);
     }
 
-    const vel = vlength(pm.ps.velocity);
+    const vel = v3_length(pm.ps.velocity[0]!, pm.ps.velocity[1]!, pm.ps.velocity[2]!);
 
     // Slide along the ground plane.
     PM_ClipVelocity(pm.ps.velocity, pml.groundTrace.planeNormal, pm.ps.velocity, C.OVERCLIP);
 
     // Don't decrease velocity when going up or down a slope.
     normalize(pm.ps.velocity);
-    vscale(pm.ps.velocity, pm.ps.velocity, vel);
+    v3_scale_array(pm.ps.velocity, 0, pm.ps.velocity, 0, vel);
 
     // Don't do anything if standing still.
     if (pm.ps.velocity[0] === 0 && pm.ps.velocity[1] === 0) {
@@ -733,14 +725,14 @@ function PM_WalkMove(): void {
 function PM_DeadMove(): void {
     if (!pml.walking) return;
 
-    let forward = vlength(pm.ps.velocity);
-    forward = f32(forward - 20);
+    let forward = v3_length(pm.ps.velocity[0]!, pm.ps.velocity[1]!, pm.ps.velocity[2]!);
+    forward = forward - 20;
 
     if (forward <= 0) {
-        clear(pm.ps.velocity);
+        pm.ps.velocity.fill(0);
     } else {
         normalize(pm.ps.velocity);
-        vscale(pm.ps.velocity, pm.ps.velocity, forward);
+        v3_scale_array(pm.ps.velocity, 0, pm.ps.velocity, 0, forward);
     }
 }
 
@@ -749,21 +741,21 @@ function PM_NoclipMove(): void {
     // viewheight branch is not reachable at the default and is not ported.
     pm.ps.viewheight = C.DEFAULT_VIEWHEIGHT;
 
-    const speed = vlength(pm.ps.velocity);
+    const speed = v3_length(pm.ps.velocity[0]!, pm.ps.velocity[1]!, pm.ps.velocity[2]!);
     if (speed < 1) {
-        clear(pm.ps.velocity);
+        pm.ps.velocity.fill(0);
     } else {
         let drop = 0;
 
-        const friction = f32(C.pm_friction * 1.5); // extra friction
+        const friction = C.pm_friction * 1.5; // extra friction
         const control = speed < C.pm_stopspeed ? C.pm_stopspeed : speed;
-        drop = f32(drop + f32(f32(control * friction) * pml.frametime));
+        drop = drop + ((control * friction) * pml.frametime);
 
-        let newspeed = f32(speed - drop);
+        let newspeed = speed - drop;
         if (newspeed < 0) newspeed = 0;
-        newspeed = f32(newspeed / speed);
+        newspeed = newspeed / speed;
 
-        vscale(pm.ps.velocity, pm.ps.velocity, newspeed);
+        v3_scale_array(pm.ps.velocity, 0, pm.ps.velocity, 0, newspeed);
     }
 
     const scale = PM_CmdScale(pm.cmd.moves);
@@ -772,17 +764,19 @@ function PM_NoclipMove(): void {
     const smove = pm.cmd.moves[RIGHTMOVE]!;
 
     for (let i = 0; i < 3; i++) {
-        t_wishvel[i] = f32(f32(pml.forward[i]! * fmove) + f32(pml.right[i]! * smove));
+        t_wishvel[i] = (pml.forward[i]! * fmove) + (pml.right[i]! * smove);
     }
-    t_wishvel[2] = f32(t_wishvel[2]! + pm.cmd.moves[UPMOVE]!);
+    t_wishvel[2] = t_wishvel[2]! + pm.cmd.moves[UPMOVE]!;
 
-    copy(t_wishdir, t_wishvel);
+    v3_copy_array(t_wishdir, 0, t_wishvel, 0);
     let wishspeed = normalize(t_wishdir);
-    wishspeed = f32(wishspeed * scale);
+    wishspeed = wishspeed * scale;
 
     PM_Accelerate(t_wishdir, wishspeed, C.pm_accelerate);
 
-    vectorMA(pm.ps.origin, pm.ps.origin, pml.frametime, pm.ps.velocity);
+    // `VectorMA` with a velocity rather than a direction, so this is an axpy
+    // and not a displacement -- see the note above `PM_SlideMove`.
+    vector_axpy_offset(pm.ps.origin, 0, pml.frametime, pm.ps.velocity, 0, 3);
 }
 
 /* ------------------------------------------------------------------ *
@@ -810,15 +804,15 @@ function PM_CrashLand(): void {
 
     // Calculate the exact velocity on landing by solving the quadratic for the
     // moment of impact within the frame.
-    const dist = f32(pm.ps.origin[2]! - pml.previous_origin[2]!);
+    const dist = pm.ps.origin[2]! - pml.previous_origin[2]!;
     const vel = pml.previous_velocity[2]!;
-    const acc = f32(-pm.ps.gravity);
+    const acc = -pm.ps.gravity;
 
-    const a = f32(acc / 2);
+    const a = acc / 2;
     const b = vel;
-    const c = f32(-dist);
+    const c = -dist;
 
-    const den = f32(f32(b * b) - f32(f32(4 * a) * c));
+    const den = (b * b) - ((4 * a) * c);
     if (den < 0) return;
 
     /*
@@ -833,19 +827,19 @@ function PM_CrashLand(): void {
      `eventSequence` divergence with position and velocity still in exact
      agreement.
     */
-    const t = f32((-b - Math.sqrt(den)) / f32(2 * a));
+    const t = (-b - Math.sqrt(den)) / (2 * a);
 
-    let delta = f32(vel + f32(t * acc));
-    delta = f32(f32(delta * delta) * 0.0001);
+    let delta = vel + (t * acc);
+    delta = (delta * delta) * 0.0001;
 
     // Ducking while falling doubles damage.
     if ((pm.ps.pm_flags & C.PMF_DUCKED) !== 0) {
-        delta = f32(delta * 2);
+        delta = delta * 2;
     }
 
     if (pm.waterlevel === 3) return;
-    if (pm.waterlevel === 2) delta = f32(delta * 0.25);
-    if (pm.waterlevel === 1) delta = f32(delta * 0.5);
+    if (pm.waterlevel === 2) delta = delta * 0.25;
+    if (pm.waterlevel === 1) delta = delta * 0.5;
 
     if (delta < 1) return;
 
@@ -876,10 +870,10 @@ function PM_CorrectAllSolid(trace: TraceResult): boolean {
     for (let i = -1; i <= 1; i++) {
         for (let j = -1; j <= 1; j++) {
             for (let k = -1; k <= 1; k++) {
-                copy(t_point, pm.ps.origin);
-                t_point[0] = f32(t_point[0]! + i);
-                t_point[1] = f32(t_point[1]! + j);
-                t_point[2] = f32(t_point[2]! + k);
+                v3_copy_array(t_point, 0, pm.ps.origin, 0);
+                t_point[0] = t_point[0]! + i;
+                t_point[1] = t_point[1]! + j;
+                t_point[2] = t_point[2]! + k;
 
                 pm.trace(
                     trace, t_point, pm.mins, pm.maxs, t_point,
@@ -889,7 +883,7 @@ function PM_CorrectAllSolid(trace: TraceResult): boolean {
                 if (!trace.allsolid) {
                     t_point[0] = pm.ps.origin[0]!;
                     t_point[1] = pm.ps.origin[1]!;
-                    t_point[2] = f32(pm.ps.origin[2]! - 0.25);
+                    t_point[2] = pm.ps.origin[2]! - 0.25;
 
                     pm.trace(
                         trace, pm.ps.origin, pm.mins, pm.maxs, t_point,
@@ -914,8 +908,8 @@ function PM_GroundTraceMissed(): void {
         // Just transitioned into freefall. If they aren't in a jumping animation
         // and the ground is a way off, force one -- otherwise the player
         // backflips down staircases.
-        copy(t_point, pm.ps.origin);
-        t_point[2] = f32(t_point[2]! - 64);
+        v3_copy_array(t_point, 0, pm.ps.origin, 0);
+        t_point[2] = t_point[2]! - 64;
 
         pm.trace(
             t_trace2, pm.ps.origin, pm.mins, pm.maxs, t_point,
@@ -941,7 +935,7 @@ function PM_GroundTraceMissed(): void {
 function PM_GroundTrace(): void {
     t_point[0] = pm.ps.origin[0]!;
     t_point[1] = pm.ps.origin[1]!;
-    t_point[2] = f32(pm.ps.origin[2]! - 0.25);
+    t_point[2] = pm.ps.origin[2]! - 0.25;
 
     pm.trace(
         t_trace, pm.ps.origin, pm.mins, pm.maxs, t_point,
@@ -961,7 +955,7 @@ function PM_GroundTrace(): void {
     }
 
     // Check if getting thrown off the ground.
-    if (pm.ps.velocity[2]! > 0 && dot(pm.ps.velocity, t_trace.planeNormal) > 10) {
+    if (pm.ps.velocity[2]! > 0 && v3_dot_array(pm.ps.velocity, 0, t_trace.planeNormal, 0) > 10) {
         if (pm.cmd.moves[FORWARDMOVE]! >= 0) {
             PM_ForceLegsAnim(C.LEGS_JUMP);
             pm.ps.pm_flags &= ~C.PMF_BACKWARDS_JUMP;
@@ -1019,7 +1013,7 @@ function PM_SetWaterLevel(): void {
 
     t_point[0] = pm.ps.origin[0]!;
     t_point[1] = pm.ps.origin[1]!;
-    t_point[2] = f32(pm.ps.origin[2]! + C.MINS_Z + 1);
+    t_point[2] = pm.ps.origin[2]! + C.MINS_Z + 1;
 
     let cont = pm.pointcontents(t_point, pm.ps.clientNum);
 
@@ -1031,12 +1025,12 @@ function PM_SetWaterLevel(): void {
         pm.watertype = cont;
         pm.waterlevel = 1;
 
-        t_point[2] = f32(pm.ps.origin[2]! + C.MINS_Z + sample1);
+        t_point[2] = pm.ps.origin[2]! + C.MINS_Z + sample1;
         cont = pm.pointcontents(t_point, pm.ps.clientNum);
 
         if ((cont & MASK_WATER) !== 0) {
             pm.waterlevel = 2;
-            t_point[2] = f32(pm.ps.origin[2]! + C.MINS_Z + sample2);
+            t_point[2] = pm.ps.origin[2]! + C.MINS_Z + sample2;
             cont = pm.pointcontents(t_point, pm.ps.clientNum);
             if ((cont & MASK_WATER) !== 0) {
                 pm.waterlevel = 3;
@@ -1105,14 +1099,10 @@ function PM_CheckDuck(): void {
 
 function PM_Footsteps(): void {
     // Calculate speed and cycle to be used for footsteps and bobbing.
-    pm.xyspeed = f32(
-        Math.sqrt(
-            f32(
-                f32(pm.ps.velocity[0]! * pm.ps.velocity[0]!) +
-                f32(pm.ps.velocity[1]! * pm.ps.velocity[1]!)
-            )
-        )
-    );
+    pm.xyspeed = Math.sqrt(
+            ((pm.ps.velocity[0]! * pm.ps.velocity[0]!) +
+                (pm.ps.velocity[1]! * pm.ps.velocity[1]!))
+        );
 
     if (pm.ps.groundEntityNum === C.ENTITYNUM_NONE) {
         if (pm.ps.powerups[C.PW_INVULNERABILITY] !== 0) {
@@ -1150,7 +1140,7 @@ function PM_Footsteps(): void {
         }
         // Ducked characters never play footsteps.
     } else if ((pm.cmd.buttons & C.BUTTON_WALKING) === 0) {
-        bobmove = f32(0.4); // faster speeds bob faster
+        bobmove = 0.4; // faster speeds bob faster
         if ((pm.ps.pm_flags & C.PMF_BACKWARDS_RUN) !== 0) {
             PM_ContinueLegsAnim(C.LEGS_BACK);
         } else if (pm.cmd.moves[RIGHTMOVE]! < 0 && pm.cmd.moves[FORWARDMOVE] === 0) {
@@ -1163,7 +1153,7 @@ function PM_Footsteps(): void {
         }
         footstep = true;
     } else {
-        bobmove = f32(0.3); // walking bobs slow
+        bobmove = 0.3; // walking bobs slow
         if ((pm.ps.pm_flags & C.PMF_BACKWARDS_RUN) !== 0) {
             PM_ContinueLegsAnim(C.LEGS_BACKWALK);
         } else {
@@ -1360,18 +1350,29 @@ function copyTrace(dst: TraceResult, src: TraceResult): void {
  * velocity would re-enter the first plane it slides along the *crease* between
  * them instead; and a third plane stops the player dead. That is how corners
  * behave in Q3, and it is why the number is five rather than "enough".
+ *
+ * **`VectorMA` is two different meep calls here, on purpose.** Q3's `VectorMA`
+ * is `dst = a + s * b` for any `b`. meep's `v3_displace_in_direction_array` has
+ * that body exactly, but it is documented "Direction vector must be normalized"
+ * -- and its scalar sibling `v3_displace_in_direction`, one suffix away and
+ * carrying the same sentence, really does normalize, dividing the distance by
+ * the direction's length. So the `_array` form is used only where the vector is
+ * genuinely a unit direction, and `vector_axpy_offset` (`y += alpha * x`, which
+ * promises nothing about `x`) is used where it is a velocity. Both compute the
+ * same numbers today; only one of them keeps doing so if that inconsistency is
+ * ever resolved in the other direction.
  */
 function PM_SlideMove(gravity: boolean): boolean {
     const numbumps = 4;
     let numplanes = 0;
     let bumpcount = 0;
 
-    copy(t_primal_velocity, pm.ps.velocity);
+    v3_copy_array(t_primal_velocity, 0, pm.ps.velocity, 0);
 
     if (gravity) {
-        copy(t_endVelocity, pm.ps.velocity);
-        t_endVelocity[2] = f32(t_endVelocity[2]! - f32(pm.ps.gravity * pml.frametime));
-        pm.ps.velocity[2] = f32(f32(pm.ps.velocity[2]! + t_endVelocity[2]!) * 0.5);
+        v3_copy_array(t_endVelocity, 0, pm.ps.velocity, 0);
+        t_endVelocity[2] = t_endVelocity[2]! - (pm.ps.gravity * pml.frametime);
+        pm.ps.velocity[2] = (pm.ps.velocity[2]! + t_endVelocity[2]!) * 0.5;
         t_primal_velocity[2] = t_endVelocity[2]!;
 
         if (pml.groundPlane) {
@@ -1386,7 +1387,7 @@ function PM_SlideMove(gravity: boolean): boolean {
     // Never turn against the ground plane.
     if (pml.groundPlane) {
         numplanes = 1;
-        copy(t_planes[0]!, pml.groundTrace.planeNormal);
+        v3_copy_array(t_planes[0]!, 0, pml.groundTrace.planeNormal, 0);
     } else {
         numplanes = 0;
     }
@@ -1396,7 +1397,8 @@ function PM_SlideMove(gravity: boolean): boolean {
     numplanes += 1;
 
     for (bumpcount = 0; bumpcount < numbumps; bumpcount++) {
-        vectorMA(t_end, pm.ps.origin, time_left, pm.ps.velocity);
+        v3_copy_array(t_end, 0, pm.ps.origin, 0);
+        vector_axpy_offset(t_end, 0, time_left, pm.ps.velocity, 0, 3);
 
         pm.trace(
             t_trace, pm.ps.origin, pm.mins, pm.maxs, t_end,
@@ -1411,18 +1413,18 @@ function PM_SlideMove(gravity: boolean): boolean {
         }
 
         if (t_trace.fraction > 0) {
-            copy(pm.ps.origin, t_trace.endpos);
+            v3_copy_array(pm.ps.origin, 0, t_trace.endpos, 0);
         }
 
         if (t_trace.fraction === 1) break; // moved the entire distance
 
         PM_AddTouchEnt(t_trace.entityNum);
 
-        time_left = f32(time_left - f32(time_left * t_trace.fraction));
+        time_left = time_left - (time_left * t_trace.fraction);
 
         if (numplanes >= C.MAX_CLIP_PLANES) {
             // Shouldn't really happen.
-            clear(pm.ps.velocity);
+            pm.ps.velocity.fill(0);
             return true;
         }
 
@@ -1430,19 +1432,19 @@ function PM_SlideMove(gravity: boolean): boolean {
         // which fixes some epsilon issues with non-axial planes.
         let i = 0;
         for (i = 0; i < numplanes; i++) {
-            if (dot(t_trace.planeNormal, t_planes[i]!) > 0.99) {
-                add(pm.ps.velocity, t_trace.planeNormal, pm.ps.velocity);
+            if (v3_dot_array(t_trace.planeNormal, 0, t_planes[i]!, 0) > 0.99) {
+                v3_add_array(pm.ps.velocity, 0, t_trace.planeNormal, 0);
                 break;
             }
         }
         if (i < numplanes) continue;
 
-        copy(t_planes[numplanes]!, t_trace.planeNormal);
+        v3_copy_array(t_planes[numplanes]!, 0, t_trace.planeNormal, 0);
         numplanes += 1;
 
         // Modify velocity so it parallels all of the clip planes.
         for (i = 0; i < numplanes; i++) {
-            const into = dot(pm.ps.velocity, t_planes[i]!);
+            const into = v3_dot_array(pm.ps.velocity, 0, t_planes[i]!, 0);
             if (into >= 0.1) continue; // doesn't interact with the plane
 
             if (-into > pml.impactSpeed) {
@@ -1458,7 +1460,7 @@ function PM_SlideMove(gravity: boolean): boolean {
             // See if there is a second plane the new move enters.
             for (let j = 0; j < numplanes; j++) {
                 if (j === i) continue;
-                if (dot(t_clipVelocity, t_planes[j]!) >= 0.1) continue;
+                if (v3_dot_array(t_clipVelocity, 0, t_planes[j]!, 0) >= 0.1) continue;
 
                 PM_ClipVelocity(t_clipVelocity, t_planes[j]!, t_clipVelocity, C.OVERCLIP);
 
@@ -1469,37 +1471,37 @@ function PM_SlideMove(gravity: boolean): boolean {
                 }
 
                 // See if it goes back into the first clip plane.
-                if (dot(t_clipVelocity, t_planes[i]!) >= 0) continue;
+                if (v3_dot_array(t_clipVelocity, 0, t_planes[i]!, 0) >= 0) continue;
 
                 // Slide the original velocity along the crease.
-                cross(t_dir, t_planes[i]!, t_planes[j]!);
+                v3_cross(t_dir, 0, t_planes[i]![0]!, t_planes[i]![1]!, t_planes[i]![2]!, t_planes[j]![0]!, t_planes[j]![1]!, t_planes[j]![2]!);
                 normalize(t_dir);
-                let d = dot(t_dir, pm.ps.velocity);
-                vscale(t_clipVelocity, t_dir, d);
+                let d = v3_dot_array(t_dir, 0, pm.ps.velocity, 0);
+                v3_scale_array(t_clipVelocity, 0, t_dir, 0, d);
 
                 if (gravity) {
-                    cross(t_dir, t_planes[i]!, t_planes[j]!);
+                    v3_cross(t_dir, 0, t_planes[i]![0]!, t_planes[i]![1]!, t_planes[i]![2]!, t_planes[j]![0]!, t_planes[j]![1]!, t_planes[j]![2]!);
                     normalize(t_dir);
-                    d = dot(t_dir, t_endVelocity);
-                    vscale(t_endClipVelocity, t_dir, d);
+                    d = v3_dot_array(t_dir, 0, t_endVelocity, 0);
+                    v3_scale_array(t_endClipVelocity, 0, t_dir, 0, d);
                 }
 
                 // See if there is a third plane the new move enters.
                 for (let k = 0; k < numplanes; k++) {
                     if (k === i || k === j) continue;
-                    if (dot(t_clipVelocity, t_planes[k]!) >= 0.1) continue;
+                    if (v3_dot_array(t_clipVelocity, 0, t_planes[k]!, 0) >= 0.1) continue;
 
                     // Stop dead at a triple plane interaction.
-                    clear(pm.ps.velocity);
+                    pm.ps.velocity.fill(0);
                     return true;
                 }
             }
 
             // Fixed all interactions -- try another move.
-            copy(pm.ps.velocity, t_clipVelocity);
+            v3_copy_array(pm.ps.velocity, 0, t_clipVelocity, 0);
 
             if (gravity) {
-                copy(t_endVelocity, t_endClipVelocity);
+                v3_copy_array(t_endVelocity, 0, t_endClipVelocity, 0);
             }
 
             break;
@@ -1507,12 +1509,12 @@ function PM_SlideMove(gravity: boolean): boolean {
     }
 
     if (gravity) {
-        copy(pm.ps.velocity, t_endVelocity);
+        v3_copy_array(pm.ps.velocity, 0, t_endVelocity, 0);
     }
 
     // Don't change velocity if in a timer.
     if (pm.ps.pm_time !== 0) {
-        copy(pm.ps.velocity, t_primal_velocity);
+        v3_copy_array(pm.ps.velocity, 0, t_primal_velocity, 0);
     }
 
     return bumpcount !== 0;
@@ -1526,15 +1528,15 @@ function PM_SlideMove(gravity: boolean): boolean {
  * players walk up stairs because the move is simply performed twice.
  */
 function PM_StepSlideMove(gravity: boolean): void {
-    copy(t_start_o, pm.ps.origin);
-    copy(t_start_v, pm.ps.velocity);
+    v3_copy_array(t_start_o, 0, pm.ps.origin, 0);
+    v3_copy_array(t_start_v, 0, pm.ps.velocity, 0);
 
     if (!PM_SlideMove(gravity)) {
         return; // got exactly where we wanted to go first try
     }
 
-    copy(t_down, t_start_o);
-    t_down[2] = f32(t_down[2]! - C.STEPSIZE);
+    v3_copy_array(t_down, 0, t_start_o, 0);
+    t_down[2] = t_down[2]! - C.STEPSIZE;
     pm.trace(
         t_trace2, t_start_o, pm.mins, pm.maxs, t_down,
         pm.ps.clientNum, pm.tracemask
@@ -1545,13 +1547,13 @@ function PM_StepSlideMove(gravity: boolean): void {
     // Never step up when you still have up velocity.
     if (
         pm.ps.velocity[2]! > 0 &&
-        (t_trace2.fraction === 1.0 || dot(t_trace2.planeNormal, t_up) < 0.7)
+        (t_trace2.fraction === 1.0 || v3_dot_array(t_trace2.planeNormal, 0, t_up, 0) < 0.7)
     ) {
         return;
     }
 
-    copy(t_up, t_start_o);
-    t_up[2] = f32(t_up[2]! + C.STEPSIZE);
+    v3_copy_array(t_up, 0, t_start_o, 0);
+    t_up[2] = t_up[2]! + C.STEPSIZE;
 
     // Test the player position if they were a step height higher.
     pm.trace(
@@ -1562,23 +1564,23 @@ function PM_StepSlideMove(gravity: boolean): void {
         return; // can't step up
     }
 
-    const stepSize = f32(t_trace2.endpos[2] - t_start_o[2]!);
+    const stepSize = t_trace2.endpos[2] - t_start_o[2]!;
 
     // Try slidemove from this position.
-    copy(pm.ps.origin, t_trace2.endpos);
-    copy(pm.ps.velocity, t_start_v);
+    v3_copy_array(pm.ps.origin, 0, t_trace2.endpos, 0);
+    v3_copy_array(pm.ps.velocity, 0, t_start_v, 0);
 
     PM_SlideMove(gravity);
 
     // Push down the final amount.
-    copy(t_down, pm.ps.origin);
-    t_down[2] = f32(t_down[2]! - stepSize);
+    v3_copy_array(t_down, 0, pm.ps.origin, 0);
+    t_down[2] = t_down[2]! - stepSize;
     pm.trace(
         t_trace2, pm.ps.origin, pm.mins, pm.maxs, t_down,
         pm.ps.clientNum, pm.tracemask
     );
     if (!t_trace2.allsolid) {
-        copy(pm.ps.origin, t_trace2.endpos);
+        v3_copy_array(pm.ps.origin, 0, t_trace2.endpos, 0);
     }
     if (t_trace2.fraction < 1.0) {
         PM_ClipVelocity(pm.ps.velocity, t_trace2.planeNormal, pm.ps.velocity, C.OVERCLIP);
@@ -1595,7 +1597,7 @@ function PM_StepSlideMove(gravity: boolean): void {
      step-event block sits after an `#if 0` in `bg_slidemove.c` and I stopped
      reading the function at the `PM_ClipVelocity` above.
     */
-    const delta = f32(pm.ps.origin[2]! - t_start_o[2]!);
+    const delta = pm.ps.origin[2]! - t_start_o[2]!;
     if (delta > 2) {
         if (delta < 7) {
             PM_AddEvent(C.EV_STEP_4);
@@ -1679,10 +1681,10 @@ export function PmoveSingle(pmove: Pmove): void {
     }
     pm.ps.commandTime = pm.cmd.serverTime;
 
-    copy(pml.previous_origin, pm.ps.origin);
-    copy(pml.previous_velocity, pm.ps.velocity);
+    v3_copy_array(pml.previous_origin, 0, pm.ps.origin, 0);
+    v3_copy_array(pml.previous_velocity, 0, pm.ps.velocity, 0);
 
-    pml.frametime = f32(pml.msec * 0.001);
+    pml.frametime = pml.msec * 0.001;
 
     PM_UpdateViewAngles(pm.ps, pm.cmd);
 

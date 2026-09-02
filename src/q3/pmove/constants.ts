@@ -14,30 +14,19 @@
  * These are balance numbers, and the brief keeps balance faithful. Nothing here
  * is tuned, rounded or "modernised" -- `JUMP_VELOCITY` is 270 because it is 270,
  * and a strafe jump that clears a gap in Q3 has to clear it here.
+ *
+ * The values the C writes with an `f` suffix -- `OVERCLIP`, `MIN_WALK_NORMAL`,
+ * `pm_wadeScale` -- used to be rounded to float32 here so the port multiplied by
+ * the same 1.0010000467300415 the C does. They are the decimal now; see D-174.
  */
 
-/**
- * Float literals must be rounded to float32.
- *
- * `#define OVERCLIP 1.001f` is a *float* constant: the value the C actually
- * multiplies by is 1.0010000467300415, not 1.001. Using the double drifts the
- * port from the oracle by one ULP per clip, which compounds -- it showed up as a
- * last-digit position difference after ~140 frames of bunny hopping, and nowhere
- * before that.
- *
- * Only constants that are not exactly representable in binary need this
- * (`0.25`, `0.5`, `100.0` and friends are exact), but it is applied wherever the
- * C wrote an `f` suffix so the correspondence is checkable by eye rather than by
- * remembering which decimals are dyadic.
- */
-const F = Math.fround;
 
 /* ---- pmove tunables, from the top of bg_pmove.c ---- */
 
 export const pm_stopspeed = 100.0;
 export const pm_duckScale = 0.25;
 export const pm_swimScale = 0.50;
-export const pm_wadeScale = F(0.70);
+export const pm_wadeScale = 0.70;
 
 /** OpenArena addition, used when `DF_FAST_WATER_MOVE` is set. */
 export const pm_swimFastScale = 5.0;
@@ -66,8 +55,8 @@ export const DEAD_VIEWHEIGHT = -16;
 export const QUACK_VIEWHEIGHT = 22;
 
 /** `bg_local.h`. Slopes shallower than this are not walkable. */
-export const MIN_WALK_NORMAL = F(0.7);
-export const OVERCLIP = F(1.001);
+export const MIN_WALK_NORMAL = 0.7;
+export const OVERCLIP = 1.001;
 
 export const TIMER_LAND = 130;
 export const TIMER_GESTURE = 34 * 66 + 50;

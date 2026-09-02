@@ -35,8 +35,9 @@
  * docblock is stale. `queries/raycast.js` refines every hit against the true
  * shape -- "the convex primitives, the convex hull, the concave mesh / heightmap,
  * and the wrappers" -- and measurement agrees: 224 rays fired from every spawn on
- * `oa_dm1` against real brushes disagree with the ported, bit-exact `cm_trace` by
- * at most **0.64 units**, and never miss a wall it finds. A ray is cheaper than a
+ * `oa_dm1` against real brushes disagree with the ported `cm_trace` -- bit-exact
+ * against the C when this was measured -- by at most **0.64 units**, and never
+ * miss a wall it finds. A ray is cheaper than a
  * sweep and needs no shape, so a line of sight is a ray.
  *
  * **Sensors are skipped by rays**, which the port gets for free in exactly the
@@ -145,7 +146,7 @@ export class DamageQueries implements DamageQuery {
      * through, and how far along the segment it was.
      *
      * The world is not consulted here. `WeaponSystem` traces that against the
-     * ported `cm_trace`, which is bit-exact and carries Q3's own surface flags --
+     * ported `cm_trace`, which is the only thing carrying Q3's own surface flags --
      * `SURF_NOIMPACT` decides whether a bullet leaves a mark -- and it takes the
      * nearer of the two answers.
      */

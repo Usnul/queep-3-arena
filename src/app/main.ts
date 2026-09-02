@@ -260,8 +260,8 @@ function bakeRequested(): boolean {
  * `?trace=clipmap` runs movement on the ported `cm_trace` instead of meep's
  * physics.
  *
- * Both backends ship. Physics is the default (D-029); the clipmap is bit-exact
- * against the C and is what the physics backend is measured against, so having
+ * Both backends ship. Physics is the default (D-029); the clipmap is the path
+ * measured against the C and is what the physics backend is measured against, so having
  * it a query parameter away makes an A/B comparison in the running game a
  * refresh rather than a rebuild.
  */
@@ -276,9 +276,9 @@ function useClipmapTrace(): boolean {
  * The meep-native path is the default (D-071): the brief's "movement fidelity is
  * non-negotiable" was reversed in favour of porting Q3 in spirit rather than in
  * body, and reproducing Q3's contact semantics through a general-purpose sweep
- * was what made that expensive. The ported path stays because it is bit-exact
- * against the C and is therefore the reference any claim about the new one is
- * measured against.
+ * was what made that expensive. The ported path stays because it is the one
+ * held against the C oracle, and is therefore the reference any claim about the
+ * new one is measured against. It agreed with the C bit for bit until D-174.
  *
  * Forced on when `?trace=clipmap` is set, since that selects the ported
  * collision backend and there is nothing for the kinematic mover to run on.

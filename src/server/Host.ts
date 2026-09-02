@@ -51,7 +51,7 @@ import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/Netwo
 import { BspFile } from '../q3/bsp/BspFile.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
-import { vec3, type Vec3 } from '../q3/math.ts';
+import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import { HeadlessPhysics } from '../../tools/pipeline/headless-physics.ts';
 import { ItemSystem, type DropTrace } from '../game/Items.ts';
 import { buildWaypoints, linkMapPortals, type WaypointGraph } from '../game/Waypoints.ts';
@@ -1070,7 +1070,7 @@ export class Host {
      */
     private sinkFor(record: Slot, frame: number): StepSink {
         return {
-            fired: (weapon: WeaponId, eye: ArrayLike<number>, angles: ArrayLike<number>) => {
+            fired: (weapon: WeaponId, eye: Vec3Like, angles: ArrayLike<number>) => {
                 if (frame <= record.lastFiredFrame) return;
                 record.lastFiredFrame = frame;
                 this.weapons.fire(

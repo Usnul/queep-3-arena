@@ -35,36 +35,21 @@ import {
 } from './ClipMap.ts';
 import type { BrushHull } from './brushHull.ts';
 
+import { v3_dot } from '@woosh/meep-engine/src/core/geom/vec3/v3_dot.js';
+
 /* ------------------------------------------------------------------ *
- * Float32 arithmetic.
+ * Arithmetic.
  *
- * The C computes this file in `float`: every multiply and add rounds to 32 bits.
- * JavaScript computes in `float64`, which is *more* precise -- and that is the
- * problem. A trace's decisions are exact comparisons on near-cancelling
- * quantities (`d1 > 0 && d2 >= d1`, `enterFrac < leaveFrac`), so being more
- * precise than the oracle produces a different answer, not a better one.
+ * Plain float64, which is what JavaScript has, and `DotProduct` is meep's
+ * `v3_dot` rather than a local one. This file used to wrap every multiply and
+ * add in `Math.fround` so the port reproduced the C's `float` rounding step for
+ * step; D-174 struck that, and the measured cost is set out there.
  *
- * Measured before this was added: 4000 randomised player-sized sweeps against
- * `oa_dm1` produced 2 divergences, one a 1.4e-5 fraction difference and one a
- * grazing contact the port missed entirely because a tie broke the other way.
- * With float32 semantics the same suite is bit-exact.
- *
- * `Math.fround` is a single machine instruction under V8, so this costs
- * essentially nothing at runtime. What it costs is readability, which is why
- * every expression below mirrors the C's association order exactly -- `DotProduct`
- * is `((x0*y0) + (x1*y1)) + (x2*y2)`, left to right, and `dot3` reproduces that
- * rounding step for rounding step.
+ * `TraceWork` still stores its vectors in `Float32Array`, because the C's
+ * `trace_t` and `vec3_t` are `float` and that is also what goes on the wire.
+ * Storage is the one place the width is still Q3's; the arithmetic in between
+ * is the engine's.
  * ------------------------------------------------------------------ */
-
-const f32 = Math.fround;
-
-/** `DotProduct`, rounding at each step exactly as the C does. */
-function dot3(
-    ax: number, ay: number, az: number,
-    bx: number, by: number, bz: number
-): number {
-    return f32(f32(f32(ax * bx) + f32(ay * by)) + f32(az * bz));
-}
 
 /** `trace_t` from `q_shared.h`. */
 export interface TraceResult {
@@ -106,8 +91,8 @@ class TraceWork {
 
     /*
      Float32Array, not plain arrays: these hold what the C holds in `float`
-     fields, and storing them at double precision would reintroduce exactly the
-     divergence `f32` above exists to remove.
+     fields, and the width they round to is the one the wire format and the
+     `trace_t` above use.
     */
     readonly start = new Float32Array(3);
     readonly end = new Float32Array(3);
@@ -190,12 +175,10 @@ function traceThroughBrush(cm: ClipMap, brushIndex: number): void {
 
         // Adjust the plane distance appropriately for mins/maxs.
         const sb = cm.planeSignbits[planeIndex]! * 3;
-        const dist = f32(
-            planes[p + 3]! - dot3(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz)
-        );
+        const dist = planes[p + 3]! - v3_dot(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz);
 
-        const d1 = f32(dot3(sx, sy, sz, nx, ny, nz) - dist);
-        const d2 = f32(dot3(ex, ey, ez, nx, ny, nz) - dist);
+        const d1 = v3_dot(sx, sy, sz, nx, ny, nz) - dist;
+        const d2 = v3_dot(ex, ey, ez, nx, ny, nz) - dist;
 
         if (d2 > 0) getout = true; // endpoint is not in solid
         if (d1 > 0) startout = true;
@@ -208,7 +191,7 @@ function traceThroughBrush(cm: ClipMap, brushIndex: number): void {
 
         if (d1 > d2) {
             // enter
-            let f = f32(f32(d1 - SURFACE_CLIP_EPSILON) / f32(d1 - d2));
+            let f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
             if (f < 0) f = 0;
             if (f > enterFrac) {
                 enterFrac = f;
@@ -217,7 +200,7 @@ function traceThroughBrush(cm: ClipMap, brushIndex: number): void {
             }
         } else {
             // leave
-            let f = f32(f32(d1 + SURFACE_CLIP_EPSILON) / f32(d1 - d2));
+            let f = (d1 + SURFACE_CLIP_EPSILON) / (d1 - d2);
             if (f > 1) f = 1;
             if (f < leaveFrac) leaveFrac = f;
         }
@@ -288,11 +271,9 @@ function testBoxInBrush(cm: ClipMap, brushIndex: number): void {
         const nz = planes[p + 2]!;
 
         const sb = cm.planeSignbits[planeIndex]! * 3;
-        const dist = f32(
-            planes[p + 3]! - dot3(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz)
-        );
+        const dist = planes[p + 3]! - v3_dot(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz);
 
-        const d1 = f32(dot3(tw.start[0]!, tw.start[1]!, tw.start[2]!, nx, ny, nz) - dist);
+        const d1 = v3_dot(tw.start[0]!, tw.start[1]!, tw.start[2]!, nx, ny, nz) - dist;
 
         // Completely in front of face -- no intersection.
         if (d1 > 0) return;
@@ -332,12 +313,12 @@ function boundsIntersect(
     b: number
 ): boolean {
     return !(
-        maxs[0]! < f32(brushBounds[b]! - SURFACE_CLIP_EPSILON) ||
-        maxs[1]! < f32(brushBounds[b + 1]! - SURFACE_CLIP_EPSILON) ||
-        maxs[2]! < f32(brushBounds[b + 2]! - SURFACE_CLIP_EPSILON) ||
-        mins[0]! > f32(brushBounds[b + 3]! + SURFACE_CLIP_EPSILON) ||
-        mins[1]! > f32(brushBounds[b + 4]! + SURFACE_CLIP_EPSILON) ||
-        mins[2]! > f32(brushBounds[b + 5]! + SURFACE_CLIP_EPSILON)
+        maxs[0]! < (brushBounds[b]! - SURFACE_CLIP_EPSILON) ||
+        maxs[1]! < (brushBounds[b + 1]! - SURFACE_CLIP_EPSILON) ||
+        maxs[2]! < (brushBounds[b + 2]! - SURFACE_CLIP_EPSILON) ||
+        mins[0]! > (brushBounds[b + 3]! + SURFACE_CLIP_EPSILON) ||
+        mins[1]! > (brushBounds[b + 4]! + SURFACE_CLIP_EPSILON) ||
+        mins[2]! > (brushBounds[b + 5]! + SURFACE_CLIP_EPSILON)
     );
 }
 
@@ -476,36 +457,36 @@ function boxOnPlaneSide(
 
     switch (signbits) {
         case 0:
-            dist1 = dot3(nx, ny, nz, maxs[0]!, maxs[1]!, maxs[2]!);
-            dist2 = dot3(nx, ny, nz, mins[0]!, mins[1]!, mins[2]!);
+            dist1 = v3_dot(nx, ny, nz, maxs[0]!, maxs[1]!, maxs[2]!);
+            dist2 = v3_dot(nx, ny, nz, mins[0]!, mins[1]!, mins[2]!);
             break;
         case 1:
-            dist1 = dot3(nx, ny, nz, mins[0]!, maxs[1]!, maxs[2]!);
-            dist2 = dot3(nx, ny, nz, maxs[0]!, mins[1]!, mins[2]!);
+            dist1 = v3_dot(nx, ny, nz, mins[0]!, maxs[1]!, maxs[2]!);
+            dist2 = v3_dot(nx, ny, nz, maxs[0]!, mins[1]!, mins[2]!);
             break;
         case 2:
-            dist1 = dot3(nx, ny, nz, maxs[0]!, mins[1]!, maxs[2]!);
-            dist2 = dot3(nx, ny, nz, mins[0]!, maxs[1]!, mins[2]!);
+            dist1 = v3_dot(nx, ny, nz, maxs[0]!, mins[1]!, maxs[2]!);
+            dist2 = v3_dot(nx, ny, nz, mins[0]!, maxs[1]!, mins[2]!);
             break;
         case 3:
-            dist1 = dot3(nx, ny, nz, mins[0]!, mins[1]!, maxs[2]!);
-            dist2 = dot3(nx, ny, nz, maxs[0]!, maxs[1]!, mins[2]!);
+            dist1 = v3_dot(nx, ny, nz, mins[0]!, mins[1]!, maxs[2]!);
+            dist2 = v3_dot(nx, ny, nz, maxs[0]!, maxs[1]!, mins[2]!);
             break;
         case 4:
-            dist1 = dot3(nx, ny, nz, maxs[0]!, maxs[1]!, mins[2]!);
-            dist2 = dot3(nx, ny, nz, mins[0]!, mins[1]!, maxs[2]!);
+            dist1 = v3_dot(nx, ny, nz, maxs[0]!, maxs[1]!, mins[2]!);
+            dist2 = v3_dot(nx, ny, nz, mins[0]!, mins[1]!, maxs[2]!);
             break;
         case 5:
-            dist1 = dot3(nx, ny, nz, mins[0]!, maxs[1]!, mins[2]!);
-            dist2 = dot3(nx, ny, nz, maxs[0]!, mins[1]!, maxs[2]!);
+            dist1 = v3_dot(nx, ny, nz, mins[0]!, maxs[1]!, mins[2]!);
+            dist2 = v3_dot(nx, ny, nz, maxs[0]!, mins[1]!, maxs[2]!);
             break;
         case 6:
-            dist1 = dot3(nx, ny, nz, maxs[0]!, mins[1]!, mins[2]!);
-            dist2 = dot3(nx, ny, nz, mins[0]!, maxs[1]!, maxs[2]!);
+            dist1 = v3_dot(nx, ny, nz, maxs[0]!, mins[1]!, mins[2]!);
+            dist2 = v3_dot(nx, ny, nz, mins[0]!, maxs[1]!, maxs[2]!);
             break;
         case 7:
-            dist1 = dot3(nx, ny, nz, mins[0]!, mins[1]!, mins[2]!);
-            dist2 = dot3(nx, ny, nz, maxs[0]!, maxs[1]!, maxs[2]!);
+            dist1 = v3_dot(nx, ny, nz, mins[0]!, mins[1]!, mins[2]!);
+            dist2 = v3_dot(nx, ny, nz, maxs[0]!, maxs[1]!, maxs[2]!);
             break;
         default:
             return 3;
@@ -524,8 +505,8 @@ function boxOnPlaneSide(
 
 function positionTest(cm: ClipMap): void {
     for (let i = 0; i < 3; i++) {
-        leafBoundsMin[i] = f32(f32(tw.start[i]! + tw.sizeMin[i]!) - 1);
-        leafBoundsMax[i] = f32(f32(tw.start[i]! + tw.sizeMax[i]!) + 1);
+        leafBoundsMin[i] = (tw.start[i]! + tw.sizeMin[i]!) - 1;
+        leafBoundsMax[i] = (tw.start[i]! + tw.sizeMax[i]!) + 1;
     }
 
     leafCount = 0;
@@ -578,25 +559,25 @@ function traceThroughTree(
     let offset: number;
 
     if (type < 3) {
-        t1 = f32((type === 0 ? p1x : type === 1 ? p1y : p1z) - dist);
-        t2 = f32((type === 0 ? p2x : type === 1 ? p2y : p2z) - dist);
+        t1 = (type === 0 ? p1x : type === 1 ? p1y : p1z) - dist;
+        t2 = (type === 0 ? p2x : type === 1 ? p2y : p2z) - dist;
         offset = tw.extents[type]!;
     } else {
         const nx = cm.planes[p]!;
         const ny = cm.planes[p + 1]!;
         const nz = cm.planes[p + 2]!;
-        t1 = f32(dot3(nx, ny, nz, p1x, p1y, p1z) - dist);
-        t2 = f32(dot3(nx, ny, nz, p2x, p2y, p2z) - dist);
+        t1 = v3_dot(nx, ny, nz, p1x, p1y, p1z) - dist;
+        t2 = v3_dot(nx, ny, nz, p2x, p2y, p2z) - dist;
         // "this is silly" -- id's own comment. Preserved because the value
         // participates in the branch below.
         offset = tw.isPoint ? 0 : 2048;
     }
 
-    if (t1 >= f32(offset + 1) && t2 >= f32(offset + 1)) {
+    if (t1 >= offset + 1 && t2 >= offset + 1) {
         traceThroughTree(cm, cm.nodes[n + 1]!, p1f, p2f, p1x, p1y, p1z, p2x, p2y, p2z);
         return;
     }
-    if (t1 < f32(f32(-offset) - 1) && t2 < f32(f32(-offset) - 1)) {
+    if (t1 < -offset - 1 && t2 < -offset - 1) {
         traceThroughTree(cm, cm.nodes[n + 2]!, p1f, p2f, p1x, p1y, p1z, p2x, p2y, p2z);
         return;
     }
@@ -607,15 +588,15 @@ function traceThroughTree(
 
     // Put the crosspoint SURFACE_CLIP_EPSILON on the near side.
     if (t1 < t2) {
-        const idist = f32(1.0 / f32(t1 - t2));
+        const idist = 1.0 / (t1 - t2);
         side = 1;
-        frac2 = f32(f32(f32(t1 + offset) + SURFACE_CLIP_EPSILON) * idist);
-        frac = f32(f32(f32(t1 - offset) + SURFACE_CLIP_EPSILON) * idist);
+        frac2 = (t1 + offset + SURFACE_CLIP_EPSILON) * idist;
+        frac = (t1 - offset + SURFACE_CLIP_EPSILON) * idist;
     } else if (t1 > t2) {
-        const idist = f32(1.0 / f32(t1 - t2));
+        const idist = 1.0 / (t1 - t2);
         side = 0;
-        frac2 = f32(f32(f32(t1 - offset) - SURFACE_CLIP_EPSILON) * idist);
-        frac = f32(f32(f32(t1 + offset) + SURFACE_CLIP_EPSILON) * idist);
+        frac2 = (t1 - offset - SURFACE_CLIP_EPSILON) * idist;
+        frac = (t1 + offset + SURFACE_CLIP_EPSILON) * idist;
     } else {
         side = 0;
         frac = 1;
@@ -625,10 +606,10 @@ function traceThroughTree(
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
 
-    let midf = f32(p1f + f32(f32(p2f - p1f) * frac));
-    let midx = f32(p1x + f32(frac * f32(p2x - p1x)));
-    let midy = f32(p1y + f32(frac * f32(p2y - p1y)));
-    let midz = f32(p1z + f32(frac * f32(p2z - p1z)));
+    let midf = p1f + (p2f - p1f) * frac;
+    let midx = p1x + frac * (p2x - p1x);
+    let midy = p1y + frac * (p2y - p1y);
+    let midz = p1z + frac * (p2z - p1z);
 
     traceThroughTree(
         cm,
@@ -646,10 +627,10 @@ function traceThroughTree(
     if (frac2 < 0) frac2 = 0;
     if (frac2 > 1) frac2 = 1;
 
-    midf = f32(p1f + f32(f32(p2f - p1f) * frac2));
-    midx = f32(p1x + f32(frac2 * f32(p2x - p1x)));
-    midy = f32(p1y + f32(frac2 * f32(p2y - p1y)));
-    midz = f32(p1z + f32(frac2 * f32(p2z - p1z)));
+    midf = p1f + (p2f - p1f) * frac2;
+    midx = p1x + frac2 * (p2x - p1x);
+    midy = p1y + frac2 * (p2y - p1y);
+    midz = p1z + frac2 * (p2z - p1z);
 
     traceThroughTree(
         cm,
@@ -679,10 +660,9 @@ function traceThroughTree(
 /**
  * Set up the shared trace workspace for one sweep.
  *
- * Lifted out of `boxTrace` verbatim so `traceBrushList` can reuse it. The
- * arithmetic is unchanged, including every `f32` rounding step, because the
- * differential suites hold `boxTrace` to bit-exactness against the C and this
- * is the code they were holding.
+ * Lifted out of `boxTrace` verbatim so `traceBrushList` can reuse it, and the
+ * arithmetic is unchanged by the move -- the differential suite compares
+ * `boxTrace` against the C and this is the code it was comparing.
  */
 function setupTraceWork(
     start: ArrayLike<number>,
@@ -715,14 +695,14 @@ function setupTraceWork(
      original.
     */
     for (let i = 0; i < 3; i++) {
-        const offset = f32(f32(mins[i]! + maxs[i]!) * 0.5);
-        tw.sizeMin[i] = f32(mins[i]! - offset);
-        tw.sizeMax[i] = f32(maxs[i]! - offset);
-        tw.start[i] = f32(start[i]! + offset);
-        tw.end[i] = f32(end[i]! + offset);
+        const offset = (mins[i]! + maxs[i]!) * 0.5;
+        tw.sizeMin[i] = mins[i]! - offset;
+        tw.sizeMax[i] = maxs[i]! - offset;
+        tw.start[i] = start[i]! + offset;
+        tw.end[i] = end[i]! + offset;
     }
 
-    tw.maxOffset = f32(f32(tw.sizeMax[0]! + tw.sizeMax[1]!) + tw.sizeMax[2]!);
+    tw.maxOffset = (tw.sizeMax[0]! + tw.sizeMax[1]!) + tw.sizeMax[2]!;
 
     // offsets[signbits] = vector to the appropriate corner from the origin.
     const o = tw.offsets;
@@ -740,11 +720,11 @@ function setupTraceWork(
 
     for (let i = 0; i < 3; i++) {
         if (tw.start[i]! < tw.end[i]!) {
-            tw.boundsMin[i] = f32(tw.start[i]! + tw.sizeMin[i]!);
-            tw.boundsMax[i] = f32(tw.end[i]! + tw.sizeMax[i]!);
+            tw.boundsMin[i] = tw.start[i]! + tw.sizeMin[i]!;
+            tw.boundsMax[i] = tw.end[i]! + tw.sizeMax[i]!;
         } else {
-            tw.boundsMin[i] = f32(tw.end[i]! + tw.sizeMin[i]!);
-            tw.boundsMax[i] = f32(tw.start[i]! + tw.sizeMax[i]!);
+            tw.boundsMin[i] = tw.end[i]! + tw.sizeMin[i]!;
+            tw.boundsMax[i] = tw.start[i]! + tw.sizeMax[i]!;
         }
     }
 }
@@ -776,9 +756,7 @@ function finishTrace(
         tw.trace.endpos[2] = end[2]!;
     } else {
         for (let i = 0; i < 3; i++) {
-            tw.trace.endpos[i] = f32(
-                start[i]! + f32(tw.trace.fraction * f32(end[i]! - start[i]!))
-            );
+            tw.trace.endpos[i] = start[i]! + (tw.trace.fraction * (end[i]! - start[i]!));
         }
     }
 
@@ -903,12 +881,10 @@ function traceThroughPlanes(
         if (nz < 0) signbits |= 4;
         const sb = signbits * 3;
 
-        const dist = f32(
-            planes[p + 3]! - dot3(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz)
-        );
+        const dist = planes[p + 3]! - v3_dot(tw.offsets[sb]!, tw.offsets[sb + 1]!, tw.offsets[sb + 2]!, nx, ny, nz);
 
-        const d1 = f32(dot3(sx, sy, sz, nx, ny, nz) - dist);
-        const d2 = f32(dot3(ex, ey, ez, nx, ny, nz) - dist);
+        const d1 = v3_dot(sx, sy, sz, nx, ny, nz) - dist;
+        const d2 = v3_dot(ex, ey, ez, nx, ny, nz) - dist;
 
         if (d2 > 0) getout = true; // endpoint is not in solid
         if (d1 > 0) startout = true;
@@ -921,7 +897,7 @@ function traceThroughPlanes(
 
         if (d1 > d2) {
             // enter
-            let f = f32(f32(d1 - SURFACE_CLIP_EPSILON) / f32(d1 - d2));
+            let f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
             if (f < 0) f = 0;
             if (f > enterFrac) {
                 enterFrac = f;
@@ -930,7 +906,7 @@ function traceThroughPlanes(
             }
         } else {
             // leave
-            let f = f32(f32(d1 + SURFACE_CLIP_EPSILON) / f32(d1 - d2));
+            let f = (d1 + SURFACE_CLIP_EPSILON) / (d1 - d2);
             if (f > 1) f = 1;
             if (f < leaveFrac) leaveFrac = f;
         }
@@ -1141,9 +1117,9 @@ function pointLeafnum(cm: ClipMap, px: number, py: number, pz: number): number {
 
         let d: number;
         if (type < 3) {
-            d = f32((type === 0 ? px : type === 1 ? py : pz) - dist);
+            d = (type === 0 ? px : type === 1 ? py : pz) - dist;
         } else {
-            d = f32(dot3(cm.planes[p]!, cm.planes[p + 1]!, cm.planes[p + 2]!, px, py, pz) - dist);
+            d = v3_dot(cm.planes[p]!, cm.planes[p + 1]!, cm.planes[p + 2]!, px, py, pz) - dist;
         }
 
         num = d < 0 ? cm.nodes[n + 2]! : cm.nodes[n + 1]!;
@@ -1200,10 +1176,8 @@ export function pointContents(
             const planeIndex = cm.brushSides[sideIndex * 2]!;
             const p = planeIndex * PLANE_STRIDE;
 
-            const d = f32(
-                dot3(cm.planes[p]!, cm.planes[p + 1]!, cm.planes[p + 2]!, px, py, pz) -
-                cm.planes[p + 3]!
-            );
+            const d = v3_dot(cm.planes[p]!, cm.planes[p + 1]!, cm.planes[p + 2]!, px, py, pz) -
+                cm.planes[p + 3]!;
 
             if (d > 0) break;
         }
