@@ -104,6 +104,8 @@ export interface NetClientOptions {
     hooks: ClientHooks;
     /** How many item entities the map has; the pool must match the host's. */
     itemCount: number;
+    /** Action-log ring depth, in frames. Must match the host's. */
+    frameCapacity?: number;
 }
 
 /** One remote or local slot, as the client holds it. */
@@ -220,7 +222,7 @@ export class NetClient {
             role: 'client',
             local_peer_id: options.peerId,
             tick_rate_hz: TICK_HZ,
-            frame_capacity: FRAME_CAPACITY,
+            frame_capacity: options.frameCapacity ?? FRAME_CAPACITY,
             connection_timeout_ms: 0,
             // v1 has no reconnect (D-167); a dropped socket is a return to the
             // menu, and the ladder would otherwise sit there retrying a

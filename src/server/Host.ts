@@ -134,6 +134,16 @@ export interface HostOptions {
      * `onRewind` fires every tick, and it does -- see D-173.
      */
     simulationDelayTicks?: number;
+    /**
+     * Action-log ring depth, in frames. Defaults to {@link FRAME_CAPACITY}.
+     *
+     * Tunable because it bounds three horizons at once -- rollback depth,
+     * back-fill range and retransmit window -- and the third is the one a slow
+     * link exhausts: `Replicator.pack_for_peer` silently credits a frame that
+     * has aged out of the ring (`if (!has_frame(frame)) { last_packed = frame;
+     * continue; }`), so anything still unacked when it ages out is gone.
+     */
+    frameCapacity?: number;
 }
 
 /**
@@ -348,7 +358,7 @@ export class Host {
             local_peer_id: HOST_PEER_ID,
             simulation_delay_ticks: options.simulationDelayTicks ?? SIMULATION_DELAY_TICKS,
             tick_rate_hz: TICK_HZ,
-            frame_capacity: FRAME_CAPACITY,
+            frame_capacity: options.frameCapacity ?? FRAME_CAPACITY,
             /*
              Off. The rig drives every clock by hand, and a wall-clock reaper
              inside a deterministic test is a test that fails on a slow machine.

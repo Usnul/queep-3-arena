@@ -100,6 +100,8 @@ export interface RigOptions {
     link?: Link;
     /** Host-side input buffer, in frames. */
     simulationDelayTicks?: number;
+    /** Action-log ring depth, in frames. Applied to both peers. */
+    frameCapacity?: number;
 }
 
 export class NetRig {
@@ -108,6 +110,9 @@ export class NetRig {
 
     /** The link every client is joined by. */
     readonly link: Link;
+
+    /** Action-log ring depth handed to both peers; undefined uses the default. */
+    private frameCapacity: number | undefined;
 
     /**
      * Simulated wall time, in milliseconds, advanced one tick per `step`.
@@ -135,9 +140,11 @@ export class NetRig {
             seed: options.seed ?? 0x5eed,
             difficulty: options.difficulty,
             simulationDelayTicks: options.simulationDelayTicks,
+            frameCapacity: options.frameCapacity,
         });
 
         const rig = new NetRig(host, options.link ?? 'loopback');
+        rig.frameCapacity = options.frameCapacity;
 
         /*
          Past the input buffer before anybody joins. `ServerAuthoritativeServer.tick`
@@ -219,6 +226,7 @@ export class NetRig {
             spawnQ3: this.host.spawns[record.index % this.host.spawns.length]!,
             hooks,
             itemCount: this.host.items.items.length,
+            frameCapacity: this.frameCapacity,
         });
 
         net.physicsStep = () => physics.step(SESSION_TICK_SECONDS);
