@@ -2218,10 +2218,12 @@ That is an accurate description of a component that cannot be used for its state
 
 ### GAP-043: the action stream's own redundancy forces a host rollback every tick, and reordering silently eats event actions
 
-Two findings from one measurement, and they share a cause: the replicator's send path is designed
-around "re-send everything unacked", and two other parts of the stack were not written to expect it.
+**Status: the first half is fixed in 3.14.4. The second half is not.**
 
-**1. A host rolls back on essentially every tick at any real latency.**
+Two findings from one measurement, sharing a cause: the replicator's send path is designed around
+"re-send everything unacked", and two other parts of the stack were not written to expect it.
+
+**1. A host rolls back on essentially every tick at any real latency. FIXED IN 3.14.4.**
 `NetworkPeer.flush_outbound` packs `[last_acked + 1 .. current]` for every peer every tick, so at an
 RTT of N frames each client input is re-sent N times. The receiving side defers each inbound record
 into `ServerAuthoritativeServer`'s pending log **and records its frame in
@@ -2254,25 +2256,50 @@ thousand. Loss and jitter are not involved. `NETWORK_PLAN.md` §7's prescribed r
 `simulation_delay_ticks` — was tried across 4, 8, 12 and 16 and moves the rewind depth by less than
 0.3 frames, because the depth is set by the *ack* round trip and not by the input buffer.
 
-- **Severity:** blocker for anything but a LAN. The engine's rollback is correct and the dedup is
-  correct; what is missing is that the rollback window is chosen before the dedup runs, so
-  retransmissions of already-applied frames are indistinguishable from genuinely late input.
-- **Suggested fix:** dedup, or at least filter `#pending_referenced_frames` against
-  `action_log`'s existing records, *before* choosing `replay_start`. A frame whose every pending
-  entry is a duplicate of a historical record needs no rewind at all. Cheap: the comparison already
-  exists in `#replay_frame` and would simply move earlier. Alternatively, have the deferral hook
-  skip records at or below a per-peer applied watermark, as the execute-on-arrival path already does
-  with `#applied_through`.
-- **Workaround:** none found. This port ships on a LAN (D-167) and records the number.
+- **Severity:** was a blocker for anything but a LAN. The engine's rollback was correct and the
+  dedup was correct; what was missing is that the rollback window was chosen before the dedup ran,
+  so retransmissions of already-applied frames were indistinguishable from genuinely late input.
+- **Fixed in 3.14.4**, by the suggested fix: `tick()` now walks the pending refs and takes the
+  oldest frame that `#frame_has_unapplied_input(f)` says carries something the action log does not
+  already hold, instead of taking `refs[0]` verbatim. The new comment says so in as many words --
+  *"`__replay_frame`'s dedup would then discard the very entries that caused the rewind, leaving the
+  world exactly as it was. So run the same comparison here, before the window is chosen."*
+- **Verified**, on the same rig that found it, with bots removed so that unpredictable damage
+  cannot confound the rate:
 
-**2. Event-style actions are lost under reordering.** The design leans on "an action with no
-affected components is one the replicator always sends and the receiver applies exactly once" — true
-for loss, false for reordering. `Replicator.unpack_from_peer` keeps a per-peer `#applied_through`
-watermark and skips any frame group at or below it, so a packet carrying frames 95..105 that arrives
-*after* one carrying 100..110 has frames 95..99 discarded **wholesale**. Replicated state survives
-that, because the next tick re-sends it; an event has only the one chance. Measured: 928 of 945
-events delivered at 150 ms / 40 ms jitter / 5% loss, and 593 of 596 at 40 ms / 8 ms / 1% — muzzle
-flashes, impacts and explosions that never happen on the client.
+  | link | short-circuit, 3.14.3 | short-circuit, 3.14.4 | host rewinds, 3.14.3 | 3.14.4 |
+  |---|---:|---:|---:|---:|
+  | loopback | 97.6% | 97.6% | 0 | 0 |
+  | 10 ms clean | 92.5% | 97.5% | 6 / 1200 | **0** |
+  | 40 ms clean | **0.1%** | **97.3%** | **1190 / 1200** | **0** |
+  | 80 ms clean | 21.7% | 97.2% | 865 / 1200 | **0** |
+
+  Coherence no longer depends on latency at all -- 80 ms is within 0.4 points of a loopback, and the
+  residual ~2.5% is Q3's one-second health bleed (D-170), which is host-only state no client can
+  predict. `test/net-latency.test.ts`'s first suite is the regression test and asserts the flatness
+  as well as the level.
+
+**2. Event-style actions are lost under reordering. NOT fixed in 3.14.4** -- the
+`#applied_through` skip is unchanged. The design leans on "an action with no affected components is
+one the replicator always sends and the receiver applies exactly once", which is true for loss and
+false for reordering. `Replicator.unpack_from_peer` keeps a per-peer `#applied_through` watermark and
+skips any frame group at or below it, so a packet carrying frames 95..105 that arrives *after* one
+carrying 100..110 has frames 95..99 discarded **wholesale**. Replicated state survives that, because
+the next tick re-sends it; an event has only the one chance.
+
+  Re-measured on 3.14.4 against a **cutoff frame** (see the correction below), 20 s, 4 bots:
+
+  | link | packets lost | events delivered |
+  |---|---:|---:|
+  | loopback | 0 | 474 / 474 |
+  | 10 ms, 1 ms jitter, 0.1% | 2 | 474 / 474 |
+  | 40 ms, 8 ms jitter, 1% | 44 | **516 / 516** |
+  | 80 ms, 20 ms jitter, 2% | 121 | 403 / 474 (15% lost) |
+  | 150 ms, 40 ms jitter, 5% | 331 | 305 / 516 (41% lost) |
+
+  The third row is the informative one: 44 packets lost and **not one event lost with them**, which
+  is the action stream's redundancy working exactly as designed. Delivery only fails once jitter is
+  large enough to reorder -- loss alone never costs an event.
 
 - **Severity:** major, and invisible: a missing explosion looks like a rendering bug, and nothing
   counts the shortfall.
@@ -2285,11 +2312,21 @@ flashes, impacts and explosions that never happen on the client.
   `orchestrator/ServerAuthoritativeServer.js:350-392` (`tick`), `:410-470` (`#replay_frame`'s dedup),
   `orchestrator/NetworkPeer.js` (`flush_outbound`), `test/net-latency.test.ts`
 
+**A correction to the first version of this entry, because the measurement was wrong.** It reported
+1.8% of events lost at 150 ms/5% and 0.5% at 40 ms/1%. Both numbers were produced by comparing the
+host's dispatched total against the client's received total *at an arbitrary stop*, which counts the
+permanently in-flight window as loss -- and, on a clean link with no loss at all, reported 8.6% of
+events missing. Draining without the host is no better: `flush_outbound` only sends when the host
+ticks, so stopping it strands the tail for ever. The sound method is a **cutoff frame**: record what
+the host dispatched by frame C, keep both peers running until the client has applied a frame at or
+past C, then compare. Under that method a clean link loses exactly zero and the bad link loses 41%,
+so the original entry was wrong in both directions.
+
 **A note on reproducing these.** The rig pins every seed and injects the transport's clock, so the
-loopback and zero-latency cases reproduce exactly. The lossy cases do not: the engine reads
+loopback and clean-latency cases reproduce exactly. The lossy cases do not: the engine reads
 `performance.now()` on its fragment-retention and render-delay paths, so *which* packets are lost
 varies between runs on one machine. The shortfall appears on every run; its size moves. The test
-asserts only the deterministic cases and prints the rest.
+asserts the deterministic cases and prints the rest.
 
 
 ## 4. Ergonomics

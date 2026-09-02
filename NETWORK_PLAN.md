@@ -726,8 +726,12 @@ is refused before any session exists. `test/net-robustness.test.ts` covers the i
   rather than a bespoke side-channel** -- at-least-once with dedup, ~1189 B per command, unordered
   (so key them with a counter) and unfragmented (so an SDP offer needs chunking; ICE candidates fit).
   `NodeUDPTransport` covers a Node-to-Node link and cannot reach a browser at all. Removes
-  head-of-line blocking; measure before and after with the latency rig, **after** GAP-043, because at
-  40 ms the limit is a rollback loop no transport touches (D-173).
+  head-of-line blocking; measure before and after with the latency rig. The rollback loop that used
+  to block this is fixed (D-176), but **the remaining half of GAP-043 is a prerequisite**: a
+  UDP-style transport reorders by nature, and reordering is exactly what still eats event actions --
+  measured at 41% of muzzle flashes, impacts and explosions lost on a 150 ms / 40 ms-jitter link,
+  while a link that only *loses* packets loses no events at all. Switching transports before that is
+  fixed trades head-of-line blocking for missing gunshots.
 - **Browser listen server** over WebRTC: the host tab owns slot 0 with no prediction.
 - **Predict static triggers**: `trigger_push` and `trigger_teleport` boxes are map constants, so the
   shared step can evaluate them on both sides (`BG_TouchJumpPad` is predicted in Q3).
@@ -749,13 +753,15 @@ is refused before any session exists. `test/net-robustness.test.ts` covers the i
   (§3.2) is the whole defence; a rollback replays player moves against bodies the world step has
   since moved, so late inputs resolve against slightly newer positions. ~~Measure how often
   `onRewind` fires under the latency rig; if it is every tick, raise `simulation_delay_ticks`.~~
-  **Measured, and this remedy does not work (D-173, GAP-043).** `onRewind` fires on 893 of 900
+  **Measured, and this remedy did not work (D-173, GAP-043).** `onRewind` fired on 893 of 900
   frames at 40 ms of *clean, lossless, in-order* delay, because `flush_outbound` re-sends every
-  unacked frame and the rollback window is chosen from those retransmissions before the dedup
-  discards them. Raising `simulation_delay_ticks` across 4, 8, 12 and 16 moves the mean depth by
+  unacked frame and the rollback window was chosen from those retransmissions before the dedup
+  discarded them. Raising `simulation_delay_ticks` across 4, 8, 12 and 16 moved the mean depth by
   less than 0.3 frames: the depth is the ack round trip, not the input buffer. The client's
-  short-circuit falls to **0.1%** on that link. This is the blocking item for anything but a LAN and
-  it is upstream of the transport choice.
+  short-circuit fell to **0.1%** on that link.
+  **Fixed in meep 3.14.4** (D-176): `tick()` now takes the oldest pending frame that carries input
+  the action log does not already hold. Re-measured, zero rewinds and 97.3% coherence at 40 ms, and
+  the rate no longer depends on latency at all. `test/net-latency.test.ts` is the regression test.
 - **Two clocks.** The session step and the engine step are tied by convention, not by the engine.
   A missed `session.tick` on either side is silent. The clock test in step 0 and the
   `current_frame`-per-fixed-step assertion in the rig guard it.
@@ -808,6 +814,6 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 4 — join in progress | **done** |
 | 5 — WebSocket host, browser client | host, CLI and socket test **done**; browser `?join=` branch not started |
 | 6 — full match for every slot | not started |
-| 7 — latency, loss, bandwidth | rig + `SimulatedTransport` + `test/net-latency.test.ts` **done**; both targets **not met** (D-173, GAP-043) |
+| 7 — latency, loss, bandwidth | rig + `SimulatedTransport` + `test/net-latency.test.ts` **done**; prediction target **met on 3.14.4** (D-176), event delivery under reordering **not met** (GAP-043 second half); bandwidth table still to write |
 | 8 — robustness | not started |
 | 9 — documentation, report, trap matrix | not started |

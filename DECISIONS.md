@@ -9719,3 +9719,69 @@ the manifest alongside the quality setting -- a Vorbis file is a function of its
 rebuild under a different one will produce different bytes for the same audio. Two tests hold the
 line: one that every name in the manifest is `.ogg` and that nothing else is left under
 `built/sound`, and one that every file has a duration for `loopEnd` to use.
+
+### D-176: meep 3.14.4 fixes the rollback loop, and the event loss I reported alongside it was mostly my own measurement
+
+The maintainer reported 3.14.4 as fixing GAP-043. It fixes half of it, completely, and the other
+half is untouched -- and re-measuring turned up that the number I had published for that other half
+was wrong in both directions.
+
+**The rollback loop is fixed, and the fix is the one the gap asked for.**
+`ServerAuthoritativeServer.tick` no longer takes `refs[0]` verbatim; it walks the pending references
+and takes the oldest frame that `#frame_has_unapplied_input(f)` says carries something the action log
+does not already hold. The engine's new comment states the reasoning in the same terms the gap did:
+*"`__replay_frame`'s dedup would then discard the very entries that caused the rewind, leaving the
+world exactly as it was. So run the same comparison here, before the window is chosen."*
+
+Verified on the rig that found it, with **bots removed** -- a bot shooting the client inflicts damage
+no client can predict, so every hit is a legitimate short-circuit miss and the rate stops measuring
+latency:
+
+| link | short-circuit 3.14.3 | 3.14.4 | host rewinds 3.14.3 | 3.14.4 |
+|---|---:|---:|---:|---:|
+| loopback | 97.6% | 97.6% | 0 | 0 |
+| 10 ms clean | 92.5% | 97.5% | 6 / 1200 | **0** |
+| 40 ms clean | **0.1%** | **97.3%** | **1190 / 1200** | **0** |
+| 80 ms clean | 21.7% | 97.2% | 865 / 1200 | **0** |
+
+Coherence no longer depends on latency at all: 80 ms is within 0.4 points of a loopback, and the
+residual 2.4% is Q3's one-second health bleed (D-170). `test/net-latency.test.ts`'s first suite is
+now the regression test and asserts the **flatness** as well as the level, so a return of the
+latency dependence fails it rather than merely making it slower.
+
+**The event loss is not fixed, and my number for it was wrong.** `Replicator`'s `#applied_through`
+skip is unchanged, so a late-arriving older frame group is still discarded wholesale with every
+event action in it. But GAP-043 originally reported "1.8% of events lost at 150 ms/5%", and that
+figure came from comparing the host's dispatched total against the client's received total *at an
+arbitrary stop*. The host keeps dispatching for as long as it runs and the client is permanently a
+link's-worth of frames behind, so that comparison counts the in-flight window as loss -- on a
+**lossless** link it reported 8.6% of muzzle flashes missing, which cannot be true.
+
+Draining is not the fix either, and the reason is worth keeping: `flush_outbound` only sends when
+the host ticks, so a drain that stops the host strands the tail permanently and the gap never
+closes. The sound method is a **cutoff frame** -- record what the host dispatched by frame C, keep
+*both* peers running until the client has applied a frame at or past C, and only then compare.
+Under it:
+
+| link | packets lost | events delivered |
+|---|---:|---:|
+| loopback | 0 | 474 / 474 |
+| 10 ms, 1 ms jitter, 0.1% | 2 | 474 / 474 |
+| 40 ms, 8 ms jitter, 1% | 44 | **516 / 516** |
+| 80 ms, 20 ms jitter, 2% | 121 | 403 / 474 (15% lost) |
+| 150 ms, 40 ms jitter, 5% | 331 | 305 / 516 (41% lost) |
+
+So the original entry was wrong twice: it under-reported the bad link by a factor of twenty, and it
+attributed loss to links that lose nothing. The third row is the one that identifies the mechanism
+-- 44 packets lost and **not one event lost with them**. Packet loss alone never costs an event,
+because the action stream re-sends every unacked frame; only *reordering* does, and reordering needs
+jitter. That is a sharper statement of the defect than the first version managed, and it came out of
+correcting the instrument rather than out of reading more source.
+
+**What this changes about the transport question (D-173).** The blocking item is gone, so "measure
+first, then WebRTC or WebTransport on the client with NodeUDP where both ends are Node" is now a
+live plan rather than something waiting behind a defect. One caveat moves to the front: a UDP-style
+transport *reorders by nature*, and reordering is precisely what the remaining half of GAP-043 eats
+events on. Switching transports without that fix trades head-of-line blocking for missing muzzle
+flashes. The 40 ms / 8 ms / 1% row says the current stack already tolerates real loss perfectly, so
+the honest order is: fix or work around `#applied_through`, then switch.

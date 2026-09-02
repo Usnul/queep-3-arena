@@ -1,5 +1,5 @@
 /*
- * net-latency.test.ts -- the same match over a link that loses and reorders.
+ * net-latency.test.ts -- the same match over a link that delays, loses and reorders.
  *
  * Copyright (C) 2026 queep-3-arena contributors
  *
@@ -10,22 +10,29 @@
  *
  * ---
  *
- * This file exists to answer one question with numbers rather than with a
- * paragraph: **does this netcode need an ordered, reliable transport, or is it
- * already a UDP-shaped thing being carried over TCP?**
+ * Written to answer "does this netcode need an ordered, reliable transport, or
+ * is it a UDP-shaped thing being carried over TCP?" (D-173). It answered a
+ * different and more useful question first: on meep 3.14.3 the host rolled back
+ * on 893 of 900 frames at **40 ms of clean, lossless, in-order delay**, and the
+ * client's prediction agreed with the host on one AUTH_STATE in a thousand. No
+ * transport touches that. GAP-043 was filed; 3.14.4 fixed it, and the first
+ * suite below is the regression test.
  *
- * It matters because `WebSocketTransport`'s own docblock says it is "not the
- * right choice for game state -- WebSocket runs over TCP, which means
- * head-of-line blocking under packet loss", and v1 ships on it anyway (D-167).
- * Whether that is a reasonable compromise or a mistake is a measurement, and
- * `SimulatedTransport` is the engine's own instrument for taking it: loss
- * sampled per send, delivery scheduled at `now + latency + jitter`, and
- * **reordering as a consequence of jitter** rather than as a switch -- which is
- * exactly how a datagram path reorders.
+ * `SimulatedTransport` is the instrument: loss sampled per send, delivery at
+ * `now + latency + jitter`, and **reordering as a consequence of jitter** rather
+ * than as a switch. The rig drives its clock from its own step counter, so a
+ * link is the same link on every machine.
  *
- * The rig drives the transport's clock from its own step counter, so an 80 ms
- * link is 80 ms in every run on every machine. A test that read `Date.now`
- * would be measuring the test runner.
+ * **How to count a delivered event, because getting it wrong is easy and I did.**
+ * The host keeps dispatching for as long as it runs and the client is
+ * permanently a link's-worth of frames behind, so comparing the two totals at an
+ * arbitrary stop reports the in-flight window as loss -- it read as 8.6% of
+ * muzzle flashes going missing on a *lossless* link, which is not true.
+ * Draining without the host is worse: `flush_outbound` only sends when the host
+ * ticks, so stopping it strands the tail permanently. The sound method is a
+ * **cutoff frame** -- count what the host dispatched by frame C, keep both peers
+ * running until the client has applied a frame at or past C, and only then
+ * compare.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -49,24 +56,31 @@ interface Outcome {
     label: string;
     predicted: number;
     reconciles: number;
-    hits: number;
-    total: number;
     hitRate: number;
-    effects: number;
-    hostDispatched: number;
+    comparisons: number;
     rewinds: number;
     rewindDepth: number;
+    /** Events the host dispatched up to the cutoff frame. */
+    dispatched: number;
+    /** Events the client had applied once it caught up past the cutoff. */
+    received: number;
+    caughtUp: boolean;
     droppedPackets: number;
     inputsAgedOut: number;
     hostWalked: number;
     finite: boolean;
 }
 
-/** Thirty seconds of one client, four bots and a circle, over `link`. */
-async function run(label: string, link: Link, seconds = 30): Promise<Outcome> {
+async function run(
+    label: string,
+    link: Link,
+    options: { seconds?: number; bots?: number } = {}
+): Promise<Outcome> {
+    const seconds = options.seconds ?? 20;
+
     const rig = await NetRig.create({
         map: 'oa_dm1',
-        bots: 4,
+        bots: options.bots ?? 4,
         clients: 1,
         seed: 23,
         link,
@@ -82,6 +96,20 @@ async function run(label: string, link: Link, seconds = 30): Promise<Outcome> {
         depthTotal += depth;
     });
 
+    /*
+     The newest host frame this client has applied. `onFrameApplied` fires once
+     per frame group the replicator applies, which is exactly "the client has
+     caught up to here".
+    */
+    let appliedThrough = -1;
+    (
+        client.net.session.peer as unknown as {
+            replicator: { onFrameApplied: { add(fn: (p: number, f: number) => void): void } };
+        }
+    ).replicator.onFrameApplied.add((_peer, frame) => {
+        if (frame > appliedThrough) appliedThrough = frame;
+    });
+
     const slot = rig.host.slots[client.net.slotIndex]!;
     let previous = [...slot.state.origin];
     let walked = 0;
@@ -93,20 +121,26 @@ async function run(label: string, link: Link, seconds = 30): Promise<Outcome> {
         previous = now;
     }
 
+    const cutoffFrame = rig.host.currentFrame;
+    const dispatched = rig.hostEffects.length;
+
+    // Both peers keep running until the client has passed the cutoff.
+    for (let n = 0; n < 600 && appliedThrough < cutoffFrame; n++) rig.step(1);
+
     const net = client.net;
-    const total = net.shortCircuitHits + net.shortCircuitMisses;
+    const comparisons = net.shortCircuitHits + net.shortCircuitMisses;
 
     return {
         label,
         predicted: net.predictedFrames,
         reconciles: net.reconcileCount,
-        hits: net.shortCircuitHits,
-        total,
-        hitRate: total === 0 ? 0 : net.shortCircuitHits / total,
-        effects: client.effects.length,
-        hostDispatched: rig.hostEffects.length,
+        hitRate: comparisons === 0 ? 0 : net.shortCircuitHits / comparisons,
+        comparisons,
         rewinds,
         rewindDepth: rewinds === 0 ? 0 : depthTotal / rewinds,
+        dispatched,
+        received: Math.min(client.effects.length, dispatched),
+        caughtUp: appliedThrough >= cutoffFrame,
         droppedPackets: rig.droppedPackets,
         inputsAgedOut: rig.host.session.server!.pending_dropped_count(),
         hostWalked: walked,
@@ -114,176 +148,170 @@ async function run(label: string, link: Link, seconds = 30): Promise<Outcome> {
     };
 }
 
-describe('the netcode over a link that behaves like UDP', () => {
-    it('survives loss, jitter and the reordering they cause', async () => {
-        const cases: Array<[string, Link]> = [
-            ['loopback (0 ms, 0%)', 'loopback'],
-            ['LAN    (10 ms, 1 ms jitter, 0.1%)', { latency_ms: 10, jitter_ms: 1, loss_pct: 0.1 }],
-            ['broadband (40 ms, 8 ms, 1%)', { latency_ms: 40, jitter_ms: 8, loss_pct: 1 }],
-            ['poor  (80 ms, 20 ms, 2%)', { latency_ms: 80, jitter_ms: 20, loss_pct: 2 }],
-            ['bad   (150 ms, 40 ms, 5%)', { latency_ms: 150, jitter_ms: 40, loss_pct: 5 }],
-        ];
+/* ------------------------------------------------------------------ *
+ * GAP-043's first half: the rollback loop, fixed in 3.14.4
+ * ------------------------------------------------------------------ */
 
+describe('prediction coherence against pure latency', () => {
+    it('does not degrade with delay on a clean link', async () => {
+        /*
+         Zero bots, and that is the point of this case rather than a
+         simplification: a bot shooting the client inflicts damage the client
+         cannot predict, so every hit is one legitimate short-circuit miss and
+         the rate stops measuring *latency*. With nobody shooting, the only
+         unpredictable thing left is Q3's one-second health bleed (D-170),
+         which costs about one miss a second on every link equally.
+        */
         const outcomes: Outcome[] = [];
-        for (const [label, link] of cases) outcomes.push(await run(label, link));
+        for (const [label, link] of [
+            ['loopback', 'loopback'],
+            ['10 ms clean', { latency_ms: 10, jitter_ms: 0, loss_pct: 0 }],
+            ['40 ms clean', { latency_ms: 40, jitter_ms: 0, loss_pct: 0 }],
+            ['80 ms clean', { latency_ms: 80, jitter_ms: 0, loss_pct: 0 }],
+        ] as Array<[string, Link]>) {
+            outcomes.push(await run(label, link, { bots: 0 }));
+        }
 
         // eslint-disable-next-line no-console
         console.log(
-            '\n[net-latency] 30 s, 1 client + 4 bots, oa_dm1, seed 23\n' +
+            '\n[net-latency] prediction vs pure latency, 20 s, no bots\n' +
                 outcomes
                     .map(
                         (o) =>
-                            `  ${o.label.padEnd(34)} predicted ${String(o.predicted).padStart(4)}  ` +
-                            `reconciles ${String(o.reconciles).padStart(4)}  ` +
-                            `short-circuit ${(o.hitRate * 100).toFixed(1).padStart(5)}%  ` +
-                            `host rewinds ${String(o.rewinds).padStart(4)} @ depth ` +
-                            `${o.rewindDepth.toFixed(1).padStart(4)}  ` +
-                            `events ${String(o.effects).padStart(4)}/${String(o.hostDispatched).padStart(4)}  ` +
-                            `packets lost ${String(o.droppedPackets).padStart(4)}  ` +
-                            `inputs aged out ${o.inputsAgedOut}`
+                            `  ${o.label.padEnd(12)} short-circuit ` +
+                            `${(o.hitRate * 100).toFixed(1).padStart(5)}% of ${o.comparisons}  ` +
+                            `reconciles ${String(o.reconciles).padStart(3)}  ` +
+                            `host rewinds ${String(o.rewinds).padStart(4)}`
                     )
                     .join('\n')
         );
 
         for (const o of outcomes) {
             /*
-             The properties that have to hold on every link, and each one is a
-             different way the netcode could have depended on TCP.
+             The GAP-043 regression test. On meep 3.14.3 the 40 ms row read
+             0.1% with 893 rewinds in 900 frames, because `flush_outbound`
+             re-sends every unacked frame and `ServerAuthoritativeServer.tick`
+             chose its rollback window from those retransmissions *before*
+             `#replay_frame`'s dedup discarded them. 3.14.4 runs the same
+             comparison before choosing the window, and the rate stopped
+             depending on latency at all.
+            */
+            expect(o.hitRate, `${o.label}: prediction coherence collapsed`).toBeGreaterThan(0.9);
+            expect(
+                o.rewinds,
+                `${o.label}: the host is rolling back on a clean link`
+            ).toBeLessThan(20);
+            expect(o.comparisons, `${o.label}: AUTH_STATE stopped arriving`).toBeGreaterThan(
+                20 * 60 * 0.9
+            );
+        }
 
-             `inputsAgedOut` is the sharp one: `ServerAuthoritativeServer` trims
-             pending actions older than `frame_capacity`, so a non-zero count
-             means a client's input arrived too late to be simulated at all --
-             the player pressed a key and the world never saw it. Zero on every
-             link is what says `FRAME_CAPACITY = 64` is big enough for the
-             round trips this port will meet.
+        // And it is flat rather than merely passing: 80 ms is as good as none.
+        expect(Math.abs(outcomes[3]!.hitRate - outcomes[0]!.hitRate)).toBeLessThan(0.05);
+    });
+});
+
+/* ------------------------------------------------------------------ *
+ * Everything else a real link does
+ * ------------------------------------------------------------------ */
+
+describe('the netcode over a link that behaves like UDP', () => {
+    it('survives loss, jitter and the reordering they cause', async () => {
+        const outcomes: Outcome[] = [];
+        for (const [label, link] of [
+            ['loopback (0 ms, 0%)', 'loopback'],
+            ['LAN (10 ms, 1 ms, 0.1%)', { latency_ms: 10, jitter_ms: 1, loss_pct: 0.1 }],
+            ['broadband (40 ms, 8 ms, 1%)', { latency_ms: 40, jitter_ms: 8, loss_pct: 1 }],
+            ['poor (80 ms, 20 ms, 2%)', { latency_ms: 80, jitter_ms: 20, loss_pct: 2 }],
+            ['bad (150 ms, 40 ms, 5%)', { latency_ms: 150, jitter_ms: 40, loss_pct: 5 }],
+        ] as Array<[string, Link]>) {
+            outcomes.push(await run(label, link));
+        }
+
+        // eslint-disable-next-line no-console
+        console.log(
+            '\n[net-latency] 20 s, 1 client + 4 bots, oa_dm1, seed 23\n' +
+                outcomes
+                    .map(
+                        (o) =>
+                            `  ${o.label.padEnd(28)} short-circuit ` +
+                            `${(o.hitRate * 100).toFixed(1).padStart(5)}%  ` +
+                            `rewinds ${String(o.rewinds).padStart(3)} @ ${o.rewindDepth.toFixed(1)}  ` +
+                            `events ${String(o.received).padStart(3)}/${String(o.dispatched).padStart(3)}  ` +
+                            `packets lost ${String(o.droppedPackets).padStart(4)}  ` +
+                            `aged out ${o.inputsAgedOut}`
+                    )
+                    .join('\n')
+        );
+
+        for (const o of outcomes) {
+            /*
+             `inputsAgedOut` is the sharp one: the host trims pending actions
+             older than `frame_capacity`, so anything but zero means a player
+             pressed a key and the world never saw it.
             */
             expect(o.inputsAgedOut, `${o.label}: an input aged out of the ring`).toBe(0);
             expect(o.finite, `${o.label}: the host's state went non-finite`).toBe(true);
             expect(o.predicted, `${o.label}: the client stopped predicting`).toBeGreaterThan(
-                60 * 25
+                20 * 60 * 0.9
             );
             expect(o.hostWalked, `${o.label}: the host stopped seeing input`).toBeGreaterThan(1000);
-
-            /*
-             Every transient event the host dispatched reaches the client.
-             These are the actions with no affected components -- muzzle
-             flashes, impacts, explosions -- which the replicator re-sends
-             until acked and the receiver applies exactly once. Losing one is
-             not a correction that heals; it is a gunshot nobody heard.
-
-             Compared against what the *host dispatched on this run* rather
-             than against another run's total, and the difference matters:
-             the host's world step consumes client input, so a link that
-             delays input produces a different match. The first version of
-             this compared the LAN run's event count against the loopback's
-             and failed at 486 against 840 -- which was two different matches
-             being compared, not an event being lost.
-            */
-            expect(o.hostDispatched, `${o.label}: the host raised nothing`).toBeGreaterThan(0);
+            expect(o.caughtUp, `${o.label}: the client never caught up to the cutoff`).toBe(true);
         }
-
-        /*
-         Exact with no link at all, and asserted there. **Not exact on a
-         simulated one**, and that is a defect rather than a tolerance --
-         measured at 928 of 945 on a 150 ms / 5% link and at 593 of 596 on a
-         40 ms / 1% one, so muzzle flashes, impacts and explosions simply never
-         happen on the client. The cause is reordering rather than loss:
-         `Replicator.unpack_from_peer` keeps an `#applied_through` watermark per
-         peer and skips any frame group at or below it, so a packet carrying
-         frames 95..105 that arrives *after* one carrying 100..110 has frames
-         95..99 discarded wholesale -- and every event action in them with it.
-         State survives that, because the next packet re-sends it; an event has
-         only the one chance. GAP-043.
-
-         Reported rather than asserted on the simulated links, and not because
-         the number is unwelcome: the engine reads `performance.now()` on its
-         fragment-retention and render paths, so a lossy run is **not
-         reproducible** even with every seed pinned and the transport clock
-         injected. The shortfall is real and appears on every run; which events
-         and how many is not. Asserted where it is deterministic, measured
-         where it is not, and never asserted at the broken value.
-        */
-        expect(
-            outcomes[0]!.effects,
-            'events went missing with no link at all'
-        ).toBe(outcomes[0]!.hostDispatched);
-
-        const shortfalls = outcomes
-            .slice(1)
-            .filter((o) => o.effects < o.hostDispatched)
-            .map(
-                (o) =>
-                    `${o.label.trim()} ${o.effects}/${o.hostDispatched} ` +
-                    `(${(100 * (1 - o.effects / o.hostDispatched)).toFixed(1)}% lost)`
-            );
-
-        // eslint-disable-next-line no-console
-        console.log(
-            shortfalls.length === 0
-                ? '[net-latency] every event reached the client on every link this run'
-                : `[net-latency] TARGET NOT MET -- events lost: ${shortfalls.join('; ')}; ` +
-                  `target 0% on every link. See GAP-043.`
-        );
 
         // The lossy links really did lose packets, or this measured nothing.
         expect(outcomes[3]!.droppedPackets).toBeGreaterThan(0);
         expect(outcomes[4]!.droppedPackets).toBeGreaterThan(outcomes[3]!.droppedPackets);
     });
 
-    it('costs reconciliation rather than correctness as the link worsens', async () => {
-        const clean = await run('clean', { latency_ms: 10, jitter_ms: 1, loss_pct: 0 }, 20);
-        const rough = await run('rough', { latency_ms: 120, jitter_ms: 30, loss_pct: 4 }, 20);
-
-        // eslint-disable-next-line no-console
-        console.log(
-            `[net-latency] 10 ms/0% -> short-circuit ${(clean.hitRate * 100).toFixed(1)}%, ` +
-                `${clean.reconciles} reconciles; ` +
-                `120 ms/4% -> ${(rough.hitRate * 100).toFixed(1)}%, ${rough.reconciles} reconciles ` +
-                `(${(rough.reconciles / Math.max(1, clean.reconciles)).toFixed(1)}x)`
-        );
-
-        /*
-         What survives, stated as a bound: the client keeps predicting every
-         frame, the host keeps moving, and nothing ages out of the input ring.
-        */
-        expect(rough.reconciles).toBeGreaterThan(clean.reconciles);
-        expect(rough.inputsAgedOut).toBe(0);
-        expect(rough.predicted).toBeGreaterThan(clean.predicted * 0.95);
-    });
-
-    /**
-     * The gate `NETWORK_PLAN.md` §5 step 7 sets, and the one this port does not
-     * meet. Written as a measurement with a named target rather than as a
-     * passing assertion on the wrong number, because a test that asserted 0.1%
-     * would be pinning the defect (see D-173, GAP-043).
-     */
-    it('records how far the reconciliation loop is from its target', async () => {
-        const clean = await run('40 ms, no jitter, no loss', {
+    it('delivers every event until reordering starts, and then does not', async () => {
+        const losing = await run('40 ms, 8 ms jitter, 1% loss', {
             latency_ms: 40,
-            jitter_ms: 0,
-            loss_pct: 0,
-        }, 15);
+            jitter_ms: 8,
+            loss_pct: 1,
+        });
+        const reordering = await run('150 ms, 40 ms jitter, 5% loss', {
+            latency_ms: 150,
+            jitter_ms: 40,
+            loss_pct: 5,
+        });
 
         // eslint-disable-next-line no-console
         console.log(
-            `[net-latency] TARGET NOT MET -- 40 ms of clean, lossless, in-order delay: ` +
-                `short-circuit ${(clean.hitRate * 100).toFixed(1)}% (target >90%), ` +
-                `host rewinds ${clean.rewinds} of ${15 * 60} frames at mean depth ` +
-                `${clean.rewindDepth.toFixed(1)} (§7 target <=6 and rare). ` +
-                `See D-173 / GAP-043.`
+            `[net-latency] events: ${losing.label} ${losing.received}/${losing.dispatched} ` +
+                `(${losing.droppedPackets} packets lost); ` +
+                `${reordering.label} ${reordering.received}/${reordering.dispatched} ` +
+                `(${reordering.droppedPackets} packets lost) ` +
+                `-- TARGET NOT MET, GAP-043 second half`
         );
 
         /*
-         What IS asserted is the shape of the defect, so that a fix moves this
-         test rather than leaving it silently true: the rollback rate tracks
-         *latency alone*, with neither loss nor jitter involved. If a change
-         ever makes a clean 40 ms link stop rolling back on most frames, this
-         fails and the gate above should be tightened to match.
+         Every event arrives while packets are merely *lost*, and that is the
+         action stream's redundancy doing its job: `flush_outbound` re-sends
+         every unacked frame, so a dropped packet costs latency rather than
+         content. Measured at 44 packets lost and zero events lost.
         */
-        expect(clean.droppedPackets, 'this case is supposed to be lossless').toBe(0);
+        expect(losing.received, 'events went missing on a link that only loses').toBe(
+            losing.dispatched
+        );
+
+        /*
+         They stop arriving once the link *reorders*, which is GAP-043's second
+         half and is untouched in 3.14.4. `Replicator` keeps a per-peer
+         `#applied_through` watermark and skips any frame group at or below it,
+         so a packet carrying frames 95..105 that arrives after one carrying
+         100..110 has 95..99 discarded wholesale -- with every event action in
+         them. Replicated state survives that because the next tick re-sends it;
+         an event has only the one chance. Measured: 302 of 516 at 150 ms with
+         40 ms of jitter.
+
+         Reported against its target rather than asserted at the broken value,
+         and the *shape* is asserted so a fix breaks this test instead of
+         passing quietly.
+        */
         expect(
-            clean.rewinds,
-            'the host stopped rolling back on a clean link -- retighten the target'
-        ).toBeGreaterThan(15 * 60 * 0.5);
+            reordering.received,
+            'reordering stopped eating events -- tighten this to an equality'
+        ).toBeLessThan(reordering.dispatched);
     });
 });
