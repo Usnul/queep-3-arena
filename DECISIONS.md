@@ -8402,3 +8402,98 @@ plasma gun, `1, 0.75, 0` at 18.75 m for the rocket, `1, 0.7, 0` at 23.4375 m for
 `Weapons.detonate` -> `Arena.explosion` -> `Effects.explosion` path rather than a direct call.
 `muzzle-flash.test.ts` pins the same thing per weapon, and pins the two rows above that are this
 port's choice rather than the C's, so neither can be quietly undone.
+
+### D-164: the beam starts on the gun that is drawn, and five separate things had moved it off
+
+Reported from the screen: firing the lightning gun while moving, the beam does not meet the barrel
+-- it sits slightly ahead of the weapon, in the direction of travel. It did, and the offset was not
+one mistake. It was every difference between two answers to the same question, accumulated.
+
+**`WeaponSystem` and `ViewWeapon` both compute "where is the muzzle", and they disagree about
+five things.** The simulation's answer is `projectileOrigin`: the eye at the *end of the fixed
+step*, plus the model's *rest* pose along `ps.viewangles`, behind a reachability trace. The gun on
+screen is placed from the pose the *frame* is drawn with. So:
+
+| | the beam's near end | the gun the player sees |
+| --- | --- | --- |
+| eye | end of the fixed step | blended across the step at `alpha` (D-081) |
+| angles | `ps.viewangles`, the step's | the live mouse accumulator (D-155) |
+| bob and view kick | not applied | `CG_OffsetFirstPersonView`, applied |
+| sway | not applied (deliberately -- `barrelOffset` says why) | `CG_CalculateWeaponPosition`, applied |
+| the barrel itself | refused when a trace from `CalcMuzzlePoint` to it is blocked | drawn regardless |
+
+The first one is the report. The camera is deliberately a step behind the simulation -- that is
+what `writeCamera` blends for, and it is worth 16 ms of position lag nobody can see *in the world*
+-- but a beam seeded at the simulation's eye is not in the world, it is supposed to be touching a
+mesh that is a step behind it. At Q3's run speed a step is 5.3 units, and it points exactly the way
+you are moving.
+
+The last one is the larger of the two and was invisible because it is intermittent. D-116's
+reachability trace exists so a *rocket* is not born inside a wall; a beam collides with nothing, so
+all the trace buys it is a jump back to `CalcMuzzlePoint` -- 14 units in front of the eye, in
+mid-air -- whenever anything is between the muzzle point and the barrel. Which is most of the time
+in a corridor.
+
+**Measured rather than argued.** `oa_dm1`, driven headlessly in the browser at `1/165` s a frame
+with the trigger held and the forward key down, comparing the beam's first knot against
+`ViewWeapon`'s own `tag_flash` transform on every frame the gun was lit and the player was moving
+faster than 250 u/s. Of 291 lightning beams the player fired, **167 used the barrel and 124 -- 43%
+-- fell back**. On the frame each beam is born, in Q3 units:
+
+| | before | after |
+| --- | --- | --- |
+| barrel used: distance from the drawn muzzle | 4.89 mean | **0** |
+| barrel used: along the direction of travel | +3.79 mean, +8.04 worst | **0** |
+| barrel refused: forward, right, up | -18.57, -5.96, +7.94 | **not reachable** |
+
+Zero is exact and not a rounding: the beam and the flash light are now the same point, computed
+once per frame and handed to both.
+
+**The fix is the one D-115 and D-158 already made twice.** `Arena` offers every muzzle flash to the
+gun before lighting the world, and the burst of particles is raised from `update` rather than from
+the shot for exactly this reason -- `pendingBurst`'s own docblock says "the only muzzle position
+available at that moment is the one the last frame drew". The beam is the third thing that comes
+out of `tag_flash` and the last one that was still coming out of somewhere else. It is now offered
+the same way, refused on the same two conditions -- no gun on screen, or a weapon that is not the
+one drawn -- and drawn from the same point in the same frame. Everyone whose gun is *not* drawn
+keeps the old path unchanged: every bot, every headless caller, and the player between dying and
+respawning.
+
+**The C is on this side of it, which is worth saying because the port is otherwise diverging.**
+`CG_LightningBolt` builds its beam from `cg.refdef.vieworg` for the local client and
+`cent->lerpOrigin` for everyone else -- the *rendered* eye, bob and kick included, not the
+prediction's. Q3 asks the frame where the shooter is; this now does too, and reads a tag off the
+mesh where Q3 adds fourteen units of `forward`.
+
+One knock-on, and it is a simplification: `barrelOffset` is passed for every weapon and was read by
+both paths. The hitscan side no longer reaches it for anyone who has a gun on screen, and everyone
+else passes null, so `fire`'s `barrelQ3` is now what its docblock always claimed -- projectiles
+only.
+
+**What this does not fix, stated because the numbers say it plainly.** The beam is a world-space
+`Trail3D` stroke and the camera keeps moving for the 50 ms it lives, so its near end slides
+backwards over its life: along the direction of travel, averaged in 10 ms buckets, 0, -4.7, -7.5,
+-10.3, -13.1 units. Before this change the same series read +3.8, -5.0, -7.8, -10.6, -13.3 -- the
+same slide with the lead added on top. So what has been removed is the offset at birth, which is
+the frame the beam is brightest and the one the report was about; the slide is unchanged and is
+now the whole of the residual.
+
+Removing it as well is a different change and is written down here rather than done. Q3 has no
+such residual because `RT_LIGHTNING` has no lifetime -- `CG_LightningBolt` re-adds the beam from
+the muzzle on every frame the trigger is held, which is why the `WP_LIGHTNING` row exists at all
+(see `HITSCAN_TRAILS`). The port's equivalent would be to rewrite the stroke's first knot each
+frame, and the obstacle is ordering rather than difficulty: the drawn muzzle does not exist until
+`PresentationSystem`, which the scheduler runs last, and `Trail3DSystem` writes its geometry eight
+systems earlier. A per-frame re-anchor would therefore land one rendered frame late -- 1.9 units at
+165 Hz, 5.3 at 60 -- which trades a growing error for a constant one and is not obviously a win at
+60 Hz. It becomes worth doing if the gun's placement can be moved ahead of the trail system, which
+is a scheduling question and not a trail question.
+
+`hitscan-trail.test.ts` is new and pins the routing and the arithmetic: that the near end is the
+flash light's point to the float32 the knot buffer stores, that two runs differing only in where
+the camera ends up put the beam's near end apart by exactly the camera's own displacement, that a
+shot the gun takes leaves exactly one beam and not a second in the world, that a ray raises one
+beam each where a flash collapses, and that all three refusals -- a bot, a corpse, an unmodelled
+weapon -- still draw from the point the simulation gave. Four of its ten fail against the code this
+entry replaces. `first-person.test.ts` keeps what a beam *is* -- width, colour, fade, both ends --
+and is untouched.

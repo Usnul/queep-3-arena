@@ -99,9 +99,22 @@ interface EcsDataset {
     removeComponentFromEntity(entity: number, type: unknown): void;
 }
 
-/** What `Arena` needs of this class, so it can hand a flash to the gun. */
-export interface MuzzleFlashSink {
+/**
+ * What `Arena` needs of this class, so it can hand the gun what came out of it.
+ *
+ * Two effects and one question: *is this weapon the one on screen?* Both answer
+ * it the same way and both fall back to the world when the answer is no, which
+ * is what makes a single `ownerId === LOCAL_CLIENT` test at the call site
+ * enough -- a dead player and a weapon the bundle has no model for decline the
+ * beam exactly as they decline the light.
+ *
+ * Named for the class rather than for the flash since D-164 gave it a second
+ * member. It was `MuzzleFlashSink` while a flash was the only thing the gun was
+ * offered.
+ */
+export interface ViewWeaponSink {
     flash(weapon: string): boolean;
+    hitscanTrail(weapon: string, endQ3: ArrayLike<number>): boolean;
 }
 
 /**
@@ -117,6 +130,28 @@ export interface MuzzleParticleSink {
         positionMeep: readonly number[],
         directionMeep: readonly number[],
         weapon: string
+    ): void;
+}
+
+/**
+ * And the other half of it: the line a hitscan shot leaves behind.
+ *
+ * Separate from {@link MuzzleParticleSink} rather than a second method on it,
+ * for the reason that one is narrow: these are two unrelated capabilities of the
+ * same object, and a test that wants to count bursts should not have to stub a
+ * beam to do it.
+ *
+ * The muzzle is in **scene metres** and the far end in **Q3 units**, which looks
+ * careless and is not. The near end is a point on a drawn mesh and has never
+ * been anything else; the far end is where the ray stopped, which is the
+ * simulation's answer in the simulation's units, and converting it here would be
+ * converting it twice.
+ */
+export interface HitscanTrailSink {
+    hitscanTrailFromGun(
+        weapon: string,
+        muzzleMeep: readonly number[],
+        endQ3: ArrayLike<number>
     ): void;
 }
 
@@ -513,7 +548,16 @@ const scratchRotation = new Quaternion();
 const scratchFlash = new Vector3();
 const scratchForward = new Vector3();
 
-export class ViewWeapon implements MuzzleFlashSink {
+/**
+ * `tag_flash` in world space, written once a frame by {@link ViewWeapon.update}.
+ *
+ * One point, three consumers -- the light, the burst and the beam -- because
+ * they are all the same muzzle and reading them off one another is how they
+ * were kept together before D-164 added the third.
+ */
+const scratchMuzzle = new Vector3();
+
+export class ViewWeapon implements ViewWeaponSink {
     private readonly ecd: EcsDataset;
     private readonly library: ModelLibrary;
     private readonly shadows: ShadowPolicy;
@@ -574,6 +618,32 @@ export class ViewWeapon implements MuzzleFlashSink {
      * only weapon that can do it.
      */
     private pendingBurst = false;
+
+    /**
+     * Where the beams go, or null for a session that draws none. See
+     * {@link particles}, which arrives the same way and for the same reason.
+     */
+    trails: HitscanTrailSink | null = null;
+
+    /**
+     * Rays fired since the last frame, waiting for a muzzle to be drawn from.
+     *
+     * The same deferral {@link pendingBurst} is, and the *measured* case for it:
+     * a beam seeded at the simulation's idea of the barrel starts 3.8 Q3 units
+     * ahead of the drawn one at a run, in the direction of travel, and 18.6
+     * behind it whenever `projectileOrigin`'s reachability trace has refused the
+     * barrel. Both go to zero when the point is read off the gun in the frame
+     * that draws it. See D-164.
+     *
+     * A list rather than {@link pendingBurst}'s flag, because rays do not
+     * collapse the way a flash does: a shotgun raises eleven per pull and each
+     * one is its own line. The weapon rides along with the endpoint so a shot
+     * fired in the sixteen milliseconds before a weapon switch still draws its
+     * own beam rather than the new gun's -- the muzzle it comes off is then the
+     * wrong gun's by a few units, which is the lesser of the two wrongs and the
+     * rarer.
+     */
+    private readonly pendingTrails: { weapon: string; endQ3: [number, number, number] }[] = [];
 
     /** `WP_*` ids whose model or hands tag the bundle does not have. */
     readonly unmodelled: string[] = [];
@@ -669,6 +739,16 @@ export class ViewWeapon implements MuzzleFlashSink {
                     barrelRoll
                 );
             }
+
+            /*
+             And the muzzle itself, once, for everything that comes out of it.
+
+             `scratchPosition`/`scratchRotation` are this frame's exactly when
+             `wanted` is non-null, which is this branch -- so this is the only
+             place the tag can be carried into the world, and the three consumers
+             below read the answer rather than each recomputing it.
+            */
+            this.worldMuzzle(wanted.muzzle, scratchMuzzle);
         }
 
         /*
@@ -682,9 +762,7 @@ export class ViewWeapon implements MuzzleFlashSink {
          dlight at `tag_flash` on every frame the flash is up.
         */
         if (wanted !== null && this.flashSeconds > 0) {
-            // `scratchPosition`/`scratchRotation` are this frame's: they are
-            // written exactly when `wanted` is non-null, which is this branch.
-            this.lightFlash(wanted.muzzle);
+            this.lightFlash();
 
             // And the particles, once per shot, at the muzzle the light just
             // moved to -- see `pendingBurst` for why they are not raised from
@@ -701,6 +779,19 @@ export class ViewWeapon implements MuzzleFlashSink {
             // longer exists.
             this.pendingBurst = false;
         }
+
+        /*
+         The beams, from the same muzzle, on their own condition.
+
+         Not folded into the branch above, because a beam is not the flash: it
+         only wants a gun to have been drawn, where the light additionally wants
+         to still be lit. The two lifetimes are set independently -- the flash is
+         `MUZZLE_FLASH_SECONDS` and the beam is a per-weapon row in `Effects` --
+         and a beam that quietly stopped being drawn when somebody shortened the
+         flash would be the kind of coupling nothing reports.
+        */
+        if (wanted !== null) this.drawTrails();
+        else this.pendingTrails.length = 0;
 
         if (wanted !== this.current) {
             this.show(this.current, false);
@@ -742,6 +833,46 @@ export class ViewWeapon implements MuzzleFlashSink {
          the same moment for the same reason.
         */
         applyMuzzleFlash(this.flashLight, weapon, this.shadows.casts('effect'));
+
+        return true;
+    }
+
+    /**
+     * Take a hitscan ray's beam onto the gun, if that weapon is the one on screen.
+     *
+     * The same offer {@link flash} is, refused on the same two conditions and
+     * for the same reason -- and the reason is stronger here, because a beam has
+     * a *visible origin* where a light only has a centre. `Arena` draws the line
+     * in the world when the answer is no.
+     *
+     * **And on a third, which the flash has no equivalent of**: a session that
+     * has not been handed a {@link trails} sink. The light is this class's own
+     * and a missing particle sink costs a shot its burst and nothing else, but a
+     * beam is drawn entirely by `Effects`, so accepting one with nowhere to send
+     * it would take the local player's beams away altogether rather than moving
+     * them. Refusing is what puts them back in the world.
+     *
+     * **What this is worth is the difference between two answers to one
+     * question.** `WeaponSystem` computes "where is the gun" from the eye at the
+     * end of the fixed step, the rest pose of the model, and a trace that
+     * refuses the barrel when anything is in front of it. This class computes it
+     * from the pose the *frame* is drawn with -- eye blended across the step
+     * (D-081), angles live off the mouse (D-155), bob and view kick included,
+     * sway included, no trace -- and it is that gun the player is looking at.
+     * Measured at a run, the first is 3.8 Q3 units ahead of the second in the
+     * direction of travel, which is the report D-164 came in as, and 18.6 units
+     * behind it on the 43% of shots whose reachability trace failed.
+     *
+     * Only the endpoint is kept: the near end is not knowable yet. See
+     * {@link pendingTrails}.
+     *
+     * @returns whether the gun took it.
+     */
+    hitscanTrail(weapon: string, endQ3: ArrayLike<number>): boolean {
+        if (this.trails === null) return false;
+        if (this.current === null || this.currentName !== weapon) return false;
+
+        this.pendingTrails.push({ weapon, endQ3: [endQ3[0]!, endQ3[1]!, endQ3[2]!] });
 
         return true;
     }
@@ -792,14 +923,17 @@ export class ViewWeapon implements MuzzleFlashSink {
     }
 
     /**
-     * Put the flash on the model's `tag_flash`, in world space.
+     * Carry a point on the drawn model into world space.
      *
      * Which is `CG_PositionRotatedEntityOnTag` with the rotation already done:
      * the gun's own transform maps model space onto the world, so the tag rides
      * it like any other point on the mesh -- scaled, turned by the view and the
      * sway, and offset to the eye.
+     *
+     * `scratchPosition`/`scratchRotation` are the caller's problem: they hold
+     * this frame's gun only inside the branch of `update` that wrote them.
      */
-    private lightFlash(offsetQ3: readonly [number, number, number]): void {
+    private worldMuzzle(offsetQ3: readonly [number, number, number], out: Vector3): void {
         scratchFlash.set(
             offsetQ3[0]! * WORLD_SCALE,
             offsetQ3[1]! * WORLD_SCALE,
@@ -807,11 +941,18 @@ export class ViewWeapon implements MuzzleFlashSink {
         );
         scratchFlash.applyQuaternion(scratchRotation);
 
-        this.flashTransform.position.set(
+        out.set(
             scratchPosition.x + scratchFlash.x,
             scratchPosition.y + scratchFlash.y,
             scratchPosition.z + scratchFlash.z
         );
+    }
+
+    /**
+     * Put the flash on the muzzle {@link worldMuzzle} found for this frame.
+     */
+    private lightFlash(): void {
+        this.flashTransform.position.set(scratchMuzzle.x, scratchMuzzle.y, scratchMuzzle.z);
 
         if (this.lit) return;
 
@@ -855,6 +996,31 @@ export class ViewWeapon implements MuzzleFlashSink {
             [scratchForward.x, scratchForward.y, scratchForward.z],
             weapon
         );
+    }
+
+    /**
+     * Draw every ray fired since the last frame, from this frame's muzzle.
+     *
+     * The list is emptied whether or not anything drew them, which is the same
+     * rule {@link pendingBurst} follows: a beam is a thing that happened at a
+     * moment, and one held over to the next frame would be drawn from a muzzle
+     * that has moved on.
+     */
+    private drawTrails(): void {
+        // Non-null for anything that reached the list: {@link hitscanTrail}
+        // refuses a shot it has nowhere to send. Read once all the same, because
+        // the field is public and the shot arrived a frame ago.
+        const sink = this.trails;
+
+        for (const pending of this.pendingTrails) {
+            sink?.hitscanTrailFromGun(
+                pending.weapon,
+                [scratchMuzzle.x, scratchMuzzle.y, scratchMuzzle.z],
+                pending.endQ3
+            );
+        }
+
+        this.pendingTrails.length = 0;
     }
 
     /** Take it back out of the scene. Idempotent, and called far more often. */

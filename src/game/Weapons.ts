@@ -211,11 +211,19 @@ export interface WeaponEvents {
      *
      * One per pellet, so a shotgun raises eleven. The presentation is what
      * decides that the shotgun draws none of them.
+     *
+     * `ownerId` comes with it for the same reason `muzzleFlash` carries one, and
+     * it is the same distinction: the local player has a weapon model on screen
+     * with a `tag_flash` on it, and nobody else does. `startQ3` is this layer's
+     * best answer to "where is the gun" -- the rest pose, on the simulation's
+     * clock -- and for the one shooter whose gun is *drawn* there is a better
+     * one, which only the presentation can see. See D-164.
      */
     hitscanTrail(
         startQ3: ArrayLike<number>,
         endQ3: ArrayLike<number>,
-        weapon: WeaponId
+        weapon: WeaponId,
+        ownerId: number
     ): void;
     /**
      * `normalQ3` is the surface the missile struck, for the scorch mark.
@@ -470,6 +478,14 @@ export class WeaponSystem {
          branch's alone. A trail that started at the traced origin would start
          fourteen units in front of the eye, in mid-air -- exactly the complaint
          D-116 was written to fix, and worse for a line than for a point.
+
+         **The trail's reading of it is the fallback rather than the answer**,
+         and D-164 is why. This is the gun at rest, on the simulation's clock,
+         with a reachability trace in front of it; the gun the player is looking
+         at is none of those three, and the presentation draws the beam off the
+         drawn gun whenever there is one. What is left here is every shooter
+         whose gun is not on screen -- which is every bot, every headless caller,
+         and the player between dying and respawning.
         */
         const origin = this.projectileOrigin(eyeQ3, barrelQ3);
 
@@ -505,7 +521,7 @@ export class WeaponSystem {
                  ray including the ones that hit somebody, which is the whole
                  reason this is not folded into `bulletImpact`.
                 */
-                this.events.hitscanTrail(origin, t_hit, weapon);
+                this.events.hitscanTrail(origin, t_hit, weapon, ownerId);
                 continue;
             }
 

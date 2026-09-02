@@ -1085,6 +1085,18 @@ async function main(): Promise<void> {
         viewWeapon.particles = arena.effects;
 
         /*
+         And where its beams go, which is the third thing that comes out of the
+         same `tag_flash` and the last one that was still coming out of somewhere
+         else. A hitscan shot's line used to be drawn from the simulation's idea
+         of the barrel -- the rest pose, on the fixed step's clock, behind a
+         reachability trace -- which at a run put its near end a few units ahead
+         of the drawn muzzle in the direction of travel, and much further when
+         the trace refused. Same `Effects`, same reason as the burst above. See
+         D-164.
+        */
+        viewWeapon.trails = arena.effects;
+
+        /*
          And what comes out of the barrel. `CG_Missile`'s models, off the same
          library, set the same way and for the same reason -- see `MissileView`,
          and D-118 for why a rocket was a box until now.

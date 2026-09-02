@@ -232,7 +232,7 @@ const PLASMA_LIGHT_REACH_Q3 = 150;
 /**
  * What `Arena` needs of this class, so it can dress a missile it is told about.
  *
- * The same shape and the same reason as `MuzzleFlashSink`: the arena is built
+ * The same shape and the same reason as `ViewWeaponSink`: the arena is built
  * before the model library exists, so this arrives afterwards and is null until
  * it does.
  */

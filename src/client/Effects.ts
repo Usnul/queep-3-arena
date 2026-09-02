@@ -963,6 +963,12 @@ export class Effects {
      * muzzle and the trail is drawn from the gun, and they differ by the length
      * of the weapon.
      *
+     * **This is the fallback since D-164**, and the shooters it is left with are
+     * the ones with no gun on screen: every bot, every headless caller, and the
+     * player between dying and respawning. Anyone whose weapon is *drawn* gets
+     * {@link hitscanTrailFromGun} instead, because "where is the barrel" has a
+     * better answer once there is a mesh to read it off -- see there.
+     *
      * **Q3 draws its tracer from `CG_CalcMuzzlePoint` and gets away with it**,
      * which is worth knowing before this looks like an unforced divergence. It
      * gets away with it because `CG_Tracer` never draws the beginning of the
@@ -983,10 +989,50 @@ export class Effects {
         startQ3: ArrayLike<number>,
         endQ3: ArrayLike<number>
     ): void {
+        if (HITSCAN_TRAILS[weapon] === undefined) return;
+
+        const [ax, ay, az] = toMeep(startQ3);
+
+        this.beam(weapon, ax, ay, az, endQ3);
+    }
+
+    /**
+     * The same line, measured from the gun the player is looking at.
+     *
+     * `ViewWeapon` calls this for the one shooter whose weapon is drawn, in the
+     * frame that draws it, with `tag_flash` already carried into the world --
+     * which is a strictly better answer to "where is the barrel" than the one
+     * {@link hitscanTrail} is handed, and the only one available to a beam that
+     * has to *touch* the mesh. Everything the two disagree about is listed at
+     * `ViewWeapon.hitscanTrail`; D-164 measured it.
+     *
+     * The far end is still the simulation's, in Q3 units, because that is where
+     * the ray stopped and nothing on screen has an opinion about it.
+     */
+    hitscanTrailFromGun(
+        weapon: string,
+        muzzleMeep: readonly number[],
+        endQ3: ArrayLike<number>
+    ): void {
+        if (HITSCAN_TRAILS[weapon] === undefined) return;
+
+        this.beam(weapon, muzzleMeep[0]!, muzzleMeep[1]!, muzzleMeep[2]!, endQ3);
+    }
+
+    /**
+     * Both of the above, once the near end has been agreed on. Scene metres in,
+     * Q3 units for the far end, and the per-weapon row does the rest.
+     */
+    private beam(
+        weapon: string,
+        ax: number,
+        ay: number,
+        az: number,
+        endQ3: ArrayLike<number>
+    ): void {
         const spec = HITSCAN_TRAILS[weapon];
         if (spec === undefined) return;
 
-        const [ax, ay, az] = toMeep(startQ3);
         const [bx, by, bz] = toMeep(endQ3);
 
         /*

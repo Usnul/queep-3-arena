@@ -37,7 +37,7 @@ import {
     type WeaponId,
 } from '../game/Weapons.ts';
 import { Effects } from './Effects.ts';
-import type { MuzzleFlashSink } from './ViewWeapon.ts';
+import type { ViewWeaponSink } from './ViewWeapon.ts';
 import type { MissileSink } from './MissileView.ts';
 import { NO_SHADOWS, type ShadowPolicy } from './Shadows.ts';
 import { impactSound } from './impactSound.ts';
@@ -133,7 +133,7 @@ export class Arena implements WeaponEvents {
      * before it. Null leaves every flash in the world, which is what this class
      * did before there was a first-person weapon at all.
      */
-    viewWeapon: MuzzleFlashSink | null = null;
+    viewWeapon: ViewWeaponSink | null = null;
 
     /**
      * What a projectile in flight is drawn as, once there are models to draw it
@@ -371,9 +371,23 @@ export class Arena implements WeaponEvents {
     hitscanTrail(
         startQ3: ArrayLike<number>,
         endQ3: ArrayLike<number>,
-        weapon: WeaponId
+        weapon: WeaponId,
+        ownerId: number
     ): void {
-        this.effects.hitscanTrail(weapon, startQ3, endQ3);
+        /*
+         Offered to the gun first, exactly as `muzzleFlash` is and for a sharper
+         version of the same reason. A beam has a visible *origin*: it is a line
+         that has to touch the barrel, and the barrel it has to touch is the one
+         being drawn -- blended eye, live angles, bob, view kick and sway, none
+         of which the simulation's answer carries. `ViewWeapon` refuses on the
+         same two conditions the flash is refused on, and then this draws the
+         line in the world from where the simulation thinks the gun is. See
+         D-164.
+        */
+        const onTheGun =
+            ownerId === LOCAL_CLIENT && this.viewWeapon?.hitscanTrail(weapon, endQ3) === true;
+
+        if (!onTheGun) this.effects.hitscanTrail(weapon, startQ3, endQ3);
     }
 
     explosion(
