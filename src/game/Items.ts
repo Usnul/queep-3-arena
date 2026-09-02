@@ -265,29 +265,45 @@ export class ItemSystem {
     }
 
     /**
-     * Advance time, respawn what is due, and hand back everything the player
-     * touched this frame.
+     * Advance the clock and respawn what is due. **Once per frame, whoever is
+     * playing.**
+     *
+     * Split from {@link touch} for the arithmetic reason rather than a tidy
+     * one: `update` did both, and a host running it once per player would
+     * advance a shared clock N times a frame, so on a full server every item in
+     * the map would respawn sixteen times too fast. One clock, N touch tests.
+     */
+    advance(deltaSeconds: number): void {
+        this.time += deltaSeconds;
+
+        for (const item of this.items) {
+            if (item.present) continue;
+            if (this.time >= item.respawnAt) item.present = true;
+        }
+    }
+
+    /**
+     * Everything one player touched this frame, given the clock has advanced.
      *
      * Returns an array rather than raising events because a player can walk
      * through two items in one frame and the caller wants both, in order.
+     *
+     * Order matters between players and is the caller's: two players reaching
+     * one item on the same frame both pass `touchesItem`, and the first one
+     * asked takes it, because taking it clears `present` before the second is
+     * tested.
      */
-    update(
-        deltaSeconds: number,
+    touch(
         playerOriginQ3: ArrayLike<number>,
         inventory: Inventory,
         alive: boolean
     ): PickupEvent[] {
-        this.time += deltaSeconds;
-
         const events: PickupEvent[] = [];
 
-        for (const item of this.items) {
-            if (!item.present) {
-                if (this.time >= item.respawnAt) item.present = true;
-                continue;
-            }
+        if (!alive) return events;
 
-            if (!alive) continue;
+        for (const item of this.items) {
+            if (!item.present) continue;
             if (!touchesItem(playerOriginQ3, item.origin)) continue;
             if (!canBeGrabbed(item.def, inventory)) continue;
 
@@ -300,6 +316,23 @@ export class ItemSystem {
         }
 
         return events;
+    }
+
+    /**
+     * The single-player frame: advance once, then test the one player.
+     *
+     * Kept so that `match.test.ts`, `bench-match.ts` and the pickup tests read
+     * as they always have. It is exactly {@link advance} followed by
+     * {@link touch}, which is what it always was.
+     */
+    update(
+        deltaSeconds: number,
+        playerOriginQ3: ArrayLike<number>,
+        inventory: Inventory,
+        alive: boolean
+    ): PickupEvent[] {
+        this.advance(deltaSeconds);
+        return this.touch(playerOriginQ3, inventory, alive);
     }
 
     /**

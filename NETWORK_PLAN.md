@@ -747,7 +747,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 |---|---|
 | 0 — reversal recorded, scaffold, clock test | **done** |
 | 1 — protocol types | **done** |
-| 2 — `PlayerSlot` extraction, single-player unchanged | not started |
+| 2 — `PlayerSlot` extraction, single-player unchanged | **done** |
 | 3 — headless host + client over loopback | not started |
 | 4 — join in progress | not started |
 | 5 — WebSocket host, browser client | not started |

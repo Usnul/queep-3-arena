@@ -693,18 +693,15 @@ export class MoverSystem {
     }
 
     /**
-     * Advance the simulation.
+     * Advance the mover clock and every mover on it. **Once per frame, whoever
+     * is playing.**
      *
-     * @param playerMinsQ3 world-space player bounds, for trigger tests.
-     * @returns the per-mover displacement since the previous call, which the
-     *   caller needs in order to carry a player standing on a plat.
+     * Split from {@link touch} for the same arithmetic reason `ItemSystem` was:
+     * `update` did both, and a host calling it once per player would advance
+     * `level.time` sixteen times a frame, so every door on the map would open
+     * sixteen times too fast. One clock, N trigger tests.
      */
-    update(
-        deltaSeconds: number,
-        playerMinsQ3: ArrayLike<number>,
-        playerMaxsQ3: ArrayLike<number>,
-        alive: boolean
-    ): void {
+    advance(deltaSeconds: number): void {
         /*
          Q3 runs the game at a fixed 50 ms server frame and every mover position
          is derived from an integer `level.time`. Accumulating whole
@@ -748,7 +745,19 @@ export class MoverSystem {
 
             moverOrigin(mover, this.timeMs, mover.origin);
         }
+    }
 
+    /**
+     * Fire every trigger one player's box is inside, given the clock has
+     * advanced.
+     *
+     * @param playerMinsQ3 world-space player bounds, for trigger tests.
+     */
+    touch(
+        playerMinsQ3: ArrayLike<number>,
+        playerMaxsQ3: ArrayLike<number>,
+        alive: boolean
+    ): void {
         if (!alive) return;
 
         for (const trigger of this.triggers) {
@@ -775,6 +784,23 @@ export class MoverSystem {
             if (!boxesOverlap(playerMinsQ3, playerMaxsQ3, trigger.mins, trigger.maxs)) continue;
             this.fire(trigger);
         }
+    }
+
+    /**
+     * The single-player frame: advance once, then test the one player.
+     *
+     * Kept so that `main.ts`, `match.test.ts` and the mover tests read as they
+     * always have. It is exactly {@link advance} followed by {@link touch},
+     * which is what it always was.
+     */
+    update(
+        deltaSeconds: number,
+        playerMinsQ3: ArrayLike<number>,
+        playerMaxsQ3: ArrayLike<number>,
+        alive: boolean
+    ): void {
+        this.advance(deltaSeconds);
+        this.touch(playerMinsQ3, playerMaxsQ3, alive);
     }
 
     private fire(trigger: Trigger): void {

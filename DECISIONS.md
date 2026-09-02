@@ -9030,3 +9030,75 @@ scratch buffer, so the sum is the number that matters and it is 173 -- six times
 truncated to 32 bytes at a **code-point** boundary rather than a code-unit one, because a lone
 surrogate half encodes as U+FFFD and a name cut mid-emoji would come back different on every peer,
 so `NetPlayerInfo.equals` would never settle and the component would republish for ever.
+
+### D-169: the per-frame player step is one function three machines run, and the clock is an argument rather than an accumulator
+
+`PlayerController` was three things wearing one coat: it sampled the keyboard and the mouse, it
+advanced the simulation, and it kept the two-step pose history the camera is blended from. A
+networked game needs the middle third to run in three places -- on the host for every slot, on a
+client for its own slot as a prediction, and on that same client again for every frame of a
+reconciliation replay -- and two of those three have no keyboard and no camera. So the middle third
+is `src/game/PlayerSlot.ts`, ECS-free and renderer-free, and the controller keeps the other two.
+
+**What the split had to preserve, and how it was checked.** `test/player-slot.test.ts` transcribes
+the pre-extraction `update()` -- the same statements in the same order, reading the same fields --
+and runs both it and `PlayerSlot.step` through 600 frames of `meepmove.test.ts`'s strafe-jump chain
+on real `oa_dm1` collision, comparing origin, velocity, view angles, bob cycle, cooldown, ammunition,
+ground entity, `pm_flags` and view height **every frame**. They agree to the last bit, and the run
+is worth running: peak 275, 337, 320 and 342 u/s from spawns 0..3 against a 320 base, 10 to 12
+landings, 50 shots. The control is a transcription rather than a call on purpose -- an equivalence
+test that imports the thing it is checking proves nothing -- and the 69-case
+`player-controller.test.ts` is what protects the behaviour once the copy goes stale. The whole
+existing suite passes unchanged: 1066 tests, up from 1061 by exactly the five added here.
+
+**The clock is an argument, and `NETWORK_PLAN.md` §3.4 said it would not be.** The plan has `step`
+compute `msec = frameMsec(frame)` itself. It cannot, and the reason is a measurement rather than a
+preference: single-player carries a sub-millisecond remainder over `deltaSeconds` and spends
+16, 17, 16, 17, 17, 16; `frameMsec` spends 16, 17, 17, 16, 17, 17. Both only ever spend 16 or 17 and
+neither is wrong, but they are **not the same sequence**, and `player-controller.test.ts` drives the
+controller at 125 Hz -- where the carry spends 8 ms a frame and `frameMsec` would spend 16 or 17, so
+every timed quantity in 69 tests would double. So `StepClock` carries four numbers the caller
+decides: the frame, the millisecond, the solver's `dt` in seconds, and `usercmd_t.serverTime`. The
+networked path passes `frameMsec(frame)` and the closed-form running total; single-player passes its
+carry; neither has to know about the other.
+
+**And the two clocks do not sum to the same second.** Measured over 60 frames: the closed form spends
+exactly 1000 ms, and the carry spends **999**. The carry is fed `em.fixedUpdateStepSize`, and
+`0.016666666666 * 1000` is short of `50 / 3`, so the single-player Q3 clock runs one millisecond per
+second slow against the movers' own integer arithmetic. That is a twentieth of the two percent D-110
+removed by replacing rounding with the carry, and it is in the *other* direction. It is the same
+constant that makes `session.tick(em.fixedUpdateStepSize)` skip its first step (D-167) showing up a
+second time, in a second subsystem, from the same six hundred picoseconds. Recorded and not fixed:
+fixing it changes single-player movement, which this step is required to leave alone.
+
+**`SetClientViewAngle` did not replace `setYaw`, yet.** The plan calls for it here. `setYaw` writes
+`PlayerController.yaw`, the mouse accumulator, which is exactly why it cannot run on a host -- but
+nothing on the networked path calls it until the host has teleporters to send people through, which
+is step 6. `ps.delta_angles` is already on the wire (`NetPlayerState.deltaAngles`) and already
+carried through `load`/`store`, so the field the fix needs is in place and the function arrives with
+its first caller. Deferring it kept this step to one behaviour-preserving change.
+
+**Two things moved onto the command, because the step now runs on a machine with no input devices.**
+`BUTTON_ATTACK` is Q3's own bit and this port had simply never set it -- the fire decision and the
+mouse lived in one class, so `fireIfReady` read a field instead. Setting it also writes `EF_FIRING`
+on the ported `bg_pmove` path, which nothing in this port reads, and can hold `PMF_RESPAWNED`, which
+nothing in this port sets. `BUTTON_CROUCH` is bit 32 and is **not Q3's**: Q3 reads the crouch off
+`upmove < 0` and this port has taken it as a separate held key since `MoveCommand.crouch` was
+written, which was fine while the only caller was the machine the key was pressed on. Bit 32 is free
+-- Q3 uses 1, 2, 4, 8 and 16, and the ported `bg_pmove` tests only 1, 2, 4 and 16 -- so the crouch
+travels as a button with no behaviour change at all, including the jump-and-crouch case this port
+answers "ducked" and Q3 answers "not ducked".
+
+**`ItemSystem` and `MoverSystem` gained an `advance`/`touch` split, and the reason is arithmetic
+rather than tidiness.** Both had one `update` that advanced a shared clock *and* tested one player.
+A host calling that once per player would advance `level.time` sixteen times a frame on a full
+server: every door on the map opening sixteen times too fast, every item respawning sixteen times
+too fast. So `advance(dt)` runs once and `touch(player)` runs per slot, with the old `update`
+signature kept as exactly those two calls in that order -- which is what it always was -- so
+`match.test.ts`, `bench-match.ts` and the mover and item suites read as they always have.
+
+**One citation went stale and the generator caught it**, which is the trap matrix doing the job D-066
+built it for: `trap_Milliseconds` cited `src/client/PlayerController.ts::serverTime`, and
+`serverTime` had moved. It now cites `PlayerSlot.ts::timeMs` and `protocol.ts::frameMsec`, and the
+note says what the command time is now and why a replayed frame gets the millisecond it got the
+first time.

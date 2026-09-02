@@ -33,28 +33,25 @@
 
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { angleVectors, vec3, type Vec3 } from '../q3/math.ts';
-import { Pmove as runPmove, PM_PreviewViewAngles } from '../q3/pmove/pmove.ts';
+import { PM_PreviewViewAngles } from '../q3/pmove/pmove.ts';
 import {
+    createUserCmd,
     FORWARDMOVE,
     RIGHTMOVE,
     UPMOVE,
-    type Pmove,
     type PlayerState,
+    type UserCmd,
 } from '../q3/pmove/types.ts';
 import * as C from '../q3/pmove/constants.ts';
 import {
     isWeaponId,
-    weaponStats,
     WEAPON_ORDER as Q3_WEAPON_ORDER,
     type WeaponId,
 } from '../game/Weapons.ts';
-import { newInventory, type Inventory } from '../game/Items.ts';
-import { PlayerMovement, type MoverHost } from './MeepMove.ts';
-import {
-    createPmoveHost,
-    type MoverSource,
-    type PhysicsTraceBackend,
-} from '../game/PmoveHost.ts';
+import type { Inventory } from '../game/Items.ts';
+import type { MoverHost } from './MeepMove.ts';
+import { BUTTON_CROUCH, PlayerSlot, type StepSink } from '../game/PlayerSlot.ts';
+import type { MoverSource, PhysicsTraceBackend } from '../game/PmoveHost.ts';
 import { takePointerLock } from './pointerLock.ts';
 import {
     DEAD_VIEW_PITCH,
@@ -73,15 +70,6 @@ export type { PhysicsTraceBackend };
 
 /** Scene units per Q3 unit; must match the pipeline's `WORLD_SCALE`. */
 const WORLD_SCALE = 1 / 32;
-
-/**
- * `PM_Footsteps`' cycle rates, per millisecond, with Q3's own comments on them:
- * "faster speeds bob faster", "walking bobs slow" and "ducked characters bob
- * much faster". All three are bound now -- shift is `+speed`.
- */
-const BOBMOVE_RUN = 0.4;
-const BOBMOVE_WALK = 0.3;
-const BOBMOVE_DUCKED = 0.5;
 
 /**
  * The part of a meep `Transform` this writes. Exported because the systems in
@@ -315,8 +303,17 @@ export interface InputDevices {
 const ANGLE_PER_PIXEL = 12;
 
 export class PlayerController {
-    readonly ps: PlayerState;
-    private readonly pmove: Pmove;
+    /**
+     * The simulation half, which the host and a networked client also run.
+     *
+     * Public because everything downstream of a player -- weapons, items, the
+     * HUD, character placement -- reads `ps` and the inventory off it, and
+     * because `PlayerSystem` drives the step through it. What stays on this
+     * class is what a headless peer has no use for: the keyboard, the mouse
+     * accumulator, and the two-step pose history the camera is blended from.
+     */
+    readonly slot: PlayerSlot;
+
     private readonly element: HTMLElement;
     private readonly devices: InputDevices;
 
@@ -334,17 +331,29 @@ export class PlayerController {
     /** Set true while the pointer is locked; movement input is ignored otherwise. */
     active = false;
 
-    /**
-     * Health, armour, ammo and owned weapons.
+/**
+     * Health, armour, ammo and owned weapons. The slot's, forwarded.
      *
-     * Lives here rather than in `Arena` because Q3 keeps it in `playerState_t`
-     * next to the movement state, and because weapon selection and firing both
-     * have to consult it every frame.
+     * Lives beside the movement state because Q3 keeps it in `playerState_t`,
+     * and because weapon selection and firing both consult it every frame.
      */
-    readonly inventory: Inventory = newInventory();
+    get inventory(): Inventory {
+        return this.slot.inventory;
+    }
 
-    /** Currently selected weapon. */
-    weapon: WeaponId = 'WP_MACHINEGUN';
+    /** Currently selected weapon. The slot's, forwarded. */
+    get weapon(): WeaponId {
+        return this.slot.weapon;
+    }
+
+    set weapon(value: WeaponId) {
+        this.slot.weapon = value;
+    }
+
+    /** `playerState_t`. The slot's, forwarded. */
+    get ps(): PlayerState {
+        return this.slot.ps;
+    }
 
     /**
      * Brush entities the ported clipmap has to be clipped against.
@@ -353,7 +362,13 @@ export class PlayerController {
      * entity list and the controller needs a spawn point from the same list.
      * Ignored entirely on the physics backend, which sees movers as bodies.
      */
-    movers: MoverSource | null = null;
+    get movers(): MoverSource | null {
+        return this.slot.movers;
+    }
+
+    set movers(value: MoverSource | null) {
+        this.slot.movers = value;
+    }
 
     /**
      * True on the frames the attack button is held.
@@ -400,12 +415,6 @@ export class PlayerController {
 
     /** Raised when the attack button is held on an empty weapon. */
     onDryFire: (() => void) | null = null;
-
-    /** Rate limit for the empty click, so holding fire is a click and not a buzz. */
-    private dryFireCooldownMs = 0;
-
-    /** Milliseconds until the current weapon can fire again. */
-    private cooldownMs = 0;
 
     /**
      * `CG_OffsetFirstPersonView`'s timed offsets, and the events that set them.
@@ -471,40 +480,14 @@ export class PlayerController {
         this.devices = devices;
 
         /*
-         Movement is built by `createPmoveHost`, which bots use too. The shared
-         setup is the point: a bot moving through a different `pmove_t` is a bot
-         playing a different game, and the difference would show up as bots
-         taking jumps the player cannot.
+         The simulation, built once and shared with nothing on this path -- but
+         the same class the host builds one of per player and a networked client
+         builds one of for itself. `?move=q3` is `moverHost === null`, which
+         runs the ported `bg_pmove` whole; both solvers write the same
+         `playerState_t`, so nothing downstream can tell which one ran.
         */
-        this.pmove = createPmoveHost({
-            cm,
-            spawnQ3,
-            physics,
-            movers: () => this.movers,
-            startHealth: this.inventory.health,
-        });
-
-        this.ps = this.pmove.ps;
-
-        /*
-         The shipping movement path (D-071).
-
-         `PlayerMovement` runs Q3's motor and hands the resulting velocity to
-         meep's `KinematicMover`; the ported `bg_pmove` above stays built and is
-         used when this is null, which is what `?move=q3` selects. Both write
-         the same `playerState_t`, so nothing downstream -- weapons, items, the
-         HUD, character placement -- can tell which one ran.
-        */
-        this.movement = moverHost === null
-            ? null
-            : new PlayerMovement(moverHost, this.ps.origin);
+        this.slot = new PlayerSlot({ cm, spawnQ3, physics, moverHost });
     }
-
-    /** Non-null when movement runs on meep's solver, which is the default. */
-    private readonly movement: PlayerMovement | null;
-
-    /** Held-key crouch, for the meep-native path; Q3 reads it off `UPMOVE`. */
-    private crouching = false;
 
     attach(): void {
         if (this.attached) return;
@@ -552,8 +535,7 @@ export class PlayerController {
      * rocket launcher must leave you holding what you had, mid-fight.
      */
     selectWeapon(weapon: WeaponId): boolean {
-        if (!this.inventory.weapons.has(weapon)) return false;
-        if ((this.inventory.ammo[weapon] ?? 0) === 0) return false;
+        if (!this.slot.canSelect(weapon)) return false;
 
         /*
          `cg.weaponSelectTime = cg.time`, which `CG_DrawWeaponSelect` counts
@@ -730,33 +712,61 @@ export class PlayerController {
 
         this.time += msec;
 
-        /*
-         The one `playerState_t` field left that nothing maintained.
+        this.sampleCommand();
 
-         `Bot` mirrors its health into `ps.stats` every frame and this class
-         never did, so the player's copy sat at its spawn value forever. Three
-         places in `bg_pmove` read it -- `PM_UpdateViewAngles` refuses to turn a
-         corpse, `PmoveSingle` drops `CONTENTS_BODY` from the trace mask so a
-         corpse can fall through players, and the medium-fall event is
-         suppressed for the dead -- and none of them ever saw a dead player.
+        this.slot.step(
+            this.command,
+            { frame: this.frameNumber++, msec, dt: deltaSeconds, timeMs: this.time },
+            this.sink
+        );
 
-         Found by asking what `Bot` maintains that this does not, which is the
-         same question that found D-072, D-074 and D-075. Unlike those three
-         this one predates the movement rewrite and is wrong on both paths.
-        */
-        this.ps.stats[C.STAT_HEALTH] = this.inventory.health;
+        this.weaponSelectMs = Math.max(0, this.weaponSelectMs - msec);
 
-        const cmd = this.pmove.cmd;
-        cmd.serverTime = this.time;
+        this.recordView(msec);
+    }
+
+    /**
+     * The keyboard and the mouse, as one `usercmd_t`. Nothing else.
+     *
+     * Public so a networked client can sample without stepping: it hands the
+     * command to the session, which executes it as a `UserCmdAction` at the
+     * frame it is tagged with, on this machine as a prediction and on the host
+     * as the truth. Single-player samples and steps in the same breath, which
+     * is what `update` does above.
+     *
+     * The command is reused between frames. Whoever takes it copies it; holding
+     * on to it is holding on to next frame's input as well.
+     */
+    sampleCommand(): UserCmd {
+        const cmd = this.command;
+
         cmd.angles[0] = this.pitch;
         cmd.angles[1] = this.yaw;
         cmd.angles[2] = 0;
         cmd.buttons = 0;
-        cmd.weapon = 1;
+        cmd.weapon = 0;
 
         this.attacking =
             this.active && !this.dead && this.devices.pointer.mouseButtonLeft.is_down;
-        this.crouching = this.active && this.has(KEY_CROUCH);
+
+        /*
+         `BUTTON_ATTACK` goes on the command rather than staying a field the
+         step reads off this object, because the step now runs on a machine with
+         no mouse. Q3's own client has always set it; this port never did only
+         because the fire decision and the mouse lived in one class. The flag
+         beside it stays, because the presentation asks it once a frame for the
+         barrel spin and the muzzle glow.
+        */
+        if (this.attacking) cmd.buttons |= C.BUTTON_ATTACK;
+
+        /*
+         And the crouch, which Q3 reads off `UPMOVE`'s sign and this port has
+         always taken as a separate held key -- see `BUTTON_CROUCH`. Set outside
+         the alive branch below because that is where it has always been
+         computed: a dead player holding crouch still carries the flag, and it
+         is only the moves that are zeroed.
+        */
+        if (this.active && this.has(KEY_CROUCH)) cmd.buttons |= BUTTON_CROUCH;
 
         if (this.active && !this.dead) {
             /*
@@ -784,44 +794,46 @@ export class PlayerController {
             cmd.moves[UPMOVE] = 0;
         }
 
-        if (this.movement === null) {
-            const wasAirborne = this.ps.groundEntityNum === C.ENTITYNUM_NONE;
-            const fallSpeed = -this.ps.velocity[2]!;
-
-            runPmove(this.pmove);
-
-            /*
-             `PM_CrashLand` raises `EV_FALL_*` on the ported path and this class
-             has no event queue to read it from, so the landing is detected the
-             same way it is on the other one -- airborne, then not. Q3's own
-             suppression of the event for a jump does not apply: a jump leaves
-             the ground rather than arriving on it.
-            */
-            if (wasAirborne && this.ps.groundEntityNum !== C.ENTITYNUM_NONE) {
-                this.kick.land(fallSpeed);
-            }
-        } else {
-            const move = this.movement.step(this.pmove, this.crouching, deltaSeconds);
-            if (move.landed) this.kick.land(move.landingSpeed);
-            /*
-             ...and then the one thing `PM_Footsteps` did that the replacement
-             does not. Q3's whole gait -- the footstep sounds, the view bob and
-             the gun's sway -- is one counter on `playerState_t`, and the
-             kinematic path (D-071) retired the function that turns it. Left
-             unmaintained it sits at zero for the whole game, so a client reading
-             it gets a player who never takes a step; a client reconstructing it
-             from something else gets a second answer that can disagree with the
-             ported path, and did (D-081).
-            */
-            this.updateBobCycle(msec);
-        }
-
-        this.fireIfReady(msec);
-
-        this.weaponSelectMs = Math.max(0, this.weaponSelectMs - msec);
-
-        this.recordView(msec);
+        return cmd;
     }
+
+    /**
+     * This frame's input. Reused; see {@link sampleCommand}.
+     *
+     * Its own command rather than the `pmove_t`'s: the step copies it into the
+     * one it owns and both solvers then *mutate* that copy (`PM_CmdScale`
+     * clears BUTTON_WALKING for a run), so a shared array would hand the next
+     * frame's sampler a command the last frame had edited.
+     */
+    private readonly command: UserCmd = createUserCmd();
+
+    /**
+     * The frame the step is told it is running, counted here.
+     *
+     * Single-player has no shared clock to take one from -- the number exists
+     * so the sink can key a side effect by frame, which only the networked host
+     * needs to do -- so it is a plain counter and nothing reads it back.
+     */
+    private frameNumber = 0;
+
+    /**
+     * What the step reports back: a shot, an empty click, a landing.
+     *
+     * All three used to be inline in `update`; they are a sink now because the
+     * host plays a real shot where a client plays a predicted flash, and both
+     * run the same step to decide it happened.
+     */
+    private readonly sink: StepSink = {
+        fired: (_weapon, eyeQ3, anglesQ3) => {
+            this.onFire?.(eyeQ3, anglesQ3);
+        },
+        dryFired: () => {
+            this.onDryFire?.();
+        },
+        landed: (speed) => {
+            this.kick.land(speed);
+        },
+    };
 
     /**
      * Snapshot the eye for this step, and raise the events the view kicks need.
@@ -916,84 +928,9 @@ export class PlayerController {
         }
     }
 
-    /**
-     * `PM_Footsteps`' cycle, for the path that no longer runs `PM_Footsteps`.
-     *
-     * The arithmetic is the C's, including the truncation: `bobCycle` is a byte
-     * on Q3's wire, so the fraction of a cycle a frame does not fill is dropped
-     * rather than carried, and reproducing that is what keeps the two movement
-     * paths agreeing on a quantity a test can compare. It costs a little rate at
-     * high frame rates, and it costs Q3 the same.
-     *
-     * Only the leg animations are missing from the port -- `PM_ContinueLegsAnim`
-     * belongs to a character this player does not have -- and the events, which
-     * this port raises from `Footsteps` rather than from an event queue.
-     */
-    private updateBobCycle(msec: number): void {
-        const ps = this.ps;
-        const cmd = this.pmove.cmd;
-
-        // Airborne leaves the position in the cycle intact but does not advance.
-        if (ps.groundEntityNum === C.ENTITYNUM_NONE) return;
-
-        if (cmd.moves[FORWARDMOVE] === 0 && cmd.moves[RIGHTMOVE] === 0) {
-            // Come to rest at the start of a stride, so the next one is level.
-            if (this.movementSpeed < 5) ps.bobCycle = 0;
-            return;
-        }
-
-        // `PM_Footsteps`' order: ducked first, and a ducked walk bobs as a
-        // ducked run does, because Q3 never asks the second question.
-        const bobmove = (ps.pm_flags & C.PMF_DUCKED) !== 0
-            ? BOBMOVE_DUCKED
-            : this.walking
-                ? BOBMOVE_WALK
-                : BOBMOVE_RUN;
-
-        ps.bobCycle = Math.trunc(ps.bobCycle + bobmove * msec) & 255;
-    }
-
     /** Horizontal speed, Q3 units/s -- whichever solver produced it. */
     get movementSpeed(): number {
-        return Math.hypot(this.ps.velocity[0]!, this.ps.velocity[1]!);
-    }
-
-    /**
-     * Q3's weapon timing: a fixed cooldown per shot, from the balance table.
-     *
-     * Counted in the same integer milliseconds the simulation runs on rather
-     * than in seconds, so the fire rate is exactly the `addTime` value from
-     * `PM_Weapon` and does not drift with frame rate.
-     */
-    private fireIfReady(msec: number): void {
-        this.cooldownMs -= msec;
-
-        if (!this.attacking || !this.active) return;
-        if (this.cooldownMs > 0) return;
-        if (this.onFire === null) return;
-
-        /*
-         `PM_Weapon`: no ammo means no shot and no cooldown reset, so holding
-         the button on an empty weapon does nothing rather than dry-firing at
-         the weapon's rate. Gauntlet's ammo is -1 and stays there.
-        */
-        const ammo = this.inventory.ammo[this.weapon] ?? 0;
-        if (ammo === 0) {
-            this.dryFireCooldownMs -= msec;
-            if (this.dryFireCooldownMs <= 0) {
-                this.dryFireCooldownMs = 500;
-                this.onDryFire?.();
-            }
-            return;
-        }
-        if (ammo > 0) this.inventory.ammo[this.weapon] = ammo - 1;
-
-        const ps = this.ps;
-        const eye = [ps.origin[0]!, ps.origin[1]!, ps.origin[2]! + ps.viewheight];
-
-        this.onFire(eye, ps.viewangles);
-
-        this.cooldownMs = weaponStats(this.weapon).fireRateMs;
+        return this.slot.speed;
     }
 
     /**
@@ -1127,11 +1064,11 @@ export class PlayerController {
      * standing box would open a door you cannot fit through.
      */
     get mins(): ArrayLike<number> {
-        return this.pmove.mins;
+        return this.slot.pmove.mins;
     }
 
     get maxs(): ArrayLike<number> {
-        return this.pmove.maxs;
+        return this.slot.pmove.maxs;
     }
 
     /** Face a given Q3 yaw. Used by teleporters, which choose your facing. */
@@ -1158,7 +1095,7 @@ export class PlayerController {
      * already handles.
      */
     get moving(): boolean {
-        const moves = this.pmove.cmd.moves;
+        const moves = this.slot.pmove.cmd.moves;
         return moves[FORWARDMOVE] !== 0 || moves[RIGHTMOVE] !== 0;
     }
 
@@ -1182,7 +1119,7 @@ export class PlayerController {
      * solvers were given.
      */
     get walking(): boolean {
-        return (this.pmove.cmd.buttons & C.BUTTON_WALKING) !== 0;
+        return (this.slot.pmove.cmd.buttons & C.BUTTON_WALKING) !== 0;
     }
 
     /**

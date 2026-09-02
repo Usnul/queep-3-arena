@@ -878,10 +878,11 @@
     "trap_Milliseconds": {
       "status": "mapped",
       "meep": "engine ticker + performance.now",
-      "note": "Q3's clock, used both for timing and as `usercmd_t.serverTime`. The ticker supplies the delta; `performance.now` supplies the instrumentation.",
+      "note": "Q3's clock, used both for timing and as `usercmd_t.serverTime`. The ticker supplies the delta; `performance.now` supplies the instrumentation. The command time is now `StepClock.timeMs`, handed to `PlayerSlot.step` by whoever owns the clock -- an accumulator in single-player, `frameMsec` summed over the frame number on a networked peer, so that a replayed frame gets the millisecond it got the first time.",
       "evidence": [
         "src/app/main.ts::performance.now",
-        "src/client/PlayerController.ts::serverTime"
+        "src/game/PlayerSlot.ts::timeMs",
+        "src/net/protocol.ts::frameMsec"
       ]
     },
     "trap_RealTime": {
