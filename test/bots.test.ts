@@ -337,12 +337,40 @@ describe('a bot has to notice you first', () => {
         expect(h.shots.length, 'shots fired before noticing').toBe(0);
     });
 
-    it("notices faster at a higher difficulty, in the table's own order", () => {
-        const times = DIFFICULTIES.map((skill) => {
+    /*
+     The one measurement in this file that has to hold the bot's *facing* still,
+     and does it by keeping the target directly overhead: `attention` falls off
+     with the angle off the view axis, and a bot walking a route is pointed
+     somewhere new every second. Overhead, the horizontal offset is zero, the
+     rate is exactly one second per second, and the reaction is the table's own
+     number rather than a bound around it.
+
+     Contrived on purpose. The case above measures a bot in the ordinary
+     situation and can only assert a range; this one gives up the situation to
+     get the number.
+    */
+    it("pays the reaction its difficulty asks for, to the tick", () => {
+        const noticeIn = (skill: BotSkill): number => {
             const h = harness({ skill });
-            return h.until(() => h.bot.enemyVisible);
+
+            while (!h.bot.enemyVisible && h.now < 10) {
+                h.target[0] = h.bot.origin[0]!;
+                h.target[1] = h.bot.origin[1]!;
+                h.target[2] = h.bot.origin[2]! + 200;
+                h.step();
+            }
+
+            return h.now;
+        };
+
+        const times = DIFFICULTIES.map(noticeIn);
+
+        DIFFICULTIES.forEach((skill, i) => {
+            expect(times[i], skill.id).toBeGreaterThanOrEqual(skill.reactionSeconds);
+            expect(times[i], skill.id).toBeLessThanOrEqual(skill.reactionSeconds + 2 * TICK);
         });
 
+        // Which is the table's order, since the table is what it just paid.
         for (let i = 1; i < times.length; i++) {
             expect(times[i], DIFFICULTIES[i]!.id).toBeLessThan(times[i - 1]!);
         }
@@ -522,6 +550,57 @@ describe('a bot does not have perfect aim', () => {
 
         expect(lateral(nearAngle, 150), 'miss at 150 units').toBeLessThan(15);
         expect(lateral(farAngle, 1500), 'miss at 1500 units').toBeGreaterThan(15);
+    });
+
+    /*
+     Tracking, which is the third of the three and the one with a sign to it. The
+     bot aims where the target *was* `trackingSeconds` ago -- a lag, and the
+     exact opposite of the aim prediction D-055 rules out. Measured against a bot
+     that is identical except for carrying no lag, because the absolute number
+     depends on how fast the bearing happens to be sweeping and the *difference*
+     does not.
+    */
+    it('trails a moving target instead of leading it', () => {
+        const base = difficulty('hurt-me-plenty');
+
+        // No aim error in either, so the only thing left in the signal is the
+        // lag. The two bots are otherwise the same bot.
+        const lagging: BotSkill = { ...base, aimErrorDegrees: 0 };
+        const instant: BotSkill = { ...base, aimErrorDegrees: 0, trackingSeconds: 0 };
+
+        const meanError = (skill: BotSkill): number => {
+            const h = harness({ skill, range: 700 });
+            h.until(() => h.shots.length > 0, 20);
+
+            const seen = h.shots.length;
+            const errors: number[] = [];
+
+            for (let i = 0; i < 400; i++) {
+                // Straight across the bot's view at a run, which is what a
+                // player strafing past a corner does.
+                h.target[1] = h.target[1]! + 300 * TICK;
+                h.step();
+
+                const bearingNow = bearing(h.bot, h.target);
+                for (let j = seen + errors.length; j < h.shots.length; j++) {
+                    errors.push(angleDelta(h.shots[j]!.yaw, bearingNow));
+                }
+            }
+
+            expect(errors.length, 'shots at a moving target').toBeGreaterThan(10);
+            return errors.reduce((a, e) => a + e, 0) / errors.length;
+        };
+
+        const withLag = meanError(lagging);
+        const withoutLag = meanError(instant);
+
+        /*
+         The target moves toward increasing yaw, so trailing it is a *negative*
+         error. The bot with no lag sits near zero -- only the trigger's own
+         tolerance is left -- and the one with a lag sits behind it.
+        */
+        expect(withLag, 'aimed ahead of a target it is supposed to trail').toBeLessThan(0);
+        expect(withLag).toBeLessThan(withoutLag - 1);
     });
 
     it('aims true when the difficulty says it has no error to carry', () => {
