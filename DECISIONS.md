@@ -9370,3 +9370,85 @@ assertion about a rocket would be a coin toss. The seed is now load-bearing in o
 measured across seven seeds at forty seconds with four bots, six produce a rocket and one (seed 7)
 produces sixteen shots and no projectile at all, because no bot happens to walk over a launcher.
 The fight cases name their seed and say why.
+
+### D-173: the transport was the wrong question, and 40 milliseconds of clean delay is where this netcode stops working
+
+The maintainer asked whether meep's UDP transports would beat the WebSocket v1 ships on. They would,
+and the engine says so itself -- `WebSocketTransport`'s docblock opens *"**Not** the right choice for
+game state -- WebSocket runs over TCP, which means head-of-line blocking under packet loss"*. So the
+answer was going to be "yes, switch". Measuring first turned it into something more useful.
+
+**What is actually available**, since "UDP on both ends" is not quite what ships:
+
+| adapter | reach | what it needs that meep does not provide |
+|---|---|---|
+| `NodeUDPTransport` | **Node to Node only** (`node:dgram`) | a browser cannot open a UDP socket; one adapter per peer, demultiplexed by source `address:port` |
+| `WebRTCDataChannelTransport` | browser, `{ordered:false, maxRetransmits:0}` | signalling, ICE and the `RTCPeerConnection` are "the application's responsibility"; a Node WebRTC stack on the host |
+| `WebTransportTransport` | browser, QUIC datagrams, `reliable=false` | an HTTP/3 server, which its own docblock calls "out of scope for the engine" |
+
+So there is no single transport spanning both ends, and each browser option needs server machinery
+the engine does not ship. `NodeUDP` is also the only one with **no congestion control at all** --
+`CONGESTION_CONTROL.md` says the other three are masked by TCP, SCTP and QUIC respectively.
+
+**And the signalling does not need a bespoke side-channel.** `NetworkPeer.send_reliable_command` /
+`onReliableCommand` is at-least-once with sender retransmit and receiver dedup, and its own docblock
+names "lobby/room state" as the use. Three caveats that decide how it can be used: delivery is
+**not ordered** ("key payloads with a counter and reorder in the application handler"), the payload
+cap is `MAX_CHANNEL_PAYLOAD_BYTES - 11` (~1189 B) with **no fragmentation at that layer** -- so ICE
+candidates fit comfortably and a whole SDP offer does not -- and loss detection rides the channel's
+seq window, which needs traffic to advance. The one thing it cannot carry is the peer id, because
+`local_peer_id` is a `NetworkSession` constructor argument and `send_reliable_command` needs a
+connected peer: that has to come from whatever establishes the transport. The *frame* number does
+not need the hello either -- `peer.onInitialSync` is dispatched with it as its third argument, and
+only `NetworkSession`'s own handler discards it (GAP-042).
+
+**Then the measurement, which is why none of the above is the next thing to do.**
+`test/net-latency.test.ts` runs the same 30-second match over `SimulatedTransport` with the clock
+injected from the rig's own step counter, so a link is the same link on every machine:
+
+| link | client short-circuit | host rewinds | mean depth | inputs aged out |
+|---|---:|---:|---:|---:|
+| loopback | 93.1% | 1 / 1800 | 2.0 | 0 |
+| 10 ms, 1 ms jitter, 0.1% | 93.1% | 5 / 1800 | 3.4 | 0 |
+| 40 ms, 8 ms, 1% | 7.4% | 1640 / 1800 | 3.7 | 0 |
+| 80 ms, 20 ms, 2% | 21.2% | 1270 / 1800 | 7.8 | 0 |
+| 150 ms, 40 ms, 5% | 13.7% | 1162 / 1800 | 15.7 | 0 |
+
+**The load-bearing row is not in that table**, because it has no loss and no jitter in it: at
+**40 ms of clean, in-order, lossless delay** the short-circuit is **0.1%** and the host rewinds on
+893 of 900 frames. Loss and reordering are not involved at all. The netcode does not degrade on a
+bad link; it stops working somewhere between 10 and 40 ms of *any* link.
+
+The cause is GAP-043: `flush_outbound` re-sends every unacked frame each tick, the deferral hook
+files each retransmission in `#pending_referenced_frames`, and `tick()` picks its rollback window
+from those refs **before** `#replay_frame`'s dedup discards them. So the host rewinds by the ack
+round trip every single tick, for input it has already applied. §7's prescribed remedy -- raise
+`simulation_delay_ticks` -- was tried at 4, 8, 12 and 16 and moves the depth by less than 0.3
+frames, because the depth is the *ack* RTT and not the input buffer. That paragraph in the plan is
+now wrong and says so.
+
+The second half of GAP-043 came out of the same run: event actions are lost under **reordering**,
+not loss -- `Replicator`'s per-peer `#applied_through` watermark discards a whole late-arriving frame
+group, and an event has no second chance where state has one every tick. 928 of 945 delivered at
+150 ms/5%, 593 of 596 at 40 ms/1%.
+
+**So the order of work changes.** A transport that removes head-of-line blocking is worth having and
+is still the right destination; it is not worth having *first*, because at 40 ms the limit is a
+rollback loop that no transport touches. What the measurement bought:
+
+1. The rig now takes a `link`, and `SimulatedTransport` is wired with an injected clock so latency
+   runs reproduce. That is step 7's instrument, built early and useful immediately.
+2. Two unmet targets are written down as measurements with named goals rather than as assertions on
+   the wrong value -- `test/net-latency.test.ts` asserts what is deterministic (every event arrives
+   with no link; nothing ever ages out of the ring; the client never stops predicting; the host's
+   state never goes non-finite on any link) and *prints* the two shortfalls against their targets.
+   The rollback case additionally asserts the **shape** of the defect, so a fix breaks the test
+   rather than leaving it quietly true.
+3. `Host` takes `simulationDelayTicks`, because the sweep needed it and step 7 will again.
+
+**What is not yet known**, stated so it is not mistaken for settled: whether the 0.1% is *only* the
+wasted rollback, or whether the rollback also produces a different answer. The host's state runs
+**ahead** of the client's for the same frame -- 1.6 units at frame 11 growing to 4 -- and
+`weaponTime` differs on 890 of 891 frames, which is the signature of the slot being stepped a
+different number of times on the two sides rather than of a small numeric drift. That is the next
+thing to find, and it is a correctness question rather than a performance one.

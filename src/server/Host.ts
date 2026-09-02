@@ -126,6 +126,14 @@ export interface HostOptions {
     /** Seeds every draw the simulation makes; the same seed is the same match. */
     seed?: number;
     fragLimit?: number;
+    /**
+     * Host-side input buffer, in frames. Defaults to
+     * {@link SIMULATION_DELAY_TICKS}.
+     *
+     * Tunable because `NETWORK_PLAN.md` §7's risk list says to raise it if
+     * `onRewind` fires every tick, and it does -- see D-173.
+     */
+    simulationDelayTicks?: number;
 }
 
 /**
@@ -338,7 +346,7 @@ export class Host {
             entity_manager: entityManager,
             role: 'host',
             local_peer_id: HOST_PEER_ID,
-            simulation_delay_ticks: SIMULATION_DELAY_TICKS,
+            simulation_delay_ticks: options.simulationDelayTicks ?? SIMULATION_DELAY_TICKS,
             tick_rate_hz: TICK_HZ,
             frame_capacity: FRAME_CAPACITY,
             /*

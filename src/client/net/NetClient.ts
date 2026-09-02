@@ -477,7 +477,7 @@ export class NetClient {
 
                 this.ring.set(frame, this.hashOwned(record));
                 if (this.predictionTrace !== null) {
-                    this.predictionTrace.set(frame, Float32Array.from(record.state.origin));
+                    this.predictionTrace.set(frame, new NetPlayerState().copy(record.state));
                 }
                 this.bodies.sync();
             },
@@ -656,7 +656,7 @@ export class NetClient {
      * "divergence" in a simulation that agrees to the last bit, which is how
      * the first version of the loopback test read a fall as a desync.
      */
-    predictionTrace: Map<number, Float32Array> | null = null;
+    predictionTrace: Map<number, NetPlayerState> | null = null;
 
     /** Look the ring up for a server frame; NaN when it has aged out. */
     ringHash(frame: number): number {

@@ -27,6 +27,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { LoopbackTransport } from '@woosh/meep-engine/src/engine/network/transport/LoopbackTransport.js';
+import { SimulatedTransport } from '@woosh/meep-engine/src/engine/network/transport/adapters/SimulatedTransport.js';
 
 import { BspFile } from '../../src/q3/bsp/BspFile.ts';
 import { ClipMap } from '../../src/q3/cm/ClipMap.ts';
@@ -45,10 +46,38 @@ export type Script = (cmd: UserCmd, frame: number, client: RigClient) => void;
 /** A command that does nothing, which is what an unscripted client sends. */
 export const IDLE: Script = () => {};
 
+/**
+ * What the two peers are joined by.
+ *
+ * `'loopback'` is `LoopbackTransport`: bytes queue and are handed over exactly
+ * when the rig says so, which is what makes the zero-latency case a unit test
+ * rather than a race.
+ *
+ * A `Link` object is `SimulatedTransport`, which is the engine's model of a real
+ * one -- loss sampled per send, delivery scheduled at `now + latency + jitter`,
+ * and **reordering as a consequence** rather than as a setting, exactly as a UDP
+ * path reorders. Its clock is injected, so the rig drives simulated time from
+ * its own step counter and the run still reproduces.
+ */
+export type Link =
+    | 'loopback'
+    | {
+          latency_ms: number;
+          jitter_ms: number;
+          loss_pct: number;
+          seed?: number;
+      };
+
+/** The two adapters, as much of them as the rig drives. */
+interface RigTransport {
+    deliverDue(nowMs: number): void;
+    droppedCount(): number;
+}
+
 export interface RigClient {
     readonly net: NetClient;
     readonly physics: HeadlessPhysics;
-    readonly transport: LoopbackTransport;
+    readonly transport: RigTransport;
     /** Replace at any time; called once per predicted frame. */
     script: Script;
     readonly effects: EffectEventData[];
@@ -67,17 +96,35 @@ export interface RigOptions {
     /** Frames to run the host alone before any client joins. */
     warmup?: number;
     difficulty?: string;
+    /** How the peers are joined. Defaults to `'loopback'`. */
+    link?: Link;
+    /** Host-side input buffer, in frames. */
+    simulationDelayTicks?: number;
 }
 
 export class NetRig {
     readonly host: Host;
     readonly clients: RigClient[] = [];
 
+    /** The link every client is joined by. */
+    readonly link: Link;
+
+    /**
+     * Simulated wall time, in milliseconds, advanced one tick per `step`.
+     *
+     * `SimulatedTransport` schedules delivery against an injected clock, so
+     * driving that clock from the step counter rather than from `Date.now`
+     * keeps an 80 ms link exactly 80 ms in every run on every machine. A rig
+     * that read the wall clock would measure the test runner.
+     */
+    private clockMs = 0;
+
     /** Every effect the host queued, in the order it queued them. */
     readonly hostEffects: { frame: number; kind: number; owner: number }[] = [];
 
-    private constructor(host: Host) {
+    private constructor(host: Host, link: Link) {
         this.host = host;
+        this.link = link;
     }
 
     static async create(options: RigOptions): Promise<NetRig> {
@@ -87,9 +134,10 @@ export class NetRig {
             assetRoot: BUILT,
             seed: options.seed ?? 0x5eed,
             difficulty: options.difficulty,
+            simulationDelayTicks: options.simulationDelayTicks,
         });
 
-        const rig = new NetRig(host);
+        const rig = new NetRig(host, options.link ?? 'loopback');
 
         /*
          Past the input buffer before anybody joins. `ServerAuthoritativeServer.tick`
@@ -189,9 +237,7 @@ export class NetRig {
         const calls = net.fastForward(target);
         const align = { calls, milliseconds: performance.now() - alignStart, target };
 
-        const hostSide = new LoopbackTransport();
-        const clientSide = new LoopbackTransport();
-        LoopbackTransport.bind_pair(hostSide, clientSide);
+        const { hostSide, clientSide, hostRig, clientRig } = this.makeLink(peerId);
 
         this.host.session.connect(peerId, hostSide);
         net.session.connect(0, clientSide);
@@ -199,7 +245,7 @@ export class NetRig {
         self = {
             net,
             physics,
-            transport: clientSide,
+            transport: clientRig,
             script: IDLE,
             effects,
             hits,
@@ -209,17 +255,96 @@ export class NetRig {
         };
         this.clients.push(self);
 
-        // Both transports, so the host's queue is drained too.
-        (self as { hostTransport?: LoopbackTransport }).hostTransport = hostSide;
-        this.hostTransports.push(hostSide);
+        // The host's side too, so its queue is drained.
+        this.hostTransports.push(hostRig);
+        this.rawHostTransports.push(hostSide);
 
         return self;
     }
 
-    private readonly hostTransports: LoopbackTransport[] = [];
+    private readonly hostTransports: RigTransport[] = [];
+
+    /** The unwrapped host-side adapters, for a test that wants their stats. */
+    readonly rawHostTransports: object[] = [];
+
+    /**
+     * Build the pair, and wrap each one in the two calls the rig makes of it.
+     *
+     * The two adapters do not share a drain method -- `LoopbackTransport` hands
+     * over everything queued (`deliver_all`) and `SimulatedTransport` hands over
+     * whatever is due (`tick(now)`) -- so the rig holds a two-method view rather
+     * than branching at every call site.
+     */
+    private makeLink(peerId: number): {
+        hostSide: object;
+        clientSide: object;
+        hostRig: RigTransport;
+        clientRig: RigTransport;
+    } {
+        if (this.link === 'loopback') {
+            const hostSide = new LoopbackTransport();
+            const clientSide = new LoopbackTransport();
+            LoopbackTransport.bind_pair(hostSide, clientSide);
+            return {
+                hostSide,
+                clientSide,
+                hostRig: { deliverDue: () => void hostSide.deliver_all(), droppedCount: () => 0 },
+                clientRig: {
+                    deliverDue: () => void clientSide.deliver_all(),
+                    droppedCount: () => 0,
+                },
+            };
+        }
+
+        const clock = (): number => this.clockMs;
+        /*
+         A different seed per peer and per direction, so the two sides do not
+         drop the *same* packet index as each other -- which is what one shared
+         generator would do and is not what a real link looks like.
+        */
+        const base = this.link.seed ?? 1337;
+        const shared = {
+            latency_ms: this.link.latency_ms,
+            jitter_ms: this.link.jitter_ms,
+            loss_pct: this.link.loss_pct,
+            clock,
+        };
+        /*
+         The cast is the fourth instance of one declaration defect: the
+         constructor destructures `random_seed`, the body uses it to seed the
+         loss generator, and the JSDoc `@param` block that becomes the parameter
+         type does not list it -- so `tsc` rejects the one option that makes a
+         lossy run reproducible. Same shape as `NetworkSession`'s
+         `frame_capacity`. See REPORT.md section 4.
+        */
+        type SimOptions = ConstructorParameters<typeof SimulatedTransport>[0];
+        const hostSide = new SimulatedTransport({
+            ...shared,
+            random_seed: base + peerId * 2,
+        } as SimOptions);
+        const clientSide = new SimulatedTransport({
+            ...shared,
+            random_seed: base + peerId * 2 + 1,
+        } as SimOptions);
+        SimulatedTransport.bind_pair(hostSide, clientSide);
+
+        return {
+            hostSide,
+            clientSide,
+            hostRig: {
+                deliverDue: (nowMs) => hostSide.tick(nowMs),
+                droppedCount: () => hostSide.dropped_count(),
+            },
+            clientRig: {
+                deliverDue: (nowMs) => clientSide.tick(nowMs),
+                droppedCount: () => clientSide.dropped_count(),
+            },
+        };
+    }
 
     /** One frame with nobody connected; used for warmup and for step 4. */
     stepHostOnly(): void {
+        this.clockMs += SESSION_TICK_SECONDS * 1000;
         this.host.step();
         this.recordHostEffects();
     }
@@ -244,13 +369,23 @@ export class NetRig {
      */
     step(count = 1): void {
         for (let n = 0; n < count; n++) {
+            this.clockMs += SESSION_TICK_SECONDS * 1000;
+
             this.host.step();
             this.recordHostEffects();
 
-            for (const client of this.clients) client.transport.deliver_all();
+            for (const client of this.clients) client.transport.deliverDue(this.clockMs);
             for (const client of this.clients) client.net.step();
-            for (const transport of this.hostTransports) transport.deliver_all();
+            for (const transport of this.hostTransports) transport.deliverDue(this.clockMs);
         }
+    }
+
+    /** Packets the simulated link ate, both directions. Zero on a loopback. */
+    get droppedPackets(): number {
+        let total = 0;
+        for (const client of this.clients) total += client.transport.droppedCount();
+        for (const transport of this.hostTransports) total += transport.droppedCount();
+        return total;
     }
 
 }

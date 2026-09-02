@@ -171,9 +171,9 @@ describe('the prediction against the host, at zero latency', () => {
 
             const hostOrigin = rig.host.slots[slotIndex]!.state.origin;
             const d = Math.hypot(
-                predicted[0]! - hostOrigin[0]!,
-                predicted[1]! - hostOrigin[1]!,
-                predicted[2]! - hostOrigin[2]!
+                predicted.origin[0]! - hostOrigin[0]!,
+                predicted.origin[1]! - hostOrigin[1]!,
+                predicted.origin[2]! - hostOrigin[2]!
             );
 
             compared += 1;

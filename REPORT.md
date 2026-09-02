@@ -2166,6 +2166,82 @@ That is an accurate description of a component that cannot be used for its state
 - **Evidence:** `node_modules/@woosh/meep-engine/src/engine/network/NetworkSession.js` (the `onInitialSync` subscription, `#local_frame`, `#simulate_one_step`), `orchestrator/ServerAuthoritativeServer.js:350-360` (the trim), `src/client/net/NetClient.ts` (`fastForward`), `test/net-join-late.test.ts`
 
 
+### GAP-043: the action stream's own redundancy forces a host rollback every tick, and reordering silently eats event actions
+
+Two findings from one measurement, and they share a cause: the replicator's send path is designed
+around "re-send everything unacked", and two other parts of the stack were not written to expect it.
+
+**1. A host rolls back on essentially every tick at any real latency.**
+`NetworkPeer.flush_outbound` packs `[last_acked + 1 .. current]` for every peer every tick, so at an
+RTT of N frames each client input is re-sent N times. The receiving side defers each inbound record
+into `ServerAuthoritativeServer`'s pending log **and records its frame in
+`#pending_referenced_frames`** — including the retransmissions. `tick()` then chooses the rollback
+window from those refs:
+
+```js
+let replay_start = sim_frame;
+if (refs.length > 0 && refs[0] <= sim_frame) replay_start = refs[0];
+if (replay_start <= committed_top) { rewind_to(...); }
+```
+
+`refs[0]` is the oldest unacked frame, which is ~RTT frames in the past, so **every tick rewinds by
+the RTT and replays**. The duplicates are then discarded by `#replay_frame`'s `(sender, type,
+payload)` dedup — after the rewind has already happened. The rollback is pure waste and it is not
+occasional; measured on `oa_dm1`, one client, 20 s:
+
+| link | host rewinds | mean depth | client short-circuit |
+|---|---:|---:|---:|
+| loopback | 0 / 1200 | — | 97.6% |
+| 10 ms, 1 ms jitter, 1% | 6 / 1200 | 1.0 | 92.5% |
+| **40 ms, no jitter, no loss** | **1190 / 1200** | **4.0** | **0.1%** |
+| 40 ms, 8 ms jitter, 1% | 1090 / 1200 | 3.8 | 7.7% |
+| 80 ms, 20 ms, 2% | 865 / 1200 | 8.5 | 21.7% |
+| 150 ms, 40 ms, 5% | 808 / 1200 | 16.8 | 18.2% |
+
+The third row is the one that matters: **no loss, no jitter, in-order delivery, 40 ms of clean
+delay**, and the client's prediction agrees with the host's authority on one AUTH_STATE in a
+thousand. Loss and jitter are not involved. `NETWORK_PLAN.md` §7's prescribed remedy — raise
+`simulation_delay_ticks` — was tried across 4, 8, 12 and 16 and moves the rewind depth by less than
+0.3 frames, because the depth is set by the *ack* round trip and not by the input buffer.
+
+- **Severity:** blocker for anything but a LAN. The engine's rollback is correct and the dedup is
+  correct; what is missing is that the rollback window is chosen before the dedup runs, so
+  retransmissions of already-applied frames are indistinguishable from genuinely late input.
+- **Suggested fix:** dedup, or at least filter `#pending_referenced_frames` against
+  `action_log`'s existing records, *before* choosing `replay_start`. A frame whose every pending
+  entry is a duplicate of a historical record needs no rewind at all. Cheap: the comparison already
+  exists in `#replay_frame` and would simply move earlier. Alternatively, have the deferral hook
+  skip records at or below a per-peer applied watermark, as the execute-on-arrival path already does
+  with `#applied_through`.
+- **Workaround:** none found. This port ships on a LAN (D-167) and records the number.
+
+**2. Event-style actions are lost under reordering.** The design leans on "an action with no
+affected components is one the replicator always sends and the receiver applies exactly once" — true
+for loss, false for reordering. `Replicator.unpack_from_peer` keeps a per-peer `#applied_through`
+watermark and skips any frame group at or below it, so a packet carrying frames 95..105 that arrives
+*after* one carrying 100..110 has frames 95..99 discarded **wholesale**. Replicated state survives
+that, because the next tick re-sends it; an event has only the one chance. Measured: 928 of 945
+events delivered at 150 ms / 40 ms jitter / 5% loss, and 593 of 596 at 40 ms / 8 ms / 1% — muzzle
+flashes, impacts and explosions that never happen on the client.
+
+- **Severity:** major, and invisible: a missing explosion looks like a rendering bug, and nothing
+  counts the shortfall.
+- **Suggested fix:** apply actions with no affected components even from a frame group below the
+  watermark — they are idempotent by construction and the watermark exists to protect *prior-state
+  capture*, which they do not participate in. Failing that, route them through
+  `ReliableCommandPipeline`, which already has at-least-once delivery and receiver dedup.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/engine/network/replication/Replicator.js`
+  (`#applied_through`, `unpack_from_peer`),
+  `orchestrator/ServerAuthoritativeServer.js:350-392` (`tick`), `:410-470` (`#replay_frame`'s dedup),
+  `orchestrator/NetworkPeer.js` (`flush_outbound`), `test/net-latency.test.ts`
+
+**A note on reproducing these.** The rig pins every seed and injects the transport's clock, so the
+loopback and zero-latency cases reproduce exactly. The lossy cases do not: the engine reads
+`performance.now()` on its fragment-retention and render-delay paths, so *which* packets are lost
+varies between runs on one machine. The shortfall appears on every run; its size moves. The test
+asserts only the deterministic cases and prints the rest.
+
+
 ## 4. Ergonomics
 
 Observations that are not gaps — the facility exists and works — but cost time or attention.
@@ -2388,6 +2464,9 @@ Observations that are not gaps — the facility exists and works — but cost ti
   is "this option was removed", and the reader then has to open the `.js` to discover it was not.
   This port routes every construction through `src/net/session.ts` so the cast lives once with its
   reason attached. The fix is one line in the `.d.ts` and the `.js` needs no change at all.
+  **Second instance, same shape:** `SimulatedTransport`'s constructor destructures `random_seed` and
+  seeds its loss generator from it, and the `@param` block that becomes the parameter type omits it
+  — so the one option that makes a lossy run reproducible does not typecheck.
 
 - **`NetworkSession.normalize_if_dirty` is tagged `@private` in its JSDoc and is not.** The method
   restores every remote-owned component from the interpolation log after the render pass has left
