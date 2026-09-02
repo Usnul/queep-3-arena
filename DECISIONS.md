@@ -8863,3 +8863,99 @@ What that does not settle is whether it *looks* right, and two things are worth 
 are trusted. The plasma fireball's top channel is 0.82 rather than 1.0, because equal luminance in a
 blue costs peak; and the smoke emitter is still achromatic grey for all six weapons, which is
 defensible for anything that leaves a scorch mark but was never argued.
+
+## Phase 11 — multiplayer
+
+### D-167: networking is in scope, the brief's anti-goal is reversed, and the model is Q3's expressed in meep's primitives
+
+**The maintainer reversed it.** `INITIAL_INSTRUCTIONS.md` section 2 says *"Networking -- delete
+entirely. Single process. Do not port snapshots, delta compression, or client prediction"*, and
+section 10 lists "port netcode" among the anti-goals. That is now withdrawn: multiplayer is in
+scope. It is recorded here for the reason D-110 recorded the other reversal -- every argument in
+`NETWORK_PLAN.md` is downstream of this one and none of them can be re-derived from the code, so
+without this entry the whole of `src/net/` reads as somebody ignoring the brief.
+
+**The priority order from D-110 still holds**, and it decides the shape rather than merely
+permitting the work: *exercise meep well first, produce a faithful port second*. meep ships a
+complete netcode package (`engine/network`: transports, a seq/ack channel, an action log with
+rewind, a replicator, both orchestrators of a server-authoritative predict/reconcile loop, and a
+`NetworkSession` facade over all of it) and this port had never imported one line of it. So the
+work uses that package wherever it reaches, **even where a hand-rolled protocol over a WebSocket
+would be fewer lines**, and files every place it does not fit as a GAP in `REPORT.md`. The friction
+is the evidence; producing it is the point.
+
+**The model: Q3's, in meep's primitives.** A dedicated Node host is the authority. Each human's
+*inputs* are a `SimAction` the client predicts and the host executes; the local player is the only
+predicted entity. Everything the host owns -- bots, missiles, items, movers, scores -- is *state*,
+published every tick as the session's own `ReplaceComponent` actions and played out on clients
+through its interpolation log behind an adaptive render delay. Transient happenings -- flashes,
+impacts, explosions, hits, pickups, deaths -- are event-shaped `SimAction`s with no affected
+components, which the replicator always sends and the rewind never touches.
+
+Two alternatives were considered and are rejected here so nobody re-derives them:
+
+- **Full deterministic input replication**, where every client simulates bots, missiles and movers
+  from the same inputs. This is the engine's own textbook model and it is the wrong one for this
+  game: the simulation's state is not in replicated components -- behaviour-tree blackboards,
+  `MoveState`, physics contact state, projectile records -- so `RewindEngine` cannot restore it and
+  a rollback tears the world; the contact events that detonate missiles are not replayable; every
+  client would run the whole match at the pace of the slowest peer; and it asks bots to be
+  bit-identical across machines, a property this port has never needed and has no oracle for.
+- **A bespoke snapshot protocol over `Channel`** -- Q3's own `entityState_t` deltas. Rejected
+  because it exercises one layer of the package where the plan can exercise all of them, and
+  because it would re-implement INITIAL_SYNC, AUTH_STATE, the interpolation log and time dilation
+  by hand, which is a worse use of the same effort and a worse report.
+
+**Topology for v1:** one Node process hosts (`npm run host`), browsers join over a WebSocket. Bots
+live on the host. There is no listen server, because a browser cannot accept a socket; that and
+WebRTC are follow-ups.
+
+**What does not change.** The single-player path stays exactly as it is and keeps its tests: `?map=`
+with no `?join=` is the same game, `?move=q3` and `?trace=clipmap` stay single-player-only (the
+networked step is the shipping `MeepMove` path and nothing else), the ported `bg_pmove` and
+`cm_trace` stay in the tree as the oracle, and `npm run divergence` still measures against them.
+`ws` enters as a devDependency imported only by `src/server/` and `tools/`; nothing of it reaches a
+browser bundle, and meep stays external and unvendored (D-002).
+
+**What v1 deliberately does not do**, stated now rather than discovered later: no lag compensation
+(a hitscan resolves against where the host has everyone *now*, which is Q3 vanilla's own answer),
+no prediction of jump pads or teleporters, no reconnect, no chat, no server browser, and no delta
+compression beyond the engine's own format.
+
+**One file the plan did not name.** `src/net/session.ts` is a four-line factory over
+`new NetworkSession(...)`, and it exists because the generated declaration destructures
+`frame_capacity` without listing it in the parameter's type, so the option this port raises to 64
+does not typecheck while the runtime honours it. The cast lives there once with its reason
+attached rather than at every construction site, and it goes away when the `.d.ts` gains the line.
+Filed under REPORT section 4.
+
+**The scaffold's own finding: the session's clock is not the engine's clock, and the difference is
+six hundred picoseconds.** `NetworkSession.tick(dt)` keeps a private fixed-step accumulator; it
+never calls `EntityManager.update` and never reads `fixedUpdateStepSize`. The obvious argument to
+hand it is the step the surrounding `fixedUpdate` was called with, and that argument is wrong:
+
+    em.fixedUpdateStepSize * 1000 = 16.666666666
+    session.tick_period_ms        = 16.666666666666666
+
+The engine's default is *short* of the period, so `while (accum >= period)` fails on the first call,
+that step never happens, and the session runs one frame behind its caller for the rest of the match.
+Measured: 600 calls at `fixedUpdateStepSize` leave the host at frame 598; 600 calls at
+`1 / TICK_HZ` leave it at 599, and the second sequence is right from the first call. The deficit is
+6.7e-10 ms a step, so it never recovers the frame and never loses a second one -- that would take
+about 2.5e10 further steps, thirteen years at 60 Hz. A permanent, silent, one-frame offset is the
+worst available failure: a client one frame behind its own reckoning tags every input with the wrong
+frame and the host applies each to the state *before* the one the client predicted against, which
+presents as constant small corrections, i.e. as a bad network rather than as a bad constant.
+`SESSION_TICK_SECONDS` in `src/net/protocol.ts` is the constant, and `test/net-clock.test.ts`
+asserts both halves -- the right argument stepping once per call, and the wrong one measurably
+behind and staying behind.
+
+**Q3's millisecond comes off the frame number, not off an accumulator.** `frameMsec(n)` is
+`floor((n + 1) * 50 / 3) - floor(n * 50 / 3)`: the 16/17 pattern `MoverSystem` and
+`PlayerController` have always carried, derived from the frame *number* instead of from a running
+total. Networking is what forces the change. An accumulator answers "how much time has passed
+here", which is a local fact; a host at frame 6000 and a client that has just fast-forwarded to
+frame 6000 have to agree about what frame 6000 is worth without having agreed about anything before
+it, and only a closed form can do that. Sixty consecutive frames still sum to exactly 1000, at any
+starting frame, a million frames in -- asserted, because that is the property the whole timer layer
+rests on.

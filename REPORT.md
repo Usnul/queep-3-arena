@@ -2315,6 +2315,20 @@ Observations that are not gaps — the facility exists and works — but cost ti
   was the harness. Related to D-077, and the same lesson.
 
 
+### Added during phase 11
+
+- **`NetworkSession`'s generated declaration forgets the one option a game most needs to raise.**
+  The constructor destructures `frame_capacity`; the class declares `readonly frame_capacity:
+  number`; the docblock two lines above the parameter explains what it sizes and says outright to
+  raise it for high-RTT links. The inline object type the parameter is annotated with does not list
+  it. So `new NetworkSession({ ..., frame_capacity: 64 })` is `TS2353: 'frame_capacity' does not
+  exist in type ...` while the runtime honours it exactly. Every other constructor option is
+  present, which is what makes it a trap rather than a gap: the natural reading of one missing key
+  is "this option was removed", and the reader then has to open the `.js` to discover it was not.
+  This port routes every construction through `src/net/session.ts` so the cast lives once with its
+  reason attached. The fix is one line in the `.d.ts` and the `.js` needs no change at all.
+
+
 ## 5. Performance
 
 > **On dating.** Numbers here were taken across five sessions and two engine versions, and the
