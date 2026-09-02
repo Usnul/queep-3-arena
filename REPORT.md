@@ -3653,6 +3653,52 @@ retiring the entry.
 a docblock naming the recycle it protects) and `SpriteSystemPE.js:96-102` (the subscriptions, now
 below `__copy_transform`'s first call).
 
+### BUG-18: `uint8_array_hash`'s `offset` parameter is only correct when it is zero
+
+`core/collection/array/typed/uint8_array_hash.js` takes `(array, offset, length)` and bounds its
+main loop by `length` where it means `offset + length`:
+
+```js
+let i = offset;
+const overflow = length & 3;
+for (; i < offset + overflow; i++) { ... }   // this one honours the offset
+for (; i < length; i += 4) { ... }           // this one does not
+```
+
+With `offset = 0` the two agree and the function is correct, which is why it works everywhere it is
+currently called. With any other offset it hashes `ceil((length - offset) / 4)` words instead of
+`length / 4`, reads up to three bytes past the requested range, and returns a value that depends on
+where the range *starts* rather than on what is in it.
+
+**Reproduction**, whole:
+
+```js
+import { uint8_array_hash } from '@woosh/meep-engine/src/core/collection/array/typed/uint8_array_hash.js';
+
+const a = new Uint8Array([1,2,3,4,5,6,7,8,9,10,11,12]);
+
+uint8_array_hash(a, 4, 8);              // 134678269
+uint8_array_hash(a.subarray(4, 12), 0, 8); // 82109100
+```
+
+Both spellings ask for the same eight bytes. The first hashes four of them (`i` starts at 4, the
+loop stops at 8) and never looks at the other four.
+
+- **Severity:** minor today and sharp-edged tomorrow. Nothing in the engine passes a non-zero
+  offset, so nothing is currently wrong; the failure mode when something does is a hash that
+  silently agrees for inputs that differ, which is the worst shape a hash can fail in -- a
+  deduplication that drops a distinct entry, or a change-detection pass that reports "unchanged".
+  This port hashes AUTH_STATE payloads to decide whether to reconcile and would have had exactly
+  that: two different predicted states hashing equal, the correction skipped, the client left
+  wrong with no symptom but drift.
+- **Workaround:** pass `offset = 0` and slice, which is what `src/client/net/NetClient.ts` does.
+- **Suggested fix:** `for (; i < offset + length; i += 4)`. One token. The sibling
+  `computeStridedIntegerArrayHash` gets the same loop right, so this is a slip rather than a
+  convention.
+- **Evidence:** `node_modules/@woosh/meep-engine/src/core/collection/array/typed/uint8_array_hash.js`,
+  `src/client/net/NetClient.ts` (`hashBytes`)
+
+
 ## 7. What worked well
 
 Specific things that would be a loss to regress.

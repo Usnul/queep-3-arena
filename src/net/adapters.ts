@@ -44,6 +44,7 @@ import {
     InterpolationKind,
 } from '@woosh/meep-engine/src/engine/interpolation/BinaryInterpolationAdapter.js';
 import type { BinaryBuffer } from '@woosh/meep-engine/src/core/binary/BinaryBuffer.js';
+import { utf8_encoded_length } from '@woosh/meep-engine/src/core/binary/utf8/utf8_encoded_length.js';
 
 import {
     MAX_NAME_BYTES,
@@ -323,8 +324,6 @@ export class NetPlayerInfoAdapter extends BinaryClassSerializationAdapter<NetPla
     }
 }
 
-const UTF8 = new TextEncoder();
-
 /**
  * Cut a string to at most `maxBytes` of UTF-8 without splitting a code point.
  *
@@ -332,13 +331,21 @@ const UTF8 = new TextEncoder();
  * `String.prototype.slice` and encodes as U+FFFD, so a name cut mid-emoji comes
  * back as a different string on every peer than the one the host holds -- and
  * `equals` on `NetPlayerInfo` would then never settle.
+ *
+ * The measuring is meep's `utf8_encoded_length`, not a `TextEncoder`. The first
+ * version of this encoded the whole string to find its length and then encoded
+ * every code point again to find *its* length -- two allocations per character
+ * to count bytes nobody keeps. The engine's counts them arithmetically. Same
+ * family of miss as the hand-written mulberry32 in `src/server/random.ts`
+ * (D-172): the utility was there, under a name that says what it does.
  */
 export function truncateUtf8(value: string, maxBytes: number): string {
-    if (UTF8.encode(value).length <= maxBytes) return value;
+    if (utf8_encoded_length(value) <= maxBytes) return value;
+
     let out = '';
     let bytes = 0;
     for (const codePoint of value) {
-        const size = UTF8.encode(codePoint).length;
+        const size = utf8_encoded_length(codePoint);
         if (bytes + size > maxBytes) break;
         out += codePoint;
         bytes += size;

@@ -57,6 +57,8 @@ import {
     type NetInventory,
     type NetPlayerState,
 } from '../net/components.ts';
+import { clamp } from '@woosh/meep-engine/src/core/math/clamp.js';
+
 import { PlayerMovement, type MoverHost } from '../client/MeepMove.ts';
 import type { ClipMap } from '../q3/cm/ClipMap.ts';
 import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
@@ -541,10 +543,7 @@ export class PlayerSlot {
  * is what a silent two's-complement wrap does to a cooldown.
  */
 function clampInt16(value: number): number {
-    const i = Math.trunc(value);
-    if (i > 32767) return 32767;
-    if (i < -32768) return -32768;
-    return i;
+    return clamp(Math.trunc(value), -32768, 32767);
 }
 
 /** Reused so a shot allocates nothing; the sink must not retain it. */

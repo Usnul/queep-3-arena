@@ -9323,11 +9323,44 @@ declaration is not callable and `const r = seededRandom(seed); r();` is a compil
 consequence, and it is filed in REPORT section 4. It explains the mistake. It does not excuse it:
 the file was never opened.
 
+**One re-invention is a slip; four is a habit, so the rest of this work was swept for them.** What
+came back:
+
+| I wrote | meep already had |
+|---|---|
+| `mulberry32` in `src/server/random.ts` | `core/math/random/seededRandom.js` -- the same algorithm |
+| `fnv1a` in `NetClient.ts` | `core/collection/array/typed/uint8_array_hash.js` |
+| `mixInt` / `mixInts` / `mixFloats` in `components.ts` | `hash_mix2`, `computeIntegerArrayHash`, `computeHashFloatArray` |
+| `vec3Equals` in `components.ts` | `core/geom/vec3/v3_equals_array.js` |
+| `clampInt16`'s bounds check in `PlayerSlot.ts` | `core/math/clamp.js` |
+| `truncateUtf8`'s byte counting in `adapters.ts` | `core/binary/utf8/utf8_encoded_length.js` |
+
+All six are replaced and every measurement in D-170, D-171 and D-172 is unchanged -- 600 of 600
+frames bit-exact, 270 shots and 48 projectiles on seed 23 before and after -- because these were
+re-derivations rather than different answers. The UTF-8 one is a small improvement as well as a
+deduplication: the version it replaced encoded the whole string to measure it and then encoded
+every code point again to measure *that*, two allocations per character to count bytes nobody
+keeps, where the engine's counts them arithmetically.
+
+**And one of them found an engine bug.** `uint8_array_hash(array, offset, length)` bounds its main
+loop by `length` where it means `offset + length`, so the `offset` parameter is only correct when it
+is zero: the same eight bytes hash to 134678269 through `offset = 4` and 82109100 through a
+`subarray`. Nothing in the engine passes a non-zero offset, so nothing is wrong today -- but the
+failure shape is the worst one a hash has, two different inputs agreeing, and this port hashes
+AUTH_STATE payloads to decide whether to reconcile. BUG-18.
+
 **What was checked and is *not* a duplicate:** `Difficulty.gaussian` against meep's
 `randomGaussian`. They are different distributions -- the engine's is a sum of six uniforms
 returning `[0, 1]` centred on 0.5, and D-162's is Box-Muller rejected at 2.5σ returning a truncated
-standard normal, chosen so a bot's burst goes wide as a burst rather than as one absurd shot. That
-one stays.
+standard normal, chosen so a bot's burst goes wide as a burst rather than as one absurd shot. So is
+`lerpAngle`, which has no engine equivalent for degrees (`quat3_nlerp` is the quaternion case). Both
+stay.
+
+**The method that would have caught all six, written down because it is the cheap one:** before
+writing a utility, `ls` the directory in `core/` whose name is the noun -- `random`, `hash`, `utf8`,
+`vec3`, `math`. Every one of these was one listing away. The port's own report has a section called
+"what worked well" about meep's class-per-file, filename-is-the-export convention making the source
+navigable; not navigating it is a poor use of that.
 
 **Determinism here is not a netcode requirement and that is worth being clear about.** The game is
 server-authoritative: clients are told what happened and never have to re-derive it, so a bot that

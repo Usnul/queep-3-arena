@@ -35,6 +35,7 @@ import { EntityManager } from '@woosh/meep-engine/src/engine/ecs/EntityManager.j
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { NetworkIdentity } from '@woosh/meep-engine/src/engine/network/ecs/components/NetworkIdentity.js';
 import { OwnerAwareScope } from '@woosh/meep-engine/src/engine/network/replication/ScopeFilter.js';
+import { uint8_array_hash } from '@woosh/meep-engine/src/core/collection/array/typed/uint8_array_hash.js';
 import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/NetworkSession.js';
 import { BinaryBuffer } from '@woosh/meep-engine/src/core/binary/BinaryBuffer.js';
 import type { SimAction } from '@woosh/meep-engine/src/engine/network/sim/SimAction.js';
@@ -632,7 +633,7 @@ export class NetClient {
         this.stateAdapter.serialize(scratch, state);
         this.inventoryAdapter.serialize(scratch, inventory);
 
-        return fnv1a(scratch.raw_bytes, scratch.position);
+        return hashBytes(scratch);
     }
 
     /** The same hash over the client's own prediction. */
@@ -641,7 +642,7 @@ export class NetClient {
         scratch.position = 0;
         this.stateAdapter.serialize(scratch, record.state);
         this.inventoryAdapter.serialize(scratch, record.inventory);
-        return fnv1a(scratch.raw_bytes, scratch.position);
+        return hashBytes(scratch);
     }
 
     /**
@@ -739,12 +740,23 @@ export class NetClient {
 const SCRATCH_STATE = new NetPlayerState();
 const SCRATCH_INVENTORY = new NetInventory();
 
-/** FNV-1a over the first `length` bytes. Compared only against itself. */
-export function fnv1a(bytes: Uint8Array, length: number): number {
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < length; i++) {
-        hash ^= bytes[i]!;
-        hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash;
+/**
+ * Hash everything written into `buffer` so far.
+ *
+ * meep's own `uint8_array_hash`, not a hand-written FNV-1a -- which is what was
+ * here first, and which is the same mistake as the hand-written mulberry32 that
+ * `src/server/random.ts` used to be (D-172). The value is only ever compared
+ * against another value from this same function, so any decent mixer would do;
+ * the point is that the engine ships one and this port's job is to use it.
+ *
+ * **Offset zero, deliberately.** `uint8_array_hash(array, offset, length)`'s
+ * second loop bounds itself by `length` where it means `offset + length`, so
+ * with a non-zero offset it hashes the first `4 - (length & 3)` bytes of the
+ * range and silently ignores the rest -- measured: the same eight bytes hash to
+ * 134678269 through `offset = 4` and 82109100 through a `subarray`. Passing the
+ * buffer's own start is both what this needs and the only argument that is
+ * correct. See REPORT.md section 6.
+ */
+function hashBytes(buffer: BinaryBuffer): number {
+    return uint8_array_hash(buffer.raw_bytes, 0, buffer.position);
 }

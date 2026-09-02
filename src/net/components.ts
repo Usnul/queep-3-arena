@@ -37,6 +37,11 @@
  * `registerProtocol` in `protocolSetup.ts` is the only place it is written.
  */
 
+import { computeHashFloatArray } from '@woosh/meep-engine/src/core/math/hash/computeHashFloatArray.js';
+import { computeIntegerArrayHash } from '@woosh/meep-engine/src/core/collection/array/computeIntegerArrayHash.js';
+import { hash_mix2 } from '@woosh/meep-engine/src/core/math/hash/hash_mix2.js';
+import { v3_equals_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_equals_array.js';
+
 import { WEAPON_ORDER as Q3_WEAPON_ORDER, isWeaponId } from '../game/Weapons.ts';
 
 /**
@@ -465,34 +470,31 @@ export const REPLICATED = [
 ] as const;
 
 /* ------------------------------------------------------------------ *
- * Local helpers. Not exported: nothing outside this file should be
- * hashing a component, and `equals` is the supported question.
+ * Local helpers.
+ *
+ * Three lines of glue over meep's own hashing, rather than the
+ * hand-written FNV-ish mixer that was here first -- the same mistake as
+ * the hand-written mulberry32 in `src/server/random.ts` (D-172), found
+ * the same way. `hash_mix2` is the canonical two-value step and is
+ * allocation-free where `combine_hash`'s varargs is not;
+ * `computeHashFloatArray` and `computeIntegerArrayHash` are the array
+ * forms. Nothing outside this file should be hashing a component --
+ * `equals` is the supported question.
  * ------------------------------------------------------------------ */
 
+/** Componentwise, on two triples. The engine's, which takes offsets. */
 function vec3Equals(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
-    return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+    return v3_equals_array(a as never, 0, b as never, 0);
 }
 
-/** FNV-ish integer mix. Only ever compared against itself, never stored. */
 function mixInt(h: number, v: number): number {
-    return (Math.imul(h ^ v, 0x01000193) | 0) >>> 0;
+    return hash_mix2(h, v);
 }
 
 function mixInts(h: number, a: ArrayLike<number>): number {
-    let out = h;
-    for (let i = 0; i < a.length; i++) out = mixInt(out, a[i]!);
-    return out;
+    return hash_mix2(h, computeIntegerArrayHash(a as never, 0, a.length));
 }
 
-const FLOAT_BITS = new Float32Array(1);
-const FLOAT_AS_INT = new Int32Array(FLOAT_BITS.buffer);
-
-/** Hashes the float's *bits*, so `-0` and `0` are distinguished as the wire distinguishes them. */
 function mixFloats(h: number, a: ArrayLike<number>): number {
-    let out = h;
-    for (let i = 0; i < a.length; i++) {
-        FLOAT_BITS[0] = a[i]!;
-        out = mixInt(out, FLOAT_AS_INT[0]!);
-    }
-    return out;
+    return hash_mix2(h, computeHashFloatArray(a as never));
 }
