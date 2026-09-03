@@ -845,5 +845,5 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 5 — WebSocket host, browser client | **done** except the renderer, which the preview browser cannot start. Standing still against a real host: 0/3808 short-circuited before, 323/329 after, two defects fixed (D-178, D-179/GAP-044) |
 | 6 — full match for every slot | host half **done** (D-180); remote characters and missiles **done** and measured (D-181); client weapon selection **done** (D-182). Scoreboard HUD, remote footsteps and teleport/pad handling not built; GAP-045 open upstream |
 | 7 — latency, loss, bandwidth | **done**. Both REPORT §5 tables written (D-183) and re-taken at 30 Hz (D-184): downstream **45.8 KB/s** per client, inside the 48 KB/s target; host CPU **29–65 ms/s**; event delivery now exact at every link. Superlinear host cost unchanged |
-| 8 — robustness | not started |
-| 9 — documentation, report, trap matrix | not started |
+| 8 — robustness | **done** (D-185). Forged commands rejected 66/66 with the victim unmoved; found and fixed a leaver nobody was told about; what v1 deliberately does not do is written down |
+| 9 — documentation, report, trap matrix | **done**. Six network syscalls reclassified with cited evidence and the matrix regenerated; README has `?join=`, `npm run host` and a Multiplayer section; REPORT §7 has the networking "what worked" entry |

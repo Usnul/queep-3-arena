@@ -75,11 +75,39 @@ that is not optional.
 |---|---|
 | `?map=<name>` | which level to load |
 | `?fly=1` | swaps the player for a noclip camera, for inspecting conversions |
+| `?join=ws://host:port` | joins a match on a dedicated host instead of running one locally. `?name=` and `?character=` go with it. The map must be the host's, and the client says so plainly if it is not |
 | `?move=q3` | runs the ported `bg_pmove.c` whole -- slide-move, ground trace and all -- instead of Q3's motor on meep's `KinematicMover` |
 | `?trace=clipmap` | runs collision on the ported `cm_trace` instead of meep's physics, for an A/B; implies `?move=q3` |
 | `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
 | `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Beats the saved setting for the session; out of range is ignored rather than clamped |
 | `?fog=off` | empties the air, taking the map's volumetric lighting with it -- the volume is what turns Shade's volumetrics on at all, so this is the whole feature and its frame cost (D-151, D-154) |
+
+### Multiplayer
+
+Start a host, then point a browser at it:
+
+```bash
+npm run host -- --map oa_dm1 --bots 4
+```
+
+```
+http://localhost:5173/?map=oa_dm1&join=ws://localhost:5300
+```
+
+The host takes `--map`, `--bots`, `--port` (5300), `--difficulty`, `--seed` and `--fraglimit`. It
+runs the whole match — movement, weapons, items, bots, scoring — and every browser is a client that
+predicts its own player and is corrected by the host. Up to sixteen slots, bots included.
+
+**What v1 does not do**, none of it an oversight (D-185): no reconnect, so a dropped socket is a
+return to the menu and a second join is a new player who happens to get the same slot; no kick, ban
+or anti-cheat beyond ownership — a client cannot drive somebody else's player, which is tested, but
+it can send whatever it likes for its own; no idle reaping, so a socket that dies without closing
+holds its slot until TCP notices; no chat, no scoreboard UI, no server browser (join by address).
+
+The session runs at **30 Hz**, which is half single-player's rate. That is a deliberate trade and it
+costs something real: `bg_pmove` is stepped at the session rate, so a networked strafe jump tops out
+about 4.5% slower than a local one (D-184). What it buys is 45.8 KB/s a client instead of 88.7, and
+event delivery that stops losing shots on a lossy link.
 
 ### The menu
 
@@ -124,6 +152,7 @@ Three findings in the report reproduce on their own:
 |---|---|
 | `npm run divergence` | identical input through the C oracle, the ported clipmap and meep's physics, and how far the third drifts from the first — the second is the control, and its own worst disagreement with the C is three orders of magnitude below the third's |
 | `npm run bench-match` | a six-bot deathmatch played headlessly on both movement paths, then the cost of a single trace decomposed. Section 5's numbers come from here: the shipping path needs 6.0 traces a frame where driving `bg_pmove` through meep's physics needed 30.4, and in that older arrangement the ported Q3 rule that decides the answer cost 0.22 µs against the 3.06 of the `shape_cast` in front of it |
+| `npm run bench-net` | what a host frame costs by how many people are in the match, and the milliseconds of CPU a second of match takes. Section 5's networking table comes from here |
 | `npm run navmesh-probe` | meep's `NavigationMesh` built from a Quake III level three ways — solid brushes, render surfaces, and an extracted walkable surface — each repaired with the engine's topology toolkit. 5%, 0% and 48% of spawn-point pairs are routable, against 100% for the waypoint graph this port ships. GAP-016 explains what that difference is, and includes a claim I got wrong twice before getting it right |
 
 ## What works
@@ -138,6 +167,12 @@ Three findings in the report reproduce on their own:
   exactly 320 u/s and a scripted strafe chain reaches 354 (D-071).
 - **The ported `bg_pmove.c`**, measured against the C step by step and reachable with `?move=q3`.
   It is the reference the new path is judged against rather than the shipping path.
+- **Multiplayer**, on meep's server-authoritative session: a dedicated host, browser clients that
+  predict their own player and reconcile against the host, remote players drawn from replicated
+  state 0.6 frames behind the truth, and bots that shoot at every human rather than the first one.
+  Two clients and four bots for 45 seconds is a test, not a demo. What it costs on the wire and on
+  the host's CPU is in REPORT section 5, and the honest headline is that sixteen slots is not
+  reachable without relevance culling neither the engine nor this port has.
 - **Weapons** with Q3's own damage numbers and fire rates, extracted from the sources rather than
   transcribed.
 - **Items** that spawn, drop to the floor, bob, spin, obey `BG_CanItemBeGrabbed` and respawn on

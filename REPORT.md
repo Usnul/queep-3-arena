@@ -518,13 +518,13 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 
 | status | count | meaning |
 |---|---:|---|
-| `mapped`, exercised | 31 | a meep facility does the job, and this port calls it |
+| `mapped`, exercised | 34 | a meep facility does the job, and this port calls it |
 | `mapped`, not exercised | 18 | the facility exists and would do the job; this port never needed it |
-| `hybrid` | 5 | a meep facility does part of the job and ported Q3 code does the rest |
+| `hybrid` | 7 | a meep facility does part of the job and ported Q3 code does the rest |
 | `ported` | 7 | reimplemented faithfully in TypeScript; deliberately *not* mapped onto meep |
 | `workaround` | 21 | meep has no direct facility; solved outside the engine |
 | `GAP` | 0 | no reasonable answer; see gap register |
-| `not needed` | 227 | the whole subsystem is out of scope (netcode, botlib, CD keys, cinematics) |
+| `not needed` | 222 | the whole subsystem is out of scope (netcode, botlib, CD keys, cinematics) |
 
 | Q3 syscall | uses | modules | disposition | meep facility | where it lives | notes |
 |---|---:|---|---|---|---|---|
@@ -677,7 +677,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_Cvar_VariableValue` | 219 | game, q3_ui, ui | workaround | URL query parameters | `src/app/main.ts` | Q3's entire settings surface, and by call count its most-used syscall family. meep has `engine/options` with reactive values and it was not used: this port has four knobs -- map, collision backend, fly camera, static targets -- and they are URL query parameters, which are shareable, survive a reload and cost nothing. A port that kept Q3's ~400 cvars would need the real thing. |
 | `trap_DebugPolygonCreate` | 3 | game | mapped | DebugDrawSystem3 | *not exercised.* AAS is deleted, and the navigation graph was debugged with headless tools (`tools/navmesh-probe.ts`, `tools/trace-compare.ts`) rather than on screen -- a deliberate choice recorded in section 7, not an oversight. | Q3 uses it to visualise AAS areas. |
 | `trap_DebugPolygonDelete` | 2 | game | mapped | DebugDrawSystem3 | *not exercised.* As above. | As above. |
-| `trap_DropClient` | 12 | game | not needed | - | -- |  |
+| `trap_DropClient` | 12 | game | mapped | NetworkSession.drop_peer, beside the host's own slot bookkeeping | `src/server/Host.ts`<br>`src/server/Host.ts`<br>`src/server/wsHost.ts` | Two halves, because the engine owns one and the game owns the other. `session.drop_peer` tears down the peer, its channel and its action log; `Host.release` frees the slot, clears the name, hands ownership of the entity back to the host and lets `publishPresence` tell the other clients the slot is empty -- which it did not, until step 8 found that a leaver's character stood where they logged off for ever (D-185). There is no *kick*: this is the disconnect path, called from `WsHost` on `close` and `error`, and v1 has no operator to invoke it deliberately. |
 | `trap_EA_Action` | 12 | game | not needed | bot writes usercmd_t directly | -- | Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t. _(classified by prefix `trap_EA_`)_ |
 | `trap_EA_Attack` | 8 | game | not needed | bot writes usercmd_t directly | -- | Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t. _(classified by prefix `trap_EA_`)_ |
 | `trap_EA_Command` | 12 | game | not needed | bot writes usercmd_t directly | -- | Elementary Action layer is a botlib IPC shim; an in-process bot just fills a usercmd_t. _(classified by prefix `trap_EA_`)_ |
@@ -719,13 +719,13 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_GetConfigString` | 32 | q3_ui, ui | not needed | - | -- | Configstrings are a replication cache. With no replication the port reads the same worldspawn and entity keys directly -- `CS_MUSIC`, for instance, is `MapSound` reading the `music` key off worldspawn. |
 | `trap_GetConfigstring` | 24 | game | not needed | - | -- | Configstrings are a replication cache. With no replication the port reads the same worldspawn and entity keys directly -- `CS_MUSIC`, for instance, is `MapSound` reading the `music` key off worldspawn. |
 | `trap_GetCurrentCmdNumber` | 5 | cgame | not needed | - | -- |  |
-| `trap_GetCurrentSnapshotNumber` | 3 | cgame | not needed | - | -- |  |
+| `trap_GetCurrentSnapshotNumber` | 3 | cgame | mapped | NetworkSession.current_frame | `src/client/net/NetClient.ts`<br>`src/server/wsHost.ts` | The frame number, which meep keeps on the session and hands out on every signal. Q3 needed the call because the snapshot ring was the client's only clock; here the frame is the clock, it is the key the prediction ring is indexed by, and it is what a joining client aligns to out of the hello. |
 | `trap_GetEntityToken` | 7 | cgame, game | ported | - | `src/q3/bsp/Entities.ts` | Walks the BSP entity lump string. Ported as part of the BSP reader; the same parse feeds item spawning, movers, speakers and the navigation graph. |
 | `trap_GetGameState` | 4 | cgame | not needed | - | -- |  |
 | `trap_GetGlconfig` | 8 | cgame, q3_ui, ui | mapped | graphics device info | *not exercised.* The camera derives its own aspect and the HUD is laid out by CSS, so nothing asks. | Only used for screen dimensions and aspect. |
-| `trap_GetServerCommand` | 3 | cgame | not needed | direct call / meep Signal | -- | Server-to-client command stream collapses to a function call. |
+| `trap_GetServerCommand` | 3 | cgame | hybrid | SimAction event stream; NetworkPeer.send_reliable_command unused | `src/net/actions.ts`<br>`src/net/actions.ts`<br>`src/client/net/NetClient.ts` | Q3's reliable server-to-client command stream carried two different things and they are split here. Gameplay events -- a shot, an impact, a pickup -- are `SimAction`s with no affected components (`EffectEvent`, `HitEvent`, `PickupEvent`), so they ride the same ordered, redundant action stream as input and need no separate channel; GAP-043 is what happened when that stream lost them. Text commands (`print`, `cp`, `chat`, `scores`) are not shipped at all, because there is no console and no chat in v1. meep does offer a reliable side channel, `NetworkPeer.send_reliable_command`, and this port uses none of it -- it is not ordered, it caps around 1189 bytes with no fragmentation at that layer, and everything v1 needs is already in the action stream (D-173). |
 | `trap_GetServerinfo` | 7 | game | not needed | - | -- | Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields. |
-| `trap_GetSnapshot` | 4 | cgame | not needed | - | -- | Netcode; brief section 2 says delete entirely. |
+| `trap_GetSnapshot` | 4 | cgame | mapped | Replicator + AUTH_STATE, through NetworkSession | `src/net/registerProtocol.ts`<br>`src/client/net/NetClient.ts`<br>`src/app/netSystems.ts` | Q3's client pulls a snapshot per server frame and interpolates between the last two. meep pushes instead: `Replicator` sends every replicated component that changed, `AUTH_STATE` carries the owned entity's authoritative bytes once a tick, and `InterpolationLog` behind `AdaptiveRenderDelay` is what the render pass samples -- so there is no snapshot object to ask for and no `snap.ps` to read. The port's equivalent of `snap.entities` is the replicated pool (`NetPlayerState`, `NetMissile`, `NetItem`), which is a fixed set of slots rather than a per-frame list, and the difference is deliberate: a pool needs no spawn/despawn messages and no entity-number recycling. |
 | `trap_GetUserCmd` | 7 | cgame | mapped | engine/input devices plus own usercmd_t builder | `src/client/PlayerController.ts` | cgame-side spelling of the same call. |
 | `trap_GetUsercmd` | 4 | game | mapped | engine/input devices plus own usercmd_t builder | `src/client/PlayerController.ts`<br>`src/client/PlayerController.ts` | Q3's `usercmd_t` is kept exactly -- 16-bit angles, byte moves, button bits -- because pmove reads it. What meep supplies is the layer beneath: `keyboard.keys.<name>.is_down` is a live switch with no held-key bookkeeping, and `pointer.on.move` hands over the pointer-lock delta already extracted as its third argument. |
 | `trap_GetUserinfo` | 21 | game | not needed | - | -- | Userinfo is a string marshalled across a client/server boundary. Single process, no boundary, no string: the player's name, model and rate are ordinary fields. |
@@ -762,7 +762,7 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_LinkEntity` | 59 | game | mapped | ECS entity build + index residency | `src/client/ItemsView.ts`<br>`src/client/PhysicsWorld.ts` | Server-side spatial linking becomes ECS residency: building an entity with a `Transform` and a drawable or a body is what puts it into the relevant index, and nothing has to be told twice. |
 | `trap_LocateGameData` | 4 | game | not needed | ECS dataset | -- | Shared-memory handshake between QVM and engine. Gone with the QVM. |
 | `trap_MemoryRemaining` | 11 | cgame, q3_ui, ui | not needed | - | -- | QVM heap accounting. |
-| `trap_Milliseconds` | 18 | cgame, game, q3_ui, ui | mapped | engine ticker + performance.now | `src/app/main.ts`<br>`src/client/PlayerController.ts` | Q3's clock, used both for timing and as `usercmd_t.serverTime`. The ticker supplies the delta; `performance.now` supplies the instrumentation. |
+| `trap_Milliseconds` | 18 | cgame, game, q3_ui, ui | mapped | engine ticker + performance.now | `src/app/main.ts`<br>`src/game/PlayerSlot.ts`<br>`src/net/protocol.ts` | Q3's clock, used both for timing and as `usercmd_t.serverTime`. The ticker supplies the delta; `performance.now` supplies the instrumentation. The command time is now `StepClock.timeMs`, handed to `PlayerSlot.step` by whoever owns the clock -- an accumulator in single-player, `frameMsec` summed over the frame number on a networked peer, so that a replayed frame gets the millisecond it got the first time. |
 | `trap_PC_AddGlobalDefine` | 3 | cgame, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
 | `trap_PC_FreeSource` | 7 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
 | `trap_PC_LoadSource` | 9 | cgame, game, ui | workaround | offline tokenizer in the asset pipeline | `tools/pipeline/shader-script.ts` | Q3's C-preprocessor-flavoured token parser, used for `.menu` files, bot characters and `.shader`-adjacent data. The menus are not ported and botlib is deleted, so what is left is the `.shader` set, parsed offline by the asset pipeline's own tokenizer: 104 scripts, 2,226 entries, 1,960 unique names, 250 cross-file name collisions and 36 parse warnings, every one of them a line that puts a directive on a brace and loses it. |
@@ -815,8 +815,8 @@ Mechanically derived from the OpenArena gamecode at `.refs/oa-gamecode`. **309 d
 | `trap_S_StopLoopingSound` | 3 | cgame | mapped | remove the emitter entity | `src/client/Audio.ts` | SoundLoop.stop. Unlinking is what stops the sound, so the removal is the stop. Called when a missile detonates, when a weapon is picked up, and when a bot switches or dies. |
 | `trap_S_UpdateEntityPosition` | 4 | cgame | mapped | Transform on the emitter entity | `src/client/Audio.ts` | SoundLoop.move writes the Transform the emitter was registered with. The spatial index subscribes to that vector's onChanged, so a rocket's fly sound follows the rocket and refits its BVH leaf only when it actually moves. |
 | `trap_Send` | 1 | game | not needed | - | -- | OA-specific raw send. |
-| `trap_SendClientCommand` | 19 | cgame | not needed | direct call | -- |  |
-| `trap_SendConsoleCommand` | 57 | cgame, game | not needed | - | -- | Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize. |
+| `trap_SendClientCommand` | 19 | cgame | hybrid | UserCmdAction on the action stream | `src/net/actions.ts`<br>`src/game/PlayerSlot.ts`<br>`src/client/PlayerController.ts` | Q3 sent both a `usercmd_t` stream and out-of-band client commands (`say`, `team`, `weapon N`) down this call. The movement half is `UserCmdAction`, executed on the host at the frame it is tagged with and predicted on the client at the same one. The out-of-band half is mostly gone: there is no chat and no team, and the one command that mattered for gameplay -- selecting a weapon -- rides `usercmd_t.weapon` instead, which is where Q3's own `PM_Weapon` reads it and is the only way the host can hear about a change (D-182). Nothing in this port sends a text command. |
+| `trap_SendConsoleCommand` | 57 | cgame, game | not needed | - | -- | Q3's console is a command table plus a tokenizer, and everything from `give all` to `map oa_dm1` goes through it. Not shipped: no console, no commands, nothing to tokenize. **The plan expected this one to become `mapped` at step 9 and it does not**: the networked build gained a host that takes `--map`, `--bots` and `--fraglimit` on argv (`tools/host.ts`), which is where a dedicated server's configuration lives now, but that is a process argument rather than a command a running game sends itself. Nothing in the port issues a console command, so citing `tools/host.ts` here would be evidence for a claim the code does not make. |
 | `trap_SendServerCommand` | 169 | game | not needed | direct call / meep Signal | -- | 169 call sites collapse to direct calls; the ones that matter carry HUD, scoreboard and print payloads. |
 | `trap_SetBrushModel` | 13 | game | hybrid | kinematic RigidBody per submodel brush | `src/game/Movers.ts`<br>`src/client/PhysicsWorld.ts`<br>`src/q3/cm/entityClip.ts` | Binds an entity to BSP submodel *N. On the physics backend each of the submodel's brushes becomes a `KinematicVelocity` body whose `Transform` the mover simulation writes, and the broadphase refits without being asked. On the clipmap backend the same submodel is an offset passed to `clipToEntities`. |
 | `trap_SetCDKey` | 5 | q3_ui, ui | not needed | - | -- |  |
@@ -4228,6 +4228,34 @@ Specific things that would be a loss to regress.
   component route arrives at the same `sopra.playEvent` one link later and the second path was
   buying nothing but a second answer to every question. That the four Q3 calls collapse onto one
   component is not luck; it is the component having been designed around the right two axes.
+
+- **The networking composed, and it composed into far less code than the problem deserves.** Q3's
+  client-side prediction loop is one of the harder things in the original sources -- a command ring,
+  a snapshot ring, `CL_PredictPlayerState`'s replay from the last acknowledged snapshot, and the
+  error decay that hides the correction. On meep it is `SimAction` for the command,
+  `RewindEngine` + `ActionLog` for the replay, and `AUTH_STATE` for the acknowledgement, and this
+  port's whole client is about seven hundred lines including its comments. A client standing still
+  short-circuits **98%** of reconciliations; over a real socket a walking one predicts 600 frames
+  bit-exact. Nothing about that was fought for; it worked the way the docblocks said it would.
+- **`LoopbackTransport` and `SimulatedTransport` turn a netcode into a unit test**, and that is the
+  single most valuable thing in the network stack. `SimulatedTransport` takes an injected `clock`
+  and a seed, so 80 ms of latency with 20 ms of jitter and 2% loss is *deterministic*: the same run
+  twice is the same run. Eight of this port's test files exercise a real host and real clients over
+  real transports with no sockets, no timers and no flake — including the ones that measure
+  bandwidth in bytes and prove a forged command cannot move somebody else's player. Most engines
+  make you choose between "tested" and "networked".
+- **The pieces are separable, which is what made the failures findable.** Every defect this port hit
+  in the network stack was localised in an afternoon or less, and each time because the layering let
+  a measurement sit between two named things: a hash ring against an authoritative payload
+  (D-179's `weaponTime`), a per-frame trace against a published component (D-181), a transport's own
+  `getStats()` against a wall clock (D-183). An engine that had bundled prediction, replication and
+  transport into one object would have made all three of those unanswerable.
+- **And the counter-example is worth stating in the same breath.** What did *not* compose is the
+  thing Q3 does that meep does not: per-client delta compression against an acknowledged baseline,
+  and relevance filtering. Their absence is not a bug and does not show up as one -- it shows up as
+  a bandwidth table that is 1.85x over budget at 60 Hz and a host cost that grows superlinearly in
+  players. Section 5 has the numbers. A maintainer reading this section for what to build next
+  should read that one first.
 
 - **The engine turned out to have more than this port needed, and being able to say which parts
   were idle is worth as much as the coverage number.** The phase 6 audit separates 31 facilities

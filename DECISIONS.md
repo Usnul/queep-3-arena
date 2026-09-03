@@ -10294,3 +10294,50 @@ at it, and a lost one is permanent.
   aim-assist or a movement script is indistinguishable from a good player at this layer. Q3 was the
   same; the answer there was server-side plausibility checks, and they belong with the relevance
   culling in the follow-ups.
+
+### D-186: the documentation step, and six syscalls that stopped being "not needed"
+
+Step 9. Three artefacts, and one thing worth arguing about in each.
+
+**The trap matrix.** Six networking syscalls were classified `not-needed` on the strength of "no
+netcode", and five of them are now `mapped` or `hybrid` with cited evidence: `trap_GetSnapshot`
+(meep pushes replicated components where Q3 pulled snapshots, so there is no snapshot object to
+ask for), `trap_GetCurrentSnapshotNumber` (`session.current_frame`), `trap_GetServerCommand` (split
+in two -- gameplay events ride the action stream, text commands are not shipped),
+`trap_SendClientCommand` (`UserCmdAction`, with the one command that mattered for gameplay now on
+`usercmd_t.weapon`), and `trap_DropClient` (`session.drop_peer` beside `Host.release`). That moves
+the matrix from 31 `mapped` and 5 `hybrid` to 34 and 7.
+
+**`trap_SendConsoleCommand` stays `not-needed`, against the plan.** The plan expected it to become
+`mapped` because the networked build gained a host that takes `--map` and `--bots` on argv. It is
+not the same thing: that is a process argument, not a command a running game sends itself, and
+citing `tools/host.ts` there would be evidence for a claim the code does not make. Written into the
+note rather than left as a silent deviation.
+
+**Regenerating the matrix nearly reverted somebody else's prose.** `npm run trap-matrix` splices
+`tools/trap-classification.json` into REPORT section 2, and three entries -- `trap_CM_LoadMap`,
+`trap_SnapVector`, `trap_Trace` -- had richer text in REPORT than in the JSON, because a previous
+session had improved the prose without updating the source it is generated from. A regeneration
+would have thrown all three away, including a `bit-exact against the C oracle` that somebody had
+deliberately softened to `measured against`. They were pulled back into the JSON first. **The
+generator makes REPORT section 2 read-only and nothing says so**; that is worth a line in the tool.
+
+**README** gains the `?join=` row, a Multiplayer section with `npm run host` and the two URLs, and
+-- more usefully -- a plain list of what v1 does not do, so that no reconnect, no kick and no idle
+reaping read as decisions rather than as things somebody forgot. It also states the 30 Hz trade in
+the terms a player would care about: a networked strafe jump is 4.5% slower than a local one.
+
+**REPORT section 7** gains the networking "what worked". The honest shape of it is that the hard
+part composed and the boring part did not: Q3's prediction loop -- command ring, snapshot ring,
+`CL_PredictPlayerState`, error decay -- came out as `SimAction` plus `RewindEngine` plus
+`AUTH_STATE` in about seven hundred lines, and `SimulatedTransport`'s injected clock and seed make a
+netcode a *unit test*, which is the single most valuable thing in the stack. What did not compose is
+per-client delta compression against an acknowledged baseline, and relevance filtering, and their
+absence shows up not as a bug but as section 5's bandwidth and CPU tables.
+
+**On the suite.** Two full-suite runs today failed intermittently, both during runs where the whole
+suite took sixty-four seconds instead of nineteen -- a heavily contended machine -- and neither
+failure was captured. Six clean full runs before and after, and the two socket-based files are
+stable across four runs in isolation. Recorded rather than dismissed: it is most likely a timing
+tolerance somewhere in the socket tests, and the next person to see a red run on a busy machine
+should capture the name before re-running.
