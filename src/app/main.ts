@@ -103,7 +103,12 @@ import { buildRoster } from './roster.ts';
 import { WebSocketTransport } from '@woosh/meep-engine/src/engine/network/transport/adapters/WebSocketTransport.js';
 import { NetClient, type ClientPhysics } from '../client/net/NetClient.ts';
 import { JoinRefused, joinHost } from '../client/net/join.ts';
-import { NetClientSystem, NetRenderSystem, NetWorldSystem } from './netSystems.ts';
+import {
+    NetClientSystem,
+    NetPresentationSystem,
+    NetRenderSystem,
+    NetWorldSystem,
+} from './netSystems.ts';
 import { HOST_PEER_ID, SIMULATION_DELAY_TICKS } from '../net/protocol.ts';
 import type { UserCmd } from '../q3/pmove/types.ts';
 import { CHARACTER_HEIGHT, CharacterBodies } from '../client/CharacterBody.ts';
@@ -1666,7 +1671,51 @@ async function main(): Promise<void> {
             await em.addSystem(new WorldEffectSystem({ effects, player, movers, moversView }));
         } else {
             if (bodies !== null) await em.addSystem(new CharacterBodySystem(bodies));
+
+            /*
+             The render pass first, then the pass that reads what it wrote:
+             `NetRenderSystem` runs `session.tick(0)`, which blends every remote
+             component behind `AdaptiveRenderDelay`, and `NetPresentationSystem`
+             places the characters from those blended values. Both declare no
+             components, so this registration order is the execution order.
+            */
             await em.addSystem(new NetRenderSystem({ client: netClient }));
+
+            /*
+             One model per slot, built the first time somebody is in it rather
+             than sixteen at load: a character is a glTF fetch and fifteen of
+             them would be fifteen downloads for players who may never join.
+             `interpolatedPose` for the same reason the roster gives its bots
+             one -- the transform is written once per rendered frame from a
+             stream that arrives sixty times a second, and physics does not own
+             it, so the smoothing has to be the application's.
+            */
+            const netCharacters = new Map<number, Character>();
+
+            await em.addSystem(
+                new NetPresentationSystem({
+                    client: netClient,
+                    characterFor: (slot) => {
+                        const existing = netCharacters.get(slot);
+                        if (existing !== undefined) return existing;
+
+                        const record = netClient.slots[slot];
+                        if (record === undefined || record.state.connected === 0) return null;
+
+                        const name = CHARACTERS[record.info.character % CHARACTERS.length]!;
+                        const character = new Character(ecd, name);
+                        ecd.addComponentToEntity(character.entity, interpolatedPose());
+                        netCharacters.set(slot, character);
+
+                        console.log(
+                            `[queep] net: slot ${slot} (${record.info.name || 'unnamed'}) ` +
+                                `is here, as ${name}`
+                        );
+
+                        return character;
+                    },
+                })
+            );
         }
 
         // Last of the simulation systems, because it snapshots what they wrote.

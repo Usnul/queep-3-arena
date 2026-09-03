@@ -2194,6 +2194,14 @@ That is an accurate description of a component that cannot be used for its state
 - **Severity:** minor as a gap and major as a missing feature: a jump pad on `oa_dm1` is how you reach half the map. Step 5 gives the host `PhysicsWorld.addMover` (or lifts the three body-building calls into a module both harnesses share) and this entry closes.
 - **Evidence:** `tools/pipeline/headless-physics.ts` (the model-0 comment), `src/server/Host.ts` (`buildPools`, the movers note), `src/net/components.ts` (`NetMover`)
 
+### GAP-046: OPEN — replicated missiles have no picture, because the pool lives in a world with no transforms
+
+- **Needed:** a rocket a networked client can see. `NetMissile` replicates `active`, `generation`, `weapon`, `owner`, origin and velocity for a pool of 64, and `NETWORK_PLAN.md` §3.3 puts them on screen "through `MissileView` on pool entities".
+- **They cannot go there as written.** `MissileView.spawn(projectileId, entity, weapon, velocity)` hangs a model, an attachment and an aim quaternion on an entity that already exists in the **render** dataset and already has a `Transform` that something else moves — in single-player that something is the physics body the missile flies as. A joined client has no such body: the position is replicated, and the pool entities live in `NetClient`'s own `EntityManager`, which carries `NetworkIdentity` and the net components and nothing else.
+- **What it needs is a second pool.** 64 render entities in the application's dataset, each with a `Transform` and an `interpolatedPose`, created once at join; `spawn` on the frame `active` goes from 0 to 1, `despawn` when it returns, and a per-frame write of `sceneFromQ3(NetMissile.origin)` into the transform. The `generation` counter is already on the wire for the one case that needs care — a pool slot reused within a frame of being freed, which must be hidden for a frame so a new rocket does not streak from where the old one died.
+- **Severity: moderate.** A networked client currently sees the muzzle flash and the explosion — both are `EffectEvent`s and both arrive — but nothing in between, so a rocket crossing a room is invisible and the explosion appears unprovoked. It is presentation only: the damage, the physics and the events are all correct, and single-player is untouched.
+- **Evidence:** `src/client/MissileView.ts` (`spawn`, and the `EcsDataset` it requires), `src/client/net/NetClient.ts` (`buildPools`, the missile pool), `src/app/netSystems.ts` (the note at the top), `src/net/components.ts` (`NetMissile.generation`).
+
 ### GAP-045: OPEN — a component published once on change is sometimes never delivered, on a link that loses nothing
 
 - **Needed:** a scoreboard. `NetPlayerInfo` carries a slot's name, character, bot flag and score, all of which change a handful of times in a match, so it is published when `equals` says it differs rather than every frame.

@@ -10041,3 +10041,54 @@ both correct and a better test, since it proves the events crossed the wire. And
 scoreboard to equal the host's *at an instant* is asking the wrong question: a client is a few
 frames behind by design and the host awards a frag every second or two, so "step until they agree"
 never returns. What is left of that assertion is GAP-045.
+
+### D-181: what one player sees of another, and how to test a picture without a renderer
+
+`NetPresentationSystem` places every other player in the match from replicated state:
+`place(origin, viewangles[1])`, `Character.legsFor` from the velocity, the ground contact and the
+sign of the velocity along the view, and a torso that attacks while the cooldown runs.
+
+**On `update`, not `fixedUpdate`, and that is the arrangement rather than a detail.**
+`NetRenderSystem` has just run `session.tick(0)`, which writes *blended* values into every remote
+component from the interpolation log behind `AdaptiveRenderDelay`; reading them on the fixed step
+instead would draw the raw 60 Hz snapshots and stutter. Both systems declare no components, so the
+registration order in `main.ts` is the execution order.
+
+**`weaponTime > 0` stands in for `EF_FIRING`.** Q3 sets that flag on the server for the torso
+animation `CG_AddPlayerWeapon` draws; this port has no field for it, and the weapon cooldown is
+already on the wire and is non-zero for exactly the interval the flag would be. A proxy, and the
+honest one available -- the alternative is a bit that means the same thing.
+
+**An empty slot's model is parked a million units down**, for the same reason its body is
+(GAP-044) and a different one: an unoccupied slot's `NetPlayerState` is whatever the host last
+said, and drawing a character there puts a motionless stranger in the middle of the level.
+
+**The interface is three methods, and that is the interesting decision.** The system is typed
+against `RemoteCharacter` -- `place`, `setLegs`, `setTorso` -- rather than against `Character`,
+because the browser this port is developed in cannot get a WebGPU adapter and therefore cannot run
+a renderer at all. A system typed against the concrete class could only ever have been read. Typed
+against three methods, `test/net-presentation.test.ts` puts a recorder behind it and asks what a
+real match over a real replication path told it to draw.
+
+That turns the step-5 exit criterion this plan could not meet -- "a screenshot of tab A shows tab
+B's character where tab B's HUD says it is" -- into a number, and a better one than the screenshot
+would have been. Over 600 frames with three bots, the drawn position sits a mean of **2.75 units
+behind the host's own, which is 0.6 frames of that bot's motion** at 4.68 units a frame; the worst
+sample is 133 units and is a respawn teleport. All five leg animations appear
+(`LEGS_IDLE`, `LEGS_WALK`, `LEGS_RUN`, `LEGS_BACK`, `LEGS_JUMP`), which is the assertion that the
+velocity and ground contact are really arriving rather than defaulting: if either were zero the
+choice would collapse onto one animation.
+
+**Zero lag would be a failure, not a pass**, and the test says so: it would mean the client was
+drawing the newest snapshot it had rather than sampling the log behind the render delay, and the
+motion would stutter between snapshots. The bound is expressed in frames of the bot's own motion
+rather than in units, because units would be an assertion about how fast bots run.
+
+**One measurement mistake, which is the same one as D-179's and worth the second telling.** The
+first version compared the drawn position against `host.slots[i].slot.ps.origin` and reported 746
+units of lag. A bot has no `PlayerSlot` -- it drives its own `pmove_t` and `storeBot` copies it out
+-- so that array is one nothing ever writes, and the "lag" was the distance from a stationary zero.
+The published component is the ground truth. Both times the lesson is the same: when a measurement
+produces a number that large, suspect the measurement before the code.
+
+**Missiles are not drawn**, and the obstacle is structural rather than an omission -- see GAP-046.
