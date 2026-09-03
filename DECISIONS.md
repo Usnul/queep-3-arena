@@ -10091,4 +10091,24 @@ units of lag. A bot has no `PlayerSlot` -- it drives its own `pmove_t` and `stor
 The published component is the ground truth. Both times the lesson is the same: when a measurement
 produces a number that large, suspect the measurement before the code.
 
-**Missiles are not drawn**, and the obstacle is structural rather than an omission -- see GAP-046.
+**Missiles are drawn too, through a second pool** -- one render entity per slot, holding a bare
+`Transform` this system writes the replicated origin into. That indirection is the whole of GAP-046:
+`MissileView` attaches its models to a parent that already has a transform somebody else moves, and
+on this branch nobody does. A model is replaced when `generation` changes as well as when `active`
+does, because the host reuses a pool slot the moment its missile dies; and it is *placed before it is
+spawned*, which is the plan's "hide it for a frame" without the missing frame. Measured over 600
+frames: 2 rockets spawned, 2 despawned, none left hanging, and a worst single-frame move of 30 units
+-- two frames of a rocket's flight, which is the render delay breathing rather than a slot changing
+hands unseen.
+
+**And one thing this branch had to route around.** `Arena.update` is where single-player gets
+`CG_Missile`'s roll, and it cannot be called here: the first thing it does is step the weapons, and
+the weapons are the host's. `MissilePresenter.advance` carries the one presentation call inside it
+that a client still wants.
+
+**A correction to this entry as first written.** The networked characters were given
+`interpolatedPose()`, copying what `roster.ts` does for bots. That is wrong here and §3.3 already
+said so: on this branch the session *is* the interpolation, sampling the replication log behind
+`AdaptiveRenderDelay` and handing this system blended values once per rendered frame. A second
+smoothing stage on top would be `PoseRecorderSystem` snapshotting, on the fixed step, what the render
+step had just written -- a frame of delay and a jitter, bought for nothing. Removed.

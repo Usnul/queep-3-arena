@@ -22,13 +22,13 @@
  * every replicated component is still canonical, and only then does the render
  * pass blend them for the picture.
  *
- * Not here, and recorded rather than forgotten: **missiles**. The plan puts them
- * through `MissileView` on the replicated pool entities, and they cannot go
- * there as things stand -- `MissileView.spawn` hangs a model on an entity in the
- * *render* dataset, and `NetClient`'s pool lives in its own `EntityManager`
- * with no `Transform` on anything. Giving them a picture means a second pool of
- * render entities and a per-frame write of `sceneFromQ3(NetMissile.origin)` into
- * each one's transform. See GAP-046.
+ * Missiles are here too, through a second pool. `MissileView.spawn` hangs its
+ * model on an entity that already exists in the *render* dataset and already
+ * has a `Transform` -- in single-player that is the physics body the missile
+ * flies as -- and a joined client has no such body, because the position is
+ * replicated and `NetClient`'s pool lives in its own `EntityManager`. So the
+ * application keeps one render entity per pool slot and this writes the
+ * replicated origin into it. GAP-046 was that gap; this closes it.
  */
 
 import { System } from '@woosh/meep-engine/src/engine/ecs/System.js';
@@ -37,6 +37,7 @@ import type { NetClient } from '../client/net/NetClient.ts';
 import type { PlayerController } from '../client/PlayerController.ts';
 import type { ItemSystem } from '../game/Items.ts';
 import { Character, type LegsAnimation, type TorsoAnimation } from '../client/Characters.ts';
+import { NET_WEAPONS } from '../net/components.ts';
 import * as C from '../q3/pmove/constants.ts';
 
 /**
@@ -162,6 +163,33 @@ export interface RemoteCharacter {
 }
 
 /**
+ * One drawn missile per pool slot, addressed by slot rather than by entity.
+ *
+ * Narrow for the same reason {@link RemoteCharacter} is, and it hides the part
+ * that is genuinely awkward: the thing being moved is an entity in the render
+ * dataset while the thing saying where to move it is a component in the
+ * client's replication dataset, and nothing should have to hold both.
+ */
+export interface MissilePresenter {
+    /** `index`'s model, flying `velocityQ3`. Placed before this is called. */
+    spawn(index: number, weapon: string, velocityQ3: ArrayLike<number>): void;
+    /** Take `index`'s model away. Safe to call for a slot that has none. */
+    despawn(index: number): void;
+    /** Move `index` to `originQ3`. */
+    place(index: number, originQ3: ArrayLike<number>): void;
+    /**
+     * Roll every drawn missile about its line of flight, once per frame.
+     *
+     * `CG_Missile`'s `RotateAroundDirection`, which single-player gets through
+     * `Arena.update` -- and `Arena.update` cannot be called on this branch,
+     * because the first thing it does is step the weapons, and the weapons are
+     * the host's. So the one presentation call inside it that a client still
+     * wants comes through here instead.
+     */
+    advance(deltaSeconds: number): void;
+}
+
+/**
  * Where a slot nobody is in keeps its model.
  *
  * The same problem the bodies had (GAP-044) and the same answer, for a
@@ -191,20 +219,30 @@ const PARKED_CHARACTER_SPACING = 64;
 export class NetPresentationSystem extends System<never> {
     private readonly client: NetClient;
     private readonly characterFor: (slot: number) => RemoteCharacter | null;
+    private readonly missiles: MissilePresenter | null;
     private readonly parked = new Float64Array(3);
+
+    /** What each missile pool slot was doing last frame. See {@link drawMissiles}. */
+    private readonly missileActive: Uint8Array;
+    private readonly missileGeneration: Uint16Array;
 
     constructor(options: {
         client: NetClient;
         /** The model for a slot, or null where the roster has none. */
         characterFor: (slot: number) => RemoteCharacter | null;
+        /** Null draws no missiles, which is what the tests without models do. */
+        missiles?: MissilePresenter | null;
     }) {
         super();
 
         this.client = options.client;
         this.characterFor = options.characterFor;
+        this.missiles = options.missiles ?? null;
+        this.missileActive = new Uint8Array(options.client.missiles.length);
+        this.missileGeneration = new Uint16Array(options.client.missiles.length);
     }
 
-    override update = (): void => {
+    override update = (deltaSeconds: number): void => {
         const client = this.client;
 
         for (const slot of client.slots) {
@@ -243,7 +281,62 @@ export class NetPresentationSystem extends System<never> {
                 state.alive !== 0 && state.weaponTime > 0 ? 'TORSO_ATTACK' : 'TORSO_STAND'
             );
         }
+
+        this.drawMissiles();
+        this.missiles?.advance(deltaSeconds);
     };
+
+    /**
+     * Every rocket, grenade and plasma ball in the air, from the pool.
+     *
+     * A slot's model appears when `active` goes to one and goes away when it
+     * returns to zero -- and also when `generation` changes underneath it,
+     * which is the case the counter exists for. The host reuses a pool slot as
+     * soon as the missile in it dies, so without `generation` a rocket fired
+     * into the space a grenade just left would inherit the grenade's model and
+     * appear to have been there all along.
+     *
+     * **Placed before it is spawned**, on the frame it appears. The plan's
+     * wording was to hide a reused slot for one frame; placing first is the
+     * same idea without the missing frame, because `MissileView`'s child
+     * entities are attached to this transform and read it the moment they
+     * exist. A model that is put in the right place cannot streak from the
+     * wrong one.
+     */
+    private drawMissiles(): void {
+        const missiles = this.missiles;
+        if (missiles === null) return;
+
+        const pool = this.client.missiles;
+
+        for (let i = 0; i < pool.length; i++) {
+            const m = pool[i]!.component;
+
+            if (m.active === 0) {
+                if (this.missileActive[i] === 1) {
+                    this.missileActive[i] = 0;
+                    missiles.despawn(i);
+                }
+                continue;
+            }
+
+            const fresh =
+                this.missileActive[i] === 0 || this.missileGeneration[i] !== m.generation;
+
+            if (!fresh) {
+                missiles.place(i, m.origin);
+                continue;
+            }
+
+            if (this.missileActive[i] === 1) missiles.despawn(i);
+
+            this.missileActive[i] = 1;
+            this.missileGeneration[i] = m.generation;
+
+            missiles.place(i, m.origin);
+            missiles.spawn(i, NET_WEAPONS[m.weapon] ?? 'WP_ROCKET_LAUNCHER', m.velocity);
+        }
+    }
 }
 
 /**

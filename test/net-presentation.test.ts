@@ -32,7 +32,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { NetRig } from './net/rig.ts';
-import { NetPresentationSystem, type RemoteCharacter } from '../src/app/netSystems.ts';
+import {
+    NetPresentationSystem,
+    type MissilePresenter,
+    type RemoteCharacter,
+} from '../src/app/netSystems.ts';
 import { MAX_CLIENTS } from '../src/net/protocol.ts';
 import { FORWARDMOVE } from '../src/q3/pmove/types.ts';
 import type { LegsAnimation, TorsoAnimation } from '../src/client/Characters.ts';
@@ -62,9 +66,51 @@ class Recorder implements RemoteCharacter {
     }
 }
 
+/** A missile pool that remembers what it was told, instead of drawing it. */
+class MissileLog implements MissilePresenter {
+    readonly events: { at: number; what: string; index: number; weapon?: string }[] = [];
+    readonly live = new Set<number>();
+    /** Where each slot was last placed, to catch a model that streaks. */
+    readonly placed = new Map<number, number[]>();
+    readonly jumps: number[] = [];
+    frame = 0;
+    advanced = 0;
+
+    spawn(index: number, weapon: string): void {
+        this.events.push({ at: this.frame, what: 'spawn', index, weapon });
+        this.live.add(index);
+    }
+
+    despawn(index: number): void {
+        this.events.push({ at: this.frame, what: 'despawn', index });
+        this.live.delete(index);
+        this.placed.delete(index);
+    }
+
+    place(index: number, originQ3: ArrayLike<number>): void {
+        const at = [originQ3[0]!, originQ3[1]!, originQ3[2]!];
+        const before = this.placed.get(index);
+
+        // Only meaningful while the same missile is in the slot; a despawn
+        // clears it, so a jump here is a jump of one continuous flight.
+        if (before !== undefined && this.live.has(index)) {
+            this.jumps.push(
+                Math.hypot(at[0]! - before[0]!, at[1]! - before[1]!, at[2]! - before[2]!)
+            );
+        }
+
+        this.placed.set(index, at);
+    }
+
+    advance(): void {
+        this.advanced += 1;
+    }
+}
+
 interface Seen {
     rig: NetRig;
     recorders: Map<number, Recorder>;
+    missiles: MissileLog;
     /** Distance between the drawn position and the host's, per frame, per bot. */
     lag: number[];
     /** How far a bot moved between consecutive frames, for scale. */
@@ -85,8 +131,10 @@ beforeAll(async () => {
     };
 
     const recorders = new Map<number, Recorder>();
+    const missiles = new MissileLog();
     const system = new NetPresentationSystem({
         client: client.net,
+        missiles,
         characterFor: (slot) => {
             let recorder = recorders.get(slot);
             if (recorder === undefined) {
@@ -106,7 +154,8 @@ beforeAll(async () => {
 
     for (let n = 0; n < 600; n++) {
         rig.step(1);
-        system.update();
+        missiles.frame = n;
+        system.update(1 / 60);
 
         for (const slot of client.net.slots) {
             if (slot.info.isBot === 0) continue;
@@ -142,7 +191,7 @@ beforeAll(async () => {
         }
     }
 
-    seen = { rig, recorders, lag, step };
+    seen = { rig, recorders, missiles, lag, step };
 }, 120_000);
 
 /** The mean of a sample, or zero for an empty one. */
@@ -246,5 +295,68 @@ describe('what a client draws of the other players', () => {
         }
 
         expect(parked, 'no empty slot was exercised; the fixture changed').toBeGreaterThan(0);
+    });
+
+    it('puts a model on every missile the host fires, and takes it away again', () => {
+        const { missiles } = seen;
+
+        const spawns = missiles.events.filter((e) => e.what === 'spawn');
+        const despawns = missiles.events.filter((e) => e.what === 'despawn');
+        const weapons = new Set(spawns.map((e) => e.weapon));
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-presentation] missiles: ${spawns.length} spawned, ${despawns.length} ` +
+                `despawned, ${missiles.live.size} still in the air, weapons ` +
+                `${[...weapons].sort().join(', ') || 'none'}; ` +
+                `${missiles.advanced} roll updates`
+        );
+
+        expect(spawns.length, 'no missile was ever drawn in 600 frames with 3 bots').toBeGreaterThan(
+            0
+        );
+
+        /*
+         Everything that appeared has gone away again, except whatever is still
+         flying at the last frame. A leak here is a rocket that hangs in the air
+         for the rest of the match, which is what a pool without `generation`
+         handling looks like from the outside.
+        */
+        expect(
+            spawns.length - despawns.length,
+            'more missiles were spawned than were despawned or are still in flight'
+        ).toBe(missiles.live.size);
+
+        expect(missiles.advanced, 'the roll was never advanced').toBe(600);
+    });
+
+    it('never lets a reused pool slot streak across the level', () => {
+        const { missiles } = seen;
+
+        /*
+         The whole reason `NetMissile` carries a `generation`. The host frees a
+         pool slot the moment its missile dies and reuses it for the next shot,
+         so a slot that is not noticed to have changed hands is a model that
+         teleports from where a grenade exploded to where a rocket was just
+         fired, drawing a line across the level on the way.
+
+         Measured as the largest single-frame move of a slot that stayed the
+         same missile throughout. A rocket travels 900 units a second, so about
+         15 a frame; the bound is generous enough to allow the render delay
+         moving around and tight enough that a slot changing hands unnoticed --
+         hundreds or thousands of units -- fails it.
+        */
+        const worst = missiles.jumps.length === 0 ? 0 : Math.max(...missiles.jumps);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-presentation] worst single-frame missile move: ${worst.toFixed(1)} units ` +
+                `over ${missiles.jumps.length} samples`
+        );
+
+        expect(missiles.jumps.length, 'no missile was tracked for more than a frame').toBeGreaterThan(
+            0
+        );
+        expect(worst, 'a pool slot changed hands without being noticed').toBeLessThan(200);
     });
 });

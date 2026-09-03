@@ -43,7 +43,7 @@ import { WorldEffects } from '../game/WorldEffects.ts';
 import type { Damageable } from '../game/Weapons.ts';
 import { vec3 as q3vec3 } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
-import { Character, CHARACTERS } from '../client/Characters.ts';
+import { Character, CHARACTERS, sceneFromQ3 } from '../client/Characters.ts';
 import { AudioBank, LOOP_BUDGET } from '../client/Audio.ts';
 import { MapSound } from '../client/MapSound.ts';
 import { Bot } from '../game/Bot.ts';
@@ -108,6 +108,7 @@ import {
     NetPresentationSystem,
     NetRenderSystem,
     NetWorldSystem,
+    type MissilePresenter,
 } from './netSystems.ts';
 import { HOST_PEER_ID, SIMULATION_DELAY_TICKS } from '../net/protocol.ts';
 import type { UserCmd } from '../q3/pmove/types.ts';
@@ -1367,7 +1368,8 @@ async function main(): Promise<void> {
          light of its own (D-130), and a light in this port asks the policy
          rather than deciding for itself.
         */
-        arena.missileView = new MissileView(ecd, models, shadows);
+        const missileView = new MissileView(ecd, models, shadows);
+        arena.missileView = missileView;
 
         console.log(
             `[queep] items: ${itemsView.itemCount} placed, ${itemsView.pieceCount} pieces, ` +
@@ -1685,16 +1687,63 @@ async function main(): Promise<void> {
              One model per slot, built the first time somebody is in it rather
              than sixteen at load: a character is a glTF fetch and fifteen of
              them would be fifteen downloads for players who may never join.
-             `interpolatedPose` for the same reason the roster gives its bots
-             one -- the transform is written once per rendered frame from a
-             stream that arrives sixty times a second, and physics does not own
-             it, so the smoothing has to be the application's.
+
+             **No `interpolatedPose`, unlike the roster's bots**, and §3.3 says
+             why: on this branch the session is already the interpolation. It
+             samples the replication log behind `AdaptiveRenderDelay` and hands
+             this system blended values once per rendered frame, so adding the
+             application's own timeline on top would be a second smoothing stage
+             fed by a different clock -- `PoseRecorderSystem` snapshotting on the
+             fixed step what the render step just wrote, and blending between
+             its own samples. That is a frame of delay and a jitter, bought for
+             nothing.
             */
             const netCharacters = new Map<number, Character>();
+
+            /*
+             And one render entity per missile pool slot, which is what GAP-046
+             was about. `MissileView` hangs its model on an entity that already
+             has a `Transform` somebody else moves -- the physics body, in
+             single-player -- and a joined client has no body for a missile,
+             because the position is replicated. So these are transforms with
+             nothing else on them, and `NetPresentationSystem` writes the
+             replicated origin into them each rendered frame.
+            */
+            const missileEntities: number[] = [];
+            for (let i = 0; i < netClient.missiles.length; i++) {
+                const builder = new Entity();
+                builder.add(new Transform()).build(ecd);
+                missileEntities.push(builder.id);
+            }
+
+            const netMissiles: MissilePresenter = {
+                place: (index, originQ3) => {
+                    const entity = missileEntities[index];
+                    if (entity === undefined) return;
+                    const transform = ecd.getComponent(entity, Transform) as
+                        | Transform
+                        | undefined;
+                    if (transform === undefined) return;
+                    const [x, y, z] = sceneFromQ3(originQ3);
+                    transform.position.set(x, y, z);
+                },
+                spawn: (index, weapon, velocityQ3) => {
+                    const entity = missileEntities[index];
+                    if (entity === undefined) return;
+                    missileView.spawn(index, entity, weapon, velocityQ3);
+                },
+                despawn: (index) => {
+                    missileView.despawn(index);
+                },
+                advance: (deltaSeconds) => {
+                    missileView.update(deltaSeconds);
+                },
+            };
 
             await em.addSystem(
                 new NetPresentationSystem({
                     client: netClient,
+                    missiles: netMissiles,
                     characterFor: (slot) => {
                         const existing = netCharacters.get(slot);
                         if (existing !== undefined) return existing;
@@ -1704,7 +1753,6 @@ async function main(): Promise<void> {
 
                         const name = CHARACTERS[record.info.character % CHARACTERS.length]!;
                         const character = new Character(ecd, name);
-                        ecd.addComponentToEntity(character.entity, interpolatedPose());
                         netCharacters.set(slot, character);
 
                         console.log(
