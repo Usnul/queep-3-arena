@@ -12,6 +12,9 @@
  *
  * `SV_BuildClientSnapshot`'s relevance test, as meep's `scope_filter`.
  *
+ * PVS is the Potentially Visible Set; `q3/cm/pvs.ts` is where it is read and
+ * where the term is explained, including why *potentially* matters.
+ *
  * **`NETWORK_PLAN.md`'s premise here was wrong and this is the correction.**
  * The plan said "meep replicates every changed component to everybody with no
  * per-client baseline and no filtering", and asked whether the engine offered a

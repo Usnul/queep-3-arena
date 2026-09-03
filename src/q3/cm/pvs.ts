@@ -10,11 +10,22 @@
  *
  * ---
  *
- * A Q3 BSP carries a precomputed visibility set: for every cluster, a bit per
- * cluster saying whether any point in the first can see any point in the
- * second. `SV_BuildClientSnapshot` walks it to decide what goes in a client's
- * snapshot, which is how a sixteen-player Q3 server fits on a modem: a player
- * two rooms away costs nothing at all, not a smaller update.
+ * A Q3 BSP carries a precomputed **PVS -- Potentially Visible Set**: for every
+ * cluster, a bit per cluster saying whether any point in the first can see any
+ * point in the second. *Potentially* is the load-bearing word and the reason
+ * the acronym is worth expanding once: the set is computed from the geometry
+ * alone, so it answers "could anything here see anything there" and not "can
+ * this player see that one". It is conservative by construction -- it never
+ * hides something you could have seen, and it will happily keep something you
+ * cannot.
+ *
+ * `SV_BuildClientSnapshot` walks it to decide what goes in a client's snapshot,
+ * which is how a sixteen-player Q3 server fits on a modem: a player two rooms
+ * away costs nothing at all, not a smaller update.
+ *
+ * Q3 has a companion set, the PHS (Potentially Hearable Set), for deciding
+ * which sounds carry through walls the PVS has already hidden. This port does
+ * not use it; `MapSound.ts` says what it does instead.
  *
  * **The lump is in this port's collision BSP**, which is the thing that made
  * this worth writing rather than estimating -- 23,640 bytes on `oa_dm1`, 121
