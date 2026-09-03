@@ -43,6 +43,7 @@
     "assets": "node tools/convert-models.ts && node tools/convert-characters.ts && node tools/convert-sounds.ts",
     "navmesh-probe": "node tools/navmesh-probe.ts",
     "bench-match": "node tools/bench-match.ts",
+    "bench-net": "node tools/bench-net.ts",
     "divergence": "node tools/measure-divergence.ts",
     "host": "node tools/host.ts"
   }

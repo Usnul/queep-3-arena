@@ -3088,6 +3088,76 @@ only ever read stages, so the two it found were two that the brace bug had misfi
 largest single category of dropped *geometry* animation in the set — every flame that flickered,
 every banner that waved, every sprite that faced the camera — and the report had it at two.
 
+### Networking — what a match costs
+
+`NETWORK_PLAN.md` §7's two tables. Both are taken with the rig (`test/net/rig.ts`), which runs a
+real `Host` and real `NetClient`s in one process over real transports, on meep 3.14.5. No renderer
+is involved in either.
+
+**Six clients rather than the plan's eight.** `oa_dm1` has seven spawn points and the host gives one
+to every bot as well, so eight humans and four bots do not fit the map. The figures are per client
+and the trend across the rows is what the tables are for.
+
+#### Bandwidth, per client, six clients and four bots all moving and shooting
+
+| link | downstream | upstream | packets/s down |
+|---|---:|---:|---:|
+| loopback, 0 ms | **88.7 KB/s** | 2.9 KB/s | 240 |
+| 80 ms RTT, 10 ms jitter, 1% loss | **540 KB/s** | 9.5 KB/s | 920 |
+
+**The 48 KB/s downstream budget is not met at zero round trip: 88.7 KB/s, 1.85 times over.** The
+budget is a reasonable one — Q3's own `rate` defaults to 25000 bytes a second and caps at 90000 —
+and the overrun is structural rather than a leak.
+
+Q3 delta-compresses each client's snapshot against the last snapshot **that client acknowledged**,
+and sends only the fields differing from that per-client baseline. meep's replicator sends every
+component that changed since the last tick, to everybody, with no per-client baseline and no
+relevance filtering. With ten moving slots that is ten players' worth of state to each of six
+clients every tick, whether or not any two of them can see each other. `NetPlayerState` is also 70
+bytes of `float32` where Q3 sent quantised 16-bit positions and 8-bit angles.
+
+So the three levers are all this port's rather than the engine's, in the order they are worth
+pulling: **relevance culling** (a slot behind a wall is not worth a client's bytes, and Q3's PVS
+did this), **a lower publish rate for remote slots** than for the local prediction, and
+**quantisation** of the replicated floats. None was in scope for step 7; all three are the answer
+to "can this ship", and the first is worth more than the other two together.
+
+**540 KB/s at 80 ms is the redundancy, working as designed and not a defect.** `flush_outbound`
+packs every frame from the last acknowledgement to now, so a round trip of ten ticks sends each
+frame about ten times, sliced across up to `max_packets_per_tick` packets since 3.14.5 (D-177). It
+is what makes the action stream survive loss — GAP-043 is what happens when it cannot — and it
+means a delayed link costs roughly six times a clean one. It is measured and written down rather
+than asserted, because it is the engine's arithmetic and not this port's to hold still.
+
+#### Host CPU, `Host.step` alone, 20 s per row at 60 Hz
+
+Clients' own simulation is not charged to the host: the rig runs it in the same process, and
+counting it would make a dedicated server look six times more expensive than it is.
+
+| clients | bots | mean | p50 | p99 | worst |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 4 | 0.334 ms | 0.269 | 1.124 | 2.490 |
+| 2 | 4 | 0.561 ms | 0.500 | 1.377 | 2.863 |
+| 4 | 4 | 0.931 ms | 0.883 | 2.140 | 3.222 |
+| 6 | 4 | **1.993 ms** | 1.870 | 4.407 | 9.835 |
+
+**The 2 ms budget is met, and only just — and the trend is the finding, not the figure.** The
+marginal cost of a client is not constant: the first two cost about 114 µs each, the next two about
+185, and the last two about **531**. That is the signature of an `O(n²)`, and there are two
+candidates for it in the same place — every slot's state is replicated to every other client, and
+every character body is a broadphase pair with every other. At six clients the engine also begins
+printing `EntityManager.simulate: fixedUpdate is falling behind the clock`, which is the host
+telling us the same thing in its own words.
+
+Extrapolating the marginal cost, sixteen slots — `MAX_CLIENTS`, which the protocol already sizes
+for — would not fit in a 16.6 ms frame with room to spare for anything else. So the honest reading
+of this table is not "2 ms, met" but **"a full sixteen-player server is not reachable from here
+without the relevance culling the bandwidth table also asks for"**, which is the same fix arriving
+from two directions.
+
+Reproduce with `npm run bench-net`; the bandwidth figures are printed by
+`test/net-bandwidth.test.ts` on every run.
+
 ---
 
 ## 6. Engine bugs

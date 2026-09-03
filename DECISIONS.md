@@ -10144,3 +10144,48 @@ Measured unchanged across `player-slot`, `player-controller` and `match`.
 
 Switching twice a second -- faster than anybody plays -- short-circuits **590 of 600**, which is the
 same rate as standing still, so the change costs the prediction nothing.
+
+### D-183: what a match costs, and the two tables that say a sixteen-player server is not reachable from here
+
+Step 7's remaining half: `test/net-bandwidth.test.ts` and `tools/bench-net.ts`, both on the rig,
+both without a renderer, and both reported into REPORT section 5.
+
+**Bandwidth, per client, six clients and four bots all moving and shooting.** 88.7 KB/s downstream
+and 2.9 up on a loopback; 540 KB/s downstream and 9.5 up over 80 ms with 1% loss. Measured with
+meep's own `BandwidthMeter` on the host side of each link, which is deliberate -- how much a meep
+session costs is one of the questions this evaluation exists to answer, so the instrument is the
+engine's rather than a byte counter of this port's.
+
+**The 48 KB/s budget is not met, at 1.85 times over, and the cause is structural.** Q3
+delta-compresses each client's snapshot against the last one *that client acknowledged*; meep sends
+every component that changed since the last tick, to everybody, with no per-client baseline and no
+relevance filtering. Ten moving slots is ten players' worth of state to each of six clients every
+tick, whether or not any two can see each other -- and `NetPlayerState` is 70 bytes of `float32`
+where Q3 sent quantised 16-bit positions. The three levers are all this port's: relevance culling,
+a lower publish rate for remote slots than for the local prediction, and quantisation. None was in
+scope for step 7 and the first is worth more than the other two together.
+
+**540 KB/s at 80 ms is the redundancy working as designed**, not a defect: `flush_outbound` packs
+every frame from the last ack to now, so a ten-tick round trip sends each frame about ten times.
+That is what makes the action stream survive loss -- GAP-043 is what happens when it cannot -- and
+it is measured rather than asserted, because the arithmetic is the engine's.
+
+**Host CPU, `Host.step` alone**: 0.334 ms with no clients, 0.561 at two, 0.931 at four, 1.993 at
+six. The clients' own simulation is not charged to the host, which matters -- the rig runs it in
+the same process and counting it would make a dedicated server look six times more expensive.
+
+**The 2 ms budget is met and the trend is the finding, not the figure.** The marginal cost of a
+client is not constant: about 114 microseconds each for the first two, 185 for the next two, and
+**531** for the last two. That is an `O(n^2)` signature, and there are two candidates in the same
+place -- every slot's state replicated to every other client, and every character body a broadphase
+pair with every other. At six clients meep also starts printing `EntityManager.simulate:
+fixedUpdate is falling behind the clock`, which is the host saying it in its own words.
+
+So the honest reading is not "2 ms, met" but that **sixteen slots -- which the protocol already
+sizes for -- will not fit a 16.6 ms frame without the relevance culling the bandwidth table asks
+for independently**. Two tables, arrived at separately, pointing at one fix.
+
+**On the sample size.** Six clients rather than the plan's eight: `oa_dm1` has seven spawn points
+and the host gives one to every bot as well, so eight humans and four bots do not fit the map. The
+figures are per client and the trend is what both tables are for, so the missing two rows change
+neither conclusion.
