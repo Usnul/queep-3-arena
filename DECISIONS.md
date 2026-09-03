@@ -10245,3 +10245,52 @@ printed until it was caught. The sixth was `net-presentation`'s fixture walking 
 bots never once got line of sight, so the host fired **zero** shots in eighty seconds and the missile
 assertions were about a pool that had never held anything: a test that passes by never exercising its
 subject. It now runs the same circling walk as the rest of the suite, and 72 rockets fly.
+
+### D-185: what a misbehaving client can do, and the leaver nobody was told about
+
+Step 8. `test/net-robustness.test.ts` assumes the clients are neither honest nor present, which no
+other networked test in this suite does.
+
+**The authorization gate holds.** In a server-authoritative game the command stream is the one thing
+a client authors, so it is the one thing a client can lie with -- and the lie that matters is not "I
+moved further than I should", which the host's own simulation ignores by construction, but *"here is
+a command for somebody else's player"*. Nothing in this repository checks that. The whole defence is
+`SimActionExecutor.authorize`, wired by `NetworkSession` to `make_owner_authorization` and driven off
+`UserCmdAction.affected_components` naming the slot entity: three engine pieces that have to line up,
+none of them this port's. Measured: 66 forged commands rejected, and the victim moved **0.00 units**.
+
+Two ways of forging did not work and are recorded because both look right. `session.send` from
+outside a frame throws `ActionLog.current_buffer: no frame is open` -- an action can only be raised
+from inside the sampler, so a forger uses the same door as everybody else. Overwriting the local
+slot's `NetworkIdentity.network_id` is reverted, because that component is replicated and the session
+owns it. What works is patching the client's own `UserCmdAction.prototype.set`, which is safe to do
+to one client because `makeActions` builds a fresh class per session -- and is also exactly where a
+real cheat would live.
+
+**And it found a leaver nobody was told about.** `Host.publish` mutated `NetPlayerState` only
+`if (record.connected)`, which is right for a connected slot and silently wrong for one that has just
+stopped being connected: the component's `connected` flag went to zero locally and **the change was
+never sent**. Every client in the match kept the leaver's last position, its last pose and a
+`connected` of one, for ever -- a character standing where somebody logged off, with a body still in
+the broadphase. `publishPresence` now sends a parting update, repeated for the same window
+`publishInfo` uses and for the same reason (GAP-045): it is a single edge, there is no second chance
+at it, and a lost one is permanent.
+
+**What v1 deliberately does not do**, so that none of it reads as an oversight:
+
+- **No reconnect** (D-167). A second join from the same browser is a stranger who happens to get the
+  same slot; the score starts at zero and the test says so, because somebody will otherwise assume it
+  carried over.
+- **No kick and no ban.** A client caught forging is refused that action and served normally on the
+  next one. Punishment needs an operator, an appeal and a persistent identity, and v1 has none of the
+  three; the gate makes cheating *ineffective*, which is the part that matters.
+- **No idle reaping.** `Host` passes `connection_timeout_ms: 0`, so a client whose socket dies without
+  closing holds its slot until the transport notices -- over a WebSocket, the TCP timeout. The plan
+  asked for reaping and this is a deliberate refusal: a reap is indistinguishable from a bad thirty
+  seconds on a train, losing your slot mid-match is worse than a stale slot on a sixteen-slot server
+  nobody is queueing for, and `WsHost` frees the slot on `close` and `error`, which covers every case
+  a browser actually produces.
+- **No anti-cheat beyond ownership.** A client may send any command it likes *for its own slot*, and
+  aim-assist or a movement script is indistinguishable from a good player at this layer. Q3 was the
+  same; the answer there was server-side plausibility checks, and they belong with the relevance
+  culling in the follow-ups.

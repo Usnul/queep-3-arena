@@ -848,10 +848,7 @@ export class Host {
     private publish(frame: number): void {
         for (const record of this.slots) {
             this.storeSlot(record);
-            if (record.connected) {
-                this.mutate(record.entity, NetPlayerState);
-                this.mutate(record.entity, NetInventory);
-            }
+            this.publishPresence(record);
             this.publishInfo(record);
         }
 
@@ -991,6 +988,41 @@ export class Host {
     private mutate(entity: number, componentType: Function): void {
         this.world.sendEvent(entity, 'net_mutate_component', { component_type: componentType });
     }
+
+    /**
+     * A slot's state, while somebody is in it -- and once more when they leave.
+     *
+     * The `if (record.connected)` this replaces published a connected slot every
+     * frame and a disconnected one never, which is right for the first half and
+     * silently wrong for the second: the component's `connected` flag went to
+     * zero locally and **the change was never sent**, so every client in the
+     * match kept the leaver's last position, its last pose and a `connected` of
+     * one, for ever. A character standing where somebody logged off, with a
+     * body still in the broadphase, and nothing to say otherwise. Found by
+     * `test/net-robustness.test.ts`; it is exactly the failure the plan's step 8
+     * asks about and nothing before that test looked.
+     *
+     * The parting publish is repeated for the same window `publishInfo` uses,
+     * and for the same reason (GAP-045): this is a single edge, there is no
+     * second chance at it, and a lost one is permanent.
+     */
+    private publishPresence(record: Slot): void {
+        if (record.connected) {
+            this.presenceResends[record.index] = INFO_RESEND_FRAMES;
+            this.mutate(record.entity, NetPlayerState);
+            this.mutate(record.entity, NetInventory);
+            return;
+        }
+
+        const left = this.presenceResends[record.index] ?? 0;
+        if (left <= 0) return;
+
+        this.presenceResends[record.index] = left - 1;
+        this.mutate(record.entity, NetPlayerState);
+    }
+
+    /** Frames of parting publish still owed. See {@link publishPresence}. */
+    private readonly presenceResends = new Uint8Array(MAX_CLIENTS);
 
     /**
      * `NetPlayerInfo`, republished for a few frames after it changes.
