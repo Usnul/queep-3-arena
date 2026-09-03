@@ -77,7 +77,6 @@ that is not optional.
 | `?fly=1` | swaps the player for a noclip camera, for inspecting conversions |
 | `?join=ws://host:port` | joins a match on a dedicated host instead of running one locally. `?name=` and `?character=` go with it. The map must be the host's, and the client says so plainly if it is not |
 | `?move=q3` | runs the ported `bg_pmove.c` whole -- slide-move, ground trace and all -- instead of Q3's motor on meep's `KinematicMover` |
-| `?trace=clipmap` | runs collision on the ported `cm_trace` instead of meep's physics, for an A/B; implies `?move=q3` |
 | `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
 | `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Beats the saved setting for the session; out of range is ignored rather than clamped |
 | `?fog=off` | empties the air, taking the map's volumetric lighting with it -- the volume is what turns Shade's volumetrics on at all, so this is the whole feature and its frame cost (D-151, D-154) |

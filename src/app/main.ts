@@ -332,19 +332,6 @@ function bakeRequested(): boolean {
 }
 
 /**
- * `?trace=clipmap` runs movement on the ported `cm_trace` instead of meep's
- * physics.
- *
- * Both backends ship. Physics is the default (D-029); the clipmap is the path
- * measured against the C and is what the physics backend is measured against, so having
- * it a query parameter away makes an A/B comparison in the running game a
- * refresh rather than a rebuild.
- */
-function useClipmapTrace(): boolean {
-    return new URLSearchParams(window.location.search).get('trace') === 'clipmap';
-}
-
-/**
  * `?move=q3` runs the ported `bg_pmove.c` whole -- slide-move, ground trace and
  * all -- instead of Q3's motor on meep's `KinematicMover`.
  *
@@ -355,12 +342,15 @@ function useClipmapTrace(): boolean {
  * held against the C oracle, and is therefore the reference any claim about the
  * new one is measured against. It agreed with the C bit for bit until D-174.
  *
- * Forced on when `?trace=clipmap` is set, since that selects the ported
- * collision backend and there is nothing for the kinematic mover to run on.
+ * **`?trace=clipmap` used to force this on**, and is gone (D-203): it selected a
+ * *third* collision backend inside the browser -- ported movement over the
+ * ported `cm_trace` -- so the shipping build carried an A/B switch nobody
+ * shipping ever set. The comparison it existed for is `pmove.diff.test.ts` and
+ * `physics-divergence.test.ts`, which run the same two paths against the C
+ * oracle without a running game. The trace backend is meep's, everywhere.
  */
 function usePortedPmove(): boolean {
-    const move = new URLSearchParams(window.location.search).get('move');
-    return move === 'q3' || useClipmapTrace();
+    return new URLSearchParams(window.location.search).get('move') === 'q3';
 }
 
 async function main(): Promise<void> {
@@ -1025,14 +1015,11 @@ async function main(): Promise<void> {
             loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera, profile,
         });
     } else {
-        const clipmapOnly = useClipmapTrace();
-
         /*
-         Built even when `?trace=clipmap` selects the ported collision, because
-         that parameter picks a *movement* backend and missiles are the engine's
-         now either way. Taking the rockets away with the movement would make one
-         A/B mean two things, and the cost of the bodies nobody sweeps against is
-         about 18 ms at load.
+         Built even on `?move=q3`, because that parameter picks a *movement*
+         backend and missiles are the engine's now either way. Taking the rockets
+         away with the movement would make one A/B mean two things, and the cost
+         of the bodies nobody sweeps against is about 18 ms at load.
         */
         const physicsWorld = await PhysicsWorld.create(em, ecd, clipMap);
 
@@ -2111,9 +2098,7 @@ async function main(): Promise<void> {
                 arena,
                 describe: () => ({
                     map: mapName,
-                    backend: usePortedPmove()
-                        ? (clipmapOnly ? 'q3/clipmap' : 'q3/physics')
-                        : 'meep',
+                    backend: usePortedPmove() ? 'q3/physics' : 'meep',
                 }),
             })
         );
@@ -2169,17 +2154,11 @@ async function main(): Promise<void> {
         `[queep] ${mapName}: ${loaded.bundle.stats['triangles']} tris, ` +
         `${loaded.bundle.lights.length} lights, ${clipMap.numBrushes} brushes` +
         /*
-         This used to warn that curved surfaces were not solid. They are, on the
-         physics backend, as the facets D-125 builds -- so the note is now about
-         which trace you selected, since `?trace=clipmap` still walks through
-         them.
+         This used to warn that curved surfaces were not solid, and then that
+         they were solid on one of the two traces. There is one trace now, and it
+         builds the facets D-125 added, so a patch count is a patch count.
         */
-        (clipMap.numPatches > 0
-            ? `, ${clipMap.numPatches} patches` +
-              (useClipmapTrace()
-                  ? ' (WARNING: ?trace=clipmap passes through curved surfaces, see D-017)'
-                  : '')
-            : ''),
+        (clipMap.numPatches > 0 ? `, ${clipMap.numPatches} patches` : ''),
         loaded.timings
     );
 }

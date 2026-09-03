@@ -1735,8 +1735,10 @@ the expensive way.
   Q3-fidelity constraint with a working workaround, never an absence in the engine; the maintainer
   has since reversed the fidelity requirement, so the shipping player runs Q3's motor on
   `KinematicMover` and never asks Q3's contact question. `PhysicsTrace` and the machinery below
-  survive only for `?trace=clipmap` and the divergence harness, which measure the ported
-  reference rather than the game.
+  survive only for the divergence harness and `?move=q3`, which measure the ported reference rather
+  than the game -- **`?trace=clipmap` was the other survivor and was deleted in D-203**, on the
+  grounds that a query parameter swapping the shipping build's collision backend is a third code
+  path nobody shipping ever selects, and that everything it was for is a test that needs no browser.
 - **What is actually true.** `CM_TraceThroughBrush` is a signed-distance interval test over a
   brush's half-spaces with a ±`SURFACE_CLIP_EPSILON` (1/8 unit) term on both ends, and it returns
   "this brush does not block" for cases where the swept volume demonstrably touches the brush. At

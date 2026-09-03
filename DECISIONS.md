@@ -11585,3 +11585,66 @@ one-step relationship.
 
 Reverted, the host wiring fails on `moverBodyCount`, which is zero for the host that shipped
 yesterday and six on `oa_dm1` today.
+
+### D-203: `?trace=clipmap` comes out, and two of the three reasons for the ported trace do not survive review
+
+The maintainer, on reading `HeadlessPhysics`: *"why is it using BSP? We have a perfectly serviceable
+physics engine that's 100% capable of running on node.js"*. Three things came out of answering that,
+and only one of them was a defence.
+
+**The premise about `HeadlessPhysics` was wrong and the question underneath it was not.** That class
+*is* meep's physics -- `PhysicsSystem` and `ColliderObserverSystem` on an `EntityManager`, bodies
+with `Collider` and `ConvexHullShape3D`, queries through `shape_cast` -- and "headless" means no
+renderer. The BSP is where the collision *geometry* comes from, because that is where a Quake III
+level keeps it: convex brushes in a lump, with the render meshes being triangle soup that is neither
+solid nor closed. `buildHulls` is a loader.
+
+**What the question did find** is that `PhysicsWorld` and `HeadlessPhysics` are two classes doing one
+job -- `create`, `trace`, `traceIgnores`, `addMover`, plus `addStaticModel` on one and `step` and
+`pointContents` on the other -- and that D-202 widened the duplication rather than closing it by
+writing `addMover` twice. They already share `buildHulls`, `buildPatchHulls`, `hullShape`,
+`PhysicsTrace` and `layerForContents`; `HeadlessPhysics`' own docblock says what is left is "which
+brushes each is handed... a property of the caller rather than of the conversion", and that is now a
+parameter on both. The only thing that looked like an obstacle, `addAcousticBody`, returns false when
+`AcousticBody` is not a registered component type -- which its own comment names as the headless case.
+
+**`?trace=clipmap` is deleted**, and the maintainer's objection is the right one: a query parameter
+that swaps the collision backend of the *shipping build* is a third code path nobody shipping ever
+selects. Everything it was for is a test. `pmove.diff.test.ts` runs the ported movement against the C
+oracle and `physics-divergence.test.ts` runs the two backends against each other, both without a
+browser; what the flag added was the ability to look at the difference through a window, at the price
+of `usePortedPmove` having two meanings, `clipmapOnly` threading through to the HUD's backend string,
+and a patch-count warning that had to explain which trace you were on. All four are gone. `?move=q3`
+stays: it selects the *reference implementation* the port is judged against, which is a different
+thing from a second collision backend, and it runs on meep's trace like everything else.
+
+**On the two technical objections, one lands and one does not**, and the distinction is worth keeping
+because it decides what the remaining work is.
+
+*"Contents queries via hulls -- there's the `Collider`, run checks off it."* **Right.** The hitscan
+path calls the ported `boxTrace` to read `SURF_NOIMPACT`, and the justification written in
+`traceShot` -- "a broadphase has no opinion about it" -- is too glib. `layerForContents` already puts
+a brush's contents on the body as a layer, and `PhysicsTrace.register` already keeps the `BrushHull`
+beside each body id, so a `shape_cast` hit can be resolved to its brush today. The real obstacle is
+narrower and is about *sides*: `SURF_NOIMPACT` is per brush **side**, read from
+`cm.sideSurfaceFlags[leadside]`, and `BrushHull.surfaceFlags` is deliberately zero for a brush hull
+because "a single per-hull value would be the wrong answer for five of a box's six faces". A cast
+returns a body and a normal, so the missing step is matching that normal against the hull's own
+`planes` to pick the side -- which is a thing this port already does elsewhere, in
+`traceBrushList`. So it is one lookup away rather than blocked, and the comment claiming otherwise is
+now wrong in the file.
+
+*"`shape_cast` does have a filter -- if you need a hull list the design is flawed."* **The filter is
+real and does not reach this.** It chooses which bodies are candidates; GAP-019 is a disagreement
+about the *answer for a candidate both agree on*. Its worked example is one brush, seven thousandths
+of a unit from the swept box and moving into it: `shape_cast` reports a hit, and
+`CM_TraceThroughBrush`'s signed-interval test with its ±1/8 unit epsilon reports `enterFrac(0) <
+leaveFrac(-0.078)`, false, "does not block". No predicate over candidates can change a narrowphase
+fraction.
+
+**But the conclusion lands anyway, and GAP-019 had already conceded it**: that entry says the rule is
+"a constraint this port chose to honour", that it is "no longer load-bearing for this port at all"
+since D-071 put the shipping player on `KinematicMover`, and that the machinery "survives only for
+`?trace=clipmap` and the divergence harness". One of those two is now gone. What is left of the
+hull cross-check is a reference path and its test, which is exactly where a bit-for-bit
+reimplementation of somebody else's arithmetic belongs.

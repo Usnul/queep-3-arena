@@ -462,9 +462,9 @@ export class WeaponSystem {
     /**
      * @param missiles where projectiles fly. Null leaves projectile weapons
      *   flashing and firing nothing, which is only ever a misconfiguration --
-     *   `main.ts` builds a `PhysicsWorld` for missiles even on the clipmap
-     *   movement backend, because `?trace=clipmap` selects a *movement* backend
-     *   and taking the rockets away with it would make the A/B mean two things.
+     *   `main.ts` builds a `PhysicsWorld` for missiles even on `?move=q3`,
+     *   because that parameter selects a *movement* backend and taking the
+     *   rockets away with it would make the A/B mean two things.
      */
     constructor(
         cm: ClipMap,
@@ -688,9 +688,21 @@ export class WeaponSystem {
      * the line runs the whole way.
      *
      * The clipmap is asked as well as the broadphase and not instead of it,
-     * because it is the only one of the two that carries Q3's surface flags --
-     * `SURF_NOIMPACT` decides whether a bullet leaves a mark, and a broadphase
-     * has no opinion about it.
+     * because it is the one of the two that reports Q3's surface flags.
+     *
+     * **That is a smaller reason than it used to claim, and the claim was
+     * challenged and did not hold** (D-203). It said a broadphase "has no
+     * opinion" about `SURF_NOIMPACT`, which is not the problem:
+     * `layerForContents` already puts a brush's contents on its body and
+     * `PhysicsTrace.register` already keeps the `BrushHull` beside each body id,
+     * so a `shape_cast` hit resolves to its brush today. The real obstacle is
+     * that `SURF_NOIMPACT` is per brush **side** -- `cm.sideSurfaceFlags[leadside]`
+     * -- and `BrushHull.surfaceFlags` is deliberately zero for a brush hull,
+     * because one value per hull is the wrong answer for five of a box's six
+     * faces. A cast returns a body and a normal, so what is missing is the step
+     * that matches that normal to the hull's own `planes` and picks the side --
+     * which `traceBrushList` already does for movement. One lookup away rather
+     * than blocked.
      *
      * **Public because a joined client predicts its own tracer with it.** The
      * *damage* is the host's and stays the host's; what a client needs is the
