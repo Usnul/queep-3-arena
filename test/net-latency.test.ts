@@ -465,29 +465,34 @@ describe('the netcode over a link that behaves like UDP', () => {
          consecutive ticks' packets.
         */
         /*
-         **The engine's own counter is not zero, and its documentation says it
-         should be.** `delivery_stats` is new in meep 3.14.6 and counts frames
-         that reached this client and were dropped below the applied watermark
-         without ever running -- GAP-043's silent residual, finally measurable
-         from inside rather than inferred by counting events at both ends. Its
-         docblock says it "should stay at zero" on the default
-         `max_packets_per_tick` and that it climbs under jitter only at 1.
+         **The engine's own counter is printed here and believed in
+         `net-delivery.test.ts`, which is where it was settled.**
 
-         Measured here on the default, 20 s, one client firing ten times a
-         second: **8 frames at 40 ms, 27 at 80, 80 at 150**. The event counts
-         are nearly perfect all the same (302/302, 297/300, 288/300), so most
-         skipped frames carry no event -- which is exactly why this was so hard
-         to see before the counter existed, and exactly why the counter is the
-         right thing to watch rather than the events.
+         `delivery_stats` is new in meep 3.14.6 and counts frames that reached
+         this client and were dropped below the applied watermark without ever
+         running -- GAP-043's silent residual, finally measurable from inside
+         rather than inferred by counting events at both ends. Its docblock says
+         it "should stay at zero" on the default `max_packets_per_tick`.
+         Measured here on the default it is 10, 29 and 225 at 40, 80 and 150 ms.
 
-         Reported against its target rather than asserted at the value this
-         build happens to produce, so a fix breaks this test instead of passing
-         quietly. See GAP-047.
+         **It is not a loss count, and the frames it names were mostly applied.**
+         `net-delivery.test.ts` takes the honest number -- frames the host put
+         on the wire that the client never applied, from `onFrameApplied` and the
+         slice headers -- and gets **0, 0 and 13**. The gap is `#hold_slice`
+         validating a slice it is about to keep by walking it with `min_frame =
+         Infinity`, which books every frame in it as unapplied on the way in.
+         Filtered to head slices, which are the only ones that can lose a frame
+         for good, the counter lands within one of the honest number at every
+         link. GAP-047, and D-189 for the measurement.
+
+         So the bound below is a regression bound on a number known to contain
+         the receiver's own redundancy, not a loss rate. The loss rate is in
+         `net-delivery.test.ts` and its target there is zero.
         */
         for (const o of outcomes) {
             expect(
                 o.skippedUnapplied / Math.max(1, o.measuredFrames),
-                `${o.label}: unapplied frames got worse; the target is zero`
+                `${o.label}: skipped-unapplied frames got worse`
             ).toBeLessThan(0.1);
         }
 
@@ -495,8 +500,9 @@ describe('the netcode over a link that behaves like UDP', () => {
          And our own count, which is allowed to be a hair under: an effect
          dispatched in the last frames before the cutoff can still be in flight
          when the drain gives up, and that is a property of the measurement
-         rather than of the wire. The engine's counter above is what says
-         nothing was actually lost.
+         rather than of the wire. What says nothing was actually lost at these
+         two links is the frame census in `net-delivery.test.ts` -- zero frames
+         delivered and never applied at both -- and not the counter above.
         */
         for (const o of outcomes) {
             expect(

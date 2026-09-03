@@ -10458,3 +10458,79 @@ having: it is the difference between "the client is aligned" and "the client is 
 engine, on the snapshot*", and only the second is what GAP-042 closing actually means.
 `net-websocket.test.ts` gained the same check over a real socket, where the seek was previously
 untested because the workaround had already done it.
+
+### D-189: GAP-047 settled — the counter is 214 where the loss is 10, and the honest 10 is mostly a join
+
+D-187 filed GAP-047 with two candidate explanations and deliberately did not choose between them:
+either the frames `delivery_stats(peer).skipped_unapplied` names are genuinely never applied, or
+the ring-indexed `applied` test reports a false positive for frames older than the window it
+indexes. Neither was right, and the answer needed a measurement rather than the argument.
+
+**What was measured, and how, since the whole difficulty of this bug is that nothing reports it.**
+`Replicator.onFrameApplied` fires once per frame group applied, so the set of host frames a client
+ever ran is exactly knowable. Every inbound packet declares the frame range it covers in its slice
+header, so the union of those ranges is what the host actually put on the wire for that client. A
+frame in the union and absent from the applied set was **delivered and dropped**, which is the thing
+the counter claims to count. `unpack_from_peer` is wrapped in the test to capture the headers; it
+reads and changes nothing. `test/net-delivery.test.ts` holds it.
+
+| link | frames delivered and never applied | `skipped_unapplied` | of which head slices | non-head | events |
+|---|---:|---:|---:|---:|---:|
+| 150 ms clean, lossless | **0** | **0** | 0 | 0 | 318/318 |
+| 40 ms, 8 ms jitter, 1% | **0** | 10 | 0 | 10 | 315/315 |
+| 80 ms, 20 ms jitter, 2% | **0** | 29 | 0 | 29 | 600/603 |
+| 150 ms, 40 ms jitter, lossless | **10** | 214 | 11 | 203 | 770/788 |
+| 150 ms, 40 ms jitter, 5% | **13** | 225 | 12 | 213 | 840/864 |
+
+**1. The counter is not a loss count.** It reports 10 and 29 frames lost at 40 and 80 ms where
+nothing at all was lost, and 214 where 10 were. It is also not a rate: on the same link, a ten-second
+run reports 185 and a twenty-second run 214, while the honest count is **ten in both** — so the
+number grows with how long the peers talk to each other, which is the signature of counting traffic
+rather than loss.
+
+**2. The mechanism, and it is one line.** `#hold_slice` validates a slice it is about to keep by
+calling `#apply_groups(peer, buf, end, Infinity, ...)`. `Infinity` means "skip every frame", which is
+the right instruction for a validation walk — but the skip branch is where the delivery accounting
+lives, so **every frame of every held slice is booked `skipped_unapplied` on the way in**, and then
+applied when the gap before it fills. Reordering is what creates held slices, which is why the
+counter is zero at 150 ms *clean* and 214 at the same latency with 40 ms of jitter: same delay, same
+redundancy window, same everything except whether slices can arrive early. Every packet that
+incremented the counter applied nothing during its own call — 152 of 152 at the worst link — which is
+what a hold looks like from outside.
+
+**3. And the part that works is the part that matters.** Only a head slice can lose a frame for
+good: `#apply_held_before` runs first and raises the watermark, and nothing before a head is ever
+re-sent. Split by slice kind, the head component is **11, 12, 0, 0, 0** against an honest loss of
+**10, 13, 0, 0, 0** — within one at every link. So `skipped_unapplied` restricted to heads is exactly
+the instrument GAP-043 needed; unrestricted it is that number plus the receiver's own held slices.
+The ring window is not implicated at all: the re-sends that reach the skip branch are a median of 6
+frames behind the applied top against a 64-deep ring, so `applied[frame % 64]` cannot have been
+overwritten.
+
+**4. There is a real residual, it is small, and it is mostly a join.** Ten frames out of ~540 on a
+*lossless* 150 ms link with 40 ms of jitter — lossless being the interesting column, because no
+packet was dropped by the link, so those ten were delivered and discarded by the receiver. **Nine of
+the ten are inside the first six seconds after the join**, alongside the rewind burst and the
+coherence dip, in the window where `TimeDilation` is still walking to its buffer depth. At 40 ms and
+80 ms it is zero everywhere. So GAP-043's residual does survive on the default
+`max_packets_per_tick`, at 1.9% of frames on the worst link this port is measured over and nothing
+below it — and the events this port "happens not to lose" are not luck after all, they are a
+consequence of the loss being 0 at the two links a player would actually use.
+
+**Two traps, both of which produced a wrong answer first.** The slice header object is **reused
+across receives**, so recording the reference rather than a copy gives every packet the last packet's
+range — which read as "all 150 counting packets were non-heads" at one link and "all 9 were heads" at
+another, and the second reading is what nearly sent this to the wrong conclusion. And the join leaves
+a **legitimate hole**: a joining client's watermark starts at 0 and INITIAL_SYNC lands it near the
+host's frame, so frames 8..47 are never sent and never applied. Forty frames of that block looked
+like the loss the counter was pointing at. The census starts three seconds past the client's first
+applied frame.
+
+**What this changes in the port.** Nothing in `src/`. `test/net-latency.test.ts` keeps printing the
+counter and stops claiming it proves anything — its comment previously said "the engine's counter
+above is what says nothing was actually lost", which is the one sentence this work disproves.
+`test/net-delivery.test.ts` is the new home of the question, and it asserts the property we want
+(nothing delivered is dropped) rather than the value this build produces: zero at the links that
+achieve it, the residual bounded against a target of zero at the ones that do not, and the
+head-filtered counter asserted to agree with the honest count, so the diagnosis above is a thing a
+maintainer can re-run rather than a thing they have to take on faith.
