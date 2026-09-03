@@ -1,0 +1,135 @@
+// scoreboard.scss -- the table you hold a key to see.
+//
+// Copyright (C) 2026 queep-3-arena contributors
+//
+// This program is free software; you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation; either version 2 of the License, or (at your option) any later
+// version. See LICENSE.
+//
+// ---
+//
+// A four-column grid, centred, over the match. Two things it has to get right
+// and neither is decorative:
+//
+//   - **The columns line up across rows.** `ScoreboardView` builds one grid per
+//     row rather than one grid for the table, because a row is the unit that
+//     gets shown, hidden and re-appended -- so the track sizes are declared once
+//     here and shared by the header and every body row through the same class.
+//     A column that is sized by its content would put the header's "frags" over
+//     a different x than a row's "12".
+//   - **Digits do not dance.** Scores change every few seconds while the board
+//     is open, and a proportional font moves the whole column when 9 becomes 10.
+//     `tabular-nums` and the mono stack keep the numbers on a fixed pitch, which
+//     is what makes a changing score read as a number changing rather than as
+//     the table twitching.
+//
+// It takes no pointer events, like everything else on the HUD: the board is a
+// readout, not a menu.
+
+@use 'tokens' as *;
+
+// Sits above the status bar's stacking context, because it covers it.
+.queep-scoreboard {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: $z-hud + 1;
+
+    pointer-events: none;
+    user-select: none;
+
+    display: flex;
+    flex-direction: column;
+
+    min-width: 30rem;
+    max-width: min(46rem, 90vw);
+
+    padding: space(3);
+    gap: space(2);
+
+    background: rgba($color-void, 0.82);
+    border: 1px solid $color-border;
+    border-radius: $radius-medium;
+
+    // The board is read at a glance in the middle of a fight, so it is the one
+    // HUD element allowed a backdrop: without it a dark name sits on a dark
+    // wall and the whole point of the panel is lost.
+    backdrop-filter: blur(6px);
+
+    color: $color-text;
+    font-family: $font-ui;
+    font-size: font-size('body');
+}
+
+.queep-scoreboard__head {
+    border-bottom: 1px solid $color-border-strong;
+    padding-bottom: space(2);
+}
+
+.queep-scoreboard__body {
+    display: flex;
+    flex-direction: column;
+}
+
+// The shared track definition. Place is narrow and fixed, the name takes the
+// slack, and the two score columns are equal so the header centres over them.
+.queep-scoreboard__row {
+    display: grid;
+    grid-template-columns: 2.5rem 1fr 4rem 4rem;
+    align-items: center;
+    gap: space(2);
+
+    padding: space(1) space(2);
+    border-radius: $radius-small;
+}
+
+.queep-scoreboard__row--header {
+    color: $color-text-faint;
+    font-size: font-size('micro');
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding-bottom: 0;
+}
+
+// The player whose eyes you are behind. An accent tint rather than a border,
+// because a border on one row changes that row's height and shifts every row
+// below it the moment the lead changes hands.
+.queep-scoreboard__row--self {
+    background: rgba($color-accent, 0.16);
+    color: $color-accent-bright;
+}
+
+.queep-scoreboard__cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queep-scoreboard__cell--place,
+.queep-scoreboard__cell--kills,
+.queep-scoreboard__cell--deaths {
+    font-family: $font-mono;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.queep-scoreboard__cell--place {
+    color: $color-text-muted;
+}
+
+// Frags is the sort key, so it is the column the eye should land on; deaths is
+// context. `scoreboard.ts` says why the two are not combined into a ratio.
+.queep-scoreboard__cell--kills {
+    font-weight: $font-weight-bold;
+}
+
+.queep-scoreboard__cell--deaths {
+    color: $color-text-muted;
+}
+
+.queep-scoreboard__row--self .queep-scoreboard__cell--place,
+.queep-scoreboard__row--self .queep-scoreboard__cell--deaths {
+    color: inherit;
+}

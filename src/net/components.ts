@@ -93,6 +93,38 @@ export function weaponAt(index: number): string {
  * remote clients need it to point a character model and a muzzle flash
  * somewhere.
  */
+/**
+ * `BUTTON_WALKING`, carried in `pmFlags` bit 2, which Q3 leaves empty.
+ *
+ * **Why it is on the wire at all.** `PM_Footsteps` decides run from walk by
+ * `cmd.buttons & BUTTON_WALKING` and plays no footstep from the walk branch,
+ * because a walking player is sneaking. A client drawing somebody else has the
+ * bob cycle and not the command, so without this bit a remote player who is
+ * sneaking is heard -- which is not a cosmetic loss but a gameplay one, since
+ * "did I hear someone" is how a corridor is played.
+ *
+ * **Why a bit and not a field.** It was inferred from the replicated velocity
+ * first, on the reasoning that `PmoveSingle` clears `BUTTON_WALKING` above a
+ * move axis of 64 and `PM_CmdScale` therefore caps a walking player at
+ * `320 * 64 / 127` = 161 u/s, so anyone faster is running. That is sound and it
+ * is useless: measured over a four-bot match on `oa_dm1`, **only 31% of grounded
+ * bot frames are above the ceiling** -- a bot turning, pathing or scraping a
+ * wall spends most of its time slower than a walk while running flat out -- so
+ * the inference suppressed about two thirds of every bot's footsteps. A player
+ * cannot be told apart from a sneak by their speed.
+ *
+ * **Why bit 2.** Q3 and OpenArena between them define `PMF_*` on bits
+ * 0, 1, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14 and 15. Bits 2 and 7 are empty.
+ * `pmFlags` is already a `uint16` on the wire, so this costs **no additional
+ * bytes** -- against a new `uint8` field at 16 slots and 30 Hz, which is 480
+ * bytes a second per client on a downstream measured at 45.8 KB/s of a 48 KB/s
+ * budget (REPORT section 5). A synthetic bit in a Q3 field is a real cost in
+ * confusion, which is why it is named here rather than in
+ * `q3/pmove/constants.ts`, and why `PlayerSlot.load` masks it off before the
+ * value reaches a live `pm_flags`.
+ */
+export const NET_PMF_WALKING = 4;
+
 export class NetPlayerState {
     static readonly typeName = 'NetPlayerState';
 
@@ -107,6 +139,9 @@ export class NetPlayerState {
     /** `ps.delta_angles`, Q3's 16-bit view offset. The host's only way to turn a client. */
     readonly deltaAngles = new Int16Array(3);
 
+    /**
+     * `ps.pm_flags`, plus {@link NET_PMF_WALKING} in a bit Q3 does not use.
+     */
     pmFlags = 0;
     pmTime = 0;
     groundEntityNum = 0;

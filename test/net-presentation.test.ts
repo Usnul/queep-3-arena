@@ -35,8 +35,10 @@ import { NetRig } from './net/rig.ts';
 import {
     NetPresentationSystem,
     type MissilePresenter,
+    type RemoteAudio,
     type RemoteCharacter,
 } from '../src/app/netSystems.ts';
+import { Footsteps } from '../src/client/Audio.ts';
 import { MAX_CLIENTS } from '../src/net/protocol.ts';
 import { FORWARDMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
 import { weaponIndex } from '../src/net/components.ts';
@@ -127,10 +129,32 @@ class MissileLog implements MissilePresenter {
     }
 }
 
+/**
+ * Every footfall the presentation asked for, with the frame and the slot.
+ *
+ * The same trick as `MissileLog`: `RemoteAudio` is two methods, so what would
+ * otherwise need an `AudioContext` and a pair of ears becomes a list.
+ */
+class AudioLog implements RemoteAudio {
+    frame = 0;
+
+    readonly steps: { frame: number; slot: number; z: number }[] = [];
+    readonly landings: { frame: number; slot: number; z: number }[] = [];
+
+    footstep(slot: number, originQ3: ArrayLike<number>): void {
+        this.steps.push({ frame: this.frame, slot, z: originQ3[2]! });
+    }
+
+    land(slot: number, originQ3: ArrayLike<number>): void {
+        this.landings.push({ frame: this.frame, slot, z: originQ3[2]! });
+    }
+}
+
 interface Seen {
     rig: NetRig;
     recorders: Map<number, Recorder>;
     missiles: MissileLog;
+    audio: AudioLog;
     /** Distance between the drawn position and the host's, per frame, per bot. */
     lag: number[];
     /** How far a bot moved between consecutive frames, for scale. */
@@ -183,9 +207,11 @@ beforeAll(async () => {
 
     const recorders = new Map<number, Recorder>();
     const missiles = new MissileLog();
+    const audio = new AudioLog();
     const system = new NetPresentationSystem({
         client: client.net,
         missiles,
+        audio,
         characterFor: (slot) => {
             let recorder = recorders.get(slot);
             if (recorder === undefined) {
@@ -206,6 +232,7 @@ beforeAll(async () => {
     for (let n = 0; n < FRAMES; n++) {
         rig.step(1);
         missiles.frame = n;
+        audio.frame = n;
         system.update(1 / 60);
 
         for (const slot of client.net.slots) {
@@ -242,7 +269,7 @@ beforeAll(async () => {
         }
     }
 
-    seen = { rig, recorders, missiles, lag, step };
+    seen = { rig, recorders, missiles, audio, lag, step };
 }, 120_000);
 
 /** The mean of a sample, or zero for an empty one. */
@@ -410,5 +437,155 @@ describe('what a client draws of the other players', () => {
             0
         );
         expect(worst, 'a pool slot changed hands without being noticed').toBeLessThan(200);
+    });
+});
+
+describe('what a client hears of the other players', () => {
+    it('plays a footstep for every remote slot that walks, and none for itself', () => {
+        const { audio, rig, missiles } = seen;
+        void missiles;
+
+        const bySlot = new Map<number, number>();
+        for (const step of audio.steps) bySlot.set(step.slot, (bySlot.get(step.slot) ?? 0) + 1);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-presentation] footsteps over ${FRAMES} frames: ` +
+                [...bySlot.entries()]
+                    .sort((a, b) => a[0] - b[0])
+                    .map(([slot, n]) => `slot ${slot} ${n}`)
+                    .join(', ') +
+                `; landings ${audio.landings.length}`
+        );
+
+        /*
+         Every bot the host is running is heard. Four bots walk for the whole
+         measured stretch, so a slot with no steps at all is a slot whose
+         `bobCycle` never reached this system -- which is the failure the whole
+         arrangement exists to catch, and is silent in a browser because a
+         footstep you do not hear sounds like a footstep somewhere else.
+        */
+        const bots = rig.host.slots.filter((slot) => slot.bot !== null && slot.connected);
+        expect(bots.length).toBeGreaterThan(0);
+        for (const slot of bots) {
+            expect(
+                bySlot.get(slot.index) ?? 0,
+                `slot ${slot.index} walked a whole match in silence`
+            ).toBeGreaterThan(0);
+        }
+
+        /*
+         And never the local slot. Q3 plays the local player's footsteps through
+         `CG_PlayerAnimation` on the predicted state, not from the wire, and a
+         second copy from here would double every step the player takes.
+        */
+        const local = seen.rig.clients[0]!.net.slotIndex;
+        expect(bySlot.get(local) ?? 0, 'the client heard its own feet twice').toBe(0);
+    });
+
+    it('fires at the rate PM_Footsteps does, not once per frame', () => {
+        const { audio } = seen;
+
+        /*
+         The number that says the crossing test is doing its job.
+
+         `PM_Footsteps` advances `bobCycle` by `0.4 * msec` while running and
+         fires when it crosses 64 or 192, so a player running flat out steps
+         every 320 ms -- about ten frames at 30 Hz -- whatever their speed. A
+         version of this that fired on any change in the cycle would produce one
+         per frame per slot; a version that compared one slot's cycle against
+         another's would produce even more.
+
+         Measured at **19.3 frames**, twice the flat-out figure, and that is the
+         bots rather than the mechanism: `advanceBobCycle` holds the cycle still
+         while a slot is airborne or pressing nothing, and a bot on `oa_dm1` is
+         grounded 69% of the time and stops to turn. About 120 steps per bot per
+         eighty seconds.
+
+         Measured per slot rather than in total, because four bots stepping
+         independently is four times the rate and says nothing about any of them.
+        */
+        const bySlot = new Map<number, number[]>();
+        for (const step of audio.steps) {
+            const list = bySlot.get(step.slot) ?? [];
+            list.push(step.frame);
+            bySlot.set(step.slot, list);
+        }
+
+        const gaps: number[] = [];
+        for (const frames of bySlot.values()) {
+            for (let i = 1; i < frames.length; i++) gaps.push(frames[i]! - frames[i - 1]!);
+        }
+
+        expect(gaps.length, 'not enough footsteps to measure a rate').toBeGreaterThan(50);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-presentation] gap between one slot's footsteps: mean ` +
+                `${mean(gaps).toFixed(1)} frames over ${gaps.length} intervals`
+        );
+
+        /*
+         Bounded either side. Below 3 means the crossing test is firing on
+         something other than a crossing; above 30 means a whole second of
+         running between steps, which is a cycle that is not advancing.
+        */
+        expect(mean(gaps)).toBeGreaterThan(3);
+        expect(mean(gaps)).toBeLessThan(30);
+    });
+
+    it('never plays a footstep for a slot in the air', () => {
+        /*
+         The airborne case is the one `Footsteps` distinguishes with its own
+         branch, and it is also the one a naive cycle comparison gets wrong:
+         `PM_Footsteps` returns *before* advancing the cycle when
+         `groundEntityNum` is `ENTITYNUM_NONE`, so a jumping player's cycle is
+         frozen at whatever it held on take-off -- and the frame they land, the
+         cycle starts moving again from there. A tracker that only watched the
+         cycle would find a crossing mid-jump; one that only watched the ground
+         would find a step on landing.
+
+         Re-driven here rather than sampled from the match above, because a bot
+         on `oa_dm1` jumps when the pathfinding says to and a fixture that waits
+         for that is a fixture that measures whether it happened.
+        */
+        const tracker = new Footsteps();
+
+        // Running on the ground: the cycle advances and crosses 64.
+        expect(tracker.update(50, true, false, false)).toBe(null);
+        expect(tracker.update(70, true, false, false)).toBe('step');
+
+        // Airborne. The cycle is frozen at 70, which is what the host sends.
+        expect(tracker.update(70, false, false, false)).toBe(null);
+        expect(tracker.update(70, false, false, false)).toBe(null);
+
+        /*
+         Landing. `Footsteps` reports the landing rather than a step, and this
+         is the assertion that distinguishes the two: a frozen cycle crossing
+         nothing plus a ground transition is exactly one sound, not two and not
+         none.
+        */
+        expect(tracker.update(70, true, false, false)).toBe('land');
+
+        // And running again from where it left off crosses 192.
+        expect(tracker.update(180, true, false, false)).toBe(null);
+        expect(tracker.update(200, true, false, false)).toBe('step');
+    });
+
+    it('says nothing for a crouching slot, which is the one bit that is replicated', () => {
+        const tracker = new Footsteps();
+
+        /*
+         `PM_Footsteps` gives a ducked player `bobmove = 0.5` -- a *faster*
+         cycle -- and plays no footstep from it, because a crouched player is
+         sneaking. So the ducked branch is not "moves less" but "crosses more
+         often and is silent", and dropping the flag would make crouching the
+         loudest way to cross a room.
+
+         `ducked` is on the wire, unlike `BUTTON_WALKING`, so this one is exact
+         rather than inferred -- see `WALK_SPEED_CEILING` for the one that is not.
+        */
+        expect(tracker.update(50, true, true, false)).toBe(null);
+        expect(tracker.update(80, true, true, false)).toBe(null);
     });
 });

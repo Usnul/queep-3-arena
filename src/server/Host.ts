@@ -50,6 +50,7 @@ import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/Netwo
 
 import { BspFile } from '../q3/bsp/BspFile.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
+import { advanceBobCycle, isWalking } from '../game/bobCycle.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import { HeadlessPhysics } from '../../tools/pipeline/headless-physics.ts';
@@ -79,6 +80,7 @@ import {
     NetMover,
     NetPlayerInfo,
     NetPlayerState,
+    NET_PMF_WALKING,
     weaponIndex,
 } from '../net/components.ts';
 import { EffectKind, type ActionContext, type ProtocolActions } from '../net/actions.ts';
@@ -658,6 +660,24 @@ export class Host {
         //    does; `BotRuntime` owns the tree and the perception.
         this.bots.update(dt, msec, this.items.items);
 
+        /*
+         And their bob cycle, which nothing else advances.
+
+         A bot drives its own `pmove_t` rather than a `PlayerSlot`, so the
+         counter `PlayerSlot` keeps for a human is not kept for a bot -- and
+         `storeBot` has published `bobCycle` since step 3 with **zero** in it
+         every frame. A dead field on the wire is invisible until something
+         reads it, and the thing that reads it is a remote client's footsteps
+         (D-190). `bots.update` has just consumed each bot's command, so the
+         command that produced this frame's motion is the one the cycle is
+         advanced by, exactly as `PM_Footsteps` does inside a `pmove`.
+        */
+        for (const record of this.slots) {
+            const bot = record.bot;
+            if (bot === null || !record.connected || !record.alive) continue;
+            advanceBobCycle(bot.pmove.ps, bot.pmove.cmd, msec);
+        }
+
         // 2. Projectiles age and the missile world syncs; the contacts that
         //    detonate them arrived from the physics step, which ran first.
         this.weapons.update(dt);
@@ -902,7 +922,15 @@ export class Host {
         state.viewangles[0] = ps.viewangles[0]!;
         state.viewangles[1] = ps.viewangles[1]!;
         state.viewangles[2] = ps.viewangles[2]!;
-        state.pmFlags = ps.pm_flags & 0xffff;
+        /*
+         A bot never walks -- `Bot.think` writes `cmd.buttons = 0` every frame,
+         so the bit is always clear -- and it is written from the command rather
+         than hardcoded, because the day a bot learns to sneak this is where it
+         would say so.
+        */
+        state.pmFlags =
+            (ps.pm_flags & 0xffff & ~NET_PMF_WALKING) |
+            (isWalking(bot.pmove.cmd) ? NET_PMF_WALKING : 0);
         state.pmTime = ps.pm_time;
         state.groundEntityNum = ps.groundEntityNum;
         state.viewheight = ps.viewheight;
@@ -1029,24 +1057,25 @@ export class Host {
      *
      * The obvious arrangement -- publish once, when `equals` says something is
      * different -- loses updates, and does so on a **loopback with no loss at
-     * all**. Measured: a bot's first frag was published on the frame it
-     * happened and the client's copy of that slot still read zero eleven frames
-     * later, and for the rest of the match; a second frag on a different slot
-     * eight hundred frames later arrived on the next frame. So it is not a
-     * systematic failure to send, it is an occasional failure to deliver, and a
-     * value with one chance to arrive keeps whatever it lands on for ever.
-     * Publishing it unconditionally every frame fixes it and is how the defect
-     * was confirmed -- see GAP-045 for that experiment and for what is still
-     * unexplained about the engine's side of it.
+     * all**. The update is not lost on the wire: it arrives, the client applies
+     * it, and then a reconciliation about the client's *own* slot rewinds the
+     * whole world past the frame it landed in. `RewindEngine.rewind_to` writes
+     * every record's prior state back; what follows repairs only the one
+     * `network_id` the AUTH_STATE covered and replays only that client's own
+     * input, so nothing puts this component back -- and the host, having
+     * published on change, never sends it again. GAP-045 has the measurements,
+     * the standalone reproduction (`tools/repro/meep-mutate-rewind.mjs`) and the
+     * causal control.
      *
-     * Unconditional publishing is not the fix that ships, because this
-     * component carries a **name string** and there are sixteen slots: about
-     * 320 bytes a frame of nothing changing, against a per-frame action budget
-     * measured at 940 (D-177). So the redundancy is bounded to the frames after
-     * an actual change, which is the same trade the action stream makes -- send
-     * it again a few times rather than hope -- and costs nothing at rest,
-     * because a name, a character and a score change a handful of times a
-     * match.
+     * So the resends below are a **race and not a repair**: they win where most
+     * frames carry no rewind, which is why they fix most of it and not all.
+     * Publishing unconditionally every frame is not the fix that ships either --
+     * this component carries a **name string** and there are sixteen slots,
+     * about 320 bytes a frame of nothing changing against a per-frame action
+     * budget measured at 940 (D-177) -- and, measured, it does not close the
+     * hole where the rewind rate is high enough. The bounded redundancy is the
+     * same trade the action stream makes, send it again a few times rather than
+     * hope, and it costs nothing at rest.
      */
     private publishInfo(record: Slot): void {
         const shadow = this.infoShadow(record);

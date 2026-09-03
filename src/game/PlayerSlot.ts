@@ -50,6 +50,7 @@ import { createPmoveHost, type MoverSource, type PhysicsTraceBackend } from './P
 import { newInventory, type Inventory } from './Items.ts';
 import { weaponStats, type WeaponId } from './Weapons.ts';
 import {
+    NET_PMF_WALKING,
     NET_WEAPONS,
     NET_WEAPON_COUNT,
     weaponAt,
@@ -63,6 +64,7 @@ import { PlayerMovement, type MoverHost } from '../client/MeepMove.ts';
 import type { ClipMap } from '../q3/cm/ClipMap.ts';
 import { vec3, type Vec3Like } from '../q3/math.ts';
 import { Pmove as runPmove } from '../q3/pmove/pmove.ts';
+import { advanceBobCycle, isWalking } from './bobCycle.ts';
 import * as C from '../q3/pmove/constants.ts';
 import {
     FORWARDMOVE,
@@ -71,17 +73,6 @@ import {
     type PlayerState,
     type UserCmd,
 } from '../q3/pmove/types.ts';
-
-/**
- * `PM_Footsteps`' cycle rates, per millisecond, with Q3's own comments on them:
- * "faster speeds bob faster", "walking bobs slow" and "ducked characters bob
- * much faster". All three are bound now -- shift is `+speed`.
- *
- * Moved here from `PlayerController` with the step that reads them.
- */
-const BOBMOVE_RUN = 0.4;
-const BOBMOVE_WALK = 0.3;
-const BOBMOVE_DUCKED = 0.5;
 
 /**
  * Crouch, as a command button. **Not Q3's.**
@@ -302,43 +293,10 @@ export class PlayerSlot {
              reconstructing it from something else gets a second answer that can
              disagree with the ported path -- and did (D-081).
             */
-            this.updateBobCycle(clock.msec);
+            advanceBobCycle(this.ps, this.pmove.cmd, clock.msec);
         }
 
         this.fireIfReady(clock, sink);
-    }
-
-    /**
-     * `PM_Footsteps`' bob counter, for the path that no longer runs it.
-     *
-     * Counted in milliseconds so both solvers agree on a quantity a test can
-     * compare. It costs a little rate at high frame rates, and it costs Q3 the
-     * same. Only the leg animations are missing -- `PM_ContinueLegsAnim` belongs
-     * to a character a slot does not have.
-     */
-    private updateBobCycle(msec: number): void {
-        const ps = this.ps;
-        const cmd = this.pmove.cmd;
-
-        // Airborne leaves the position in the cycle intact but does not advance.
-        if (ps.groundEntityNum === C.ENTITYNUM_NONE) return;
-
-        if (cmd.moves[FORWARDMOVE] === 0 && cmd.moves[RIGHTMOVE] === 0) {
-            // Come to rest at the start of a stride, so the next one is level.
-            if (this.speed < 5) ps.bobCycle = 0;
-            return;
-        }
-
-        // `PM_Footsteps`' order: ducked first, and a ducked walk bobs as a
-        // ducked run does, because Q3 never asks the second question.
-        const bobmove =
-            (ps.pm_flags & C.PMF_DUCKED) !== 0
-                ? BOBMOVE_DUCKED
-                : (cmd.buttons & C.BUTTON_WALKING) !== 0
-                  ? BOBMOVE_WALK
-                  : BOBMOVE_RUN;
-
-        ps.bobCycle = Math.trunc(ps.bobCycle + bobmove * msec) & 255;
     }
 
     /**
@@ -500,7 +458,13 @@ export class PlayerSlot {
         ps.delta_angles[0] = state.deltaAngles[0]!;
         ps.delta_angles[1] = state.deltaAngles[1]!;
         ps.delta_angles[2] = state.deltaAngles[2]!;
-        ps.pm_flags = state.pmFlags;
+        /*
+         Masked, because bit 2 is this port's and not Q3's: `NET_PMF_WALKING`
+         rides in `pmFlags` to save a field (see its docblock) and a live
+         `pm_flags` must not carry it -- a solver that later grew a flag on
+         that bit would find it already set.
+        */
+        ps.pm_flags = state.pmFlags & ~NET_PMF_WALKING;
         ps.pm_time = state.pmTime;
         ps.groundEntityNum = state.groundEntityNum;
         ps.viewheight = state.viewheight;
@@ -561,7 +525,14 @@ export class PlayerSlot {
         state.deltaAngles[0] = ps.delta_angles[0]!;
         state.deltaAngles[1] = ps.delta_angles[1]!;
         state.deltaAngles[2] = ps.delta_angles[2]!;
-        state.pmFlags = ps.pm_flags & 0xffff;
+        /*
+         The command's walk bit travels with the state, because the state is
+         all a client drawing this player has. `store` runs after the step, so
+         this is the same `cmd.buttons` `PM_Footsteps` would have tested.
+        */
+        state.pmFlags =
+            (ps.pm_flags & 0xffff & ~NET_PMF_WALKING) |
+            (isWalking(this.pmove.cmd) ? NET_PMF_WALKING : 0);
         state.pmTime = ps.pm_time;
         state.groundEntityNum = ps.groundEntityNum;
         state.viewheight = ps.viewheight;

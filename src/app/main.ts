@@ -107,9 +107,12 @@ import {
     NetClientSystem,
     NetPresentationSystem,
     NetRenderSystem,
+    NetScoreboardSystem,
     NetWorldSystem,
     type MissilePresenter,
+    type RemoteAudio,
 } from './netSystems.ts';
+import { ScoreboardView } from '../client/ScoreboardView.ts';
 import { HOST_PEER_ID } from '../net/protocol.ts';
 import type { UserCmd } from '../q3/pmove/types.ts';
 import { CHARACTER_HEIGHT, CharacterBodies } from '../client/CharacterBody.ts';
@@ -1741,10 +1744,30 @@ async function main(): Promise<void> {
                 },
             };
 
+            /*
+             Other people's feet.
+
+             `audio.play` is positional, so a footstep is placed where the
+             replicated origin says the player is -- which is where the model
+             was just drawn, because both read the same blended component in the
+             same frame. The local slot is never passed here; `PlayerSystem`
+             plays its own from the predicted state, and a second copy from the
+             wire would double every step the player takes.
+            */
+            const netAudio: RemoteAudio = {
+                footstep: (_slot, originQ3) => {
+                    audio.play('player/footstep', originQ3);
+                },
+                land: (_slot, originQ3) => {
+                    audio.play('player/land', originQ3);
+                },
+            };
+
             await em.addSystem(
                 new NetPresentationSystem({
                     client: netClient,
                     missiles: netMissiles,
+                    audio: netAudio,
                     characterFor: (slot) => {
                         const existing = netCharacters.get(slot);
                         if (existing !== undefined) return existing;
@@ -1763,6 +1786,37 @@ async function main(): Promise<void> {
 
                         return character;
                     },
+                })
+            );
+
+            /*
+             And the scoreboard, which is networked-only: single-player draws
+             kills and deaths in the status bar because there is one other kind
+             of player and it is a bot, where a match has a field.
+
+             Rebuilt from `NetPlayerInfo` on the render frame and only while it
+             is open. That is not laziness about the cost -- `ScoreboardView`
+             writes no DOM for a row whose numbers have not moved -- it is that
+             a board nobody is looking at should not be reading sixteen
+             components either.
+            */
+            const scoreboard = new ScoreboardView();
+            hud.root.addChild(scoreboard.root);
+
+            await em.addSystem(
+                new NetScoreboardSystem({
+                    client: netClient,
+                    view: scoreboard,
+                    /*
+                     Q3 binds the board to `+scores`, which is a key you hold,
+                     and tab is the convention every shooter since has kept.
+                     Polled through meep's own switch rather than a keydown
+                     listener, for the reason the movement keys are (see the
+                     `KEY_*` note in `PlayerController`): a key released while
+                     the window was unfocused cannot get stuck down, which for a
+                     board you hold means it cannot get stuck open.
+                    */
+                    held: () => engine.devices.keyboard.keys['tab']?.is_down === true,
                 })
             );
         }

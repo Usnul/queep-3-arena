@@ -37,8 +37,14 @@ import type { NetClient } from '../client/net/NetClient.ts';
 import type { PlayerController } from '../client/PlayerController.ts';
 import type { ItemSystem } from '../game/Items.ts';
 import { Character, type LegsAnimation, type TorsoAnimation } from '../client/Characters.ts';
-import { NET_WEAPONS } from '../net/components.ts';
+import { NET_PMF_WALKING, NET_WEAPONS, type NetPlayerState } from '../net/components.ts';
 import { SESSION_TICK_SECONDS } from '../net/protocol.ts';
+import { Footsteps } from '../client/Audio.ts';
+import {
+    scoreboardRows,
+    type ScoreboardRow,
+    type ScoreboardSource,
+} from '../client/scoreboard.ts';
 
 /**
  * Slack on the accumulator's comparison, and it is not superstition.
@@ -212,6 +218,98 @@ export class NetRenderSystem extends System<never> {
  * ------------------------------------------------------------------ */
 
 /**
+ * The scoreboard, from `NetPlayerInfo`, while somebody is holding the key.
+ *
+ * On `update` rather than `fixedUpdate`, because it draws: a board that
+ * refreshed on the fixed step would lag the frame the key was pressed on by up
+ * to a whole simulation tick before appearing.
+ *
+ * **It reads nothing while it is closed.** `held()` gates the sixteen component
+ * reads as well as the DOM write, which matters because `ScoreboardView` already
+ * skips a row whose numbers have not changed -- so without this gate the only
+ * cost saved would be the one that was already free, and the sort would run
+ * sixty times a second for nobody.
+ */
+export class NetScoreboardSystem extends System<never> {
+    private readonly client: NetClient;
+    private readonly view: ScoreboardTable;
+    private readonly held: () => boolean;
+
+    /** Scratch, so a frame with the board open allocates one array not two. */
+    private readonly sources: ScoreboardSource[] = [];
+
+    constructor(options: {
+        client: NetClient;
+        view: ScoreboardTable;
+        /** True while the player is asking to see it. Q3's `+scores`. */
+        held: () => boolean;
+    }) {
+        super();
+
+        this.client = options.client;
+        this.view = options.view;
+        this.held = options.held;
+
+        for (const slot of options.client.slots) {
+            this.sources.push({
+                index: slot.index,
+                connected: false,
+                name: '',
+                isBot: false,
+                kills: 0,
+                deaths: 0,
+            });
+        }
+    }
+
+    override update = (): void => {
+        const open = this.held();
+        this.view.setVisible(open);
+        if (!open) return;
+
+        const client = this.client;
+
+        for (let i = 0; i < client.slots.length; i++) {
+            const slot = client.slots[i]!;
+            const info = slot.info;
+
+            /*
+             `connected` from `NetPlayerState` and the rest from
+             `NetPlayerInfo`, which is the only pair of components that has to
+             be read together here -- and the reason is GAP-045. Info is
+             published on change and a single mutation is not reliably
+             delivered, so a slot's name and score can be several frames stale
+             while its `connected` flag, published every frame with the rest of
+             the state, is current. Taking presence from the reliable one keeps
+             a joining player's row from appearing before it exists and a
+             leaver's from lingering.
+            */
+            this.sources[i] = {
+                index: slot.index,
+                connected: slot.state.connected !== 0,
+                name: info.name,
+                isBot: info.isBot !== 0,
+                kills: info.kills,
+                deaths: info.deaths,
+            };
+        }
+
+        this.view.update(scoreboardRows(this.sources, client.slotIndex));
+    };
+}
+
+/**
+ * As much of the board as the system drives.
+ *
+ * Narrow for the reason {@link RemoteCharacter} is: `ScoreboardView` owns DOM
+ * elements, and two methods can be recorded by a test that has no document.
+ */
+export interface ScoreboardTable {
+    setVisible(visible: boolean): void;
+    update(rows: readonly ScoreboardRow[]): void;
+}
+
+/**
  * As much of a character as the networked presentation drives.
  *
  * Narrow on purpose, and the reason is not tidiness: the browser this port is
@@ -254,6 +352,21 @@ export interface MissilePresenter {
 }
 
 /**
+ * A remote player's footfalls, as two calls.
+ *
+ * Narrow for the same reason {@link RemoteCharacter} is, and one more: the
+ * thing on the other end of this is a positional sound, and the audio bank
+ * needs a running `AudioContext` that the preview browser has no more than it
+ * has a GPU. Two methods can be recorded.
+ */
+export interface RemoteAudio {
+    /** `EV_FOOTSTEP`: the cycle crossed one of its two peaks, on the ground. */
+    footstep(slot: number, originQ3: ArrayLike<number>): void;
+    /** `EV_FALL_SHORT`: this slot was airborne last frame and is not now. */
+    land(slot: number, originQ3: ArrayLike<number>): void;
+}
+
+/**
  * Where a slot nobody is in keeps its model.
  *
  * The same problem the bodies had (GAP-044) and the same answer, for a
@@ -284,7 +397,18 @@ export class NetPresentationSystem extends System<never> {
     private readonly client: NetClient;
     private readonly characterFor: (slot: number) => RemoteCharacter | null;
     private readonly missiles: MissilePresenter | null;
+    private readonly audio: RemoteAudio | null;
     private readonly parked = new Float64Array(3);
+
+    /**
+     * One footfall tracker per slot, because the state is per player.
+     *
+     * `Footsteps` holds the previous cycle and the previous ground contact, so
+     * a single instance driven by sixteen slots in turn would compare slot 3's
+     * cycle against slot 2's and fire on the difference -- which is a footstep
+     * every frame for every pair of players who are not in step.
+     */
+    private readonly footsteps: Footsteps[];
 
     /** What each missile pool slot was doing last frame. See {@link drawMissiles}. */
     private readonly missileActive: Uint8Array;
@@ -296,14 +420,18 @@ export class NetPresentationSystem extends System<never> {
         characterFor: (slot: number) => RemoteCharacter | null;
         /** Null draws no missiles, which is what the tests without models do. */
         missiles?: MissilePresenter | null;
+        /** Null plays nothing, which is what a test without an AudioContext does. */
+        audio?: RemoteAudio | null;
     }) {
         super();
 
         this.client = options.client;
         this.characterFor = options.characterFor;
         this.missiles = options.missiles ?? null;
+        this.audio = options.audio ?? null;
         this.missileActive = new Uint8Array(options.client.missiles.length);
         this.missileGeneration = new Uint16Array(options.client.missiles.length);
+        this.footsteps = options.client.slots.map(() => new Footsteps());
     }
 
     override update = (deltaSeconds: number): void => {
@@ -330,6 +458,8 @@ export class NetPresentationSystem extends System<never> {
             const yaw = state.viewangles[1]!;
             character.place(state.origin, yaw);
 
+            this.stepSound(slot.index, state);
+
             character.setLegs(state.alive === 0 ? 'LEGS_IDLE' : legsOf(state, yaw));
 
             /*
@@ -349,6 +479,47 @@ export class NetPresentationSystem extends System<never> {
         this.drawMissiles();
         this.missiles?.advance(deltaSeconds);
     };
+
+    /**
+     * `EV_FOOTSTEP` and `EV_FALL_SHORT`, for somebody else.
+     *
+     * `bobCycle` is replicated and is the whole clock: `PM_Footsteps` returns
+     * before advancing it when the player is airborne or is not pressing a
+     * direction, so a cycle that moves at all means a player moving on the
+     * ground, and `Footsteps` only has to find the crossing. That is why this
+     * needs no extra field for "is stepping" -- the absence of one is the
+     * answer.
+     *
+     * **Read on `update`, off blended values, and that is right rather than a
+     * compromise.** The cycle is a `& 255` counter, so blending two samples
+     * across its wrap would produce a value between 255 and 0 and a crossing
+     * that never happened. It does not, because the cycle is registered with no
+     * interpolation adapter -- it arrives as the host's own integer and is held
+     * until the next one. A crossing found here is a crossing the host had.
+     *
+     * A dead slot is skipped: a corpse's cycle stops moving, but the frame it
+     * dies on can still carry one last crossing, and Q3 plays no footstep for a
+     * body.
+     */
+    private stepSound(slot: number, state: NetPlayerState): void {
+        const audio = this.audio;
+        if (audio === null) return;
+
+        const tracker = this.footsteps[slot]!;
+        const onGround = state.groundEntityNum !== C.ENTITYNUM_NONE;
+
+        const event = tracker.update(
+            state.bobCycle,
+            onGround,
+            state.ducked !== 0,
+            (state.pmFlags & NET_PMF_WALKING) !== 0
+        );
+
+        if (event === null || state.alive === 0) return;
+
+        if (event === 'step') audio.footstep(slot, state.origin);
+        else audio.land(slot, state.origin);
+    }
 
     /**
      * Every rocket, grenade and plasma ball in the air, from the pool.

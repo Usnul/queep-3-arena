@@ -10562,3 +10562,94 @@ above is what says nothing was actually lost", which is the one sentence this wo
 achieve it, the residual bounded against a target of zero at the ones that do not, and the
 head-filtered counter asserted to agree with the honest count, so the diagnosis above is a thing a
 maintainer can re-run rather than a thing they have to take on faith.
+
+### D-190: the scoreboard, other people's footsteps, and a field that had been publishing zero since step 3
+
+Two of step 6's three missing pieces of presentation. Both are read-only consumers of state that was
+already on the wire, and one of them found that the state was not actually there.
+
+**The scoreboard is two files because the arithmetic is the part that can be wrong.**
+`src/client/scoreboard.ts` is `CalculateRanks` as a function over sixteen slots' worth of
+`NetPlayerInfo`; `src/client/ScoreboardView.ts` is the table. The split is `statusBar.ts`'s, for
+`statusBar.ts`'s reason -- the preview browser cannot start a renderer, so a ranking inside a DOM
+view can only be looked at. What the ranking gets right and would have been easy to get wrong:
+
+- **The sort key is frags alone**, because `SortRanks` compares `PERS_SCORE` and nothing else. 10
+  frags and 9 deaths beats 9 and none. Every instinct says to break the tie on deaths and doing so
+  is a different game's scoreboard.
+- **Ranks are shared, not sequential.** Three players on four frags are all 1st and the next is 4th,
+  which is what `CalculateRanks` does as it walks the sorted list. A view numbering its own rows
+  1, 2, 3, 4 is wrong every time there is a tie, and in a deathmatch that is most of the match.
+- **Ties keep slot order, and that is this port's choice.** `SortRanks` returns 0 for equal scores
+  and `G_SortScores` hands that to `qsort`, which is not stable in C -- so Q3's tie order is
+  undefined and two clients can legitimately disagree. Slot order is stable, reproduces, and is the
+  same on every peer, which is what a networked board wants and the only thing a test can hold.
+- **Presence comes from `NetPlayerState.connected`, not from a non-empty name.** `NetPlayerInfo` is
+  published on change and a single mutation is not reliably delivered (GAP-045), so a name can be
+  late; a roster that waits for one is short a player for the first frames of every join. The test
+  log shows this happening -- the local slot draws as `player 0` -- and `displayName` is what makes
+  it read as an introduction in progress rather than a broken row.
+
+**Three columns, not four.** `NetPlayerInfo.pingMs` is on the wire and has always been zero: meep's
+`NetworkPeer` exposes no round-trip estimate, so a number needs a ping/pong over
+`send_reliable_command`, which D-173 assessed and v1 does not do. The column is **absent rather than
+zero**, because a board reading "0 ms" for every player on a 150 ms link is worse than one that does
+not claim to know, and a zero is indistinguishable from an answer. `PING_HAS_NO_SOURCE` exists so
+that the day there is a number, the thing to delete is findable by grep.
+
+**Remote footsteps, and the field that was dead.** `NetPresentationSystem` grew a `RemoteAudio`
+interface of two methods and one `Footsteps` per slot -- per slot, because `Footsteps` holds the
+previous cycle and the previous ground contact, so one instance driven by sixteen slots in turn would
+compare slot 3's cycle against slot 2's and fire on the difference, which is a footstep every frame
+for every pair of players not in step.
+
+It measured **zero footsteps**. `bobCycle` was 0 on the wire for every bot -- and 0 on the host, in
+the bot's own `playerState_t`. The counter lived in `PlayerSlot.updateBobCycle`, a bot is not a
+`PlayerSlot` (D-050: `Bot` is its own `usercmd_t` producer and consumer), and nothing else advanced
+it. So `storeBot` has published `bobCycle` since step 3 with **zero in it every frame**, and bots
+have been silent in single-player too, for as long as there have been bots. A dead field on the wire
+is invisible until something reads it. Extracted to `src/game/bobCycle.ts` and advanced for bots in
+`Host.worldStep`, right after `bots.update` has consumed each command, so the command that produced
+this frame's motion is the one the cycle advances by -- which is what `PM_Footsteps` does inside a
+`pmove`.
+
+**And then the walk bit, which took a wrong turn worth recording.** `PM_Footsteps` plays no footstep
+from its walk branch, because a walking player is sneaking, and it decides run from walk by
+`cmd.buttons & BUTTON_WALKING` -- which is not replicated. The first attempt inferred it from the
+replicated velocity: `PmoveSingle` clears `BUTTON_WALKING` above a move axis of 64 and `PM_CmdScale`
+therefore caps a walking player at `320 * 64 / 127` = 161 u/s, so anyone faster is certainly running.
+Sound reasoning, and useless: measured over a four-bot match on `oa_dm1`, **only 31% of grounded bot
+frames are above the ceiling**, because a bot turning, pathing or scraping a wall spends most of its
+time slower than a walk while running flat out. The inference suppressed about two thirds of every
+bot's footsteps -- 7 to 42 steps per bot over eighty seconds where there should be a hundred and
+twenty. **A player cannot be told apart from a sneak by their speed.**
+
+The fix is `NET_PMF_WALKING`, a bit in `pmFlags` **bit 2, which Q3 leaves empty** -- Q3 and OpenArena
+between them use bits 0, 1, 3, 4, 5, 6 and 8 through 15. `pmFlags` is already a `uint16` on the wire,
+so this costs **no additional bytes**, against a new `uint8` field at 480 B/s per client on a
+downstream measured at 45.8 of a 48 KB/s budget. Three consequences, all of them written down where
+they bite:
+
+- `PlayerSlot.load` masks it off before the value reaches a live `pm_flags`, so a solver that later
+  grows a flag on bit 2 does not find it already set.
+- Both `PlayerSlot.store` and `Host.storeBot` write it, from the command, after the step -- so the
+  bit is the one `PM_Footsteps` would have tested, and the two peers agree. That agreement is not
+  optional: `pmFlags` is inside `NetPlayerState.equals`, so a bit the host set and the client did not
+  would disagree on every AUTH_STATE and break the prediction short-circuit, which is GAP-044's
+  failure mode exactly. `net-loopback.test.ts`'s short-circuit tests are what confirm it does not.
+- `isWalking` applies `PmoveSingle`'s own veto -- the bit is ignored above a move axis of 64 -- so
+  both movement backends give Q3's answer, where before the meep backend would have honoured a bit
+  the ported solver clears.
+
+**Measured after the fix:** 121, 120, 135 and 121 footsteps per bot over 2,400 frames, at a mean gap
+of 19.3 frames. Flat-out running is a step every ten frames at 30 Hz; twice that is the bots rather
+than the mechanism, since `advanceBobCycle` holds the cycle still while a slot is airborne or
+pressing nothing and a bot on `oa_dm1` is grounded 69% of the time.
+
+**Read at render rate, and that is correct rather than a compromise.** `bobCycle`,
+`groundEntityNum` and `pmFlags` are in `NetPlayerStateAdapter.interpolate`'s discrete block -- taken
+from the newer sample verbatim, never blended -- so repeated reads inside one interpolation interval
+see one value and produce no spurious crossing. Blending a `& 255` counter would produce a value
+between 255 and 0 and a crossing that never happened; the adapter is why that cannot occur.
+
+**What is still missing from step 6:** teleporters and jump pads, which is D-191.
