@@ -39,6 +39,8 @@ import {
 } from '../src/app/netSystems.ts';
 import { MAX_CLIENTS } from '../src/net/protocol.ts';
 import { FORWARDMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
+import { weaponIndex } from '../src/net/components.ts';
+import * as C from '../src/q3/pmove/constants.ts';
 import type { LegsAnimation, TorsoAnimation } from '../src/client/Characters.ts';
 
 /** Frames measured. Long enough for a fight to happen and rockets to fly. */
@@ -50,7 +52,10 @@ function angleToShort(degrees: number): number {
 }
 
 /** The circling walk the rest of the networked suite runs, and for its reasons. */
-function circleWalk(cmd: { angles: Int16Array; moves: Int8Array }, frame: number): void {
+function circleWalk(
+    cmd: { angles: Int16Array; moves: Int8Array; buttons: number; weapon: number },
+    frame: number
+): void {
     cmd.angles[1] = angleToShort(frame * 4);
     cmd.moves[FORWARDMOVE] = 127;
     cmd.moves[UPMOVE] = frame % 30 === 0 ? 127 : 0;
@@ -152,20 +157,29 @@ beforeAll(async () => {
      were about a pool that had never held anything. Sharing the walk shares the
      match everything else in the suite is measured against.
     */
-    client.script = circleWalk;
+    client.script = (cmd, frame) => {
+        circleWalk(cmd, frame);
+        cmd.weapon = weaponIndex('WP_ROCKET_LAUNCHER') + 1;
+        cmd.buttons |= C.BUTTON_ATTACK;
+    };
 
     /*
-     One bot handed a rocket launcher, rather than hoping somebody walks over
-     one. The missile assertions below are about *presenting a replicated
-     missile*, and making them wait on item luck made them silently vacuous:
-     three bots on seed 77 played a whole match without firing a rocket, and the
-     pool they were asserting about was empty the entire time. A test that can
-     pass by never exercising its subject is worse than no test.
+     **The client fires the rockets, not a bot.** These assertions are about
+     presenting a *replicated* missile, and every version of this fixture that
+     waited on the AI to produce one was silently vacuous sooner or later: three
+     bots on seed 77 played a whole match without firing a rocket, and handing a
+     bot a launcher only moved the dependency to whether the bot ever saw
+     anybody -- which stopped happening again the moment meep 3.14.6 changed
+     where a joining client starts and therefore where it walks.
+
+     A test whose subject appears only when the pathfinding cooperates is a test
+     that passes by not running. The client's own trigger is deterministic: the
+     host grants the weapon, `NetInventory` replicates it, `usercmd_t.weapon`
+     selects it (D-182) and the cooldown does the rest.
     */
-    const gunner = rig.host.slots.find((slot) => slot.bot !== null)!;
-    gunner.bot!.inventory.weapons.add('WP_ROCKET_LAUNCHER');
-    gunner.bot!.inventory.ammo['WP_ROCKET_LAUNCHER'] = 200;
-    gunner.bot!.weapon = 'WP_ROCKET_LAUNCHER';
+    const mine = rig.host.slots[client.net.slotIndex]!;
+    mine.slot.inventory.weapons.add('WP_ROCKET_LAUNCHER');
+    mine.slot.inventory.ammo['WP_ROCKET_LAUNCHER'] = 400;
 
     const recorders = new Map<number, Recorder>();
     const missiles = new MissileLog();

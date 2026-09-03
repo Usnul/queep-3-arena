@@ -38,7 +38,8 @@ over a WebSocket would be fewer lines — and files every place it does not fit 
 - The engine's own docs on the package: `node_modules/@woosh/meep-engine/src/engine/network/README.md`
   and `CONGESTION_CONTROL.md`, then the docblocks in `NetworkSession.js`, `ServerAuthoritativeServer.js`,
   `ServerAuthoritativeClient.js`, `NetworkPeer.js`, `replication/Replicator.js`. §3.2 and §3.3
-  below summarise what was found there against meep **3.14.2**; re-verify against whatever
+  below summarise what was found there against meep **3.14.2**; the port now runs **3.14.6**,
+  and §1.4 lists what moved between them. Re-verify against whatever
   version `package.json` pins when you start, because this port has watched the engine move
   under it mid-session before (`vite.config.ts` `MEEP_PATCHES`).
 
@@ -834,6 +835,15 @@ Take the next free numbers at the time of writing; titles are indicative.
 8. What v1 does not do (lag compensation, predicted pads, reconnect, WebRTC), with the reasons.
 
 ## 9. Tracking
+
+**Engine: meep 3.14.6.** What each upgrade moved, so the numbers below can be read against the
+version that produced them:
+
+| version | what it changed here |
+|---|---|
+| 3.14.4 | the host's rollback loop on a clean link (D-176) |
+| 3.14.5 | the event loss under reordering, by slicing a tick's owed range across up to `max_packets_per_tick` packets (D-177) |
+| 3.14.6 | **closes GAP-042** -- `onInitialSync` now seeks a joining client to the host's frame and `seek_to_frame` is public, so `NetClient.fastForward` is redundant and should come out. Adds `remote_entity_count`, which makes GAP-040's symptom visible. Adds `delivery_stats(peer)`, the instrument GAP-043's residual needed -- **and it reports 8/27/80 frames skipped unapplied at 40/80/150 ms on the default configuration, which its own docblock says should be zero (GAP-047)**. Fixes a `.d.ts` generation bug in `NavigationMesh.build` (GAP-001's family), which turned this port's workaround cast into the compile error. Join-time behaviour changed with it: a client now converges for about a second on a delayed link and the host rolls back while it does, after which it rolls back **not at all** -- steady-state coherence rose from 91.2% to 96.6% at 80 ms |
 
 | step | state |
 |---|---|

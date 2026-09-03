@@ -269,12 +269,15 @@ function routable(mesh: BinaryTopology, spawns: number[][]): string {
     const t0 = performance.now();
     try {
         /*
-         Cast because the generated `.d.ts` types `build`'s *options object* as
-         `BinaryTopology`: the JSDoc puts `@param {BinaryTopology} source` on a
-         destructured parameter and the generator hoists that type onto the whole
-         object. GAP-001's family.
+         No cast. Until meep 3.14.6 the generated `.d.ts` typed `build`'s
+         *options object* as `BinaryTopology` -- the JSDoc put
+         `@param {BinaryTopology} source` on a destructured parameter and the
+         generator hoisted that type onto the whole object, so the only way to
+         call it from TypeScript was to lie about the argument. 3.14.6 emits the
+         real object type and the workaround became the error. GAP-001's family,
+         one member smaller.
         */
-        navmesh.build({ source: mesh, up: new Vector3(0, 0, 1), ...AGENT } as unknown as BinaryTopology);
+        navmesh.build({ source: mesh, up: new Vector3(0, 0, 1), ...AGENT });
     } catch (e) {
         return `build failed: ${(e as Error).message}`;
     }

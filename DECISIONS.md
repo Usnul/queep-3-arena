@@ -10341,3 +10341,56 @@ failure was captured. Six clean full runs before and after, and the two socket-b
 stable across four runs in isolation. Recorded rather than dismissed: it is most likely a timing
 tolerance somewhere in the socket tests, and the next person to see a red run on a busy machine
 should capture the name before re-running.
+
+### D-187: meep 3.14.6 closes GAP-042, hands us the instrument GAP-043 needed, and the instrument disagrees with the engine
+
+Upgraded from 3.14.5. Only two files under `engine/network` changed -- `NetworkSession.js` and
+`replication/Replicator.js` -- and between them they close one gap, make a second one visible, and
+open a third.
+
+**GAP-042 is closed.** `onInitialSync` had a `_frame_number` parameter it discarded; it now takes it
+and calls `seek_to_frame(frame_number + 1 + target_buffer_depth)`, and `seek_to_frame` is public and
+documented. A joining client aligns itself. `NetClient.fastForward` -- the workaround that ticked the
+session forward with the sampler silenced, at a cost proportional to the age of the match -- is now
+redundant and should come out; it is left in place for the moment because the join-time behaviour
+below is what the new measurements characterise and removing it deserves its own re-measurement.
+
+**The join is tighter than our guess was, and that is a visible change.** `target_buffer_depth`
+starts at `TimeDilation`'s initial target rather than at the generous `SIMULATION_DELAY_TICKS + 2`
+the workaround used, so a client joining over a delayed link converges for about a second and the
+host rolls back while it does: 42 rewinds at 40 ms clean, **all between frames 5 and 44**, and 80 at
+80 ms, all inside the first 84. After that, **not one**. Steady state is strictly better than before
+-- zero rewinds at every latency, where the old arrangement produced about one a run, and coherence
+at 80 ms rose from 91.2% to **96.6%**. `test/net-latency.test.ts` now counts join and steady state
+separately, because a single counter answered neither question well.
+
+**GAP-040's symptom is visible.** `remote_entity_count` exposes `#remote_entities.size`, and its
+docblock names the exact failure this port hit: zero on a connected client that has a snapshot means
+nothing will be interpolated and the client is about to send the host its own state back. The
+defaulting rule is unchanged so the workaround stays, but the failure is now catchable.
+
+**And the new instrument disagrees with its own documentation.** `delivery_stats(peer)` returns
+`{skipped_unapplied, skipped_duplicate}` -- exactly the counter GAP-043's residual needed, and a
+genuinely excellent addition, because the whole difficulty of that bug was that a skipped frame and
+a duplicate look identical from outside. Its docblock says `skipped_unapplied` "should stay at zero"
+on the default `max_packets_per_tick`. Measured on the default: **8 frames at 40 ms, 27 at 80, 80 at
+150**, while the event counts stay at 302/302, 297/300 and 288/300. Most frames carry no event, so
+most skipped frames cost nothing visible -- which is precisely why the counter is the better thing
+to watch, and precisely why the two columns disagreeing matters. Filed as **GAP-047**, and
+deliberately not asserted at zero: whether these are genuinely lost frames or an artefact of the
+ring-indexed `applied` test answering "no" for frames older than its window is not established here.
+
+**Two test fixtures had to stop depending on luck.** The changed join alignment moves where a client
+walks, which moves whether bots ever meet it, which collapsed the event sample in
+`net-latency.test.ts` from 224 to **five** and emptied the missile pool in `net-presentation.test.ts`
+entirely. Neither was a delivery problem and both would have been read as one. Both now generate
+their own subject -- the client holds the trigger, and for the missiles it is handed a rocket
+launcher and selects it through `usercmd_t.weapon` -- so the samples are 302 events and 100 rockets
+rather than whatever the pathfinding produced. **A test whose sample size is decided by AI luck
+cannot measure a rate**, and this is the third time in this plan that lesson has cost an hour.
+
+**One ergonomics gap closed outside the network.** `NavigationMesh.build`'s generated `.d.ts` used to
+type its *options object* as `BinaryTopology`, because the JSDoc put `@param {BinaryTopology} source`
+on a destructured parameter and the generator hoisted it -- GAP-001's family. 3.14.6 emits the real
+object type, and the cast this port carried to work around it became the only compile error in the
+upgrade. A workaround outliving its bug is a good failure mode.
