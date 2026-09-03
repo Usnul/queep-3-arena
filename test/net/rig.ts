@@ -109,6 +109,8 @@ export interface RigOptions {
     simulationDelayTicks?: number;
     /** Action-log ring depth, in frames. Applied to both peers. */
     frameCapacity?: number;
+    /** Cull replication to each client's PVS. See `PvsScope`. */
+    pvsCulling?: boolean;
 }
 
 export class NetRig {
@@ -148,6 +150,7 @@ export class NetRig {
             difficulty: options.difficulty,
             simulationDelayTicks: options.simulationDelayTicks,
             frameCapacity: options.frameCapacity,
+            pvsCulling: options.pvsCulling,
         });
 
         const rig = new NetRig(host, options.link ?? 'loopback');

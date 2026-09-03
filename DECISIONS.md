@@ -10753,3 +10753,96 @@ silence.
   `NetMover` producer will publish from, and a `func_door` whose clock has been running since the
   match started is in the right place on the day the host grows bodies. They change nothing
   observable meanwhile: nothing reads their origins and nothing collides with them.
+
+### D-192: relevance culling halves the downstream on one map and does nothing on another, and meep had the hook all along
+
+The thing REPORT §5's two tables both point at. The plan's instruction was to check whether meep
+offers a scope or relevance hook beyond `OwnerAwareScope` before building one here, and the answer
+turns two of the plan's own premises over.
+
+**It does, and it is fully wired.** `NetworkSession` takes a `scope_filter` constructor option.
+`Replicator.pack_for_peer` consults `is_entity_in_scope(peer_id, network_id)` for every record in
+the owed range, packs only what passes, and **writes no packet at all** for a peer with nothing in
+scope. `ScopeFilter.js` ships `AlwaysRelevantScope` and `OwnerAwareScope` and its own docblock names
+PVS culling and area-of-interest as what a game is expected to supply.
+
+**And "no filtering" was wrong for a second reason: component mutations are actions.**
+`net_mutate_component` becomes a `ReplaceComponentAction` in the action log, so the filter covers
+the whole of the replication traffic rather than only the game's own events. The half of the plan's
+premise that *was* right is the baseline: there is no delta compression against each client's
+acknowledged snapshot, so an in-scope component costs its full bytes every time it changes. Culling
+removes entities; it does not make the ones that stay cheaper.
+
+**One thing the engine has and does not use.**
+`network/state/PriorityAccumulator.js` is a complete starvation-resistant per-action-type priority
+scheduler -- and its own docblock says "wiring it into `Replicator.pack_for_peer` is the
+orchestrator's concern; the prototype's tiny action volumes make integration unnecessary". So
+`Replicator` never consults it. It is the right thing for the *other* half of the problem (which
+action gets the last 200 bytes of an MTU-bound packet) and it is inert. Recorded as an observation
+rather than a gap: an unwired data structure with a docblock saying it is unwired is honest.
+
+**What was built.** `src/q3/cm/pvs.ts` is `CM_PointLeafnum_r` plus `CM_ClusterPVS` --
+`clusterAt(cm, x, y, z)` and `clusterVisible(vis, from, to)` -- and `BspFile.visibility` hands over
+the lump. **The lump is in this port's collision BSP**, which is what made this a measurement rather
+than an estimate: `tools/convert-map.ts` keeps the whole lump table rather than the lumps somebody
+thought collision needed, so `oa_dm1` carries 23,640 bytes of it. `src/server/PvsScope.ts` is the
+filter, behind `HostOptions.pvsCulling`.
+
+**Measured, 6 clients and 4 bots for 20 s, which is REPORT §5's own configuration:**
+
+| map | clusters | pairs mutually visible | KB/s per client, off -> on | bytes saved | packets |
+|---|---:|---:|---:|---:|---:|
+| `oa_dm1` | 422 | 22% | **42.9 -> 19.3** | **55.0%** | 14,400 -> 10,800 |
+| `am_thornish` | 72 | 76% | 41.0 -> 41.0 | 0.1% | 14,400 -> 14,374 |
+
+On `oa_dm1`, 65,935 of 112,974 relevance questions are answered "not visible", against 14,410 the
+owner rule catches on its own. **On `am_thornish`, visibility answers "no" fifty-two times.** Same
+netcode, same six paths, same seed; both runs bit-for-bit reproducible.
+
+**So the conclusion is about maps rather than about netcode**, and that is the finding. `oa_dm1` is
+422 clusters and a player can see about a fifth of them; `am_thornish` is four alcoves around one
+hall, compiles to 72 clusters, and 76% of its cluster pairs are mutually visible, so there is nothing
+to remove. A port that ships both needs this measured per map rather than quoted as a number -- which
+is why `test/net-relevance.test.ts` prints the table on every run rather than asserting a value.
+
+The packet *count* falling by a quarter on `oa_dm1` is the other table's currency: a peer with
+nothing in scope for a frame gets no packet, so there is a quarter less to pack as well as half as
+much to send. That is the direction REPORT §5's superlinear host cost needed, though this entry does
+not claim a CPU figure -- the rig's clock is its own step counter and a wall-clock measurement
+belongs with the bench that took the original.
+
+**The bug this measurement caught, which is the reason to measure rather than reason.** The first
+version of `PvsScope` answered the visibility question alone. `NetworkSession` installs
+`scope_filter || new OwnerAwareScope(...)`, so **supplying a filter replaces the default rather than
+adding to it** -- and the default is load-bearing: its docblock says the host must not echo a
+client-owned entity's actions back to that client, "otherwise the executor would re-apply them on
+top of the client's prediction". With it gone, `am_thornish` traffic went **up 10.2%** while culling
+0.1% of it, at an unchanged packet count. That is the shape of an echo, not of a filter. The fix is
+the conjunction -- not the recipient's own, **and** visible -- and the two are counted separately so
+the visibility figure is the visibility figure. `net-relevance.test.ts` asserts the owner rule is
+still running (14,400 culls, one per client per frame) precisely because losing it is silent.
+
+**Why it is off by default, and this is the honest shortfall.** When a slot leaves a client's PVS its
+`NetPlayerState` stops arriving, and `NetPresentationSystem` draws any slot whose replicated
+`connected` is set -- so a culled player **freezes mid-stride instead of disappearing**. Q3 does not
+have this problem: an entity absent from a snapshot is absent from `cg_entities` and is not drawn.
+Fixing it means the client knowing a slot's state is stale, and `NetPlayerState` carries no way to
+say so -- nor can the client infer it, because a slot standing still and a slot being culled produce
+the same unchanged component. The candidates are a per-slot last-seen frame the client tracks off
+`onFrameApplied` (which reports frames, not entities), or a `stale` bit the host cannot set because
+staleness is per recipient and the component is shared. That is the next piece of work, and it is
+presentation rather than netcode.
+
+Two smaller decisions inside the filter, both recorded where they are made:
+
+- **Items and the match are always in scope.** An item publishes only when its `present` flag
+  flips -- a handful of times a minute -- so culling it saves nothing measurable and would put a
+  *single mutation* behind a visibility test, which is exactly what GAP-045 says is not reliably
+  delivered; a lost `NetItem.present` is an item invisible to one client and solid to the host. The
+  reason is delivery, not bandwidth.
+- **A peer's cluster is found once per frame, not once per question.** `pack_for_peer` asks about
+  every record for a peer in one pass and `clusterAt` is a BSP descent. Getting that backwards would
+  spend the host CPU the bandwidth was being saved for, which is the table this was meant to help.
+- **No area portals.** Q3 refines the PVS with `areaportal` state so a closed door hides a room; that
+  needs solid movers on the host (GAP-041) and it only ever *removes* entities, so leaving it out is
+  conservative in the direction that keeps the game correct.

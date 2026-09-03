@@ -404,6 +404,23 @@ export class BspFile {
     /* ---------------- collision lumps ---------------- */
 
     /** `float normal[3], dist` per plane, flat. */
+    /**
+     * `LUMP_VISIBILITY`, as bytes with no interpretation.
+     *
+     * The same arrangement as `lightGridPoints` and for the same reason:
+     * `q3/cm/pvs.ts` owns the cluster arithmetic, because the header
+     * (`numClusters`, `clusterBytes`) and the bit test belong with the code
+     * that walks the BSP tree to find a cluster, and this class does not walk
+     * trees.
+     *
+     * Zero-length on a map compiled with `-novis`, which `readVisibility`
+     * turns into a set that answers "visible" for every pair.
+     */
+    get visibility(): Uint8Array {
+        const l = this.lump(LUMP.VISIBILITY);
+        return this.bytes.subarray(l.offset, l.offset + l.length);
+    }
+
     get planes(): Float32Array {
         return this.f32(LUMP.PLANES);
     }

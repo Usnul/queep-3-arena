@@ -3220,12 +3220,37 @@ half as many of them between one acknowledgement and the next.
 
 **It is met, and the structural problem is not solved.** Q3 delta-compresses each client's snapshot
 against the last one *that client acknowledged*; meep sends every component that changed since the
-last tick, to everybody, with no per-client baseline and no relevance filtering. Ten moving slots is
-still ten players' worth of state to each of six clients every tick, and `NetPlayerState` is still 70
-bytes of `float32` where Q3 sent quantised 16-bit positions. What the rate change bought is headroom,
-not a fix: the three levers — **relevance culling**, a lower publish rate for remote slots than for
-the local prediction, and **quantisation** — are all still the answer, and the first is still worth
-more than the other two together.
+last tick, with no per-client baseline. Ten moving slots is still ten players' worth of state to each
+of six clients every tick, and `NetPlayerState` is still 70 bytes of `float32` where Q3 sent
+quantised 16-bit positions. What the rate change bought is headroom, not a fix: the three levers —
+**relevance culling**, a lower publish rate for remote slots than for the local prediction, and
+**quantisation** — are all still the answer.
+
+**Two corrections to the paragraph above, both from D-192, and the first one is mine.**
+
+1. **"No relevance filtering" was wrong.** meep has the hook and it is fully wired:
+   `NetworkSession` takes a `scope_filter`, `Replicator.pack_for_peer` consults
+   `is_entity_in_scope(peer_id, network_id)` for every record and writes no packet at all for a peer
+   with nothing in scope, and **component mutations are actions** — `net_mutate_component` becomes a
+   `ReplaceComponentAction` — so the filter covers the whole of this traffic and not just the game's
+   own events. `ScopeFilter.js` even names PVS culling as the expected use. The half that was right is
+   the baseline: there is no per-client delta, so culling removes entities and does not make the ones
+   that stay cheaper.
+2. **The first lever is worth more than the other two together on one map and nothing at all on
+   another.** Built and measured (`src/server/PvsScope.ts`, `test/net-relevance.test.ts`), 6 clients
+   and 4 bots for 20 s, which is this table's own configuration:
+
+| map | clusters | cluster pairs mutually visible | KB/s per client, off → on | bytes saved | packets |
+|---|---:|---:|---:|---:|---:|
+| `oa_dm1` | 422 | 22% | **42.9 → 19.3** | **55.0%** | 14,400 → 10,800 |
+| `am_thornish` | 72 | 76% | 41.0 → 41.0 | 0.1% | 14,400 → 14,374 |
+
+   On `oa_dm1`, 65,935 of 112,974 relevance questions are answered "not visible". On `am_thornish`,
+   fifty-two are — four alcoves around one hall compile to 72 clusters that mostly see each other, so
+   there is nothing to remove. **So the lever's value is a property of the map rather than of the
+   netcode**, and a report that quoted one number for it would be wrong about half the set. It is off
+   by default: a culled slot freezes rather than disappearing, because `NetPresentationSystem` draws
+   anything whose replicated `connected` is set and `NetPlayerState` has no way to say "stale".
 
 #### Host CPU, `Host.step` alone
 
@@ -3256,9 +3281,16 @@ marginal cost of a client was 114 µs each for the first two, 185 for the next t
 last two; at 30 Hz the shape is the same, roughly 184 µs per client from zero to four and 408 from
 four to six. That is an `O(n²)` signature either way, with two candidates in the same place — every
 slot's state replicated to every other client, and every character body a broadphase pair with every
-other. Halving the rate halves the constant in front of it and does not change the exponent, so
-sixteen slots is still out of reach without the relevance culling the bandwidth table asks for
-independently.
+other. Halving the rate halves the constant in front of it and does not change the exponent.
+
+**And the relevance culling this asked for independently is built (D-192), with the same map-shaped
+answer.** On `oa_dm1` the packet count falls by a quarter as well as the bytes by half — a peer with
+nothing in scope for a frame gets no packet, so there is less to *pack* and not only less to send,
+which is this table's currency rather than the other one's. No CPU figure is claimed for it here: the
+rig drives its clock from its own step counter, and a wall-clock number belongs with the bench that
+took the rows above. On `am_thornish` it changes nothing, which means the first candidate above is
+addressable and the second is not addressed at all — every character body is still a broadphase pair
+with every other whatever anybody can see.
 
 #### What else the rate change moved
 
