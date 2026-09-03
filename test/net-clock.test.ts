@@ -50,6 +50,7 @@ import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/Entity
 import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/NetworkSession.js';
 
 import { createSession } from '../src/net/session.ts';
+import { NetClientSystem } from '../src/app/netSystems.ts';
 import {
     FRAME_CAPACITY,
     SESSION_TICK_SECONDS,
@@ -89,21 +90,35 @@ async function hostSession(): Promise<{ em: EntityManager; session: NetworkSessi
 }
 
 describe('frameMsec', () => {
-    it('is only ever 16 or 17', () => {
+    it('is only ever the two integers either side of the period', () => {
+        /*
+         Written against `TICK_HZ` rather than against 16 and 17, which is what
+         it said until the rate moved to 30. A clock test that names the numbers
+         one rate produces is a test that has to be edited to pass at another --
+         and editing a clock test to make it pass is exactly how a two per cent
+         drift ships. The property is rate-free: every frame is one of the two
+         integers bracketing `1000 / TICK_HZ`, and nothing else ever appears.
+        */
+        const period = 1000 / TICK_HZ;
+        const low = Math.floor(period);
+        const high = Math.ceil(period);
+
         const seen = new Set<number>();
         for (let frame = 0; frame < 100_000; frame++) {
             seen.add(frameMsec(frame));
         }
-        expect([...seen].sort((a, b) => a - b)).toEqual([16, 17]);
+
+        const sorted = [...seen].sort((a, b) => a - b);
+        expect(sorted).toEqual(low === high ? [low] : [low, high]);
     });
 
-    it('sums to exactly 1000 over any sixty consecutive frames', () => {
+    it('sums to exactly 1000 over any TICK_HZ consecutive frames', () => {
         for (let start = 0; start < 600; start++) {
             let total = 0;
-            for (let frame = start; frame < start + 60; frame++) {
+            for (let frame = start; frame < start + TICK_HZ; frame++) {
                 total += frameMsec(frame);
             }
-            expect(total).toBe(1000);
+            expect(total, `frames ${start}..${start + TICK_HZ}`).toBe(1000);
         }
     });
 
@@ -114,8 +129,8 @@ describe('frameMsec', () => {
          integer divisions, so the millisecond at frame N is the same number
          however you got to N.
         */
-        expect(frameTimeMs(1_000_000)).toBe(16_666_666);
-        expect(frameTimeMs(60)).toBe(1000);
+        expect(frameTimeMs(1_000_000)).toBe(Math.floor(1_000_000_000 / TICK_HZ));
+        expect(frameTimeMs(TICK_HZ)).toBe(1000);
         expect(frameTimeMs(0)).toBe(0);
 
         let walked = 0;
@@ -165,21 +180,121 @@ describe("NetworkSession.tick, driven by the engine's fixed step", () => {
         session.stop();
     });
 
-    it('stays exactly one frame behind for the rest of the match', async () => {
+    it('advances at its own rate rather than its callers', async () => {
         const { em, session } = await hostSession();
 
-        for (let call = 0; call < 600; call++) {
+        const CALLS = 600;
+        for (let call = 0; call < CALLS; call++) {
             session.tick(em.fixedUpdateStepSize);
         }
 
         /*
-         600 calls, 599 frames. The deficit per call is 6.7e-10 ms, so the
-         accumulator never recovers the lost step and never loses a second one
-         inside any match anybody will play: it would take about 2.5e10 further
-         steps, which is thirteen years at 60 Hz.
+         Stated as the arithmetic rather than as a number, because the number
+         is a function of two rates and this test used to hard-code the answer
+         for one pairing of them. The session steps while its accumulator holds
+         a period, so the frames it has run are the whole periods in the time it
+         was handed -- and `current_frame` counts from -1, hence the minus one.
+
+         The engine's step being *short* of 1/60 (see above) is what makes this
+         a floor rather than an equality: at 60 Hz it costs the first step and
+         never another, and at 30 it costs nothing visible because two short
+         steps still clear one long period after the third.
         */
-        expect(session.current_frame).toBe(598);
+        const totalMs = CALLS * em.fixedUpdateStepSize * 1000;
+        const expected = Math.floor(totalMs / session.tick_period_ms) - 1;
+
+        expect(session.current_frame).toBe(expected);
 
         session.stop();
+    });
+});
+
+describe('NetClientSystem, driven by the engine rather than by the session', () => {
+    /**
+     * The pacing bug a rate change finds, and the reason this test exists.
+     *
+     * `fixedUpdate` runs at the engine's rate; `NetClient.step` advances the
+     * session by exactly one *session* period. Calling the second once per the
+     * first silently asserts that the two rates are equal -- which they were,
+     * at 60 Hz, and which stopped being true the day the session moved to 30.
+     * A client that steps its session twice per period runs at twice real time:
+     * permanently ahead of the host, every AUTH_STATE arriving for a frame it
+     * has already predicted past, and `TimeDilation` fighting a clock it cannot
+     * slow that far. Constant mis-prediction, from a one-line assumption.
+     *
+     * `NetRig` cannot see it. It drives the host and each client one call
+     * apiece, so both advance one frame per iteration whatever either rate is.
+     * That is right for measuring a protocol and blind to how it is driven, so
+     * the pacing is held here instead.
+     */
+    it('runs the session at the session rate, not the engine rate', () => {
+        let steps = 0;
+        let presented = 0;
+
+        const system = new NetClientSystem({
+            client: { step: () => (steps += 1) } as never,
+            player: { updatePresentation: () => (presented += 1) } as never,
+        });
+
+        const ENGINE_HZ = 60;
+        const SECONDS = 10;
+        const calls = ENGINE_HZ * SECONDS;
+
+        // The engine's own step, short of 1/60 and deliberately so -- this is
+        // the value `EntityManager` really uses.
+        for (let call = 0; call < calls; call++) system.fixedUpdate(0.016666666666);
+
+        expect(presented, 'the presentation clock should run every engine frame').toBe(calls);
+        expect(
+            steps,
+            `the session ran ${steps} steps in ${SECONDS} s; it should run ` +
+                `${TICK_HZ * SECONDS} at ${TICK_HZ} Hz`
+        ).toBe(TICK_HZ * SECONDS);
+    });
+
+    it('does not drift over an hour of frames', () => {
+        /*
+         The epsilon on the accumulator's comparison, held to account. Without
+         it the engine's 3.4e-10 s shortfall loses a step every time the two
+         rates would otherwise line up exactly -- which at these rates is every
+         second step, so the client would run at nothing at all; with it, an
+         hour of frames is an hour of frames.
+        */
+        let steps = 0;
+        const system = new NetClientSystem({
+            client: { step: () => (steps += 1) } as never,
+            player: { updatePresentation: () => {} } as never,
+        });
+
+        const HOURS_OF_FRAMES = 60 * 60 * 60;
+        for (let call = 0; call < HOURS_OF_FRAMES; call++) {
+            system.fixedUpdate(0.016666666666);
+        }
+
+        expect(steps).toBe(TICK_HZ * 60 * 60);
+    });
+
+    it('throws arrears away rather than carrying them, after a stall', () => {
+        /*
+         `WsHost`'s rule, for `WsHost`'s reason: a tab that was backgrounded for
+         a minute must not come back and try to simulate a minute. Carrying the
+         arrears means running the cap again every frame and never catching up,
+         while dropping them costs one jump.
+        */
+        let steps = 0;
+        const system = new NetClientSystem({
+            client: { step: () => (steps += 1) } as never,
+            player: { updatePresentation: () => {} } as never,
+        });
+
+        system.fixedUpdate(60);
+
+        expect(steps, 'a minute of arrears was simulated in one frame').toBeLessThan(8);
+        expect(system.droppedSteps, 'the drop was not recorded').toBe(1);
+
+        // And it is running normally again on the next frame.
+        const before = steps;
+        for (let call = 0; call < 60; call++) system.fixedUpdate(0.016666666666);
+        expect(steps - before).toBe(TICK_HZ);
     });
 });

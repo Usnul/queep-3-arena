@@ -38,21 +38,58 @@ import type { PlayerController } from '../client/PlayerController.ts';
 import type { ItemSystem } from '../game/Items.ts';
 import { Character, type LegsAnimation, type TorsoAnimation } from '../client/Characters.ts';
 import { NET_WEAPONS } from '../net/components.ts';
+import { SESSION_TICK_SECONDS } from '../net/protocol.ts';
+
+/**
+ * Slack on the accumulator's comparison, and it is not superstition.
+ *
+ * `EntityManager.fixedUpdateStepSize` is `0.016666666666`, which is *less* than
+ * `1 / 60` -- `SESSION_TICK_SECONDS`' own docblock is about this. So two engine
+ * steps come to 0.033333333332 against a 30 Hz period of 0.03333333333..., and
+ * an exact `>=` would fall short by 3.4e-10 seconds every single time and run
+ * the session at nothing at all. A microsecond of slack absorbs an error eight
+ * orders of magnitude smaller than itself and is far below anything a frame
+ * clock decides.
+ */
+const CLOCK_EPSILON_SECONDS = 1e-6;
+
+/**
+ * Session steps one fixed update may run. Two is the engine-to-session ratio
+ * at the shipping rates; four leaves room to catch up from a hitch without
+ * letting a long stall turn into a burst that stalls again.
+ */
+const MAX_SESSION_STEPS_PER_UPDATE = 4;
 import * as C from '../q3/pmove/constants.ts';
 
 /**
- * The session's step, and the presentation clock that rides beside it.
+ * The session's step, paced to real time, and the presentation clock beside it.
  *
  * `NetClient.step` is `session.tick` plus the `normalize_if_dirty` that undoes
  * the previous render pass's blending; the session runs 0 to 3 simulation
  * steps inside it depending on time dilation, and each one that runs samples
  * this player's input, predicts it, records its bytes and sends it.
  *
- * `updatePresentation` is what is left of `PlayerController.update` once the
- * step is somebody else's: the view kick, the weapon rack's countdown, and the
- * two-step eye-pose history `ViewSystem` blends the camera between. It runs
- * once per fixed step rather than once per session tick because it is measured
- * in wall-clock milliseconds and a dilated tick is not.
+ * **The accumulator is the whole point of this class, and it was not here.**
+ * `fixedUpdate` runs at the *engine's* rate and `NetClient.step` advances the
+ * session by exactly one *session* period, so calling it once per fixed update
+ * silently asserts that the two rates are the same. They were, at 60 Hz, and
+ * the day the session dropped to 30 that call started running the client's
+ * simulation at twice real time: permanently ahead of the host, every AUTH_STATE
+ * arriving for a frame it had already predicted past, `TimeDilation` fighting a
+ * clock it cannot slow down that far, and the constant mis-prediction and
+ * resimulation that produces. `WsHost` has paced itself against its own period
+ * since step 5; this is the same loop, and its absence here was a bug waiting
+ * for a rate change to find it.
+ *
+ * The rig cannot catch this. `NetRig.step` drives the host and each client one
+ * call apiece, so both advance one frame per iteration whatever either rate is
+ * -- which is right for measuring the protocol and blind to how it is driven.
+ * `test/net-clock.test.ts` is where the pacing is held instead.
+ *
+ * `updatePresentation` stays outside the loop, once per fixed update rather
+ * than once per session tick: it is the view kick, the weapon rack's countdown
+ * and the eye-pose history the camera is blended from, all measured in
+ * wall-clock milliseconds, and none of them is rolled back by a reconciliation.
  */
 export class NetClientSystem extends System<never> {
     private readonly client: NetClient;
@@ -66,9 +103,36 @@ export class NetClientSystem extends System<never> {
     }
 
     override fixedUpdate = (deltaSeconds: number): void => {
-        this.client.step();
+        this.accumulator += deltaSeconds;
+
+        let steps = 0;
+        while (this.accumulator + CLOCK_EPSILON_SECONDS >= SESSION_TICK_SECONDS) {
+            if (steps >= MAX_SESSION_STEPS_PER_UPDATE) {
+                /*
+                 Behind by more than the catch-up budget. Thrown away rather
+                 than carried, for `WsHost`'s reason: carrying arrears means
+                 running the cap again next frame and never catching up, while
+                 dropping them costs one jump. A tab that was backgrounded is
+                 the usual cause.
+                */
+                this.accumulator = 0;
+                this.droppedSteps += 1;
+                break;
+            }
+
+            this.accumulator -= SESSION_TICK_SECONDS;
+            this.client.step();
+            steps += 1;
+        }
+
         this.player.updatePresentation(deltaSeconds);
     };
+
+    /** Unspent time, in seconds. See the class docblock. */
+    private accumulator = 0;
+
+    /** How often this has had to throw arrears away; read by `window.queep.net`. */
+    droppedSteps = 0;
 }
 
 /**

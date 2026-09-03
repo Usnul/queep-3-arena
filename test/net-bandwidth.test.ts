@@ -34,13 +34,21 @@ import { describe, expect, it } from 'vitest';
 import { BandwidthMeter } from '@woosh/meep-engine/src/engine/network/diagnostics/BandwidthMeter.js';
 
 import { NetRig, type Link, type RigClient } from './net/rig.ts';
+import { TICK_HZ } from '../src/net/protocol.ts';
 import * as C from '../src/q3/pmove/constants.ts';
 import { FORWARDMOVE, RIGHTMOVE, type UserCmd } from '../src/q3/pmove/types.ts';
 
 const CLIENTS = 6;
 const BOTS = 4;
 const SECONDS = 12;
-const FRAMES = SECONDS * 60;
+/*
+     Frames, derived from seconds and `TICK_HZ` rather than from 60. It said 60,
+     which was the tick rate at the time and became a factor-of-two error in
+     every figure this file prints the day the rate moved -- the same
+     frames-mean-seconds trap that had `net-loopback` firing for four seconds
+     when it meant two.
+    */
+const FRAMES = SECONDS * TICK_HZ;
 
 /** The plan's budget: 48 KB/s downstream per client at zero round trip. */
 const DOWNSTREAM_BUDGET_BYTES = 48 * 1024;
@@ -89,7 +97,7 @@ async function measure(link: Link): Promise<Census> {
     rig.step(120);
 
     const startMs = 0;
-    const perFrameMs = 1000 / 60;
+    const perFrameMs = 1000 / TICK_HZ;
     meter.reset_samples();
     const before = meter.cumulative();
     meter.sample(startMs);
@@ -100,7 +108,7 @@ async function measure(link: Link): Promise<Census> {
     }
 
     const after = meter.cumulative();
-    const seconds = FRAMES / 60;
+    const seconds = FRAMES / TICK_HZ;
 
     /*
      Cumulative over a known span rather than the meter's sliding window. The

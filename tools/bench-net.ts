@@ -27,12 +27,18 @@ import { pathToFileURL } from 'node:url';
 
 import { NetRig } from '../test/net/rig.ts';
 import { FORWARDMOVE, RIGHTMOVE, type UserCmd } from '../src/q3/pmove/types.ts';
+import { TICK_HZ } from '../src/net/protocol.ts';
 import * as C from '../src/q3/pmove/constants.ts';
 import type { RigClient } from '../test/net/rig.ts';
 
 /** Frames measured per configuration, after a settling period. */
-const FRAMES = 60 * 20;
-const WARMUP = 120;
+const FRAMES = TICK_HZ * 20;
+/*
+ Four seconds. Two was not enough to settle: two runs a minute apart reported
+ 0.919 ms and 2.865 ms for the same configuration, and the shorter warmup was
+ measuring the opening of a match rather than a match.
+*/
+const WARMUP = TICK_HZ * 4;
 
 /** Everybody moving and shooting, which is what a host actually has to carry. */
 function busy(cmd: UserCmd, frame: number, self: RigClient): void {
@@ -92,7 +98,7 @@ async function main(): Promise<void> {
     const map = process.argv[2] ?? 'oa_dm1';
 
     console.log(
-        `host frame cost on ${map}, ${FRAMES / 60} s per row at 60 Hz, ` +
+        `host frame cost on ${map}, ${FRAMES / TICK_HZ} s per row at ${TICK_HZ} Hz, ` +
             'no renderer and no clients charged to it.\n'
     );
     console.log('  clients  bots     mean      p50      p99    worst');
@@ -131,6 +137,18 @@ async function main(): Promise<void> {
     const perClient = (full.mean - empty.mean) / Math.max(1, full.clients);
     console.log(
         `each connected client adds about ${(perClient * 1000).toFixed(0)} us to a host frame`
+    );
+
+    /*
+     And the number that actually compares across tick rates. A host frame costs
+     roughly the same whatever the rate -- it does the same work -- so the
+     per-frame figure above says almost nothing about whether 30 Hz was worth
+     doing. Milliseconds of CPU per second of match is what changes, and it
+     changes by the ratio of the rates.
+    */
+    console.log(
+        `that is ${(full.mean * TICK_HZ).toFixed(0)} ms of host CPU per second of match ` +
+            `at ${TICK_HZ} Hz, out of 1000`
     );
 }
 

@@ -83,6 +83,14 @@ async function run(
         bots: options.bots ?? 4,
         clients: 1,
         seed: 23,
+        /*
+         Past the input-buffer warmup before anybody joins, as every other
+         fixture in the suite does. Without it the bots spend the opening
+         seconds somewhere else and the match this measures has almost no
+         shooting in it -- which reads as "no events were lost" because none
+         were dispatched, and divides by zero on the way to saying so.
+        */
+        warmup: 40,
         link,
     });
 

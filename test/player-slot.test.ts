@@ -59,7 +59,7 @@ import {
     type StepSink,
 } from '../src/game/PlayerSlot.ts';
 import { NetInventory, NetPlayerState } from '../src/net/components.ts';
-import { frameMsec, frameTimeMs } from '../src/net/protocol.ts';
+import { TICK_HZ, frameMsec, frameTimeMs } from '../src/net/protocol.ts';
 import * as C from '../src/q3/pmove/constants.ts';
 import {
     createUserCmd,
@@ -533,29 +533,54 @@ describe('the two clocks', () => {
             closed.push(frameMsec(frame));
         }
 
-        expect(new Set(carried)).toEqual(new Set([16, 17]));
-        expect(new Set(closed)).toEqual(new Set([16, 17]));
+        /*
+         **They are not the same rate any more, and that is the finding.**
 
-        // Different sequences, from the first three frames onward.
-        expect(carried).not.toEqual(closed);
-        expect(carried.slice(0, 6)).toEqual([16, 17, 16, 17, 17, 16]);
-        expect(closed.slice(0, 6)).toEqual([16, 17, 17, 16, 17, 17]);
+         Single-player steps on the engine's fixed update, which is 60 Hz, and
+         spends 16 or 17 milliseconds a frame. The networked path steps on the
+         session, which is `TICK_HZ` -- 30 since the rate was dropped to halve
+         what a match costs on the wire (D-184) -- and spends 33 or 34.
+
+         So the two halves of this port now run `bg_pmove` at different step
+         lengths, and `PmoveSingle` is not linear in its step: measured, the
+         same strafe-jump chain tops out at 466 units a second at 16 ms and 445
+         at 33, and the same commands land the player about forty units apart
+         after five seconds. Nobody can play both halves and feel the same game,
+         which is a real cost and is written down rather than smoothed over.
+
+         This test is the tripwire for it. If single-player and the wire are
+         ever meant to agree again, it is the assertion that will say they do.
+        */
+        const engineStep = new Set(carried);
+        const sessionStep = new Set(closed);
+
+        expect(engineStep, "single-player is no longer on the engine's 60 Hz step").toEqual(
+            new Set([16, 17])
+        );
+
+        const period = 1000 / TICK_HZ;
+        const low = Math.floor(period);
+        const high = Math.ceil(period);
+        expect(sessionStep, 'the wire is no longer on the session period').toEqual(
+            low === high ? new Set([low]) : new Set([low, high])
+        );
 
         /*
-         And they do not sum to the same second, which is the measurement worth
-         keeping. The closed form spends exactly 1000 ms per 60 frames by
-         construction. The carry spends **999**, because it is fed
-         `fixedUpdateStepSize`, and `0.016666666666 * 1000` is short of `50 / 3`
-         -- so a single-player Q3 clock runs one millisecond per second slow
-         against the movers' own arithmetic. That is a twentieth of the two
-         percent D-110 removed by replacing rounding with this carry, and it is
-         in the other direction. Recorded rather than fixed here: changing it
-         changes single-player movement, which this step is required to leave
-         alone.
+         Each sums to its own second, which is the property that matters within
+         either half. The closed form spends exactly 1000 ms per `TICK_HZ`
+         frames by construction. The carry spends **999** per 60, because it is
+         fed `fixedUpdateStepSize` and `0.016666666666 * 1000` is short of
+         `50 / 3` -- so a single-player Q3 clock runs a millisecond per second
+         slow against the movers' own arithmetic. That is a twentieth of the two
+         per cent D-110 removed by replacing rounding with this carry, and it is
+         in the other direction. Recorded rather than fixed: changing it changes
+         single-player movement.
         */
+        let closedSecond = 0;
+        for (let frame = 0; frame < TICK_HZ; frame++) closedSecond += frameMsec(frame);
+        expect(closedSecond).toBe(1000);
+
         const carriedTotal = carried.reduce((x, y) => x + y, 0);
-        const closedTotal = closed.reduce((x, y) => x + y, 0);
-        expect(closedTotal).toBe(1000);
         expect(carriedTotal).toBe(999);
     });
 });

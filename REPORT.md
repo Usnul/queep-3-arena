@@ -3098,62 +3098,75 @@ is involved in either.
 to every bot as well, so eight humans and four bots do not fit the map. The figures are per client
 and the trend across the rows is what the tables are for.
 
+**The session runs at 30 Hz** (D-184). Both tables were first taken at 60 and are given at both
+rates, because the comparison is the most useful thing in them.
+
 #### Bandwidth, per client, six clients and four bots all moving and shooting
 
-| link | downstream | upstream | packets/s down |
-|---|---:|---:|---:|
-| loopback, 0 ms | **88.7 KB/s** | 2.9 KB/s | 240 |
-| 80 ms RTT, 10 ms jitter, 1% loss | **540 KB/s** | 9.5 KB/s | 920 |
+| link | 60 Hz down | 30 Hz down | 60 Hz up | 30 Hz up |
+|---|---:|---:|---:|---:|
+| loopback, 0 ms | 88.7 KB/s | **45.8 KB/s** | 2.9 | 1.5 |
+| 80 ms RTT, 10 ms jitter, 1% loss | 540 KB/s | **201 KB/s** | 9.5 | 3.5 |
 
-**The 48 KB/s downstream budget is not met at zero round trip: 88.7 KB/s, 1.85 times over.** The
-budget is a reasonable one — Q3's own `rate` defaults to 25000 bytes a second and caps at 90000 —
-and the overrun is structural rather than a leak.
+**The 48 KB/s downstream budget is met at 30 Hz and was not at 60.** Halving the rate halved the
+clean-link cost, which is what a per-tick replication model should do, and cut the delayed-link cost
+by 63% — more than half, because the action stream's owed range is counted in *frames* and there are
+half as many of them between one acknowledgement and the next.
 
-Q3 delta-compresses each client's snapshot against the last snapshot **that client acknowledged**,
-and sends only the fields differing from that per-client baseline. meep's replicator sends every
-component that changed since the last tick, to everybody, with no per-client baseline and no
-relevance filtering. With ten moving slots that is ten players' worth of state to each of six
-clients every tick, whether or not any two of them can see each other. `NetPlayerState` is also 70
-bytes of `float32` where Q3 sent quantised 16-bit positions and 8-bit angles.
+**It is met, and the structural problem is not solved.** Q3 delta-compresses each client's snapshot
+against the last one *that client acknowledged*; meep sends every component that changed since the
+last tick, to everybody, with no per-client baseline and no relevance filtering. Ten moving slots is
+still ten players' worth of state to each of six clients every tick, and `NetPlayerState` is still 70
+bytes of `float32` where Q3 sent quantised 16-bit positions. What the rate change bought is headroom,
+not a fix: the three levers — **relevance culling**, a lower publish rate for remote slots than for
+the local prediction, and **quantisation** — are all still the answer, and the first is still worth
+more than the other two together.
 
-So the three levers are all this port's rather than the engine's, in the order they are worth
-pulling: **relevance culling** (a slot behind a wall is not worth a client's bytes, and Q3's PVS
-did this), **a lower publish rate for remote slots** than for the local prediction, and
-**quantisation** of the replicated floats. None was in scope for step 7; all three are the answer
-to "can this ship", and the first is worth more than the other two together.
+#### Host CPU, `Host.step` alone
 
-**540 KB/s at 80 ms is the redundancy, working as designed and not a defect.** `flush_outbound`
-packs every frame from the last acknowledgement to now, so a round trip of ten ticks sends each
-frame about ten times, sliced across up to `max_packets_per_tick` packets since 3.14.5 (D-177). It
-is what makes the action stream survive loss — GAP-043 is what happens when it cannot — and it
-means a delayed link costs roughly six times a clean one. It is measured and written down rather
-than asserted, because it is the engine's arithmetic and not this port's to hold still.
+Clients' own simulation is not charged to the host: the rig runs it in the same process, and counting
+it would make a dedicated server look six times more expensive than it is.
 
-#### Host CPU, `Host.step` alone, 20 s per row at 60 Hz
+| clients | bots | 60 Hz mean | 30 Hz mean |
+|---:|---:|---:|---:|
+| 0 | 4 | 0.334 ms | 0.42 – 0.71 ms |
+| 2 | 4 | 0.561 ms | 0.65 ms |
+| 4 | 4 | 0.931 ms | 1.15 – 1.74 ms |
+| 6 | 4 | 1.993 ms | 0.97 – 2.16 ms |
 
-Clients' own simulation is not charged to the host: the rig runs it in the same process, and
-counting it would make a dedicated server look six times more expensive than it is.
+**Read the per-second row, not the per-frame one.** A host frame does the same work whatever the rate,
+so the per-frame figures above are within run-to-run noise of each other and say almost nothing. The
+30 Hz column is given as a range across five runs on purpose: the zero-client baseline alone drifted
+from 0.42 to 0.71 ms between runs on a contended machine, and quoting a single figure from that would
+be quoting the machine rather than the code.
 
-| clients | bots | mean | p50 | p99 | worst |
-|---:|---:|---:|---:|---:|---:|
-| 0 | 4 | 0.334 ms | 0.269 | 1.124 | 2.490 |
-| 2 | 4 | 0.561 ms | 0.500 | 1.377 | 2.863 |
-| 4 | 4 | 0.931 ms | 0.883 | 2.140 | 3.222 |
-| 6 | 4 | **1.993 ms** | 1.870 | 4.407 | 9.835 |
+What does change is CPU per second of match, by the ratio of the rates:
 
-**The 2 ms budget is met, and only just — and the trend is the finding, not the figure.** The
-marginal cost of a client is not constant: the first two cost about 114 µs each, the next two about
-185, and the last two about **531**. That is the signature of an `O(n²)`, and there are two
-candidates for it in the same place — every slot's state is replicated to every other client, and
-every character body is a broadphase pair with every other. At six clients the engine also begins
-printing `EntityManager.simulate: fixedUpdate is falling behind the clock`, which is the host
-telling us the same thing in its own words.
+| | 60 Hz | 30 Hz |
+|---|---:|---:|
+| six clients, four bots | **120 ms/s** | **29 – 65 ms/s** |
 
-Extrapolating the marginal cost, sixteen slots — `MAX_CLIENTS`, which the protocol already sizes
-for — would not fit in a 16.6 ms frame with room to spare for anything else. So the honest reading
-of this table is not "2 ms, met" but **"a full sixteen-player server is not reachable from here
-without the relevance culling the bandwidth table also asks for"**, which is the same fix arriving
-from two directions.
+**The superlinear trend survives the rate change and is the finding that matters.** At 60 Hz the
+marginal cost of a client was 114 µs each for the first two, 185 for the next two and 531 for the
+last two; at 30 Hz the shape is the same, roughly 184 µs per client from zero to four and 408 from
+four to six. That is an `O(n²)` signature either way, with two candidates in the same place — every
+slot's state replicated to every other client, and every character body a broadphase pair with every
+other. Halving the rate halves the constant in front of it and does not change the exponent, so
+sixteen slots is still out of reach without the relevance culling the bandwidth table asks for
+independently.
+
+#### What else the rate change moved
+
+- **Event delivery under loss became exact.** At 60 Hz the worst link delivered 506 of 516 event
+  actions (GAP-043's residual, D-177); at 30 Hz all three links deliver everything — 224/224,
+  144/144, 97/97. Halving the frame rate halves the owed range the action stream has to carry between
+  acknowledgements, so it stops running out of packet before it runs out of frames.
+- **Movement changed, and this is the cost.** `bg_pmove` is stepped at the session rate on the
+  networked path, and `PmoveSingle` is not linear in its step. Measured on the same strafe-jump
+  chain: top speed **466 u/s at 16 ms steps against 445 at 33, −4.5%**, with the same commands landing
+  the player about **forty units apart after five seconds**. Single-player still steps on the engine's
+  60 Hz fixed update, so the two halves of this port no longer run the same movement.
+  `test/player-slot.test.ts` holds that split as an assertion rather than leaving it to be noticed.
 
 Reproduce with `npm run bench-net`; the bandwidth figures are printed by
 `test/net-bandwidth.test.ts` on every run.

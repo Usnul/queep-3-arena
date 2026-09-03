@@ -38,8 +38,23 @@ import {
     type RemoteCharacter,
 } from '../src/app/netSystems.ts';
 import { MAX_CLIENTS } from '../src/net/protocol.ts';
-import { FORWARDMOVE } from '../src/q3/pmove/types.ts';
+import { FORWARDMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
 import type { LegsAnimation, TorsoAnimation } from '../src/client/Characters.ts';
+
+/** Frames measured. Long enough for a fight to happen and rockets to fly. */
+const FRAMES = 2400;
+
+/** 16-bit view angles, as `usercmd_t.angles` carries them. */
+function angleToShort(degrees: number): number {
+    return Math.round((degrees * 65536) / 360) & 65535;
+}
+
+/** The circling walk the rest of the networked suite runs, and for its reasons. */
+function circleWalk(cmd: { angles: Int16Array; moves: Int8Array }, frame: number): void {
+    cmd.angles[1] = angleToShort(frame * 4);
+    cmd.moves[FORWARDMOVE] = 127;
+    cmd.moves[UPMOVE] = frame % 30 === 0 ? 127 : 0;
+}
 
 /** A character that remembers what it was told, instead of drawing it. */
 class Recorder implements RemoteCharacter {
@@ -120,15 +135,37 @@ interface Seen {
 let seen: Seen;
 
 beforeAll(async () => {
-    const rig = await NetRig.create({ map: 'oa_dm1', bots: 3, clients: 1, seed: 77, warmup: 40 });
+    /*
+     Four bots and a seed that produces a fight. Three bots on seed 77 walked a
+     whole match without anybody firing a rocket, which left the missile half of
+     this file asserting things about an empty pool -- a fixture that passes by
+     never exercising what it tests.
+    */
+    const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: 23, warmup: 40 });
     const client = rig.clients[0]!;
 
-    // Walking, so the bots have somebody to chase and the remote motion under
-    // test is motion rather than a still frame.
-    client.script = (cmd, frame) => {
-        cmd.angles[1] = Math.round((frame * 2 * 65536) / 360) & 65535;
-        cmd.moves[FORWARDMOVE] = 96;
-    };
+    /*
+     The same circling walk every other networked fixture uses, rather than one
+     invented here. That is not tidiness: a slower turn and no jump took the
+     client on a path where the bots never once got line of sight, so the host
+     fired **zero** shots in eighty seconds and the missile assertions below
+     were about a pool that had never held anything. Sharing the walk shares the
+     match everything else in the suite is measured against.
+    */
+    client.script = circleWalk;
+
+    /*
+     One bot handed a rocket launcher, rather than hoping somebody walks over
+     one. The missile assertions below are about *presenting a replicated
+     missile*, and making them wait on item luck made them silently vacuous:
+     three bots on seed 77 played a whole match without firing a rocket, and the
+     pool they were asserting about was empty the entire time. A test that can
+     pass by never exercising its subject is worse than no test.
+    */
+    const gunner = rig.host.slots.find((slot) => slot.bot !== null)!;
+    gunner.bot!.inventory.weapons.add('WP_ROCKET_LAUNCHER');
+    gunner.bot!.inventory.ammo['WP_ROCKET_LAUNCHER'] = 200;
+    gunner.bot!.weapon = 'WP_ROCKET_LAUNCHER';
 
     const recorders = new Map<number, Recorder>();
     const missiles = new MissileLog();
@@ -152,7 +189,7 @@ beforeAll(async () => {
     // Warm the link, then measure a steady stretch.
     rig.step(120);
 
-    for (let n = 0; n < 600; n++) {
+    for (let n = 0; n < FRAMES; n++) {
         rig.step(1);
         missiles.frame = n;
         system.update(1 / 60);
@@ -217,14 +254,14 @@ describe('what a client draws of the other players', () => {
             (i) => rig.host.slots[i]!.info.isBot === 1 && recorders.get(i)!.positions.length > 0
         );
 
-        expect(drawn.length, 'no bot was ever drawn').toBe(3);
+        expect(drawn.length, 'no bot was ever drawn').toBe(4);
 
         const meanLag = mean(lag);
         const meanStep = mean(step);
 
         // eslint-disable-next-line no-console
         console.log(
-            `[net-presentation] ${drawn.length} bots drawn over 600 frames: ` +
+            `[net-presentation] ${drawn.length} bots drawn over ${FRAMES} frames: ` +
                 `mean lag behind the host ${meanLag.toFixed(2)} units ` +
                 `(${(meanLag / Math.max(meanStep, 1e-6)).toFixed(1)} frames of motion at ` +
                 `${meanStep.toFixed(2)} units a frame), worst ${Math.max(...lag).toFixed(2)}`
@@ -312,9 +349,10 @@ describe('what a client draws of the other players', () => {
                 `${missiles.advanced} roll updates`
         );
 
-        expect(spawns.length, 'no missile was ever drawn in 600 frames with 3 bots').toBeGreaterThan(
-            0
-        );
+        expect(
+            spawns.length,
+            `no missile was drawn in ${FRAMES} frames, with a bot handed a rocket launcher`
+        ).toBeGreaterThan(0);
 
         /*
          Everything that appeared has gone away again, except whatever is still
@@ -327,7 +365,7 @@ describe('what a client draws of the other players', () => {
             'more missiles were spawned than were despawned or are still in flight'
         ).toBe(missiles.live.size);
 
-        expect(missiles.advanced, 'the roll was never advanced').toBe(600);
+        expect(missiles.advanced, 'the roll was never advanced').toBe(FRAMES);
     });
 
     it('never lets a reused pool slot streak across the level', () => {

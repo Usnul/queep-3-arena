@@ -27,7 +27,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { NetRig, type RigClient } from './net/rig.ts';
 import { EffectKind } from '../src/net/actions.ts';
-import { MAX_CLIENTS, MAX_MISSILES } from '../src/net/protocol.ts';
+import {
+    MAX_CLIENTS,
+    MAX_MISSILES,
+    SIMULATION_DELAY_TICKS,
+    TICK_HZ,
+} from '../src/net/protocol.ts';
 import { NetworkIdentity } from '@woosh/meep-engine/src/engine/network/ecs/components/NetworkIdentity.js';
 import * as C from '../src/q3/pmove/constants.ts';
 import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
@@ -461,7 +466,13 @@ describe('the bodies of slots nobody is playing', () => {
 
 describe('what the host tells the client about', () => {
     it('activates a missile slot when a bot fires, and deactivates it on impact', async () => {
-        const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: MATCH_SEED });
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 4,
+            clients: 1,
+            seed: MATCH_SEED,
+            warmup: 40,
+        });
         const client = rig.clients[0]!;
 
         /*
@@ -501,7 +512,13 @@ describe('what the host tells the client about', () => {
     });
 
     it('tells the client when it is hit, and the damage reaches its inventory', async () => {
-        const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: MATCH_SEED });
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 4,
+            clients: 1,
+            seed: MATCH_SEED,
+            warmup: 40,
+        });
         const client = rig.clients[0]!;
         client.script = circleWalk;
 
@@ -535,7 +552,9 @@ describe('what the host tells the client about', () => {
             cmd.buttons = C.BUTTON_ATTACK;
         };
 
-        rig.step(120);
+        // Two seconds of held trigger, expressed as seconds. It said 120
+        // frames, which meant two seconds at 60 Hz and four at 30.
+        rig.step(2 * TICK_HZ);
 
         const fired = rig.host.weaponEvents.shots - before;
         const ammoAfter = rig.host.slots[client.net.slotIndex]!.inventory.ammo[1]!;
@@ -552,8 +571,21 @@ describe('what the host tells the client about', () => {
         expect(fired).toBeLessThan(30);
         expect(ammoBefore - ammoAfter, 'ammunition and shots disagree').toBe(fired);
 
-        // And the client predicted the same shots it was charged for.
-        expect(client.predictedShots.length).toBe(fired);
+        /*
+         And the client predicted the same shots it was charged for -- once the
+         host has caught up. The client leads by the prediction lead, so at the
+         instant the trigger is released it has predicted a shot or two the host
+         has not executed yet; comparing there is comparing two different
+         moments and was off by one the day the tick rate moved and the window
+         stopped happening to align.
+        */
+        client.script = () => {};
+        rig.step(SIMULATION_DELAY_TICKS + 8);
+
+        const settled = rig.host.weaponEvents.shots - before;
+        expect(client.predictedShots.length, 'predicted and charged shots disagree').toBe(
+            settled
+        );
     });
 
     it('publishes bot slots as remote state that moves', async () => {

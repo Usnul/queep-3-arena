@@ -10189,3 +10189,59 @@ for independently**. Two tables, arrived at separately, pointing at one fix.
 and the host gives one to every bot as well, so eight humans and four bots do not fit the map. The
 figures are per client and the trend is what both tables are for, so the missing two rows change
 neither conclusion.
+
+### D-184: 30 Hz, which met the bandwidth budget and cost 4.5% of a strafe jump
+
+`TICK_HZ` is 30. `frameMsec` and `frameTimeMs` are now written in terms of it rather than with
+`1000 / 60` pre-divided into `50 / 3` -- a constant that silently means "and the rate is 60" is
+exactly the sort of thing that survives a rate change and leaves a clock two per cent wrong.
+
+**What it bought.** Downstream per client on a clean link went from 88.7 KB/s to **45.8**, which is
+inside `NETWORK_PLAN.md` §7's 48 KB/s budget for the first time; over 80 ms with 1% loss it went from
+540 to **201**, a bigger cut than half because the action stream's owed range is counted in frames.
+Host CPU per second of match went from about 120 ms to 29-65. And event delivery under loss became
+**exact** at every link -- 224/224, 144/144, 97/97, where 60 Hz left ten of 516 behind (D-177): fewer
+frames between acknowledgements means the stream stops running out of packet before it runs out of
+frames.
+
+**What it cost, measured rather than assumed.** `bg_pmove` is stepped at the session rate on the
+networked path and `PmoveSingle` is not linear in its step. The same strafe-jump chain tops out at
+**466 units a second at 16 ms steps and 445 at 33 -- 4.5% slower** -- and the same commands land the
+player about forty units apart after five seconds. Single-player still steps on the engine's 60 Hz
+fixed update, so **the two halves of this port no longer run the same movement**, and a Q3 player
+would feel it in the one skill the game is built around. `test/player-slot.test.ts`'s "the two clocks"
+holds that split as an assertion so it cannot quietly become permanent.
+
+The structural bandwidth problem is untouched: meep replicates every changed component to everybody
+with no per-client baseline and no relevance filtering, and the superlinear host cost has the same
+exponent it had. Halving the rate halved a constant.
+
+**And it found a real bug, which the user predicted before the measurement did.** `NetClientSystem`
+called `client.step()` once per engine `fixedUpdate`, and `NetClient.step` advances the session by
+exactly one *session* period. That silently asserted the engine's rate and the session's were equal.
+They were, at 60. At 30 the browser client would have run its simulation at **twice real time** --
+permanently ahead of the host, every AUTH_STATE arriving for a frame it had already predicted past,
+and `TimeDilation` fighting a clock it cannot slow that far: constant mis-prediction and
+resimulation, from a one-line assumption. `WsHost` has paced itself against its own period since step
+5; `NetClientSystem` now runs the same accumulator.
+
+**`NetRig` cannot catch that class of bug at all**, and that is worth writing down. It drives the host
+and each client one call apiece, so both advance one frame per iteration whatever either rate is --
+right for measuring a protocol, blind to how it is driven. The pacing lives in
+`test/net-clock.test.ts` instead, where three tests hold it: the session runs at the session rate and
+not the caller's, it does not drift over an hour of frames, and it throws arrears away after a stall
+rather than simulating a backgrounded minute in one frame.
+
+The accumulator needs a microsecond of slack on its comparison and that is not superstition:
+`EntityManager.fixedUpdateStepSize` is `0.016666666666`, *less* than `1 / 60`, so two engine steps
+come to 0.033333333332 against a 30 Hz period of 0.0333333333... An exact `>=` falls short by 3.4e-10
+seconds every time and runs the session at nothing at all. Measured: 299 ticks per 600 engine steps
+without the slack, 300 with.
+
+**Six test failures the rate change exposed, and none of them was a test being wrong about the code.**
+Five were tests that counted frames where they meant seconds -- `rig.step(120)` for "two seconds",
+`FRAMES / 60` for "how long was that" in the bandwidth census, which quietly halved every figure it
+printed until it was caught. The sixth was `net-presentation`'s fixture walking a path on which the
+bots never once got line of sight, so the host fired **zero** shots in eighty seconds and the missile
+assertions were about a pool that had never held anything: a test that passes by never exercising its
+subject. It now runs the same circling walk as the rest of the suite, and 72 rockets fly.

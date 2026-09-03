@@ -59,7 +59,7 @@ export const MAX_CLIENTS = 16;
 export const MAX_MISSILES = 64;
 
 /** The session's tick rate. Ties to the engine's fixed step; see below. */
-export const TICK_HZ = 60;
+export const TICK_HZ = 30;
 
 /**
  * What to hand `session.tick()` for exactly one session step.
@@ -113,11 +113,18 @@ export const MAX_CLIENT_PEER_ID = 254;
 /**
  * The millisecond frame `n` is worth, as Q3 counts them.
  *
- * `floor((n + 1) * 50 / 3) - floor(n * 50 / 3)`, which is the exact
- * `1000 / 60` boundary crossed twice: 50/3 is 16.666..., so the difference
- * between consecutive floors is 16 or 17 and sixty of them sum to exactly 1000
- * with no accumulated error, for ever, on any machine that can do integer
- * arithmetic.
+ * `floor((n + 1) * 1000 / TICK_HZ) - floor(n * 1000 / TICK_HZ)`: the exact
+ * period boundary crossed twice, so the difference between consecutive floors
+ * is one of the two integers either side of it and `TICK_HZ` of them sum to
+ * exactly 1000 with no accumulated error, for ever, on any machine that can do
+ * integer arithmetic. At 60 Hz that is 16 and 17; at 30 it is 33 and 34.
+ *
+ * Written in terms of `TICK_HZ` rather than with the ratio folded in, which it
+ * was until the rate moved: `50 / 3` is `1000 / 60` pre-divided, and a constant
+ * that silently means "and the tick rate is 60" is exactly the sort of thing
+ * that survives a rate change and produces a clock two per cent wrong. The
+ * multiplication is exact for any frame number this port will reach -- one
+ * frame is 1000 by the time it is divided, and doubles are exact to 2^53.
  *
  * Derived from the frame number and not from a running total, so a host at
  * frame 6000 and a client that has just fast-forwarded to 6000 agree about
@@ -127,7 +134,9 @@ export const MAX_CLIENT_PEER_ID = 254;
  * @returns 16 or 17
  */
 export function frameMsec(frame: number): number {
-    return Math.floor(((frame + 1) * 50) / 3) - Math.floor((frame * 50) / 3);
+    return (
+        Math.floor(((frame + 1) * 1000) / TICK_HZ) - Math.floor((frame * 1000) / TICK_HZ)
+    );
 }
 
 /**
@@ -136,5 +145,5 @@ export function frameMsec(frame: number): number {
  * thousand frames to find out what time it is.
  */
 export function frameTimeMs(frame: number): number {
-    return Math.floor((frame * 50) / 3);
+    return Math.floor((frame * 1000) / TICK_HZ);
 }
