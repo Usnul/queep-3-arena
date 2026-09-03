@@ -10526,6 +10526,34 @@ host's frame, so frames 8..47 are never sent and never applied. Forty frames of 
 like the loss the counter was pointing at. The census starts three seconds past the client's first
 applied frame.
 
+**And a standalone reproduction, because the last report from this port taught that lesson.**
+GAP-043 was filed with a script that *passed*, and was a real defect in three parts. So
+`tools/repro/meep-delivery-counter.mjs` depends on the engine and nothing else, and it **fails**:
+two sessions over a seeded, **lossless** `SimulatedTransport` pair with 40 ms of jitter, and
+`skipped_unapplied` reads 234 with zero event actions never applied. `JITTER_MS=0` is the control
+and reads zero at the same latency, which is what pins the mechanism on reordering rather than
+delay. The sweep is 30 / 101 / 234 / 309 at 10 / 20 / 40 / 80 ms of jitter with the loss at zero
+throughout.
+
+**The script took two attempts and the failure is the useful part.** The first version forced
+reordering the way `meep-event-reorder.mjs` does -- swapping two neighbouring action-stream packets
+in the client's inbound queue -- and reported a clean zero. The reason: the action stream re-sends
+`[last_acked + 1, current]` every tick, so consecutive ticks' packets overlap almost entirely. With
+eight slices a tick the frontier advances by *one* frame per tick and the other seven slices are
+copies of frames already applied, so a swap inside one tick trades the single new frame against a
+duplicate and no gap can open. A hold needs `frame_start > next_frame` strictly, so **every copy of
+a frame has to be late** -- which takes reordering across ticks, which is jitter. The delivery order
+was logged to find that out rather than reasoned about, after the swap version had already produced
+a confident zero.
+
+**Filed upstream** at https://claude.ai/code/artifact/48a396e5-fa3b-4f59-9919-5e144f66b7fc, in the
+same shape as the GAP-043 report: the script and the control before the argument, and three
+outcomes listed as equally useful -- it is intended and the docblock is wrong, it is a defect and
+the fix is the one argument, or the measurement is wrong. The third names its own weakest
+assumption: "on the wire" is taken as the union of inbound slice headers' declared ranges, and if a
+declared range can cover a frame that carries no group then the measured loss is an upper bound and
+the real residual is smaller still.
+
 **What this changes in the port.** Nothing in `src/`. `test/net-latency.test.ts` keeps printing the
 counter and stops claiming it proves anything — its comment previously said "the engine's counter
 above is what says nothing was actually lost", which is the one sentence this work disproves.
