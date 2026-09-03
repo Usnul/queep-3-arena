@@ -10756,6 +10756,13 @@ silence.
 
 ### D-192: relevance culling halves the downstream on one map and does nothing on another, and meep had the hook all along
 
+> **Superseded by D-195: the filter is removed.** The measurements below are correct and are kept;
+> the conclusion drawn from them was not. A visibility filter withholds an opponent until they are
+> already shooting, loses the entity rather than precision, and buys nothing on the rendering side of
+> a GPU-driven engine. The three findings in this entry that read as caveats -- the entity freezes,
+> the value is a property of the map, `am_thornish` gets nothing -- were the design showing through.
+
+
 The thing REPORT §5's two tables both point at. The plan's instruction was to check whether meep
 offers a scope or relevance hook beyond `OwnerAwareScope` before building one here, and the answer
 turns two of the plan's own premises over.
@@ -11014,3 +11021,61 @@ zero was one match, not a property of the link, and had been hiding there since 
 `slotIndex` on the client, because it is Q3's `clientNum` and the brief allows the concept at a
 higher level -- but the words are the pool's and could be better. And `MAX_CLIENTS` is now only the
 default capacity and the width of the id space, which is what it should always have been.
+
+### D-195: the PVS filter comes out — it was the wrong lever, and I measured it instead of questioning it
+
+D-192 built a PVS relevance filter, measured it at 55% of the downstream on `oa_dm1`, and left it
+off by default behind a presentation shortfall. It is removed: `src/server/PvsScope.ts`,
+`src/q3/cm/pvs.ts`, `BspFile.visibility`, `HostOptions.pvsCulling`, the rig option, the
+`scope_filter` plumbing in `SessionOptions` and `test/net-relevance.test.ts`. About 700 lines.
+
+**Why it was wrong, and none of the three reasons is about the implementation.**
+
+1. **It withholds the information you need earliest.** A player rounds a corner and shoots. Under a
+   visibility filter they enter your set and leave it again inside a round trip, so the first you
+   hear of an opponent is the moment they are already firing at you. Every PVS boundary in a
+   deathmatch level is exactly where a fight starts — the filter's error is not spread evenly over
+   the map, it is concentrated at the corner of every room. A bandwidth lever whose failure mode
+   lines up that precisely with the moments that decide the game is not a bandwidth lever.
+2. **It has no graceful degradation.** The other two levers on REPORT §5's list lose *precision*:
+   quantisation makes an opponent's position coarser, a lower remote publish rate makes it older.
+   Both are knobs, both are tunable, both fail softly. A visibility filter loses the *entity*. That
+   is a cliff, and it is why the freeze I recorded in D-192 was not a presentation bug one fix away
+   from shipping — it was the design showing through.
+3. **And it earns nothing on the rendering side**, which is where PVS pays for itself in engines
+   that need it. Shade is GPU-driven with frustum and occlusion culling; a precomputed cluster set
+   is a second, coarser, offline answer to a question the renderer already answers per frame and
+   better. There was never a rendering win to bank.
+
+**What I actually did wrong, which is the part worth keeping.** REPORT §5 listed three levers and
+said the first was "worth more than the other two together". I took that as the specification and
+went looking for the number, and the number came out large, and a large number is very good at
+ending an argument that should have started. The design question — *what does a shooter do when it
+does not tell you about a player* — was never asked, and D-192's own findings were pointing at it
+the whole time: the entity freezes, the value is a property of the map rather than of the netcode,
+and `am_thornish` gets nothing. Three results that say "this is not a lever" read as three
+caveats to a feature.
+
+**What survives, and it is not nothing.**
+
+- **meep has a relevance hook and the plan's premise about that was wrong.** `NetworkSession` takes
+  a `scope_filter`, `Replicator.pack_for_peer` consults it per record per peer and writes no packet
+  at all for a peer with nothing in scope, and **component mutations are actions**, so it covers the
+  whole of the replication traffic. Recorded in REPORT §5. A future filter with a *defensible*
+  predicate — a hard distance cap far beyond any sightline, say, or a spectator with no need for
+  prediction — has a place to live.
+- **`OwnerAwareScope` is load-bearing and supplying any filter replaces it.** Found the hard way:
+  the first version of `PvsScope` answered only the visibility question, and the host started
+  echoing each client its own predicted entity back — traffic **up 10.2%** while culling 0.1%, at an
+  unchanged packet count. That is a trap for anyone who supplies a `scope_filter` for any reason,
+  and it is why the finding is in REPORT rather than deleted with the code.
+- **The numbers.** 422 clusters on `oa_dm1` with 22% of pairs mutually visible against 72 and 76% on
+  `am_thornish`; 42.9 → 19.3 KB/s per client and 41.0 → 41.0. Kept because they are real and because
+  somebody will propose this again, and the answer should be "yes, it saves half the bandwidth on one
+  of our two maps, and here is why we still do not want it".
+
+**What the bandwidth problem is actually waiting on.** `NetPlayerState` is 70 bytes and 27 of them
+are `float32` — position, velocity and ground normal — where Q3 sent quantised 16-bit. That, and
+publishing remote slots less often than the local prediction the short-circuit compares against.
+Both lose precision rather than entities, both are measurable against the same rig, and neither is
+built.

@@ -109,8 +109,6 @@ export interface RigOptions {
     simulationDelayTicks?: number;
     /** Action-log ring depth, in frames. Applied to both peers. */
     frameCapacity?: number;
-    /** Cull replication to each client's PVS. See `PvsScope`. */
-    pvsCulling?: boolean;
     /** How many players the host will admit. A number, not a pool size. */
     capacity?: number;
 }
@@ -152,7 +150,6 @@ export class NetRig {
             difficulty: options.difficulty,
             simulationDelayTicks: options.simulationDelayTicks,
             frameCapacity: options.frameCapacity,
-            pvsCulling: options.pvsCulling,
             capacity: options.capacity,
         });
 

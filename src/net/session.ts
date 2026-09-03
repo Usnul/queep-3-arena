@@ -54,21 +54,6 @@ export interface SessionOptions {
     /** Host-side: how long a dropped peer's state is retained. */
     server_resume_grace_ms?: number;
     reconnect?: { enabled: boolean };
-    /**
-     * Relevance filter, per peer and per entity.
-     *
-     * `Replicator.pack_for_peer` consults `is_entity_in_scope` for every action
-     * and drops a packet that ends up holding none, and **component mutations
-     * are actions** -- `net_mutate_component` becomes a
-     * `ReplaceComponentAction` -- so this covers the whole of the replication
-     * traffic. Null leaves the engine's own default in place, which on the host
-     * is `OwnerAwareScope`.
-     *
-     * Typed structurally rather than as `ScopeFilter`, because the engine
-     * documents the contract as duck-typed and the two shipped implementations
-     * share no base class.
-     */
-    scope_filter?: { is_entity_in_scope(peerId: number, networkId: number): boolean } | null;
 }
 
 /**

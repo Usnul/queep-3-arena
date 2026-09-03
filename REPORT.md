@@ -3267,31 +3267,40 @@ quantised 16-bit positions. What the rate change bought is headroom, not a fix: 
 **relevance culling**, a lower publish rate for remote slots than for the local prediction, and
 **quantisation** — are all still the answer.
 
-**Two corrections to the paragraph above, both from D-192, and the first one is mine.**
+**One correction to the paragraph above, and one lever struck off it (D-195).**
 
-1. **"No relevance filtering" was wrong.** meep has the hook and it is fully wired:
-   `NetworkSession` takes a `scope_filter`, `Replicator.pack_for_peer` consults
-   `is_entity_in_scope(peer_id, network_id)` for every record and writes no packet at all for a peer
-   with nothing in scope, and **component mutations are actions** — `net_mutate_component` becomes a
-   `ReplaceComponentAction` — so the filter covers the whole of this traffic and not just the game's
-   own events. `ScopeFilter.js` even names PVS culling as the expected use. The half that was right is
-   the baseline: there is no per-client delta, so culling removes entities and does not make the ones
-   that stay cheaper.
-2. **The first lever is worth more than the other two together on one map and nothing at all on
-   another.** Built and measured (`src/server/PvsScope.ts`, `test/net-relevance.test.ts`), 6 clients
-   and 4 bots for 20 s, which is this table's own configuration:
+**"No relevance filtering" was wrong about the engine.** meep has the hook and it is fully wired:
+`NetworkSession` takes a `scope_filter`, `Replicator.pack_for_peer` consults
+`is_entity_in_scope(peer_id, network_id)` for every record and writes no packet at all for a peer
+with nothing in scope, and **component mutations are actions** — `net_mutate_component` becomes a
+`ReplaceComponentAction` — so a filter would cover the whole of this traffic and not just the game's
+own events. The half that was right is the baseline: there is no per-client delta, so filtering
+removes entities and does not make the ones that stay cheaper.
 
-| map | clusters | cluster pairs mutually visible | KB/s per client, off → on | bytes saved | packets |
-|---|---:|---:|---:|---:|---:|
-| `oa_dm1` | 422 | 22% | **42.9 → 19.3** | **55.0%** | 14,400 → 10,800 |
-| `am_thornish` | 72 | 76% | 41.0 → 41.0 | 0.1% | 14,400 → 14,374 |
+**And "relevance culling" should not have been on the list of three levers at all, which is this
+report's mistake and not the engine's.** A PVS filter was built against that line, measured at 55% of
+the downstream on `oa_dm1` and 0.1% on `am_thornish`, and then **removed** — because saving bandwidth
+by not telling a client about a player is the wrong trade in this genre, and the measurement was
+answering a question that should not have been asked:
 
-   On `oa_dm1`, 65,935 of 112,974 relevance questions are answered "not visible". On `am_thornish`,
-   fifty-two are — four alcoves around one hall compile to 72 clusters that mostly see each other, so
-   there is nothing to remove. **So the lever's value is a property of the map rather than of the
-   netcode**, and a report that quoted one number for it would be wrong about half the set. It is off
-   by default: a culled slot freezes rather than disappearing, because `NetPresentationSystem` draws
-   anything whose replicated `connected` is set and `NetPlayerState` has no way to say "stale".
+- **The information it withholds is the information you need earliest.** A player rounds a corner and
+  shoots. Under a visibility filter they enter your set and are gone again inside a round trip, so the
+  first you hear of an opponent is at the moment they are already shooting — and every PVS boundary in
+  the level is exactly where a fight starts. A bandwidth lever whose error is concentrated at the
+  corner of a room is not a bandwidth lever, it is a gameplay regression with a nice number attached.
+- **It has no graceful degradation.** Quantisation and a lower remote publish rate lose *precision*,
+  which shows up as a slightly coarser or slightly older opponent. A visibility filter loses the
+  *entity*. One is a knob and the other is a cliff.
+- **And it earns nothing on the rendering side**, which is where PVS pays for itself in an engine that
+  needs it: Shade is GPU-driven with frustum and occlusion culling, so a precomputed cluster set adds
+  a second, coarser, offline answer to a question the renderer already answers per frame.
+
+The two levers that remain are the ones that degrade: **`NetPlayerState` is 70 bytes and 27 of them
+are `float32` position, velocity and ground normal** where Q3 sent quantised 16-bit — and a **lower
+publish rate for remote slots than for the local prediction**, since the local one is what the
+short-circuit compares and the remote ones are only drawn. Neither has been built. The culling
+measurement is kept in D-192 and D-195 because the numbers are real and someone will propose this
+again.
 
 #### Host CPU, `Host.step` alone
 
@@ -3324,14 +3333,14 @@ four to six. That is an `O(n²)` signature either way, with two candidates in th
 slot's state replicated to every other client, and every character body a broadphase pair with every
 other. Halving the rate halves the constant in front of it and does not change the exponent.
 
-**And the relevance culling this asked for independently is built (D-192), with the same map-shaped
-answer.** On `oa_dm1` the packet count falls by a quarter as well as the bytes by half — a peer with
-nothing in scope for a frame gets no packet, so there is less to *pack* and not only less to send,
-which is this table's currency rather than the other one's. No CPU figure is claimed for it here: the
-rig drives its clock from its own step counter, and a wall-clock number belongs with the bench that
-took the rows above. On `am_thornish` it changes nothing, which means the first candidate above is
-addressable and the second is not addressed at all — every character body is still a broadphase pair
-with every other whatever anybody can see.
+**The relevance culling this asked for independently was built and then removed (D-192, D-195).** It
+did cut the packet count by a quarter on `oa_dm1` as well as the bytes by half, which is this table's
+currency rather than the other one's — and it bought that by not telling a client about players it
+might be about to fight, which is not a trade this genre can make. What the measurement does still
+say is that the first candidate above (every player's state replicated to every other client) is
+where the cost is, and that the second (every character body a broadphase pair with every other) was
+never addressed at all — culling changed nothing about the broadphase, because the bodies exist
+whether or not anybody can see them.
 
 #### What else the rate change moved
 

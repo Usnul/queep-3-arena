@@ -57,8 +57,6 @@ import {
     type TeleportDestination,
 } from '../game/Movers.ts';
 import { WorldEffects, type EffectTarget } from '../game/WorldEffects.ts';
-import { PvsScope } from './PvsScope.ts';
-import { readVisibility } from '../q3/cm/pvs.ts';
 import { snapshotter_emit } from '@woosh/meep-engine/src/engine/network/sim/Snapshotter.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
@@ -143,16 +141,6 @@ interface Scene {
 }
 
 export interface HostOptions {
-    /**
-     * Cull replication to each client's PVS, the way `SV_BuildClientSnapshot`
-     * does. **Off by default**, and `PvsScope`'s docblock says why: a culled
-     * slot freezes rather than disappearing, because `NetPresentationSystem`
-     * draws anything whose replicated `connected` is set and `NetPlayerState`
-     * carries no way to say "this is stale". The measurement is in
-     * `test/net-relevance.test.ts` and D-192.
-     */
-    pvsCulling?: boolean;
-
     /**
      * How many players may be in the match at once. Defaults to `MAX_CLIENTS`.
      *
@@ -384,8 +372,6 @@ export class Host {
     private readonly missilePool: MissileEntry[] = [];
     /** The same entries by entity, for {@link originOf}. */
     private readonly missileByEntity = new Map<number, MissileEntry>();
-    /** Scratch for `PvsScope.beginFrame`, so a frame allocates no array. */
-    private readonly scopePeers: number[] = [];
     private readonly itemEntities: { entity: number; component: NetItem }[] = [];
     private readonly matchEntity: number;
     private readonly random: () => number;
@@ -401,14 +387,6 @@ export class Host {
      * will publish from.
      */
     readonly movers: MoverSystem;
-    /**
-     * The relevance filter, or null when `pvsCulling` was not asked for.
-     *
-     * Public so a bandwidth census can read `culled` and `kept` off it. See
-     * `PvsScope` for why it is off by default.
-     */
-    readonly scope: PvsScope | null;
-
     private readonly moverEvents: HostMoverEvents;
 
     /**
@@ -448,7 +426,6 @@ export class Host {
         session: NetworkSession;
         movers: MoverSystem;
         moverEvents: HostMoverEvents;
-        scope: PvsScope | null;
         capacity: number;
     }) {
         this.entityManager = parts.entityManager;
@@ -467,7 +444,6 @@ export class Host {
         this.session = parts.session;
         this.movers = parts.movers;
         this.moverEvents = parts.moverEvents;
-        this.scope = parts.scope;
         this.capacity = parts.capacity;
 
         for (let i = 0; i < MAX_CLIENTS; i++) this.worldEffects.push(new WorldEffects());
@@ -602,48 +578,9 @@ export class Host {
 
         const matchEntity = world.createEntity();
 
-        /*
-         The relevance filter, when it is asked for.
-
-         Built before the session because `scope_filter` is a constructor
-         option: `NetworkSession` installs it on the replicator at `start()` and
-         otherwise defaults to `OwnerAwareScope`. The roster it needs cannot
-         exist yet -- the `Host` is not constructed -- so it is handed a lazy
-         indirection through `hostRef`, which is the same trick the weapon
-         events already use two lines up.
-        */
-        let scope: PvsScope | null = null;
-        if (options.pvsCulling === true) {
-            const visibility = readVisibility(
-                new BspFile(
-                    raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
-                    mapName
-                ).visibility
-            );
-
-            scope = new PvsScope({
-                cm,
-                visibility,
-                roster: {
-                    slotForPeer: (peerId) =>
-                        hostRef?.players.find((r: { peerId: number; index: number }) =>
-                            r.peerId === peerId
-                        )?.index ?? -1,
-                    originOfSlot: (slot) => {
-                        const record = hostRef?.playerById(slot);
-                        if (record === undefined || !record.connected) return null;
-                        return record.state.origin;
-                    },
-                    originOfNetworkId: (networkId) => hostRef?.originOf(networkId) ?? null,
-                    ownerOfNetworkId: (networkId) => hostRef?.ownerOf(networkId) ?? -1,
-                },
-            });
-        }
-
         const session = createSession({
             entity_manager: entityManager,
             role: 'host',
-            scope_filter: scope,
             local_peer_id: HOST_PEER_ID,
             simulation_delay_ticks: options.simulationDelayTicks ?? SIMULATION_DELAY_TICKS,
             tick_rate_hz: TICK_HZ,
@@ -673,7 +610,6 @@ export class Host {
             session,
             movers,
             moverEvents,
-            scope,
             capacity: Math.max(1, options.capacity ?? MAX_CLIENTS),
         });
         hostRef = host;
@@ -1392,23 +1328,6 @@ export class Host {
      * change, which `equals` decides.
      */
     private publish(frame: number): void {
-        /*
-         The relevance filter's per-frame work, once, before anything is packed.
-
-         `is_entity_in_scope` is asked about every action for every peer, and
-         finding a peer's own cluster is a BSP descent -- so it is done here,
-         per peer per frame, rather than inside the question. Getting that
-         backwards would spend the host CPU the bandwidth was being saved for,
-         and REPORT section 5's other table is precisely about host CPU.
-        */
-        if (this.scope !== null) {
-            this.scopePeers.length = 0;
-            for (const record of this.players) {
-                if (record.connected && record.peerId >= 0) this.scopePeers.push(record.peerId);
-            }
-            this.scope.beginFrame(this.scopePeers);
-        }
-
         this.publishPopulation(frame);
 
         for (const record of this.players) {
