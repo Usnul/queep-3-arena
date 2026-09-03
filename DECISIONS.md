@@ -10394,3 +10394,67 @@ type its *options object* as `BinaryTopology`, because the JSDoc put `@param {Bi
 on a destructured parameter and the generator hoisted it -- GAP-001's family. 3.14.6 emits the real
 object type, and the cast this port carried to work around it became the only compile error in the
 upgrade. A workaround outliving its bug is a good failure mode.
+
+### D-188: the frame-alignment workaround comes out, and the join burst does not move
+
+D-187 closed GAP-042 and left `NetClient.fastForward` in place, on the grounds that removing it
+deserved its own re-measurement. This is that removal and that measurement.
+
+**What came out.** `NetClient.fastForward(target)`, which ticked the session `8 * period` at a time
+with the input sampler silenced until its counter reached the host's, plus the `aligning` flag that
+silenced the sampler, plus its three callers: the `?join=` branch of `src/app/main.ts`,
+`NetRig.join`, and `test/net-websocket.test.ts`. Every one of them ran immediately **before**
+`session.connect`, and the engine's own seek happens inside `onInitialSync`, which is the host tick
+**after** the connect. So the loop was aligning a counter that was about to be assigned.
+
+**`synced` is now the only gate on prediction**, and it is the same dispatch as the alignment.
+`onPredict` had two early returns -- `aligning` and `!synced` -- and the second subsumes the first
+exactly: the engine seeks on the dispatch that sets `synced`, so the frames the sampler stays quiet
+for are precisely the frames before the snapshot lands, and not one of them is tagged with a number
+the host has already trimmed.
+
+**The re-measurement, which is the point of doing this as its own piece of work.** The join burst on
+a delayed link is a real cost and it is what characterises the new alignment, so the question was
+whether removing the workaround moved it. It did not:
+
+| link | rewinds before | rewinds after | after settling |
+|---|---:|---:|---:|
+| loopback | 0 | 0 | 0 |
+| 10 ms clean | 0 | 0 | 0 |
+| 40 ms clean | 42 | **42** | 0 |
+| 80 ms clean | 80 | **80** | 0 |
+
+Prediction coherence is 96.6% at 40 and 80 ms on both sides of the removal, and `skipped_unapplied`
+is 8/27/80 at 40/80/150 ms on both sides -- so GAP-047 is not an artefact of the workaround either.
+Identical counts are the evidence that the loop was doing nothing: had it been contributing to the
+alignment, taking it away would have changed where the client landed and therefore how hard the host
+had to work to catch up.
+
+**What replaced the cost table.** `net-join-late.test.ts` had a test whose subject was the
+workaround -- "costs a loop whose length is the age of the match", 801 calls for a 6,000-frame host
+and 4,801 for 36,000. There is no loop to measure now, so it measures the property the loop existed
+to produce, over the same four match ages: the client lands on the host's clock, and **the cost does
+not have the match's age in it**. Measured at 0, 600, 6,000 and 36,000 frames: 0.06-0.23 ms, **one**
+host tick, and a lead of **four** frames past the host's simulation frame -- identical at every age,
+where the workaround needed 4,801 iterations for the last row and one for the first. The test asserts
+the flatness (one distinct tick count, one distinct lead across all four ages) rather than a
+duration, because a duration would be asserting this machine.
+
+**And the burst window is now measured rather than described.** The claim "all between frames 5 and
+44" was prose in a comment. `onRewind` now records the first and last rewind as frames since the
+join, the clean-link suite prints them, and it asserts the two properties that make the burst a join
+transient rather than a rate: it **starts** within a quarter-second of the join, and it **ends**
+before the four-second settle window that `steadyRewinds` is counted after -- which is strictly
+stronger than the old `steadyRewinds < 20`, and stops the settle window being a number chosen to
+make the measurement pass. Measured: frames 5-48 at 40 ms and 7-89 at 80 ms, both scaling with
+latency as a `TimeDilation` walking to a deeper target should. The window has no pre-removal reading,
+because the instrument is new; the counts above are what carry the comparison.
+
+**The one thing that had to change shape in the tests.** The alignment used to have happened by the
+time `rig.join()` returned, so `net-join-late.test.ts` could assert the client's frame immediately.
+It now happens a host tick later, so the test steps until `synced` and counts the steps -- and
+asserts, first, that the client is at frame -1 and unsynced on the way in. That negative is worth
+having: it is the difference between "the client is aligned" and "the client is aligned *by the
+engine, on the snapshot*", and only the second is what GAP-042 closing actually means.
+`net-websocket.test.ts` gained the same check over a real socket, where the seek was previously
+untested because the workaround had already done it.

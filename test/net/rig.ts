@@ -84,8 +84,15 @@ export interface RigClient {
     readonly hits: HitEventData[];
     readonly pickups: PickupEventData[];
     readonly predictedShots: number[];
-    /** What the frame-alignment workaround cost this client. See GAP-042. */
-    readonly align: { calls: number; milliseconds: number; target: number };
+    /**
+     * What joining cost, now that the engine does the alignment.
+     *
+     * `hostFrame` is where the host was when this client connected, and
+     * `milliseconds` is the wall clock of the connect itself -- which is the
+     * whole join since 3.14.6, where it used to be a loop whose length was the
+     * age of the match. See GAP-042 and D-188.
+     */
+    readonly align: { hostFrame: number; milliseconds: number };
 }
 
 export interface RigOptions {
@@ -231,24 +238,27 @@ export class NetRig {
 
         net.physicsStep = () => physics.step(SESSION_TICK_SECONDS);
 
-        /*
-         The frame alignment workaround of §4.4, in its simplest form: the host
-         is at frame F and a session that has just started is at -1, so the
-         client's inputs would be tagged with frames the host trimmed out of its
-         ring thousands of frames ago. `#local_frame` is `#private`, so the only
-         way to move it is to tick the session -- which is what `fastForward`
-         does, with the sampler silenced. Step 4 measures what that costs.
-        */
-        const lead = this.host.session.simulation_delay_ticks + 2;
-        const target = Math.max(0, this.host.currentFrame + lead);
-        const alignStart = performance.now();
-        const calls = net.fastForward(target);
-        const align = { calls, milliseconds: performance.now() - alignStart, target };
-
         const { hostSide, clientSide, hostRig, clientRig } = this.makeLink(peerId);
+
+        /*
+         Connect, and that is the alignment.
+
+         §4.4's workaround used to run here first: the host is at frame F and a
+         session that has just started is at -1, so the client's inputs would be
+         tagged with frames the host trimmed out of its ring thousands of frames
+         ago. `#local_frame` was `#private` and the only lever was to tick the
+         session forward with the sampler silenced. meep 3.14.6 seeks it off
+         INITIAL_SYNC's own `frame_number`, so the loop is gone and the cost of
+         a join no longer has the match's age in it. `net-join-late.test.ts`
+         measures that it does not.
+        */
+        const hostFrame = this.host.currentFrame;
+        const alignStart = performance.now();
 
         this.host.session.connect(peerId, hostSide);
         net.session.connect(0, clientSide);
+
+        const align = { hostFrame, milliseconds: performance.now() - alignStart };
 
         self = {
             net,

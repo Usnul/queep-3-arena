@@ -207,11 +207,12 @@ describe('a client over a real socket', () => {
         client.physicsStep = () => physics.step(SESSION_TICK_SECONDS);
 
         /*
-         Align, then connect -- the hello's frame is what makes the client's
+         Connect, and the engine aligns: INITIAL_SYNC carries the host's frame
+         and 3.14.6 seeks this session to it, which is what makes the client's
          first input land inside the host's ring rather than 30 frames behind
-         its oldest slot.
+         its oldest slot. The hello's own frame is asserted below instead of
+         being fed to a loop. GAP-042, D-188.
         */
-        client.fastForward(parsed.frame + wsHost.host.session.simulation_delay_ticks + 2);
         client.session.connect(0, new WebSocketTransport({ socket: socket as never }));
 
         const slot = wsHost.host.slots[parsed.slot]!;
@@ -247,6 +248,17 @@ describe('a client over a real socket', () => {
         // The world arrived.
         expect(client.synced, 'INITIAL_SYNC never landed over the socket').toBe(true);
         expect(client.predictedFrames, 'the client never predicted a frame').toBeGreaterThan(100);
+
+        /*
+         And the session seeked itself over a real socket, not just over the
+         rig's loopback. A client that had not been aligned would still be
+         counting from zero after 360 frames; this one is past the frame the
+         hello reported, because it was seeked to it and has run since.
+        */
+        expect(
+            client.currentFrame,
+            'the session never took the frame INITIAL_SYNC carried'
+        ).toBeGreaterThan(parsed.frame);
 
         // And the input went the other way.
         expect(walked, 'the host never saw the socket client move').toBeGreaterThan(200);

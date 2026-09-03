@@ -2222,16 +2222,89 @@ That is an accurate description of a component that cannot be used for its state
 - **Severity: unknown, and worth resolving before it is trusted.** If the count is real, GAP-043's residual survives on default settings and the events this port happens not to lose are luck. If it is a counting artefact, the field is misleading in exactly the situation it was added for.
 - **Evidence:** `test/net-latency.test.ts` ("delivers every event a reordering link can reach it with", which reports the number every run and bounds it rather than asserting zero), `node_modules/@woosh/meep-engine/src/engine/network/replication/Replicator.js` (`#delivery`, `delivery_stats`).
 
-### GAP-045: OPEN, upstream — a component published once on change is sometimes never delivered, on a link that loses nothing
+### GAP-045: OPEN, upstream — a rollback about one entity discards replicated state on every other
 
-- **Needed:** a scoreboard. `NetPlayerInfo` carries a slot's name, character, bot flag and score, all of which change a handful of times in a match, so it is published when `equals` says it differs rather than every frame.
-- **Observed, on a loopback with no loss, no jitter and no reordering:** a bot's first frag was published on the frame it happened, and the client's copy of that slot still read zero **eleven frames later and for the rest of the match**. A frag on a different slot eight hundred frames later arrived on the very next frame. So this is not a failure to send and not a failure of the wire — it is an occasional failure to deliver, and a value with one chance to arrive keeps whatever it landed on for ever.
-- **The experiment that pins it.** Replacing the change-detected publish with an unconditional `mutate` every frame makes the same measurement read `0,1,1,1,…` — the update arrives on the next frame and stays. Nothing else was changed. That is the whole diagnosis: the data, the serialisation and the transport are all fine, and delivery of a *single* mutation is not reliable.
-- **Not the cause, checked:** `NetPlayerInfo` is registered with no interpolation adapter, so it is not being restored from the `InterpolationLog` by `normalize_if_dirty`; the host's `mutateIfChanged` shadow is updated only when it publishes, so a missed send cannot be masked as "unchanged"; and the same code path delivers other slots' updates in the same frames.
-- **Workaround, in `Host.publishInfo`:** republish for ten frames after each change. Costs nothing at rest — a name and a score change a handful of times a match — where publishing unconditionally would cost about 320 bytes a frame of names that never change, against a per-frame action budget measured at 940 (D-177). It fixes most of it and **not all**: with two clients and four bots over 45 seconds, one slot out of thirty-two still ends up stale. That residual is what `test/net-match.test.ts` reports against a target of zero.
-- **Severity: moderate, and entirely cosmetic today.** A wrong score on a scoreboard is not a wrong simulation — nothing reads `NetPlayerInfo` back — but the same publish-on-change path carries `NetItem.present`, where a lost update is an item that is invisible to one client and solid to the host. That case is not yet measured and should be before step 8.
-- **Status:** accepted as an engine-side item and expected to be fixed upstream, so the workaround below stays and the residual is reported rather than chased further from this side. `INFO_RESEND_FRAMES` becomes a tuning knob rather than a workaround on the day it lands, and `test/net-match.test.ts` should tighten to zero stale slots then.
-- **Evidence:** `src/server/Host.ts` (`publishInfo`, `INFO_RESEND_FRAMES`), `test/net-match.test.ts` ("shows a scoreboard within one slot of the host"), D-180.
+**Re-diagnosed. The first version of this entry said a published-once component was "sometimes
+never delivered"; it is delivered, applied, and then rolled back.** The bug report filed with meep
+is <https://claude.ai/code/artifact/e493ed7b-d2b4-4efc-8cf2-68459909687f>; the standalone
+reproduction is `tools/repro/meep-mutate-rewind.mjs` and **it reproduces**, unlike GAP-043's. Every
+number below is re-taken at `TICK_HZ` 30 (D-184) against meep 3.14.6.
+
+- **Needed:** a scoreboard, and items that are where the host says they are. `NetPlayerInfo` and
+  `NetItem.present` both change a handful of times a match, so both are published when `equals`
+  says they differ rather than every frame.
+- **What actually happens.** `ServerAuthoritativeClient.#handle_auth_state` rewinds the **whole
+  world** — `RewindEngine.rewind_to(current_frame, server_frame - 1)` walks every action record in
+  the window and writes its prior state back — but repairs only the single `network_id` the
+  AUTH_STATE carried (`onApplyAuthState`), and replays only this client's own sampled input
+  (`onReplay` → `#sampled_actions_per_frame`). An inbound `ReplaceComponentAction` for any other
+  entity is undone and never re-applied, and the host, having published on change, never sends it
+  again. Measured over three 45-second matches: **every** value a rewind moved off the host's
+  belonged to an entity the AUTH_STATE was *not* about, and **every** stale value had been observed
+  equal to the host's at an in-step probe first.
+- **Why nobody noticed on the entity that matters most.** A host defaults its scope filter to
+  `OwnerAwareScope`, which keeps an entity *out* of the action stream sent to the peer that owns it.
+  So a client's own slot is carried by AUTH_STATE alone and is repaired one step after the rewind,
+  on the same path. Measured on client 0 over 1,350 frames: its own slot was repaired by AUTH_STATE
+  **283 times and undone by a rewind 0 times**; every other slot was undone 3–7 times and repaired
+  **0** times.
+- **The causal control.** Widening `reconcile_epsilon` to `Infinity` so the short-circuit always
+  agrees, and therefore no rewind ever runs, takes reversions and item staleness to **zero** in
+  every repeat. Nothing else changes. It is a diagnostic and not a fix — a client that never
+  reconciles is never corrected.
+- **`NetItem.present` is affected too, and that is gameplay rather than cosmetics.** Two to three
+  items per 45-second match end permanently wrong on a client, **including** in the regime that
+  publishes `NetPlayerInfo` unconditionally, because `NetItem` is published on change regardless.
+  One instance, with the rewind attributed: `frame 288: client 0 item 19 (net id 100) present
+  0 -> 1 while the host held 0 [AUTH_STATE for net id 1 at server_frame 289]` — the client saw the
+  pickup taken, a rewind about *its own player* put the item back on the floor, and nothing ever
+  corrected it. This is the measurement the previous version of this entry said should be taken
+  before step 8.
+- **Measured, three repeats, two clients, four bots, `oa_dm1`, 45 s, loopback:**
+
+  | `NetPlayerInfo` regime | stale slots | stale items | rewind reversions | held it first |
+  |---|---:|---:|---:|---:|
+  | published once, on change | 2–3 | 2–3 | 6–12 | all |
+  | republished 10 frames (ships) | 1 | 2–3 | 17–47 | all |
+  | published every frame | 0 | 2 | 17 | all |
+  | once, **rewind suppressed** | 2 | **0** | **0** | **0** |
+
+- **The workaround is racing, not repairing.** `Host.publishInfo`'s ten-frame republish only wins
+  where most frames carry no rewind. The standalone matrix shows publishing *every* frame failing
+  too once every AUTH_STATE rewinds — so the residual is not a matter of tuning
+  `INFO_RESEND_FRAMES` upward.
+- **Not the cause, checked:** no interpolation adapter on either component, so
+  `normalize_if_dirty` never touches them (`desc.interp === null` is skipped in both
+  `#on_frame_applied` and `#render_interpolated_entities`); the host's `mutateIfChanged` shadow
+  advances only on the branch that publishes; STATE_BURST is request-driven
+  (`RECOVERY_REQUEST`, and `send_state_burst_for_range` needs a `mutation_ledger`) and the loss is
+  silent, so no client would ever ask; and the `{ component_type, new_state }` payload form changes
+  nothing on the receiver.
+- **One documentation finding.** `#on_net_mutate_component`'s docblock says of the bare
+  `{ component_type }` form: *"prior bytes equal post bytes (rewind for this mutation is a
+  no-op)"*. True on the **sender**, where the caller already mutated live. False on the
+  **receiver**, where the executor captures the client's old value as prior and the rewind is
+  precisely not a no-op. That sentence is why the rewind went unsuspected for as long as it did.
+- **Two measurement traps, both of which produced confident wrong answers.** Sampling once a frame
+  reports **zero** withdrawals, because the mutation is applied and the rewind runs inside the same
+  `client.step()` — that is what produced the original "never delivered". And a high-water mark
+  answers "did it ever arrive" correctly for `kills`, which only rises, and gives a **false pass**
+  for `NetItem.present`, which falls. The instrument now carries a per-value flag, cleared when the
+  host changes its mind and set when a probe finds the two agreeing.
+- **A reproducibility note worth keeping.** Four matches in one process do not reproduce between
+  invocations; one match in a fresh process does. The engine's client path reads the wall clock
+  (`#on_frame_applied` feeds `performance.now()` to `AdaptiveRenderDelay`), so step duration changes
+  the render blend. `gap045-measure.ts` runs each configuration in its own child process and reports
+  ranges.
+- **Severity: moderate for the scoreboard, and a real gameplay bug for items.** An item one client
+  can see and the host says is gone is not cosmetic.
+- **Status:** open upstream, with the standalone reproduction filed. The workaround stays and the
+  residual is reported rather than chased further from this side; `test/net-match.test.ts` should
+  tighten to zero stale slots on the day it lands.
+- **Evidence:** `tools/repro/meep-mutate-rewind.mjs` (engine-only, exits non-zero),
+  `tools/repro/gap045-measure.ts` (`--repeat 3`), `src/server/Host.ts` (`publishInfo`,
+  `INFO_RESEND_FRAMES`, the `NetItem` loop in `publish`), `test/net-match.test.ts` ("shows a
+  scoreboard within one slot of the host"), D-180.
 
 ### GAP-044: FIXED — the client gave a body to slots nobody was playing, and stood a player's width off the host for ever
 
@@ -2249,11 +2322,12 @@ That is an accurate description of a component that cannot be used for its state
 - **meep offers:** everything except the number. INITIAL_SYNC is a complete world snapshot **and it carries the host's frame**: `NetworkPeer` writes `frame_number` into the packet and `onInitialSync` is dispatched with it, right there in the argument list.
 - **Closed in meep 3.14.6.** `NetworkSession`'s `onInitialSync` handler now takes the frame number it had been discarding and calls `this.seek_to_frame(frame_number + 1 + this.#time_dilation.target_buffer_depth)`, and `seek_to_frame` is a public, documented method rather than something reachable only by ticking. The engine's own comment names this gap. Everything below is what the gap was and what it cost while it was open, kept because the workaround is still in this port's code and the reader should know why.
 - **What it changed here, and it is not only the removal of a loop.** The engine's alignment is *tighter* than this port's guess was: `target_buffer_depth` starts at `TimeDilation`'s initial target rather than at the generous `SIMULATION_DELAY_TICKS + 2` the workaround used, so a joining client on a delayed link now spends a second or so converging, and the host rolls back while it does. Measured at 40 ms clean: 42 rewinds, **all between frames 5 and 44, and none in the remaining eighteen seconds**; at 80 ms: 80, all inside the first 84 frames. Steady state afterwards is *better* than before -- zero rewinds at every latency measured, where the pre-3.14.6 arrangement produced about one per run -- and prediction coherence rose from 91.2% to 96.6% at 80 ms. The join burst is the price of aligning correctly instead of guessing high, and `test/net-latency.test.ts` now counts the two separately.
-- **The workaround is still in the code and should come out.** `NetClient.fastForward` and its callers in `main.ts`, `test/net/rig.ts` and `test/net-websocket.test.ts` now run *before* an alignment the engine performs anyway, so they are redundant rather than harmful. Removing them is a follow-up, not a hotfix, because the join-time behaviour is what the measurements above characterise and it should be re-measured without them.
+- **The workaround is out, and the burst did not move.** `NetClient.fastForward` and its callers in `main.ts`, `test/net/rig.ts` and `test/net-websocket.test.ts` all ran *before* `session.connect`, and the engine's seek happens inside `onInitialSync`, which is the host tick *after* it -- so the loop was aligning a counter that was about to be assigned. Removed in D-188 and re-measured: **42 rewinds at 40 ms clean and 80 at 80 ms on both sides of the removal**, zero after settling on both, coherence 96.6% on both, and `skipped_unapplied` 8/27/80 on both. Identical counts are the evidence that the loop was contributing nothing; had it been, taking it away would have changed where the client landed. The join burst's *window* is now recorded rather than described -- frames 5-48 since the join at 40 ms and 7-89 at 80 ms -- and `test/net-latency.test.ts` asserts it starts within a quarter-second of the join and ends inside the settle window, which is stricter than the rate bound it had.
+- **What the cost table below became.** `test/net-join-late.test.ts` measured the loop over four match ages; there is no loop, so it measures the property the loop existed to produce over the same four ages. The client lands on the host's clock at **0.06-0.23 ms, one host tick and a lead of four frames -- identical at 0, 600, 6,000 and 36,000 frames**, against 4,801 iterations for the last row before. The flatness is what is asserted; the milliseconds are a machine.
 
 - **The gap is that the receiver drops it on the floor.** `NetworkSession`'s handler is `(_peer_id, session_token, _frame_number, buf, payload_end) => ...` — the frame is the third parameter and is named with a leading underscore. `#local_frame` is `#`-private, so an application cannot set it either; there is no `seek`, no constructor option, and no writable accessor. Meanwhile the far end is unforgiving: `ServerAuthoritativeServer.tick` trims pending actions older than `sim_frame - frame_capacity + 1`, so a client tagging frame 0 against a host at 6,000 has every input dropped **silently** — it moves on its own screen, never moves on the host's, and no signal fires. `onPendingActionDropped` covers the future-lead and capacity bounds, not this one.
 - **Workaround:** tick the session forward with the input sampler silenced until its own counter catches up, which is the only lever a `#private` field leaves. `NetClient.fastForward(target)` calls `session.tick(8 * period)` in a loop; no peer is connected yet, so the empty ack packets each step produces go nowhere.
-- **What the workaround costs, measured on `oa_dm1`:**
+- **What the workaround cost while it was in, measured on `oa_dm1`.** Kept because it is what the gap cost, and because the flat table that replaced it is only legible against this one:
 
   | host age | frames | calls | wall clock |
   |---|---:|---:|---:|

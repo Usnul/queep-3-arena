@@ -212,9 +212,6 @@ export class NetClient {
     /** The frame the sampler was last called for; the ring is written after it. */
     private lastPredicted = -1;
 
-    /** True while fast-forwarding to the host's frame; the sampler stays quiet. */
-    aligning = false;
-
     private constructor(parts: {
         entityManager: EntityManager;
         world: EntityComponentDataset;
@@ -486,9 +483,16 @@ export class NetClient {
      * back, records the bytes for replay, and sends them. So sampling, stepping
      * and sending are one call, and a frame that produced no action never
      * happened as far as the host is concerned.
+     *
+     * **`synced` is the only gate, and since 3.14.6 it is also the alignment.**
+     * There was a second one -- `aligning`, held true while `fastForward` ran
+     * the session's counter up to the host's -- and the engine now seeks the
+     * counter itself on INITIAL_SYNC, on the same dispatch that sets `synced`.
+     * So the frames this returns nothing for are exactly the frames before the
+     * snapshot lands, and none of them is tagged with a number the host has
+     * already trimmed. See GAP-042 and D-188.
      */
     private onPredict(frame: number): SimAction[] {
-        if (this.aligning) return [];
         if (!this.synced) return [];
 
         const identity = this.world.getComponent(
@@ -800,20 +804,6 @@ export class NetClient {
         // The trace is a diagnostic and is allowed to grow for a whole run;
         // trimming it would be trimming exactly the frames a test compares.
 
-    }
-
-    /** Fast-forward the session to a host frame without sending anything. */
-    fastForward(target: number): number {
-        this.aligning = true;
-        let calls = 0;
-        const bulk = 8 * SESSION_TICK_SECONDS;
-        while (this.session.current_frame < target) {
-            this.session.tick(bulk);
-            calls += 1;
-            if (calls > 1_000_000) break;
-        }
-        this.aligning = false;
-        return calls;
     }
 
     get currentFrame(): number {

@@ -10,21 +10,23 @@
  *
  * ---
  *
- * The engine has no answer for this and the shape of the hole is specific.
+ * The engine had no answer for this and the shape of the hole was specific.
  *
- * A client's session frame counter starts at 0 in `start()`. The host's is
- * wherever the match has got to. The `onInitialSync` handler is handed the
- * host's `frame_number` and **ignores it**, and `#local_frame` is `#private`,
- * so there is no supported way to tell a client what time it is. Meanwhile the
- * host trims pending actions older than `sim_frame - frame_capacity + 1`, so a
- * client that joins a host at frame 6000 tagging its inputs 0, 1, 2 has every
- * one of them dropped, silently, for ever: it moves on its own screen, it never
- * moves on the host's, and nothing anywhere reports a problem.
+ * A client's session frame counter starts at -1. The host's is wherever the
+ * match has got to. The `onInitialSync` handler was handed the host's
+ * `frame_number` and **ignored it** -- the parameter was named
+ * `_frame_number` -- and `#local_frame` was `#private`, so there was no
+ * supported way to tell a client what time it is. Meanwhile the host trims
+ * pending actions older than `sim_frame - frame_capacity + 1`, so a client that
+ * joined a host at frame 6000 tagging its inputs 0, 1, 2 had every one of them
+ * dropped, silently, for ever: it moved on its own screen, it never moved on
+ * the host's, and nothing anywhere reported a problem.
  *
- * The workaround is to tick the session forward with the input sampler
- * silenced until its own counter catches up, which is the only lever there is.
- * This file is what says the workaround works, and what it costs -- because the
- * cost is the interesting part of a workaround that runs a loop 28,801 times.
+ * **meep 3.14.6 seeks the counter itself** and `NetClient.fastForward` came out
+ * with D-188. So this file no longer measures a workaround; it measures the
+ * property the workaround existed to produce -- a joining client lands on the
+ * host's clock -- and it measures it for a host that has been up for an hour,
+ * because that is the case where getting it wrong is total and silent.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -55,10 +57,34 @@ describe('a client joining a host at frame 6000', () => {
         const client = await rig.join('late', 1);
 
         /*
-         Aligned, and aligned to the host's frame plus the lead rather than to
+         Nothing is aligned yet, and that is the shape of the change: the seek
+         happens inside `onInitialSync`, which is the host tick after the
+         connect, where the workaround used to have run the counter up before
+         the connect. A session that has started and not synced is at -1.
+        */
+        expect(client.net.synced).toBe(false);
+        expect(client.net.currentFrame).toBeLessThan(1);
+
+        let stepsToSync = 0;
+        while (!client.net.synced && stepsToSync < 30) {
+            rig.step(1);
+            stepsToSync += 1;
+        }
+
+        /*
+         Aligned, and aligned to the host's frame plus a lead rather than to
          zero. Without this the client's first input would be tagged frame 0
          against a host that trimmed frame 0 out of its ring ninety seconds ago.
+
+         The lead is the engine's, not this port's: `seek_to_frame(frame_number
+         + 1 + target_buffer_depth)` with `TimeDilation`'s initial target of 2,
+         so three frames past the snapshot's own frame, and the host has ticked
+         `stepsToSync` times while the snapshot was in flight. The workaround
+         used to guess `SIMULATION_DELAY_TICKS + 2`, which is more; the range
+         below still bounds both, because what matters here is that it is near
+         6000 rather than near zero.
         */
+        expect(stepsToSync, 'INITIAL_SYNC never landed').toBeLessThan(30);
         expect(client.net.currentFrame).toBeGreaterThanOrEqual(6000);
         expect(client.net.currentFrame).toBeLessThanOrEqual(6000 + SIMULATION_DELAY_TICKS + 4);
 
@@ -142,53 +168,94 @@ describe('a client joining a host at frame 6000', () => {
     });
 });
 
-describe('the frame-alignment workaround', () => {
-    it('costs a loop whose length is the age of the match', async () => {
-        const measured: { frame: number; calls: number; ms: number }[] = [];
+describe('the alignment the engine now performs', () => {
+    it("lands a joiner on the host's clock at a cost the age of the match is not in", async () => {
+        const measured: { age: number; ms: number; steps: number; lead: number }[] = [];
 
+        /*
+         The same four ages the workaround was measured over, so the two tables
+         can be read against each other. The last is ten minutes of match; the
+         workaround needed 4,801 iterations of its loop to cover it and 28,801
+         for an hour.
+        */
         for (const age of [0, 600, 6000, 36000]) {
             const rig = await NetRig.create({ map: 'oa_dm1', bots: 0, clients: 0, seed: 42 });
             rig.step(age);
+
+            const hostFrame = rig.host.currentFrame;
             const client = await rig.join('late', 1);
+
+            let steps = 0;
+            while (!client.net.synced && steps < 30) {
+                rig.step(1);
+                steps += 1;
+            }
+
             measured.push({
-                frame: age,
-                calls: client.align.calls,
+                age,
                 ms: client.align.milliseconds,
+                steps,
+                lead: client.net.currentFrame - hostFrame,
             });
         }
 
         // eslint-disable-next-line no-console
         console.log(
-            '[net-join-late] frame alignment: ' +
+            '[net-join-late] engine alignment: ' +
                 measured
-                    .map((m) => `${m.frame} frames -> ${m.calls} calls / ${m.ms.toFixed(1)} ms`)
+                    .map(
+                        (m) =>
+                            `${m.age} frames -> ${m.ms.toFixed(2)} ms / ${m.steps} host ticks / ` +
+                            `lead ${m.lead}`
+                    )
                     .join('; ')
         );
 
         /*
-         The loop asks for eight frames a call and averages **seven and a half**,
-         which is D-167's six hundred picoseconds turning up a third time:
-         `8 * (1 / 60) * 1000` is 133.33333333333331 and eight of the session's
-         own periods is 133.33333333333333, so the accumulator falls one step
-         short on every other call. 801 calls to cover 6,006 frames, 4,801 for
-         36,006, and 28,801 for the 216,000 frames of a one-hour-old match --
-         which is the number `NETWORK_PLAN.md` §4.4 asked for, and it measured
-         **62.5 ms** on this machine against the 250 ms threshold the plan set
-         for "consider making the host restart its frame count per match". It is
-         comfortably under, so the host keeps one counter for its whole life and
-         the workaround stays a loop.
+         What this asserts, and why it is worth a test at all now that the loop
+         is gone.
 
-         Asserted as a shape rather than as a duration: the call count is
-         arithmetic and reproduces, and the milliseconds are a machine.
+         The property is **flatness**. `NetworkSession.seek_to_frame` is an
+         assignment, so the join costs the same for a host that has been up for
+         ten minutes as for one that started this frame -- where the workaround
+         cost 4,801 iterations for the first and 1 for the second. Asserting a
+         duration would be asserting this machine, so what is asserted is that
+         the alignment does not scale: the wall clock is bounded by a constant
+         that the 36,000-frame case would blow through by two orders of
+         magnitude if a loop were still running, and the *number of host ticks*
+         it takes -- the honest unit, since the seek happens on a dispatch --
+         is identical at every age.
+
+         Measured: 0.06-0.23 ms at every age, **1** host tick at every age, and
+         a lead of **4** frames past the host's simulation frame at every age --
+         3 of them the engine's `frame_number + 1 + target_buffer_depth` and the
+         fourth the host tick that carried the snapshot. Against 4,801 loop
+         iterations and 14 ms for the 36,000-frame case before.
         */
         for (const m of measured) {
-            expect(m.calls).toBeGreaterThan(0);
-            expect(m.calls * 8, 'the loop cannot have covered the distance').toBeGreaterThanOrEqual(
-                m.frame
-            );
-            expect(m.calls).toBeLessThanOrEqual(Math.ceil(m.frame / 7) + 8);
+            expect(m.ms, 'the join is doing work proportional to the match age').toBeLessThan(5);
+            expect(m.steps, 'INITIAL_SYNC never landed').toBeLessThan(30);
         }
-        expect(measured[3]!.calls).toBeGreaterThan(measured[2]!.calls);
+
+        const steps = measured.map((m) => m.steps);
+        expect(new Set(steps).size, 'the join took longer for an older host').toBe(1);
+
+        const leads = measured.map((m) => m.lead);
+        expect(new Set(leads).size, "the lead depends on the host's age").toBe(1);
+
+        /*
+         And the lead is the engine's: `frame_number + 1 + target_buffer_depth`
+         against `TimeDilation`'s initial target of 2, measured from the host's
+         simulation frame at the moment of the connect. Bounded rather than
+         pinned to 3, because the target is the engine's to change and what this
+         port needs is that the number is small and positive -- a joiner has to
+         tag its inputs *ahead* of the host or they arrive for a frame already
+         run.
+        */
+        for (const m of measured) {
+            expect(m.lead, 'a joiner is tagging inputs the host has already run').toBeGreaterThan(0);
+            expect(m.lead).toBeLessThanOrEqual(SIMULATION_DELAY_TICKS + 4);
+        }
     });
 });
 

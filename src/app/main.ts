@@ -110,7 +110,7 @@ import {
     NetWorldSystem,
     type MissilePresenter,
 } from './netSystems.ts';
-import { HOST_PEER_ID, SIMULATION_DELAY_TICKS } from '../net/protocol.ts';
+import { HOST_PEER_ID } from '../net/protocol.ts';
 import type { UserCmd } from '../q3/pmove/types.ts';
 import { CHARACTER_HEIGHT, CharacterBodies } from '../client/CharacterBody.ts';
 import {
@@ -1254,21 +1254,21 @@ async function main(): Promise<void> {
 
         if (netClient !== null && joined !== null) {
             /*
-             Align, then connect, and in that order: the hello's frame is what
-             makes this client's first command land inside the host's ring
-             rather than however many frames behind its oldest slot the page
-             took to load. `fastForward` runs the session forward with the
-             sampler held quiet, so nothing is predicted and nothing is sent.
+             Connect, and that is the whole join.
 
-             The two frames past the delay are the host's own lead: it buffers
-             input for `SIMULATION_DELAY_TICKS` before executing it, and a
-             command that arrives for a frame it has already run is a command it
-             drops.
+             There was an alignment step here first: the host is at frame 6,000
+             and a session that has just started is at -1, so this client's
+             commands would be tagged with frames the host trimmed out of its
+             ring ninety seconds ago and dropped, silently, for ever. meep
+             3.14.6 seeks the counter itself off INITIAL_SYNC's `frame_number`,
+             which was on the wire the whole time, so the loop that used to run
+             here would now run immediately before an alignment the engine
+             performs anyway. GAP-042, closed; removed in D-188.
+
+             The hello's frame is still read -- it is what the log below has to
+             compare against, and what tells a reader of the console whether the
+             seek landed.
             */
-            const aligned = netClient.fastForward(
-                joined.hello.frame + SIMULATION_DELAY_TICKS + 2
-            );
-
             netClient.session.connect(
                 HOST_PEER_ID,
                 new WebSocketTransport({ socket: joined.socket as never })
@@ -1282,8 +1282,9 @@ async function main(): Promise<void> {
             });
 
             console.log(
-                `[queep] net: aligned to frame ${netClient.currentFrame} in ${aligned} ticks, ` +
-                    `socket open to ${joinUrl ?? ''}`
+                `[queep] net: socket open to ${joinUrl ?? ''}; host said frame ` +
+                    `${joined.hello.frame}, and the engine seeks this session to it when ` +
+                    'the snapshot lands'
             );
         }
 

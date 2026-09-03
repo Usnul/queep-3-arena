@@ -71,6 +71,17 @@ function circleWalk(
     cmd.buttons |= C.BUTTON_ATTACK;
 }
 
+/*
+ Four seconds. Two covered the convergence at 40 ms and not at 80, where 26
+ rewinds were still arriving after it -- the deeper the buffer the target, the
+ longer `TimeDilation` takes to walk to it.
+
+ Module scope rather than local to `run`, because the clean-link suite asserts
+ the rewind burst ends inside it and a window a test tunes for itself is not a
+ window.
+*/
+const SETTLE_FRAMES = TICK_HZ * 4;
+
 interface Outcome {
     label: string;
     predicted: number;
@@ -80,6 +91,8 @@ interface Outcome {
     rewinds: number;
     /** Rewinds after the joining client's clock has settled. Should be zero. */
     steadyRewinds: number;
+    /** Frames since the join at which the first and last rewind happened. */
+    rewindWindow: [number, number];
     /** Frames that arrived and never ran. meep 3.14.6's own counter. Target is zero. */
     skippedUnapplied: number;
     /** Frames the rate measurements were taken over, once the join had settled. */
@@ -143,21 +156,29 @@ async function run(
      behaviour this file used to assert (about one per run). The second is the
      property worth holding; the first is worth printing.
     */
-    /*
-     Four seconds. Two covered the convergence at 40 ms and not at 80, where 26
-     rewinds were still arriving after it -- the deeper the buffer the target,
-     the longer `TimeDilation` takes to walk to it.
-    */
-    const SETTLE_FRAMES = TICK_HZ * 4;
     const MEASURED_FRAMES = TICK_HZ * (seconds - 4);
     const joinedAt = rig.host.currentFrame;
 
     let rewinds = 0;
     let steadyRewinds = 0;
     let depthTotal = 0;
+    /*
+     And *where* the burst is, not only how big it is.
+
+     D-188 removed `NetClient.fastForward`, which ran immediately before the
+     engine's own seek and was therefore doing nothing -- but "doing nothing"
+     is a claim about the join, and the join is exactly what this burst is. So
+     the window is recorded rather than described: if the removal had moved the
+     alignment, these two numbers would move with it.
+    */
+    let firstRewind = -1;
+    let lastRewind = -1;
     rig.host.session.server!.onRewind.add((_top: number, _target: number, depth: number) => {
+        const since = rig.host.currentFrame - joinedAt;
         rewinds += 1;
-        if (rig.host.currentFrame - joinedAt > SETTLE_FRAMES) steadyRewinds += 1;
+        if (since > SETTLE_FRAMES) steadyRewinds += 1;
+        if (firstRewind < 0) firstRewind = since;
+        lastRewind = since;
         depthTotal += depth;
     });
 
@@ -237,6 +258,7 @@ async function run(
         comparisons,
         rewinds,
         steadyRewinds,
+        rewindWindow: [firstRewind, lastRewind],
         skippedUnapplied: delivery.skipped_unapplied,
         skippedDuplicate: delivery.skipped_duplicate,
         measuredFrames: MEASURED_FRAMES,
@@ -285,7 +307,8 @@ describe('prediction coherence against pure latency', () => {
                             `${(o.hitRate * 100).toFixed(1).padStart(5)}% of ${o.comparisons}  ` +
                             `reconciles ${String(o.reconciles).padStart(3)}  ` +
                             `host rewinds ${String(o.rewinds).padStart(4)} ` +
-                            `(${o.steadyRewinds} after settling)`
+                            `(${o.steadyRewinds} after settling, ` +
+                            `frames ${o.rewindWindow[0]}-${o.rewindWindow[1]} since join)`
                     )
                     .join('\n')
         );
@@ -312,6 +335,38 @@ describe('prediction coherence against pure latency', () => {
 
         // And it is flat rather than merely passing: 80 ms is as good as none.
         expect(Math.abs(outcomes[3]!.hitRate - outcomes[0]!.hitRate)).toBeLessThan(0.05);
+
+        /*
+         The burst is one contiguous transient at the join, and this is what
+         says so rather than describing it.
+
+         `steadyRewinds` already bounds what happens after four seconds. This
+         is stronger in both directions: the burst **starts** within a quarter
+         of a second of the join, so it is not something that begins in the
+         middle of a run, and it **ends** before the settle window, so the four
+         seconds is a fact about the measurement rather than a number chosen to
+         make it pass.
+
+         Re-measured after D-188 removed `NetClient.fastForward`. The counts
+         are unchanged -- 42 rewinds at 40 ms and 80 at 80 ms, the same on both
+         sides of the removal -- which is the evidence that the loop was
+         running immediately before an alignment the engine performs anyway.
+         The window itself is a new instrument and has no pre-removal reading
+         to be compared against: 40 ms is frames 5-48 since the join and 80 ms
+         is frames 7-89, both scaling with the latency, as a `TimeDilation`
+         walking to a deeper target should.
+        */
+        for (const o of outcomes) {
+            if (o.rewinds === 0) continue;
+            expect(
+                o.rewindWindow[0],
+                `${o.label}: the rewind burst does not start at the join`
+            ).toBeLessThan(TICK_HZ / 4);
+            expect(
+                o.rewindWindow[1],
+                `${o.label}: the rewind burst outlives the settle window`
+            ).toBeLessThan(SETTLE_FRAMES);
+        }
     });
 });
 

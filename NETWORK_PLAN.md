@@ -429,15 +429,27 @@ socket is handed to `WebSocketTransport`:
    with `local_peer_id: N`, registers the protocol, `start()`s, **fast-forwards to
    `F + lead`** (§4.4), then `connect(0, transport)`.
 
-### 4.4 Frame alignment workaround
+### 4.4 Frame alignment (workaround removed at meep 3.14.6)
 
-`lead = simulation_delay_ticks + ceil(oneWayMs / period) + 2`, with `oneWayMs` estimated from the
-hello round trip (or 50 ms if unknown; time dilation corrects the rest at ±5 % per tick). Fast
-forwarding is `session.tick(8 * period)` in a loop until `session.current_frame >= target`, with
-the input sampler returning `[]` while `aligning` is set. No peer is connected yet, so the empty ack
-packets go nowhere. Measure the cost (a one-hour-old host is ~216 k frames ≈ 27 k calls) and record
-it; if it exceeds ~250 ms, the alternative is to make the host restart its session frame count
-per match, which caps the distance but does not remove the workaround.
+**As planned, and as it ran until D-188:** `lead = simulation_delay_ticks + ceil(oneWayMs / period)
++ 2`, with `oneWayMs` estimated from the hello round trip (or 50 ms if unknown; time dilation
+corrects the rest at ±5 % per tick). Fast forwarding is `session.tick(8 * period)` in a loop until
+`session.current_frame >= target`, with the input sampler returning `[]` while `aligning` is set. No
+peer is connected yet, so the empty ack packets go nowhere. Measure the cost (a one-hour-old host is
+~216 k frames ≈ 27 k calls) and record it; if it exceeds ~250 ms, the alternative is to make the host
+restart its session frame count per match, which caps the distance but does not remove the
+workaround. Measured at **62.5 ms for 28,801 calls**, comfortably under, so the host kept one counter
+for its whole life.
+
+**As it is:** none of the above. meep 3.14.6's `onInitialSync` calls `seek_to_frame(frame_number + 1
++ target_buffer_depth)` and the loop is gone (GAP-042, D-187), along with the `aligning` flag --
+`synced` is the only gate on the sampler now, and it is set on the same dispatch as the seek.
+`connect` *is* the alignment. The lead is the engine's rather than this port's guess, and is smaller:
+four frames past the host's simulation frame against the `simulation_delay_ticks + 2` the workaround
+used. A joining client therefore converges for about a second on a delayed link and the host rolls
+back while it does -- 42 rewinds at 40 ms clean, 80 at 80 ms, none after four seconds -- which is the
+same burst the workaround produced, because the loop ran immediately before a seek that overwrote it
+(D-188).
 
 ### 4.5 Reconciliation
 
@@ -843,7 +855,7 @@ version that produced them:
 |---|---|
 | 3.14.4 | the host's rollback loop on a clean link (D-176) |
 | 3.14.5 | the event loss under reordering, by slicing a tick's owed range across up to `max_packets_per_tick` packets (D-177) |
-| 3.14.6 | **closes GAP-042** -- `onInitialSync` now seeks a joining client to the host's frame and `seek_to_frame` is public, so `NetClient.fastForward` is redundant and should come out. Adds `remote_entity_count`, which makes GAP-040's symptom visible. Adds `delivery_stats(peer)`, the instrument GAP-043's residual needed -- **and it reports 8/27/80 frames skipped unapplied at 40/80/150 ms on the default configuration, which its own docblock says should be zero (GAP-047)**. Fixes a `.d.ts` generation bug in `NavigationMesh.build` (GAP-001's family), which turned this port's workaround cast into the compile error. Join-time behaviour changed with it: a client now converges for about a second on a delayed link and the host rolls back while it does, after which it rolls back **not at all** -- steady-state coherence rose from 91.2% to 96.6% at 80 ms |
+| 3.14.6 | **closes GAP-042** -- `onInitialSync` now seeks a joining client to the host's frame and `seek_to_frame` is public, so `NetClient.fastForward` is redundant. **Removed in D-188**, and the join burst is identical on both sides of the removal -- 42 rewinds at 40 ms and 80 at 80 ms either way -- because the loop ran immediately before a seek that overwrote it. Adds `remote_entity_count`, which makes GAP-040's symptom visible. Adds `delivery_stats(peer)`, the instrument GAP-043's residual needed -- **and it reports 8/27/80 frames skipped unapplied at 40/80/150 ms on the default configuration, which its own docblock says should be zero (GAP-047)**. Fixes a `.d.ts` generation bug in `NavigationMesh.build` (GAP-001's family), which turned this port's workaround cast into the compile error. Join-time behaviour changed with it: a client now converges for about a second on a delayed link and the host rolls back while it does, after which it rolls back **not at all** -- steady-state coherence rose from 91.2% to 96.6% at 80 ms |
 
 | step | state |
 |---|---|
