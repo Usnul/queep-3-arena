@@ -75,6 +75,7 @@ import {
     frameTimeMs,
 } from '../../net/protocol.ts';
 import type { UserCmd } from '../../q3/pmove/types.ts';
+import type { Vec3Like } from '../../q3/math.ts';
 
 /** The solver's step. The same constant the host uses; see §4.6. */
 const SOLVER_DT = SESSION_TICK_SECONDS;
@@ -99,8 +100,25 @@ const PARKED_SLOT_SPACING = 64;
 export interface ClientHooks {
     /** This frame's input. Called once per predicted frame, never during replay. */
     sample(frame: number): UserCmd;
-    /** A shot the local player predicted. The host's own shot is authoritative. */
-    predictedFire?(weapon: string, frame: number): void;
+    /**
+     * A shot the local player predicted, on the frame it happened.
+     *
+     * `EV_FIRE_WEAPON` is a predictable event in Q3 and this is the same seam:
+     * the muzzle flash, the fire sound and the gun's own animation belong on the
+     * frame the trigger was pulled, not a round trip later. The eye and the
+     * angles come with it because the flash has a place -- `calcMuzzlePoint`
+     * turns them into the same muzzle the host will report for the same shot.
+     *
+     * What is *not* predictable is where the shot landed: a hitscan is resolved
+     * against where the host has everyone now, so the trail, the impact and the
+     * damage all arrive as events. Q3 draws those from server events too.
+     */
+    predictedFire?(
+        weapon: string,
+        eyeQ3: Vec3Like,
+        anglesQ3: ArrayLike<number>,
+        frame: number
+    ): void;
     effect?(event: EffectEventData): void;
     hit?(event: HitEventData): void;
     pickup?(event: PickupEventData): void;
@@ -772,10 +790,10 @@ export class NetClient {
      * a `HitEvent`.
      */
     private readonly sink: StepSink = {
-        fired: (weapon, _eye, _angles, frame) => {
+        fired: (weapon, eye, angles, frame) => {
             if (frame <= this.lastFiredFrame) return;
             this.lastFiredFrame = frame;
-            this.hooks.predictedFire?.(weapon, frame);
+            this.hooks.predictedFire?.(weapon, eye, angles, frame);
         },
         dryFired: () => {},
         landed: () => {},

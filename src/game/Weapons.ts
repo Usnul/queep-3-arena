@@ -377,6 +377,41 @@ function random(seedRef: { value: number }): number {
     return (((seedRef.value >>> 16) & 0xffff) / 0x10000);
 }
 
+/**
+ * `CalcMuzzlePoint`: where a shot leaves, and which way it is pointing.
+ *
+ * Fourteen units forward of the eye along the shooter's own forward, which is
+ * the point every hitscan ray starts from, the point a projectile's reachability
+ * trace works back from, and the point the muzzle flash is reported at.
+ *
+ * **Exported because two peers have to agree about it.** A joined client
+ * predicts its own muzzle flash -- Q3 does too, `EV_FIRE_WEAPON` is a
+ * predictable event -- and the host raises one for the same shot a round trip
+ * later. Two copies of "14 units forward" is two things to get wrong, and the
+ * symptom of getting it wrong is a flash that jumps when the authoritative one
+ * lands. There is one copy, and this is it.
+ *
+ * @param out the muzzle, in Q3 units.
+ * @param forward the shooter's forward, unit. Written as well as used, because
+ *     every caller wants it: it is the direction the flash points and the axis
+ *     the shot is traced along.
+ */
+export function calcMuzzlePoint(
+    eyeQ3: Vec3Like,
+    anglesQ3: ArrayLike<number>,
+    out: Vec3,
+    forward: Vec3
+): void {
+    angleVectors(anglesQ3, forward, m_right, m_up);
+
+    v3_copy_array(out, 0, eyeQ3, 0);
+    v3_displace_in_direction_array(out, 0, out, 0, forward, 0, 14);
+}
+
+/** Scratch for {@link calcMuzzlePoint}'s two unwanted axes. */
+const m_right = vec3();
+const m_up = vec3();
+
 const t_forward = vec3();
 const t_right = vec3();
 const t_up = vec3();
@@ -473,11 +508,8 @@ export class WeaponSystem {
     ): void {
         const stats = weaponStats(weapon);
 
+        calcMuzzlePoint(eyeQ3, anglesQ3, t_muzzle, t_forward);
         angleVectors(anglesQ3, t_forward, t_right, t_up);
-
-        // `CalcMuzzlePoint`: 14 units forward of the eye.
-        v3_copy_array(t_muzzle, 0, eyeQ3, 0);
-        v3_displace_in_direction_array(t_muzzle, 0, t_muzzle, 0, t_forward, 0, 14);
 
         this.events.muzzleFlash(t_muzzle, t_forward, weapon, ownerId);
 

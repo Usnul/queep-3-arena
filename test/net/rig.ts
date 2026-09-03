@@ -85,6 +85,20 @@ export interface RigClient {
     readonly pickups: PickupEventData[];
     readonly predictedShots: number[];
     /**
+     * The whole of each predicted shot, not only when it happened.
+     *
+     * `predictedShots` is the frame alone and several tests count it; this
+     * carries what the *presentation* needs -- the eye and the angles the flash
+     * is placed from -- so a test can ask whether the client's own flash lands
+     * where the host says the same shot did.
+     */
+    readonly predictedFires: {
+        frame: number;
+        weapon: string;
+        eye: number[];
+        angles: number[];
+    }[];
+    /**
      * What joining cost, now that the engine does the alignment.
      *
      * `hostFrame` is where the host was when this client connected, and
@@ -200,6 +214,7 @@ export class NetRig {
         const hits: HitEventData[] = [];
         const pickups: PickupEventData[] = [];
         const predictedShots: number[] = [];
+        const predictedFires: RigClient['predictedFires'] = [];
 
         const cmd = createUserCmd();
         let self: RigClient;
@@ -213,7 +228,15 @@ export class NetRig {
                 self.script(cmd, frame, self);
                 return cmd;
             },
-            predictedFire: (_weapon, frame) => predictedShots.push(frame),
+            predictedFire: (weapon, eye, angles, frame) => {
+                predictedShots.push(frame);
+                predictedFires.push({
+                    frame,
+                    weapon,
+                    eye: [eye[0]!, eye[1]!, eye[2]!],
+                    angles: [angles[0]!, angles[1]!, angles[2]!],
+                });
+            },
             effect: (event) =>
                 effects.push({
                     kind: event.kind,
@@ -272,6 +295,7 @@ export class NetRig {
             hits,
             pickups,
             predictedShots,
+            predictedFires,
             align,
         };
         this.clients.push(self);

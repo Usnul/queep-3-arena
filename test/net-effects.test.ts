@@ -62,6 +62,8 @@ import {
 } from '../src/app/netSystems.ts';
 import { Effects } from '../src/client/Effects.ts';
 import { EffectKind, type EffectEventData } from '../src/net/actions.ts';
+import { calcMuzzlePoint } from '../src/game/Weapons.ts';
+import { vec3 } from '../src/q3/math.ts';
 import { HostWeaponEvents } from '../src/server/Host.ts';
 import { weaponIndex } from '../src/net/components.ts';
 import { FORWARDMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
@@ -582,6 +584,162 @@ describe('the transients a joined client presents', () => {
         // At a real place, rather than at the origin a reset action would carry.
         const at = deaths[0]!.origin;
         expect(Math.abs(at[0]!) + Math.abs(at[1]!) + Math.abs(at[2]!)).toBeGreaterThan(0);
+    });
+});
+
+describe("the muzzle flash of this client's own shot", () => {
+    /*
+     `EV_FIRE_WEAPON` is a predictable event in Q3 and it is the one transient
+     on this branch that must **not** wait for the host: the flash, the fire
+     sound and the gun's animation belong on the frame the trigger was pulled.
+     Waiting made it a round trip late, which is what the hitscan trail's
+     bending was about from the other end (D-200) -- and unlike the trail, the
+     flash needs nothing the client does not already have.
+    */
+    it('is drawn where the host says the same shot was, from one shared rule', () => {
+        const { rig, live, slotIndex } = seen;
+        const client = rig.clients[0]!;
+
+        /*
+         The **whole** arrived stream rather than the measured window: these are
+         paired against `predictedFires`, which starts at the client's first
+         trigger pull, and a window on one side only would pair shot 1 with shot
+         20 and report the distance between two unrelated corners of the map.
+        */
+        const arrivedMine = live.filter(
+            (e) => e.kind === EffectKind.MuzzleFlash && e.owner === slotIndex
+        );
+
+        const muzzle = vec3();
+        const forward = vec3();
+
+        const predicted = client.predictedFires.map((fired) => {
+            calcMuzzlePoint(fired.eye, fired.angles, muzzle, forward);
+            return [muzzle[0]!, muzzle[1]!, muzzle[2]!];
+        });
+
+        expect(predicted.length, 'the client predicted no shots at all').toBeGreaterThan(20);
+        expect(arrivedMine.length, 'the host raised no shots for this client').toBeGreaterThan(
+            20
+        );
+
+        /*
+         **Matched by position rather than by index**, which is not fussiness:
+         paired by index the median gap is 32 units and *one* pair in 230 is
+         exact, and paired at an offset of one it is 229 in 230 exact with a
+         median of zero. The lists really are the same shots and really are
+         off by one -- the client predicts a shot at the join that the host never
+         raises, which is an ordinary mis-prediction and is counted below rather
+         than hidden. Asserting on an index would have been asserting on that
+         offset staying exactly one for ever.
+        */
+        const nearest = (host: ArrayLike<number>): number => {
+            let best = Infinity;
+            for (const p of predicted) {
+                const d = Math.hypot(
+                    p[0]! - host[0]!,
+                    p[1]! - host[1]!,
+                    p[2]! - host[2]!
+                );
+                if (d < best) best = d;
+            }
+            return best;
+        };
+
+        const gaps = arrivedMine.map((e) => nearest(e.origin));
+        const exact = gaps.filter((g) => g < 0.01).length;
+        const worst = Math.max(...gaps);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-effects] own shots: ${client.predictedFires.length} predicted, ` +
+                `${arrivedMine.length} raised by the host, ${exact} of them at a muzzle ` +
+                `this client had already computed; worst gap ${worst.toFixed(3)} units`
+        );
+
+        /*
+         **Every one of the host's flashes is at a muzzle this client had already
+         drawn one at**, and the reason it can be exact rather than close is that
+         there is one copy of the rule: `calcMuzzlePoint` is `CalcMuzzlePoint` --
+         fourteen units forward of the eye along the shooter's forward -- and
+         both peers call the same function. Two copies of that sentence would be
+         two chances to disagree, and disagreeing looks like a flash that jumps
+         at the moment the authoritative one lands.
+        */
+        expect(
+            exact,
+            'the host put a shot somewhere this client never predicted one'
+        ).toBe(arrivedMine.length);
+
+        /*
+         And the client predicts at most a shot or two the host never confirms.
+         Q3 has the same property -- a predicted event can turn out not to have
+         happened -- and the cost is a flash with no bullet behind it, which is
+         what every predicting shooter pays. Bounded rather than asserted to
+         zero, because zero is not what a prediction promises.
+        */
+        expect(
+            client.predictedFires.length - arrivedMine.length,
+            'the client is predicting shots the host is not taking'
+        ).toBeLessThanOrEqual(2);
+    });
+
+    it('is dropped when it arrives, because it has already been drawn', () => {
+        const log = new EffectLog();
+        const transients = new NetTransients({
+            slotIndex: 3,
+            effects: log,
+            predictsOwnFlash: true,
+        });
+
+        const flash = (owner: number): void => {
+            transients.effect({
+                kind: EffectKind.MuzzleFlash,
+                weapon: weaponIndex('WP_RAILGUN'),
+                owner,
+                origin: Float32Array.from([1, 2, 3]),
+                aux: Float32Array.from([1, 0, 0]),
+                radius: 0,
+            });
+        };
+
+        flash(3);
+        flash(4);
+
+        /*
+         Mine drawn once, by the prediction, and not again here; somebody else's
+         drawn here, because there is nothing else to draw it. The suppressed one
+         is still *counted* -- the arrival ledger in the file's first test is an
+         equality and a silently dropped event would break it -- so what the
+         count says is "arrived, and was already on screen".
+        */
+        expect(log.of('muzzleFlash').length, "somebody else's flash was dropped too").toBe(1);
+        expect(log.of('muzzleFlash')[0]!.mine).toBe(false);
+        expect(transients.counts.muzzleFlashes, 'both arrivals are counted').toBe(2);
+        expect(transients.counts.ownFlashesPredicted).toBe(1);
+    });
+
+    it('is presented from the wire when nobody is predicting it', () => {
+        /*
+         The default, and what every headless driver wants: a client that has not
+         subscribed to `predictedFire` has drawn nothing, so dropping the host's
+         copy would lose the flash entirely rather than de-duplicate it.
+        */
+        const log = new EffectLog();
+        const transients = new NetTransients({ slotIndex: 3, effects: log });
+
+        transients.effect({
+            kind: EffectKind.MuzzleFlash,
+            weapon: weaponIndex('WP_RAILGUN'),
+            owner: 3,
+            origin: Float32Array.from([1, 2, 3]),
+            aux: Float32Array.from([1, 0, 0]),
+            radius: 0,
+        });
+
+        expect(log.of('muzzleFlash').length).toBe(1);
+        expect(log.of('muzzleFlash')[0]!.mine, 'the gun was not offered its own shot').toBe(true);
+        expect(transients.counts.ownFlashesPredicted).toBe(0);
     });
 });
 

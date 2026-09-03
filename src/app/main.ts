@@ -41,7 +41,8 @@ import { ItemSystem, newInventory, type DropTrace } from '../game/Items.ts';
 import { MoverSystem, type Vec3 } from '../game/Movers.ts';
 import { WorldEffects } from '../game/WorldEffects.ts';
 import type { Damageable } from '../game/Weapons.ts';
-import { vec3 as q3vec3 } from '../q3/math.ts';
+import { calcMuzzlePoint, isWeaponId } from '../game/Weapons.ts';
+import { vec3 as q3vec3, type Vec3Like } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS, sceneFromQ3 } from '../client/Characters.ts';
 import { AudioBank, BodySounds, LOOP_BUDGET } from '../client/Audio.ts';
@@ -1117,6 +1118,15 @@ async function main(): Promise<void> {
         */
         let netTransients: NetTransients | null = null;
 
+        /*
+         And the flash it draws for this client's own trigger pull, tied the same
+         way and for the same reason: the arena it draws into is built after the
+         join, and the hook that calls it is installed during one.
+        */
+        let predictedFlash:
+            | ((weapon: string, eyeQ3: Vec3Like, anglesQ3: ArrayLike<number>) => void)
+            | null = null;
+
         const joinUrl = joinTarget();
         const joined =
             joinUrl === null ? null : await joinHost({ url: joinUrl, ...joinIdentity() });
@@ -1222,6 +1232,19 @@ async function main(): Promise<void> {
                            while the simulation underneath was correct. See
                            `NetTransients`, and D-197.
                           */
+                          /*
+                           This client's own shot, on the frame it happened.
+                           `EV_FIRE_WEAPON` is a predictable event in Q3 and the
+                           flash, its sound and the gun's animation all belong on
+                           that frame -- the alternative is what this branch did
+                           until now, which is to wait for the host to say so and
+                           draw the flash a round trip after the trigger. The
+                           replicated copy of the same shot is dropped inside
+                           `NetTransients`; see `predictsOwnFlash`.
+                          */
+                          predictedFire: (weapon, eye, angles): void => {
+                              predictedFlash?.(weapon, eye, angles);
+                          },
                           effect: (event): void => {
                               netTransients?.effect(event);
                           },
@@ -1902,10 +1925,42 @@ async function main(): Promise<void> {
             */
             await em.addSystem(new NetEffectSystem({ effects: arena.effects }));
 
+            /*
+             `CG_FireWeapon`, predicted.
+
+             The muzzle point is `calcMuzzlePoint`'s, which is the host's own --
+             shared rather than copied, because two peers computing "14 units
+             forward of the eye" separately is two chances to disagree, and the
+             symptom of disagreeing is a flash that jumps on the frame the
+             authoritative one would have landed.
+
+             Through `arena.muzzleFlash` with `LOCAL_CLIENT`, so it takes exactly
+             the path a single-player shot takes: offered to the gun on screen
+             first, drawn in the world if the gun declines, and the fire sound
+             placed at the muzzle either way.
+
+             **Only the flash.** Where the shot *landed* is not predictable --
+             a hitscan is resolved against where the host has everyone now -- so
+             the trail, the impact and the damage stay events. Q3 draws those
+             from server events as well.
+            */
+            const predictedMuzzle = q3vec3();
+            const predictedForward = q3vec3();
+
+            predictedFlash = (weapon, eyeQ3, anglesQ3): void => {
+                if (!isWeaponId(weapon)) return;
+
+                calcMuzzlePoint(eyeQ3, anglesQ3, predictedMuzzle, predictedForward);
+                arena.muzzleFlash(predictedMuzzle, predictedForward, weapon, LOCAL_CLIENT);
+            };
+
             netTransients = new NetTransients({
                 slotIndex: netClient.slotIndex,
                 effects: netEffects,
                 audio,
+                // Somebody is drawing this client's own flash now, so the host's
+                // copy of the same shot is dropped rather than drawn on top.
+                predictsOwnFlash: true,
                 /*
                  The same array `NetWorldSystem` writes `present` into, and the
                  same one the host spawned from: the join refuses a host whose

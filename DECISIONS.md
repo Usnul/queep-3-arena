@@ -11465,3 +11465,49 @@ later settle finds an empty queue. `npm run check` is green at 1,171 tests.
 and trail still arrive from the host rather than being predicted, so both are a round trip late;
 `ClientHooks.predictedFire` is the seam and nothing subscribes to it. That is what Q3 predicts with
 `CG_FireWeapon`, and it is the next piece of step 6 rather than part of this one.
+
+### D-201: the muzzle flash is predicted, which is the half of a shot a client can know
+
+D-200 left one thing named: the local player's own flash arrived from the host and was therefore a
+round trip late. `ClientHooks.predictedFire` had been the seam for it since step 3 and nothing had
+ever subscribed.
+
+**Q3 draws the line in exactly one place and this follows it.** `EV_FIRE_WEAPON` is a *predictable*
+event -- the flash, the fire sound and the gun's animation are the client's, on the frame the trigger
+was pulled -- and everything about where the shot *landed* is a server event: `EV_BULLET_HIT_WALL`,
+`EV_RAILTRAIL`, the damage. That is not a stylistic choice on Q3's part and it is not one here
+either: a hitscan is resolved against where the host has everyone **now**, and a client that traced
+it locally would be answering a different question with the same weapon. So the flash is predicted
+and the trail, the impact and the damage stay events.
+
+**One copy of `CalcMuzzlePoint`.** The flash has a place -- fourteen units forward of the eye along
+the shooter's forward -- and until now that sentence lived inside `WeaponSystem.fire`. Two peers
+computing it separately is two chances to disagree, and the symptom of disagreeing is a flash that
+*jumps* at the moment the authoritative one would have landed, which is a worse artefact than the
+lateness being fixed. It is `calcMuzzlePoint` now, exported, and both callers use it.
+
+**And the host's copy of the same shot is dropped rather than drawn on top.** `NetTransients` takes
+`predictsOwnFlash`, false by default: a client that has not subscribed to `predictedFire` has drawn
+nothing and must still present the wire's flash, and one that has must not present it twice. The
+dropped arrivals are *counted* (`ownFlashesPredicted`) rather than silently skipped, because the
+arrival ledger in `net-effects.test.ts` is an equality and a silent drop would break it -- and
+because "arrived, and was already on screen" is a number worth being able to read.
+
+**Measured, and the measurement had to be re-stated once.** Over 1,200 frames of a client holding the
+trigger: **230 of the host's 230 muzzle flashes are at a muzzle this client had already computed, to
+0.000 units.** Exact rather than close, which is what sharing the rule buys.
+
+The first version of that test paired the two lists *by index* and reported a median gap of 32 units
+with one pair in 230 exact. Thirty-two units is one shot's worth of running at 320 u/s, which is the
+shape of an off-by-one rather than of a disagreement -- and it was: the client predicts one shot at
+the join that the host never raises, so everything after it is paired with its neighbour. Fixed by
+matching on *position* rather than on index, which is also the honest form of the claim ("the host's
+flash is at a muzzle I predicted") and cannot be broken by that offset changing. The unconfirmed
+prediction is bounded and reported rather than hidden: a predicted event that turns out not to have
+happened is what every predicting shooter pays, and Q3 pays it too.
+
+**What is still late, and deliberately.** The hitscan trail and the impact mark are the host's and
+arrive a round trip after the flash. That is Q3's arrangement and it no longer looks wrong, because
+D-200 stopped the trail hinging off the drawn barrel: both of its ends now come from the same host
+frame, so it is a straight line slightly behind the gun rather than one that bends away from the
+direction of travel.

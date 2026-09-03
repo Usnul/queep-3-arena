@@ -830,6 +830,12 @@ export interface TransientCounts {
     jumpPads: number;
     pickups: number;
     /**
+     * This client's own muzzle flashes, arrived and dropped because they were
+     * already drawn on the frame the trigger was pulled. See
+     * {@link NetTransients} and `ClientHooks.predictedFire`.
+     */
+    ownFlashesPredicted: number;
+    /**
      * Events this build has no presentation for.
      *
      * Not zero by construction: `kind` is a byte and a host built against a
@@ -879,6 +885,7 @@ export class NetTransients {
     private readonly audio: RemoteSounds | null;
     private readonly items: readonly ItemInstance[];
     private readonly now: () => number;
+    private readonly predictsOwnFlash: boolean;
 
     readonly counts: TransientCounts = {
         muzzleFlashes: 0,
@@ -889,6 +896,7 @@ export class NetTransients {
         teleports: 0,
         jumpPads: 0,
         pickups: 0,
+        ownFlashesPredicted: 0,
         unknown: 0,
     };
 
@@ -913,12 +921,23 @@ export class NetTransients {
         items?: readonly ItemInstance[];
         /** Milliseconds, for the pickup label's fade. Defaults to the wall clock. */
         now?: () => number;
+        /**
+         * Whether this client draws its own muzzle flash when it fires.
+         *
+         * True means somebody is subscribed to `ClientHooks.predictedFire` and
+         * has already drawn it, so the host's copy of the same shot must be
+         * dropped rather than drawn a round trip late on top of it. False -- the
+         * default, and what a test without a renderer wants -- presents every
+         * flash from the wire, whoever fired it.
+         */
+        predictsOwnFlash?: boolean;
     }) {
         this.slotIndex = options.slotIndex;
         this.effects = options.effects ?? null;
         this.audio = options.audio ?? null;
         this.items = options.items ?? [];
         this.now = options.now ?? ((): number => performance.now());
+        this.predictsOwnFlash = options.predictsOwnFlash ?? false;
     }
 
     /** One `EffectEvent` off the wire. */
@@ -930,6 +949,24 @@ export class NetTransients {
         switch (event.kind) {
             case EffectKind.MuzzleFlash: {
                 this.counts.muzzleFlashes += 1;
+
+                /*
+                 **This client's own shot, already drawn.** Q3 predicts
+                 `EV_FIRE_WEAPON` and so does this branch, so the flash, its
+                 sound and the gun's animation happened on the frame the trigger
+                 was pulled. The host raises one for the same shot and it arrives
+                 a round trip later; drawing that too is the same flash twice,
+                 the second one out of time with the gun it came from.
+
+                 Counted before it is dropped, so the arrival ledger still
+                 balances and the number of them is visible rather than
+                 inferred.
+                */
+                if (mine && this.predictsOwnFlash) {
+                    this.counts.ownFlashesPredicted += 1;
+                    return;
+                }
+
                 effects?.muzzleFlash(event.origin, event.aux, weaponAt(event.weapon), mine);
                 return;
             }
