@@ -24,23 +24,12 @@
  * is never solid. So the trigger half needed no physics at all and has been
  * reachable since step 3.
  *
- * **The player is placed inside the trigger rather than walked into it.** There
- * is one teleporter on `oa_dm1` and eight jump pads on `am_thornish`, and
- * getting a scripted client to stand on a specific one depends on the
- * pathfinding, the spawn point and the map -- which is a fixture whose subject
- * appears when the AI cooperates, and this suite has been caught by that three
- * times (D-187). The trigger volume's own bounds come off the host, the origin
- * is written into the middle of it, and what is measured is what the host then
- * does. That is the whole of the mechanism under test; how a player gets there
- * is the movement code's business and is measured elsewhere.
- *
- * **And the origin is written into the replicated component, not into `ps`.**
- * The first version of this wrote `record.slot.ps.origin` and measured nothing:
- * a host frame is `stepSlot` (which is `load` from the components, step, `store`
- * back) and then `worldStep` and then `publish`, so a write to `ps` before the
- * frame is discarded by the `load` at the top of it. `record.state` is the
- * authority between frames; `ps` is scratch inside one. The same mistake read as
- * a teleporter landing 176 units off, pads that did not fire, and a hurt volume
+ * **The player is placed inside the trigger rather than walked into it**, and
+ * **the origin is written into the replicated component, not into `ps`.** Both
+ * of those, and the geometry that makes the first one work, now live in
+ * `net/triggers.ts`, because `net-effects.test.ts` needs the same two facts to
+ * stand a client on a teleporter and hear it. The mistakes they encode read as a
+ * teleporter landing 176 units off, pads that did not fire, and a hurt volume
  * that *healed* 24 -- the last being the replicated inventory being restored
  * over the test's own write.
  */
@@ -48,72 +37,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { NetRig } from './net/rig.ts';
-import type { Trigger } from '../src/game/Movers.ts';
-
-/** `PM_CheckDuck`'s standing `mins[2]`: how far below the origin the feet are. */
-const FEET = 24;
-
-/**
- * Places inside a trigger a player could plausibly be standing, in order.
- *
- * **The centre is the obvious choice and it does not work**, which took three
- * runs to establish and is worth writing down. A trigger volume is a brush, and
- * where inside it a player can stand is a fact about the map's geometry, not
- * about the box: at the centre of a jump pad's volume the feet are 24 units
- * lower and often inside the world, and the solver spends the next frame
- * ejecting them -- measured at 59 to 64 units of drop and 30 sideways, every
- * frame, so the trigger pass (which runs *after* the movement) never saw the
- * player inside anything.
- *
- * Two candidates cover every trigger in the set and they are complementary,
- * which is the useful part: **feet just above the volume's floor** fires the
- * four thin pads on `am_thornish` and the teleporter and hurt volume on
- * `oa_dm1`, and **head near the volume's ceiling** fires the four thick pads,
- * whose floor is below the level's. Measured: 612 and 470 respectively, on the
- * first frame, against nothing at all from the other candidate.
- *
- * The order matters only for speed; a caller tries them until one fires.
- */
-function standingSpots(trigger: Trigger): [number, number, number][] {
-    const x = (trigger.mins[0] + trigger.maxs[0]) * 0.5;
-    const y = (trigger.mins[1] + trigger.maxs[1]) * 0.5;
-    return [
-        [x, y, trigger.mins[2] + FEET + 1],
-        [x, y, trigger.maxs[2] - FEET - 1],
-    ];
-}
-
-/** The first of {@link standingSpots}, for a caller that only needs one. */
-function standIn(trigger: Trigger): [number, number, number] {
-    return standingSpots(trigger)[0]!;
-}
-
-/**
- * Hold a slot in one place for a frame, and step.
- *
- * The origin goes into the **replicated component**, because that is what
- * `stepSlot`'s `load` reads at the top of the frame; a write to `ps` before the
- * frame is discarded. Re-written each frame because the trigger pass runs after
- * the movement, so a player put somewhere they cannot stand is somewhere else
- * by the time the trigger looks.
- */
-function holdAt(
-    rig: NetRig,
-    slotIndex: number,
-    at: readonly number[],
-    options: { zeroVelocity?: boolean } = {}
-): void {
-    const state = rig.host.playerById(slotIndex)!.state;
-    state.origin[0] = at[0]!;
-    state.origin[1] = at[1]!;
-    state.origin[2] = at[2]!;
-    if (options.zeroVelocity !== false) {
-        state.velocity[0] = 0;
-        state.velocity[1] = 0;
-        state.velocity[2] = 0;
-    }
-    rig.step(1);
-}
+import { holdAt, standIn, standingSpots } from './net/triggers.ts';
 
 describe('a teleporter on the host', () => {
     it('moves the client, turns it, and stops it dead', async () => {

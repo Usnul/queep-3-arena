@@ -236,30 +236,77 @@ interface MissileEntry {
  * would give each player their own `nextFire` per trigger, so a pad two players
  * crossed together would fire twice as the same trigger.
  *
- * Sound is not routed anywhere. A teleport and a jump pad both make a noise in
- * Q3 and both are presentation: the joined client's `effect` hook still counts
- * and drops every `EffectEvent` (see `main.ts`), so a teleport sound would be
- * the first transient this port presented over the wire and it belongs with the
- * rest of them rather than ahead of them. D-191 records the shortfall.
+ * **Sound now leaves the host as an `EffectEvent`**, which it did not when this
+ * class was written: D-191 recorded a teleport and a pad crossing in silence
+ * because the joined client's `effect` hook counted and dropped every transient,
+ * so a mover sound would have been the first one presented over the wire and it
+ * belonged with the rest of them rather than ahead of them. The rest of them
+ * arrived in D-197, and these two came with them. `EffectKind.Teleport` and
+ * `EffectKind.JumpPad` carry what Q3 plays and where: `world/telein` at the
+ * origin the player left and `world/teleout` at the one they arrived on, and
+ * `world/jumppad` at the pad.
+ *
+ * `moverSound` stays silent, and that is not the same shortfall. A door and a
+ * plat make their noise from a state machine the host runs and no client can see
+ * (GAP-041): there is no `NetMover` producer, so a client that heard a door
+ * would hear one that never moved on its screen. It follows the bodies, not this.
  */
 class HostMoverEvents implements MoverEvents {
     /** The recorder the next `touch` belongs to, or null between slots. */
     slot: WorldEffects | null = null;
 
+    /**
+     * Who is being tested, for the length of one `touch`.
+     *
+     * The slot index rides the event so a client can tell its own pad crossing
+     * from somebody else's -- Q3 plays yours dry and theirs from where they are
+     * -- and the origin is read at the moment the trigger fires, which is
+     * *before* `settle` applies the teleport. That ordering is what makes
+     * `origin` the point the player left rather than the point they arrived on.
+     */
+    index = WORLD_OWNER;
+    origin: ArrayLike<number> | null = null;
+
+    /** Where the transients go. Set once, in `Host.create`. */
+    events: HostWeaponEvents | null = null;
+
     moverSound(): void {
-        // Host-side, and nothing on a headless host listens.
+        // Host-side, and nothing on a headless host listens. See the docblock.
     }
 
     teleport(destination: TeleportDestination): void {
         this.slot?.teleport(destination.origin, destination.angle);
+        this.raise(EffectKind.Teleport, destination.origin);
     }
 
     hurt(damage: number): void {
         this.slot?.hurt(damage);
+        /*
+         No transient. A `trigger_hurt` already reaches the client as a
+         `HitEvent` with `WORLD_OWNER` as the attacker (D-191), which is the
+         same `EV_DAMAGE` a rocket raises and is what the view kick runs on.
+         Q3's lava has a sound and it is the *player's* pain sound, which this
+         port does not play on either branch.
+        */
     }
 
     push(velocityQ3: readonly number[]): void {
         this.slot?.push(velocityQ3);
+        this.raise(EffectKind.JumpPad, velocityQ3);
+    }
+
+    private raise(kind: number, aux: readonly number[]): void {
+        const origin = this.origin;
+        if (this.events === null || origin === null) return;
+
+        this.events.pending.push({
+            kind,
+            weapon: 0,
+            owner: this.index,
+            origin: [origin[0]!, origin[1]!, origin[2]!],
+            aux: [aux[0]!, aux[1]!, aux[2]!],
+            radius: 0,
+        });
     }
 }
 
@@ -515,6 +562,9 @@ export class Host {
          origins and nothing collides with them.
         */
         const moverEvents = new HostMoverEvents();
+        // Same queue the weapon events use, so a pad and a muzzle flash raised
+        // on one frame are dispatched together and arrive in the order raised.
+        moverEvents.events = events;
         const movers = new MoverSystem(moverEvents);
         movers.spawn(scene.entities, scene.submodels);
 
@@ -1083,8 +1133,11 @@ export class Host {
              routes a teleport to the player who stepped on it.
             */
             this.moverEvents.slot = effects;
+            this.moverEvents.index = record.index;
+            this.moverEvents.origin = record.slot.ps.origin;
             const result = effects.applyTouch(target, this.movers, true);
             this.moverEvents.slot = null;
+            this.moverEvents.origin = null;
 
             if (result.damage > 0) {
                 record.slot.inventory.health -= result.damage;
@@ -2062,7 +2115,16 @@ export class HostWeaponEvents implements WeaponEvents {
             weapon: weaponIndex(weapon),
             owner: 0xff,
             origin: [originQ3[0]!, originQ3[1]!, originQ3[2]!],
-            aux: [normalQ3?.[0] ?? 0, normalQ3?.[1] ?? 0, normalQ3?.[2] ?? 1],
+            /*
+             The zero vector for "no surface", which is a value and not a
+             placeholder -- see `EffectEventData`. This used to substitute
+             straight up, so a rocket that stopped on a *body* told every client
+             to stamp a scorch mark on the floor underneath it: exactly the bug
+             `Arena.explosion` guards against in single-player by testing
+             whether it was given a normal at all, defeated by a wire format
+             that always had one.
+            */
+            aux: [normalQ3?.[0] ?? 0, normalQ3?.[1] ?? 0, normalQ3?.[2] ?? 0],
             radius: radiusQ3,
         });
     }

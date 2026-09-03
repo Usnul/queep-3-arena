@@ -678,9 +678,31 @@ export class NetClient {
                 }
                 this.bodies.sync();
             },
-            effect: (event) => this.hooks.effect?.(event),
-            hit: (event) => this.hooks.hit?.(event),
-            pickup: (event) => this.hooks.pickup?.(event),
+            /*
+             The three transients, presented once each -- see {@link replaying}
+             for why "once" needs saying.
+            */
+            effect: (event) => {
+                if (this.replaying) {
+                    this.replayedTransients += 1;
+                    return;
+                }
+                this.hooks.effect?.(event);
+            },
+            hit: (event) => {
+                if (this.replaying) {
+                    this.replayedTransients += 1;
+                    return;
+                }
+                this.hooks.hit?.(event);
+            },
+            pickup: (event) => {
+                if (this.replaying) {
+                    this.replayedTransients += 1;
+                    return;
+                }
+                this.hooks.pickup?.(event);
+            },
 
             /*
              A player has gone, and the entity that was them goes with it.
@@ -696,6 +718,11 @@ export class NetClient {
 
              Silent for an id this client never heard of, which is the ordinary
              case for somebody who joined and left between two of its snapshots.
+
+             **Not gated on {@link replaying}, unlike the three above.** This one
+             is a state change rather than a presentation, so a replay is
+             entitled to re-run it -- and re-running it is free, because the
+             second call finds no record for the id and returns.
             */
             playerLeft: (event) => this.reapPlayer(event.networkId),
         };
@@ -860,7 +887,19 @@ export class NetClient {
             client.set_measured(measured);
         });
 
+        /*
+         The rewind's extent, which is the window `replaying` has to cover.
+         `onBeforeReconcile` fires immediately before `rewind_to`, and one of
+         the two below fires however the reconciliation ends -- `Complete` on
+         the ordinary path and `Abandoned` when the action log has already
+         rolled past the frame the rewind needed, which returns early.
+        */
+        client.onBeforeReconcile.add(() => {
+            this.replaying = true;
+        });
+
         client.onReconcileComplete.add((_serverFrame: number, replayCount: number) => {
+            this.replaying = false;
             this.reconcileCount += 1;
             this.replayFrames += replayCount;
         });
@@ -877,9 +916,44 @@ export class NetClient {
                 onReconcileAbandoned?: { add(fn: (frame: number, id: number) => void): void };
             }
         ).onReconcileAbandoned?.add(() => {
+            this.replaying = false;
             this.reconcileAbandoned += 1;
         });
     }
+
+    /**
+     * True while the engine is re-executing arrived records inside a rewind.
+     *
+     * **A transient must be presented once, and since meep 3.15.0 it arrives
+     * twice.** `actions.ts` states the rule this port was built on: an action
+     * with no affected components is one the `RewindEngine` never touches and
+     * the receiving executor applies exactly once, so a muzzle flash cannot be
+     * un-fired by a rollback or fired twice by a retransmission. That was true
+     * until 3.15.0's `#execute_harvested`, which is GAP-045's fix and is right
+     * for what it was built for: a record that *arrived* from a peer is the only
+     * description of the state it carries, so a replay has to put it back. An
+     * event action has no state to put back -- its whole effect is a side effect
+     * outside the replicated world -- and the harvest does not distinguish the
+     * two, because `SimAction` has no way to say which it is. `EffectEvent`,
+     * `HitEvent` and `PickupEvent` are therefore re-applied for every frame of
+     * every rewound window that contains them.
+     *
+     * Measured before this gate: one teleport raised by the host arrived and was
+     * presented **twice** -- two `world/telein`s, one for the crossing and one
+     * for the reconciliation the crossing itself caused. It is worst exactly
+     * where it is most visible, because the transients a client cannot predict
+     * (a teleport, a pad, a pickup, a death) are the ones that force the rewind
+     * that duplicates them.
+     *
+     * Suppression rather than de-duplication by identity, because it costs
+     * nothing on the wire and cannot drop a first delivery: `#execute_harvested`
+     * only re-runs records already in the action log for the rewound frames, so
+     * every event it produces has been through here once already. See GAP-048.
+     */
+    private replaying = false;
+
+    /** Re-applied transients this gate has swallowed. Read by the tests. */
+    replayedTransients = 0;
 
     /** Carried from `onComputeExpected` to `onMeasureCurrent`; see there. */
     private expectedHash = Number.NaN;

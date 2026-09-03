@@ -10656,6 +10656,11 @@ between 255 and 0 and a crossing that never happened; the adapter is why that ca
 
 ### D-191: teleporters, pads and lava on the host, and GAP-041 was never blocking them
 
+> **The "no sound" shortfall below is closed by D-197**, which presents every transient on the
+> joined branch and adds `EffectKind.Teleport` and `EffectKind.JumpPad` alongside the five weapon
+> effects. The rest of the entry stands, including the two shortfalls that do not close with it:
+> triggers are still unpredicted, and bots still use no trigger on either path.
+
 Step 6's last missing piece, and the finding is that it was not blocked. The tracking table said
 "teleport/pad handling not built; GAP-045 open upstream" and §6 said movers were the host's "in
 principle, and are simulated locally for now because a headless host has no kinematic brush entities
@@ -11114,3 +11119,137 @@ REPORT §5 as a specification and going to find the number. This is taking "the 
 48 KB/s" from the plan and going to find the number. Both times the measurement was sound and the
 question was not asked. A number in a plan is a decision somebody made once, and the useful thing to
 know about it is when, and why, and whether it still holds.
+
+### D-197: the transients, and the rule that a replay does not re-fire them
+
+Step 6's largest remaining hole, and it was one line long in two places:
+
+```ts
+effect: (): void => { netEvents.effects += 1; },
+pickup: (): void => { netEvents.pickups += 1; },
+```
+
+Every `EffectEvent` and `PickupEvent` the host dispatched was counted and thrown away, so a joined
+client had **no muzzle flash, no bullet impact, no hitscan trail, no explosion, no death effect and
+no pickup feedback**. The simulation was correct and none of it was visible or audible; `hit` was
+the only transient wired at all, and only for the local slot's view kick. Step 5 put the counters
+there on purpose -- "the effect actions are arriving" and "the effect actions are being drawn" are
+separate claims and only the first was step 5's to make -- and this is the second one.
+
+**Nothing is reimplemented.** `Arena` already turns each of the five weapon effects into particles,
+a light, an impact mark and the sound Q3 plays there, out of one class that knows both the weapon
+and the surface; the difference between the two branches is *where the call comes from* and nothing
+else. So `RemoteEffects` is `Arena`'s `WeaponEvents` half, one method per `EffectKind` that draws
+something, and `main.ts` hands the wire straight to the arena through five one-line delegations.
+
+**Three things do differ, and they are why `NetTransients` is a class rather than a `switch` at the
+hook.**
+
+1. **Whose event it is.** `Arena` asks whether the shooter is `LOCAL_CLIENT`, which is Q3 client 0,
+   and the wire's `owner` is a *slot index*. Passing one for the other hangs the view weapon's flash
+   on whoever holds slot 0 and never on the player holding the gun -- and on a host that put this
+   client in slot 0 the two agree by accident, which is the version of the bug that never shows up
+   in a test. `RemoteEffects` carries a boolean instead, and the translation is at the wiring site.
+2. **What a pickup is.** The wire carries an item *index*; the sound name and the status-bar label
+   come off the def both peers loaded from the same map. `PresentationSystem` now takes a
+   `PickupLabel` -- two getters -- rather than a `PickupSystem`, because on this branch there is no
+   `PickupSystem`: the items are the host's.
+3. **Where a sound goes.** Q3 plays your own pad and your own pickup dry and everybody else's from
+   where they are standing. Single-player only ever had the first half, because there was nobody
+   else, and `main.ts` hard-codes `playLocal` for the jump pad accordingly.
+
+**And the two shortfalls D-191 named are closed with them.** `EffectKind.Teleport` and
+`EffectKind.JumpPad` are appended to the byte both peers read off the same frozen table, and
+`HostMoverEvents` raises them into the same queue the weapon events use. A teleport carries where
+the player left in `origin` and where they arrived in `aux` -- read at the moment the trigger fires,
+which is *before* `WorldEffects.settle` moves them -- so `world/telein` and `world/teleout` land at
+Q3's two points rather than both at one. A pad carries the vector `AimAtTarget` solved for. The
+third thing D-191 left silent, `moverSound`, stays silent and is not the same shortfall: a door's
+noise comes from a state machine no client can see (GAP-041), so a client that heard one would hear
+a door that never moved on its screen. It follows the bodies.
+
+**And a clock nobody was running, which drawing anything at all revealed.** `Arena.update` cannot be
+called on this branch -- the first thing it does is step the weapons, and the weapons are the
+host's -- so `CombatSystem` is not registered and the four things inside that call have to be
+accounted for one at a time. Three already were: the missile roll comes through
+`MissilePresenter.advance` (D-181 wrote that down), the projectile trail follows
+`WeaponSystem.liveProjectiles`, which is empty here, and the shootable boxes are single-player's.
+The fourth is `Effects.update`, which retires a finished emitter, expires a muzzle flash's light
+after 50 ms, and fades an impact mark out over `CG_AddMarks`' ten seconds. Nothing ran it. That cost
+nothing while a joined client drew nothing at all and became a few hundred entities a minute the
+moment it did -- every flash and every scorch mark of a whole match accumulating in the dataset with
+no path out. `NetEffectSystem` is the one line, and the test measures the leak rather than the
+registration: a hundred transients make 220 entities and twelve seconds of clock takes all 220 away.
+
+**A fix that came with the wire format.** `HostWeaponEvents.explosion` substituted straight up for a
+missing surface normal, so a rocket that stopped on a *body* told every client to stamp a scorch
+mark on the floor underneath it. `Arena.explosion` has guarded against exactly that since D-163 by
+testing whether it was given a normal at all -- and the wire defeated the guard by always having
+one. The zero vector is the sentinel now, which cannot be confused with a normal.
+
+**GAP-048, which the fixture found and which is a regression in a property this port was built on.**
+`src/net/actions.ts` has said since step 1 that an action with no affected components "cannot be
+un-fired by a rollback, and cannot be fired twice by a retransmission". The first half still holds.
+The second stopped being true in meep 3.15.0: `ServerAuthoritativeClient.#execute_harvested` --
+GAP-045's fix, and the thing D-193 was glad to get -- re-executes every record in a rewound window
+whose `sender_id` is a connected peer, because an arrived record is the only description of the
+state it carries. An event action carries none, and the harvest has no way to ask.
+
+It is worst exactly where it is most visible, because **the transients a client cannot predict are
+the ones that force the rewind that duplicates them**. Measured: one host-side teleporter crossing,
+one event raised, **two** arrivals, two `world/telein`s. In an ordinary firefight it is 53
+re-applications over 1,200 frames and 217 reconciliations, against 543 genuine events. The
+workaround is a `replaying` flag on `NetClient`, set on `onBeforeReconcile` and cleared on both ways
+a reconciliation can end, gating the three presentation hooks. It cannot drop a first delivery,
+because the harvest only re-runs records already in the log. `playerLeft` is deliberately not gated:
+it is a state change rather than a presentation, so a replay is entitled to re-run it, and the
+second call finds no record and returns.
+
+The alternative -- a sequence number on each event and a seen-set -- is robust against a genuine
+duplicate too, and costs one to three bytes on every event on a wire that already carries 543 of
+them a run. The flag is free and covers the case that exists.
+
+**Measured**, `test/net-effects.test.ts`, ten assertions over three rigs:
+
+- 1,200 frames on `oa_dm1`: **543 effect actions arrived and 543 were presented** -- 191 muzzle
+  flashes, 161 hitscan trails, 161 bullet impacts, 30 explosions -- against **543** the host raised.
+  Equal in both directions, which is the number GAP-048's gate exists for.
+- Every drawn effect names a real `WeaponId`, both guns among them, and `mine` matches the stream's
+  own owner field on all 191 flashes.
+- 161 trails between two points: shortest 1.0 units, longest 522.3. The short ones are real -- a
+  shot taken with the muzzle against a wall stops where it started -- so what is asserted is that
+  one of them crosses a room, which cannot be true if the two ends are being read as one field.
+- A forced death: **one** death explosion and **one** `impact/flesh`, at the host's own origin.
+- A pickup: `item/item_armor_combat` played dry, `"Armor"` on the status bar, and the same shard
+  taken by another slot played *positionally*.
+- The teleporter on `oa_dm1`: one event, `telein` at [274, 1600, -104] and `teleout` at
+  [448, 1024, 40], the far end within 4 units of the mark the host actually used.
+- A jump pad on `am_thornish`: one event, played dry for the rider, `aux` z of **612** against the
+  612 `AimAtTarget` solved for.
+- A hundred transients through a real `Effects` in a headless dataset: **220 entities created and
+  220 retired** once the clock has run past the marks' ten seconds.
+
+**Two traps this fixture walked into, both of which produced a confident wrong answer.**
+
+- **Arm the client through the replicated component.** `net-presentation.test.ts` grants its
+  rocket launcher by writing `record.slot.inventory`, which is the `PlayerSlot`'s scratch: a host
+  frame is `load` from the components, step, `store` back, so the write is wiped by the `load` at
+  the top of the next frame. `net-triggers.test.ts` already names this trap for origins. Writing
+  `record.inventory` every frame is what makes "the client holds the trigger" a property of the
+  script rather than of how much ammunition it started with.
+- **Take both ends of a measured window at the same instant.** The first version started the
+  presenter at zero and the host count at "now", so it presented the warm-up backlog and compared
+  it against a host that had forgotten it: **660 presented against 543 raised** -- which reads
+  exactly like the duplication the file is there to rule out, and would have been reported as it.
+
+**And a fixture fact worth writing down rather than leaving to be rediscovered.** Over the 1,200
+measured frames with three bots on seed 23, the bots fire **nothing**. That is the fourth time this
+suite has met the same thing (D-187), and it is why every assertion here is produced by the client's
+own script or written directly -- including the one about somebody *else's* muzzle flash, which is
+two synthesized events with two owners rather than a wait for a bot to shoot.
+
+Also here, because they were in the way and are the same change: `weaponAt` returns a `WeaponId`
+rather than a `string` -- `NET_WEAPONS` is `isWeaponId`'s own output, so the tag has already been
+through D-114's one crossing and two call sites stop casting it back -- and `net/triggers.ts` holds
+the standing-spot geometry `net-triggers.test.ts` paid three runs each for, because this file needs
+the same two facts to stand a client on a teleporter and hear it.

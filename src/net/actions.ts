@@ -1,5 +1,5 @@
 /*
- * actions.ts -- the four things that travel as actions.
+ * actions.ts -- the five things that travel as actions.
  *
  * Copyright (C) 2026 queep-3-arena contributors
  *
@@ -20,14 +20,22 @@
  * whole reason the shared step's *entire* carried state has to live in those
  * two components (see `components.ts`).
  *
- * **The other three do not mutate anything**, and that is a load-bearing
+ * **The other four do not mutate anything**, and that is a load-bearing
  * property rather than a simplification. An action with no affected components
- * is one the `Replicator` always sends, the `RewindEngine` never touches, and
- * the receiving executor applies exactly once. So a muzzle flash cannot be
- * un-fired by a rollback, and cannot be fired twice by a retransmission. They
- * are the wire form of `WeaponEvents`, and on the host their `apply` does
- * nothing at all: the host raised the event that created them in the first
- * place.
+ * is one the `Replicator` always sends and the `RewindEngine` never touches, so
+ * a muzzle flash cannot be un-fired by a rollback. They are the wire form of
+ * `WeaponEvents` and of the two `MoverEvents` that make a noise, and on the host
+ * their `apply` does nothing at all: the host raised the event that created them
+ * in the first place.
+ *
+ * **What this docblock used to add -- "and the receiving executor applies
+ * exactly once" -- stopped being true in meep 3.15.0.** A reconciliation
+ * re-executes the records in its rewound window that arrived from a peer, which
+ * is GAP-045's fix and is right for a record that carries state, because the
+ * record is the only description of that state. An event action carries none:
+ * its whole effect is a side effect outside the replicated world, and
+ * `SimAction` has no way to say so. `NetClient.replaying` is where a client
+ * suppresses the second application; see GAP-048 and D-197.
  *
  * **Every class here is built per session by a factory**, which is the engine's
  * own pattern -- `NetworkSession.#make_replace_component_action_class` does
@@ -87,13 +95,31 @@ export interface ActionContext {
     playerLeft(event: PlayerLeftData): void;
 }
 
-/** The five shapes `WeaponEvents` raises, as one byte. */
+/**
+ * Every transient the host raises, as one byte.
+ *
+ * The first five are `WeaponEvents`; the last two are `MoverEvents`, and they
+ * are here rather than in a message of their own because they are the same
+ * thing: a happening at a point that a receiver draws or plays once and then
+ * forgets. A teleport and a jump pad have no mutating half on this side at all
+ * -- the velocity write and the origin write are the host's and arrive in an
+ * AUTH_STATE -- so what crosses is purely the noise they make.
+ *
+ * **Appended rather than inserted**, for `PlayerLeft`'s reason one level down:
+ * `kind` is a byte both peers read off the same frozen table, so a peer built
+ * against the older list disagrees about two values rather than about all of
+ * them.
+ */
 export const EffectKind = Object.freeze({
     MuzzleFlash: 0,
     HitscanTrail: 1,
     BulletImpact: 2,
     Explosion: 3,
     Death: 4,
+    /** `origin` is where the player left, `aux` where they arrived. */
+    Teleport: 5,
+    /** `origin` is the pad, `aux` the velocity `AimAtTarget` solved for. */
+    JumpPad: 6,
 });
 
 /**
@@ -112,9 +138,16 @@ export const WORLD_OWNER = 255;
  *
  * `aux` is the second vector each kind needs and they are not the same vector:
  * a direction for a muzzle flash, a surface normal for an impact or an
- * explosion, the far end for a trail. One field rather than three because the
- * kinds are mutually exclusive and a union on the wire is three unused floats
- * per event on every other kind.
+ * explosion, the far end for a trail, the far end of a teleport, the launch
+ * vector of a pad. One field rather than three because the kinds are mutually
+ * exclusive and a union on the wire is three unused floats per event on every
+ * other kind.
+ *
+ * **A zero `aux` on an explosion means there was no surface**, and that is a
+ * value rather than an omission. `CG_MissileHitPlayer` draws no `CG_ImpactMark`
+ * -- Q3 marks walls and never marks people -- so a rocket that stopped on a body
+ * carries no normal, and the host used to substitute straight up rather than say
+ * so. A normal is a unit vector, so the zero vector cannot be confused with one.
  */
 export interface EffectEventData {
     kind: number;

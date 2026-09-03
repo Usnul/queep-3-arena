@@ -308,6 +308,22 @@ export class CombatSystem extends System<never> {
 }
 
 /**
+ * The last thing picked up, as the status bar reads it.
+ *
+ * Two getters rather than `PickupSystem` itself, because on the networked
+ * branch there is no `PickupSystem`: items are the host's, the pickup arrives as
+ * a `PickupEvent`, and `NetTransients` is what turns it into a sound and a name.
+ * Both satisfy this, and `PresentationSystem` does not need to know which one it
+ * was handed.
+ */
+export interface PickupLabel {
+    /** `CG_ItemPickup`'s text: `50 Armor`, `Rocket Launcher`, or empty. */
+    readonly pickupLabel: string;
+    /** How long it has been up. The status bar fades it out. */
+    readonly pickupAgeSeconds: number;
+}
+
+/**
  * Item respawn, pickup, and Q3's once-a-second inventory bleed.
  *
  * `ClientTimerActions` runs on a 1000 ms cadence rather than per frame -- health
@@ -315,7 +331,7 @@ export class CombatSystem extends System<never> {
  * 200-health player in three seconds at 60 fps. It used to need an accumulator
  * in `main` to say so; on a fixed step it is a counter of steps.
  */
-export class PickupSystem extends System<never> {
+export class PickupSystem extends System<never> implements PickupLabel {
     private readonly items: ItemSystem;
     private readonly itemsView: ItemsView;
     private readonly player: PlayerController;
@@ -472,7 +488,7 @@ export class PresentationSystem extends System<never> {
     private readonly player: PlayerController;
     private readonly audio: AudioBank;
     private readonly hud: Hud;
-    private readonly pickups: PickupSystem;
+    private readonly pickups: PickupLabel;
     private readonly arena: Arena;
     private readonly describe: () => { map: string; backend: string };
 
@@ -482,7 +498,11 @@ export class PresentationSystem extends System<never> {
         player: PlayerController;
         audio: AudioBank;
         hud: Hud;
-        pickups: PickupSystem;
+        /**
+         * `PickupSystem` in single-player and `NetTransients` on a joined
+         * client, which is the only difference between the two status bars.
+         */
+        pickups: PickupLabel;
         arena: Arena;
         describe: () => { map: string; backend: string };
     }) {

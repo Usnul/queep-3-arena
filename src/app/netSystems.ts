@@ -35,9 +35,16 @@ import { System } from '@woosh/meep-engine/src/engine/ecs/System.js';
 
 import type { NetClient } from '../client/net/NetClient.ts';
 import type { PlayerController } from '../client/PlayerController.ts';
-import type { ItemSystem } from '../game/Items.ts';
+import type { ItemInstance, ItemSystem } from '../game/Items.ts';
 import { Character, type LegsAnimation, type TorsoAnimation } from '../client/Characters.ts';
-import { NET_PMF_WALKING, NET_WEAPONS, type NetPlayerState } from '../net/components.ts';
+import { EffectKind, type EffectEventData, type PickupEventData } from '../net/actions.ts';
+import type { WeaponId } from '../game/Weapons.ts';
+import {
+    NET_PMF_WALKING,
+    NET_WEAPONS,
+    weaponAt,
+    type NetPlayerState,
+} from '../net/components.ts';
 import { SESSION_TICK_SECONDS } from '../net/protocol.ts';
 import { Footsteps } from '../client/Audio.ts';
 import {
@@ -580,6 +587,385 @@ export class NetPresentationSystem extends System<never> {
             missiles.spawn(i, NET_WEAPONS[m.weapon] ?? 'WP_ROCKET_LAUNCHER', m.velocity);
         }
     }
+}
+
+/* ------------------------------------------------------------------ *
+ * Transients
+ * ------------------------------------------------------------------ */
+
+/**
+ * As much of the effect layer as a replicated transient drives.
+ *
+ * **`Arena`'s `WeaponEvents` half, one method per {@link EffectKind} that draws
+ * something**, and that is the point of the shape rather than a coincidence:
+ * the single-player game already turns each of these five into particles, a
+ * light, an impact mark and the sound Q3 plays there, and it does it out of one
+ * class that knows both the weapon and the surface. A joined client wants
+ * exactly that and differs only in where the call comes from -- an action off
+ * the wire instead of a `WeaponSystem` in this process -- so this is the seam
+ * that lets `main.ts` hand the wire straight to the arena.
+ *
+ * Narrow for {@link RemoteCharacter}'s reason: the browser this port is
+ * developed in cannot start a renderer, so a presenter typed against `Arena`
+ * could only ever be read rather than run. Against five methods it can be driven
+ * by a test with the real event stream of a real match behind it.
+ *
+ * **`mine` rather than an owner id**, because the two number spaces are not the
+ * same one and quietly agree on a value. `Arena` asks whether the shooter is
+ * `LOCAL_CLIENT`, which is Q3 client 0, and the wire's `owner` is a *slot index*
+ * -- so passing one for the other would hang the view weapon's flash on whoever
+ * holds slot 0 and never on the player holding the gun.
+ */
+export interface RemoteEffects {
+    /** `CG_MuzzleFlash`. `mine` offers it to the gun on screen first. */
+    muzzleFlash(
+        originQ3: ArrayLike<number>,
+        directionQ3: ArrayLike<number>,
+        weapon: WeaponId,
+        mine: boolean
+    ): void;
+    /** The line from a barrel to whatever the shot stopped on. */
+    hitscanTrail(
+        startQ3: ArrayLike<number>,
+        endQ3: ArrayLike<number>,
+        weapon: WeaponId,
+        mine: boolean
+    ): void;
+    /** `CG_Bullet`: the spark and the hole. */
+    bulletImpact(
+        originQ3: ArrayLike<number>,
+        normalQ3: ArrayLike<number>,
+        weapon: WeaponId
+    ): void;
+    /**
+     * `CG_MissileHitWall`, and `CG_MissileHitPlayer` when `normalQ3` is null.
+     *
+     * Null is the case Q3 draws no `CG_ImpactMark` for -- it marks walls and
+     * never marks people -- and it arrives as a zero `aux`, which cannot be a
+     * real normal. See `EffectEventData`.
+     */
+    explosion(
+        originQ3: ArrayLike<number>,
+        radiusQ3: number,
+        weapon: WeaponId,
+        normalQ3: ArrayLike<number> | null
+    ): void;
+    /** Somebody died. `Arena.deathExplosion`: no surface, so no weapon and no mark. */
+    death(originQ3: ArrayLike<number>): void;
+}
+
+/**
+ * The sound bank, as much of it as a transient with nothing to draw needs.
+ *
+ * `AudioBank`'s own two calls, so `main.ts` passes the bank itself. Narrow for
+ * {@link RemoteAudio}'s reason -- a positional sound needs a running
+ * `AudioContext`, which the preview browser has no more than it has a GPU.
+ *
+ * **Only some of the sounds come through here**, and the split is worth stating
+ * because it is otherwise a surprise. The five weapon effects carry their own
+ * noise inside {@link RemoteEffects}, because `Arena` reads the sound and the
+ * mark off one row of one `switch (weapon)` and splitting them would be two
+ * copies of `CG_MissileHitWall`. What is left is the transients that draw
+ * nothing at all -- a death's flesh hit, a teleport, a pad, a pickup -- and they
+ * come through this.
+ */
+export interface RemoteSounds {
+    /** `S_StartSound` at a point, in Q3 units. */
+    play(name: string, originQ3: ArrayLike<number>): void;
+    /** `S_StartLocalSound`: dry, at the listener. */
+    playLocal(name: string): void;
+}
+
+/** What has been presented, per kind, for `window.queep.net` and the tests. */
+export interface TransientCounts {
+    muzzleFlashes: number;
+    trails: number;
+    impacts: number;
+    explosions: number;
+    deaths: number;
+    teleports: number;
+    jumpPads: number;
+    pickups: number;
+    /**
+     * Events this build has no presentation for.
+     *
+     * Not zero by construction: `kind` is a byte and a host built against a
+     * longer {@link EffectKind} table sends values this one does not know, as
+     * does a `PickupEvent` naming an item index this client has not got. A
+     * count is how either shows up as a number rather than as silence.
+     */
+    unknown: number;
+}
+
+/** `CG_DrawPickupItem`'s age for "nothing has been picked up yet", in seconds. */
+const NO_PICKUP_SECONDS = 99;
+
+/**
+ * Every transient the host raised, turned into something seen or heard.
+ *
+ * **This is the whole of what a joined client used to be missing.** The `effect`
+ * and `pickup` hooks counted their events and threw them away, so a networked
+ * match had no muzzle flash, no bullet impact, no trail, no explosion, no death
+ * effect and no pickup feedback: the simulation was right and none of it was
+ * visible or audible. What replaces the counters is a translation and nothing
+ * more -- the drawing is `Arena`'s and the noise is `AudioBank`'s, exactly as in
+ * single-player, and the only thing this class holds is the policy that differs
+ * over a wire.
+ *
+ * Three things differ, and they are the reason this is a class rather than a
+ * `switch` inlined at the hook:
+ *
+ * 1. **Whose event it is.** `owner` is a slot index; `Arena` wants to know
+ *    whether the shooter is the player whose gun is on screen. That comparison
+ *    is against `slotIndex` and belongs nowhere near the arena.
+ * 2. **What a pickup is.** The wire carries an item *index*; the sound and the
+ *    label are read off the def both peers loaded from the same map.
+ * 3. **Where a sound goes.** Q3 plays your own pad and your own pickup dry and
+ *    everybody else's from where they are standing. Single-player only ever had
+ *    the first half, because there was nobody else.
+ *
+ * **Not a `System`.** These arrive from inside `SimAction.apply`, which is
+ * inside `session.tick`, which is inside `NetClientSystem.fixedUpdate` -- so
+ * there is no pass to hang them on and the hooks call this directly. That is
+ * also what makes it testable without an engine: it is driven by events, and a
+ * test can hand it the events a real match produced.
+ */
+export class NetTransients {
+    private readonly slotIndex: number;
+    private readonly effects: RemoteEffects | null;
+    private readonly audio: RemoteSounds | null;
+    private readonly items: readonly ItemInstance[];
+    private readonly now: () => number;
+
+    readonly counts: TransientCounts = {
+        muzzleFlashes: 0,
+        trails: 0,
+        impacts: 0,
+        explosions: 0,
+        deaths: 0,
+        teleports: 0,
+        jumpPads: 0,
+        pickups: 0,
+        unknown: 0,
+    };
+
+    private label = '';
+    private labelAtMs = -Infinity;
+
+    constructor(options: {
+        /** The slot this client is playing. Decides `mine` on every event. */
+        slotIndex: number;
+        /** Null draws nothing, which is what a test without a renderer does. */
+        effects?: RemoteEffects | null;
+        /** Null plays nothing, which is what a test without an `AudioContext` does. */
+        audio?: RemoteSounds | null;
+        /**
+         * The map's items, indexed by `ItemInstance.index`.
+         *
+         * The same array `NetWorldSystem` writes `present` into, and the same
+         * one the host spawned from -- the join refuses a host whose item count
+         * differs, which is what makes an index mean the same shard on both
+         * sides (see `main.ts`).
+         */
+        items?: readonly ItemInstance[];
+        /** Milliseconds, for the pickup label's fade. Defaults to the wall clock. */
+        now?: () => number;
+    }) {
+        this.slotIndex = options.slotIndex;
+        this.effects = options.effects ?? null;
+        this.audio = options.audio ?? null;
+        this.items = options.items ?? [];
+        this.now = options.now ?? ((): number => performance.now());
+    }
+
+    /** One `EffectEvent` off the wire. */
+    effect(event: EffectEventData): void {
+        const mine = event.owner === this.slotIndex;
+        const effects = this.effects;
+        const audio = this.audio;
+
+        switch (event.kind) {
+            case EffectKind.MuzzleFlash: {
+                this.counts.muzzleFlashes += 1;
+                effects?.muzzleFlash(event.origin, event.aux, weaponAt(event.weapon), mine);
+                return;
+            }
+
+            case EffectKind.HitscanTrail: {
+                this.counts.trails += 1;
+                effects?.hitscanTrail(event.origin, event.aux, weaponAt(event.weapon), mine);
+                return;
+            }
+
+            case EffectKind.BulletImpact: {
+                this.counts.impacts += 1;
+                effects?.bulletImpact(event.origin, event.aux, weaponAt(event.weapon));
+                return;
+            }
+
+            case EffectKind.Explosion: {
+                this.counts.explosions += 1;
+                effects?.explosion(
+                    event.origin,
+                    event.radius,
+                    weaponAt(event.weapon),
+                    isZero(event.aux) ? null : event.aux
+                );
+                return;
+            }
+
+            case EffectKind.Death: {
+                this.counts.deaths += 1;
+                effects?.death(event.origin);
+                /*
+                 `Arena.hit` plays this beside the death explosion in
+                 single-player, and it is not inside `deathExplosion` there
+                 either: the explosion is what makes a kill legible without a
+                 death animation, and the wet noise is a separate `S_StartSound`
+                 on the body.
+                */
+                audio?.play('impact/flesh', event.origin);
+                return;
+            }
+
+            case EffectKind.Teleport: {
+                this.counts.teleports += 1;
+                /*
+                 Both ends, both positional, which is what the single-player
+                 `MoverSystem` callback in `main.ts` does -- Q3 plays `telein`
+                 where you left and `teleout` where you arrive, and a player
+                 near either end hears the one nearest them.
+                */
+                audio?.play('world/telein', event.origin);
+                audio?.play('world/teleout', event.aux);
+                return;
+            }
+
+            case EffectKind.JumpPad: {
+                this.counts.jumpPads += 1;
+                /*
+                 Dry for the player riding it and positional for anybody else.
+                 Single-player has only the first case and hard-codes it; over a
+                 wire the same pad is heard by everyone in the room, and one on
+                 the far side of the map played dry would be a launch in the
+                 listener's own head.
+                */
+                if (mine) audio?.playLocal('world/jumppad');
+                else audio?.play('world/jumppad', event.origin);
+                return;
+            }
+
+            default: {
+                this.counts.unknown += 1;
+                return;
+            }
+        }
+    }
+
+    /**
+     * One `PickupEvent` off the wire.
+     *
+     * `Touch_Item` plays the pickup sound and `CG_ItemPickup` writes the name
+     * across the bottom of the screen; the second is the picker's alone, which
+     * is why the label is written only for this client's own slot.
+     */
+    pickup(event: PickupEventData): void {
+        const item = this.items[event.item];
+        if (item === undefined) {
+            this.counts.unknown += 1;
+            return;
+        }
+
+        this.counts.pickups += 1;
+
+        const sound = `item/${item.def.classname}`;
+
+        if (event.slot === this.slotIndex) {
+            this.label = item.def.pickupName;
+            this.labelAtMs = this.now();
+            this.audio?.playLocal(sound);
+            return;
+        }
+
+        /*
+         From the shard rather than from the player who took it. Q3 starts the
+         sound on the picking client's entity and the two are within a pickup
+         box of each other -- 44 units at the widest -- so this is the same point
+         to within less than the sound's own falloff, and it needs no second
+         lookup into a roster that may not carry the slot yet.
+        */
+        this.audio?.play(sound, item.origin);
+    }
+
+    /** `CG_DrawPickupItem`'s text, for the status bar. */
+    get pickupLabel(): string {
+        return this.label;
+    }
+
+    /**
+     * How long that text has been up, in seconds.
+     *
+     * Off the wall clock rather than accumulated on a step, because there is no
+     * step to accumulate on: this class is driven by events. It is also the
+     * right clock -- the status bar fades the label over real seconds, and
+     * `PickupSystem` sums a *fixed* delta to approximate the same thing.
+     */
+    get pickupAgeSeconds(): number {
+        if (this.labelAtMs === -Infinity) return NO_PICKUP_SECONDS;
+        return (this.now() - this.labelAtMs) / 1000;
+    }
+}
+
+/** True for the zero vector, which is the wire's "there was no surface". */
+function isZero(v: ArrayLike<number>): boolean {
+    return v[0] === 0 && v[1] === 0 && v[2] === 0;
+}
+
+/**
+ * As much of `Effects` as ageing it needs.
+ *
+ * Narrow for the reason every other interface in this file is, and because the
+ * whole of what a joined client needs from that class is one method.
+ */
+export interface EffectClock {
+    /** Advance timers, fade marks, and retire what has finished. */
+    update(deltaSeconds: number): void;
+}
+
+/**
+ * The effects' own clock, which nothing else on this branch runs.
+ *
+ * **`Arena.update` cannot be called here** -- the first thing it does is step
+ * the weapons, and the weapons are the host's -- so `CombatSystem` is not
+ * registered and the four things inside that call have to be accounted for one
+ * at a time. Three of them are already answered: the missile roll comes through
+ * {@link MissilePresenter.advance}, the projectile trail follows
+ * `WeaponSystem.liveProjectiles`, which is empty here, and the shootable boxes
+ * `?targets=1` puts out are single-player's.
+ *
+ * The fourth is `Effects.update`, and it is the one that cannot be skipped: it
+ * is what retires a finished emitter, expires a muzzle flash's light after 50
+ * milliseconds, and fades an impact mark out over `CG_AddMarks`' ten seconds.
+ * Without it every transient this client draws is an entity that stays in the
+ * dataset for the length of the match -- which was invisible while the client
+ * drew nothing at all, and is a few hundred entities a minute now that it does.
+ *
+ * On `update` rather than `fixedUpdate`, because everything it decides is
+ * measured in wall-clock seconds and the finer clock is the better one for a
+ * fade.
+ */
+export class NetEffectSystem extends System<never> {
+    private readonly effects: EffectClock;
+
+    constructor(options: { effects: EffectClock }) {
+        super();
+
+        this.effects = options.effects;
+    }
+
+    override update = (deltaSeconds: number): void => {
+        this.effects.update(deltaSeconds);
+    };
 }
 
 /**

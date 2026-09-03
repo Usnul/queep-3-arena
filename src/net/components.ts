@@ -42,7 +42,7 @@ import { computeIntegerArrayHash } from '@woosh/meep-engine/src/core/collection/
 import { hash_mix2 } from '@woosh/meep-engine/src/core/math/hash/hash_mix2.js';
 import { v3_equals_array } from '@woosh/meep-engine/src/core/geom/vec3/v3_equals_array.js';
 
-import { WEAPON_ORDER as Q3_WEAPON_ORDER, isWeaponId } from '../game/Weapons.ts';
+import { WEAPON_ORDER as Q3_WEAPON_ORDER, isWeaponId, type WeaponId } from '../game/Weapons.ts';
 
 /**
  * The weapons a slot can hold, in Q3's own `weapon_t` order.
@@ -57,19 +57,33 @@ import { WEAPON_ORDER as Q3_WEAPON_ORDER, isWeaponId } from '../game/Weapons.ts'
  * -- and takes it *derived*, so that a weapon appearing in the balance tables
  * appears on the wire without anyone editing a constant.
  */
-export const NET_WEAPONS: readonly string[] = Q3_WEAPON_ORDER.filter(isWeaponId);
+export const NET_WEAPONS: readonly WeaponId[] = Q3_WEAPON_ORDER.filter(isWeaponId);
 
 /** How many ammunition counters a `NetInventory` carries. Twelve, today. */
 export const NET_WEAPON_COUNT = NET_WEAPONS.length;
 
-/** Wire index of a weapon tag, or 0 (`WP_GAUNTLET`) for one off the list. */
+/**
+ * Wire index of a weapon tag, or 0 (`WP_GAUNTLET`) for one off the list.
+ *
+ * Total over strings on purpose -- it is the direction that has to cope with a
+ * tag the balance tables do not name -- so the list is widened for the lookup
+ * rather than the parameter narrowed.
+ */
 export function weaponIndex(tag: string): number {
-    const at = NET_WEAPONS.indexOf(tag);
+    const at = (NET_WEAPONS as readonly string[]).indexOf(tag);
     return at < 0 ? 0 : at;
 }
 
-/** The weapon tag at a wire index, clamped to the list. */
-export function weaponAt(index: number): string {
+/**
+ * The weapon tag at a wire index, clamped to the list.
+ *
+ * A `WeaponId` rather than a `string`, and it is D-114's rule rather than a
+ * convenience: an outside string becomes a `WeaponId` only through `isWeaponId`,
+ * and `NET_WEAPONS` is `isWeaponId`'s own output. So every tag that comes off
+ * the wire has already been through the one crossing, and the callers that used
+ * to cast the answer back do not have to.
+ */
+export function weaponAt(index: number): WeaponId {
     return NET_WEAPONS[index] ?? NET_WEAPONS[0]!;
 }
 

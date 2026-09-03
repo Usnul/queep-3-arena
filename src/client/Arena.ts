@@ -52,8 +52,12 @@ const WORLD_SCALE = 1 / 32;
  * `roster.ts` hands out 0 to the player, `1000 +` to `addTarget`'s boxes and
  * `2000 +` to bots, and the zero is load-bearing beyond this file -- a bot
  * firing with it shoots itself, because `hitscanShot` skips the owner.
+ *
+ * Exported because a joined client has to translate into this space: the wire
+ * names a shooter by *slot index*, and the only question this class asks of an
+ * owner is whether it is this one. See `RemoteEffects`.
  */
-const LOCAL_CLIENT = 0;
+export const LOCAL_CLIENT = 0;
 
 function toMeep(q3: ArrayLike<number>): [number, number, number] {
     return [q3[0]! * WORLD_SCALE, q3[2]! * WORLD_SCALE, -q3[1]! * WORLD_SCALE];

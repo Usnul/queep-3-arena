@@ -87,7 +87,8 @@ import { GPUProfileLevel, gpu_profile_level_name }
 import { downloadAsFile } from '@woosh/meep-engine/src/core/binary/downloadAsFile.js';
 import { barrelOffset, ViewWeapon } from '../client/ViewWeapon.ts';
 import { MissileView } from '../client/MissileView.ts';
-import { Arena } from '../client/Arena.ts';
+import { Arena, LOCAL_CLIENT } from '../client/Arena.ts';
+import { WORLD_OWNER } from '../net/actions.ts';
 import { PhysicsWorld } from '../client/PhysicsWorld.ts';
 import { Missiles } from '../client/Missiles.ts';
 import { DamageQueries } from '../client/DamageQueries.ts';
@@ -105,12 +106,16 @@ import { NetClient, type ClientPhysics } from '../client/net/NetClient.ts';
 import { JoinRefused, joinHost } from '../client/net/join.ts';
 import {
     NetClientSystem,
+    NetEffectSystem,
     NetPresentationSystem,
     NetRenderSystem,
     NetScoreboardSystem,
+    NetTransients,
     NetWorldSystem,
     type MissilePresenter,
     type RemoteAudio,
+    type RemoteEffects,
+    type TransientCounts,
 } from './netSystems.ts';
 import { ScoreboardView } from '../client/ScoreboardView.ts';
 import { HOST_PEER_ID } from '../net/protocol.ts';
@@ -1101,13 +1106,14 @@ async function main(): Promise<void> {
          class parses everything it sees as a packet.
         */
         /*
-         Events that arrived and were not presented. Both are step 6's -- an
-         explosion is `Effects` and a pickup is a sound off `ItemsView` -- and
-         both are worth counting in the meantime, because "the effect actions
-         are arriving" and "the effect actions are being drawn" are separate
-         claims and only the first one is step 5's to make.
+         Every transient the host raises, once there is an arena to draw it
+         with. Null on the single-player branch and until the join has built
+         one: the hooks below fire from inside `session.tick`, which nothing
+         calls until the systems are registered, so the knot is the same one
+         `controller` is tied with a few lines down and is untied at the same
+         point in the frame.
         */
-        const netEvents = { effects: 0, pickups: 0 };
+        let netTransients: NetTransients | null = null;
 
         const joinUrl = joinTarget();
         const joined =
@@ -1197,24 +1203,28 @@ async function main(): Promise<void> {
 
                           /*
                            The view kick, which is the one part of taking damage
-                           a client can act on with nothing else built -- the
-                           health it happened to arrives in the same AUTH_STATE.
-                           Everything else an event carries (the explosion, the
-                           impact mark, the pickup sound) is presentation of
-                           somebody else's state and belongs to step 6, so for
-                           now they are counted and dropped, which is how
-                           `window.queep.net` can show that they arrive at all.
+                           that is this client's own state rather than a picture
+                           of somebody else's -- the health it happened to
+                           arrives in the same AUTH_STATE.
                           */
                           hit: (event): void => {
                               if (event.victim === joined.hello.slot) {
                                   controller?.damaged(event.damage);
                               }
                           },
-                          effect: (): void => {
-                              netEvents.effects += 1;
+                          /*
+                           And the rest of them, which used to be counted and
+                           thrown away -- so a networked match had the muzzle
+                           flash, the impact, the trail, the explosion, the
+                           death effect and the pickup sound of an empty room
+                           while the simulation underneath was correct. See
+                           `NetTransients`, and D-197.
+                          */
+                          effect: (event): void => {
+                              netTransients?.effect(event);
                           },
-                          pickup: (): void => {
-                              netEvents.pickups += 1;
+                          pickup: (event): void => {
+                              netTransients?.pickup(event);
                           },
                       },
                   });
@@ -1763,6 +1773,77 @@ async function main(): Promise<void> {
                 },
             };
 
+            /*
+             And everything that happens once and is then over: the flash, the
+             trail, the hole in the wall, the blast, the death, the teleport,
+             the pad and the pickup.
+
+             Straight through to the arena that already draws all five weapon
+             effects for the single-player game, because the difference between
+             the two branches is *where the call comes from* and nothing else --
+             an action off the wire here, a `WeaponSystem` in this process
+             there. What the adapter adds is the one thing that does differ:
+             `Arena` asks whether the shooter is Q3 client 0 so it can offer the
+             flash to the gun on screen, and the wire's `owner` is a slot index,
+             so the two number spaces are translated here rather than silently
+             agreeing on a value. See `RemoteEffects`.
+            */
+            const netEffects: RemoteEffects = {
+                muzzleFlash: (originQ3, directionQ3, weapon, mine) => {
+                    arena.muzzleFlash(
+                        originQ3,
+                        directionQ3,
+                        weapon,
+                        mine ? LOCAL_CLIENT : WORLD_OWNER
+                    );
+                },
+                hitscanTrail: (startQ3, endQ3, weapon, mine) => {
+                    arena.hitscanTrail(
+                        startQ3,
+                        endQ3,
+                        weapon,
+                        mine ? LOCAL_CLIENT : WORLD_OWNER
+                    );
+                },
+                bulletImpact: (originQ3, normalQ3, weapon) => {
+                    arena.bulletImpact(originQ3, normalQ3, weapon);
+                },
+                explosion: (originQ3, radiusQ3, weapon, normalQ3) => {
+                    /*
+                     `undefined` rather than `null` for "no surface", because
+                     that is the shape `Arena.explosion` already tests -- a
+                     missile that stopped on a player carries no normal and Q3
+                     draws no mark on a body.
+                    */
+                    arena.explosion(originQ3, radiusQ3, weapon, normalQ3 ?? undefined);
+                },
+                death: (originQ3) => {
+                    arena.deathExplosion(originQ3);
+                },
+            };
+
+            /*
+             And their clock. `CombatSystem` is what runs it in single-player,
+             through `Arena.update`, and that call cannot be made here because
+             it steps the weapons -- so the one line inside it that a client
+             still needs is registered on its own. Without it every flash, spark
+             and scorch mark this client draws is an entity that never leaves.
+            */
+            await em.addSystem(new NetEffectSystem({ effects: arena.effects }));
+
+            netTransients = new NetTransients({
+                slotIndex: netClient.slotIndex,
+                effects: netEffects,
+                audio,
+                /*
+                 The same array `NetWorldSystem` writes `present` into, and the
+                 same one the host spawned from: the join refuses a host whose
+                 item count differs, which is what makes a wire index name the
+                 same shard on both sides.
+                */
+                items: items.items,
+            });
+
             await em.addSystem(
                 new NetPresentationSystem({
                     client: netClient,
@@ -1833,7 +1914,13 @@ async function main(): Promise<void> {
                 player,
                 audio,
                 hud,
-                pickups,
+                /*
+                 `PickupSystem` runs the items in single-player and does not
+                 exist on the networked branch, where a pickup is a `PickupEvent`
+                 the host raised. Both answer the two questions the status bar
+                 asks; see `PickupLabel`.
+                */
+                pickups: netTransients ?? pickups,
                 arena,
                 describe: () => ({
                     map: mapName,
@@ -1854,15 +1941,22 @@ async function main(): Promise<void> {
              The networked branch's whole observable surface, and what step 5's
              exit criterion is read off: `synced` says INITIAL_SYNC arrived,
              `reconcileCount` staying flat says the prediction agrees with the
-             host, and the two event counters say the action stream is carrying
-             more than state. Null when this tab is running its own match.
+             host, and `events` says the action stream is carrying more than
+             state. Null when this tab is running its own match.
+
+             `events` counts what was *presented* rather than what arrived and
+             was dropped, which is the same number now that nothing is dropped
+             -- and is the one worth having, because `unknown` in it is a kind
+             this build has no picture for.
             */
             net:
                 netClient === null
                     ? null
                     : {
                           client: netClient,
-                          events: netEvents,
+                          get events(): TransientCounts | null {
+                              return netTransients?.counts ?? null;
+                          },
                           get synced(): boolean {
                               return netClient.synced;
                           },

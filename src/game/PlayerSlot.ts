@@ -404,7 +404,7 @@ export class PlayerSlot {
     private selectFromCommand(wanted: number): void {
         if (wanted <= 0) return;
 
-        const weapon = weaponAt(wanted - 1) as WeaponId;
+        const weapon = weaponAt(wanted - 1);
         if (weapon === this.weapon) return;
         if (!this.canSelect(weapon)) return;
 
@@ -470,7 +470,7 @@ export class PlayerSlot {
         ps.viewheight = state.viewheight;
         ps.bobCycle = state.bobCycle;
 
-        this.weapon = weaponAt(state.weapon) as WeaponId;
+        this.weapon = weaponAt(state.weapon);
         this.cooldownMs = state.weaponTime;
 
         /*
