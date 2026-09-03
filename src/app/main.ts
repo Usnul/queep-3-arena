@@ -1896,6 +1896,14 @@ async function main(): Promise<void> {
                      `KEY_*` note in `PlayerController`): a key released while
                      the window was unfocused cannot get stuck down, which for a
                      board you hold means it cannot get stuck open.
+
+                     **And the poll is why the key has to be cancelled by hand.**
+                     `KeyboardDevice` cancels a key whose own `down` signal has a
+                     handler, and a poll is not a subscription -- so tab reached
+                     the browser, moved the focus ring out of the document, took
+                     the pointer lock with it, and made the second press walk the
+                     browser's chrome. `PlayerController.onKeyDown` names it
+                     alongside space. See D-199.
                     */
                     held: () => engine.devices.keyboard.keys['tab']?.is_down === true,
                 })

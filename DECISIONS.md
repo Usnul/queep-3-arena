@@ -11313,3 +11313,36 @@ scoreboard UI (D-190 shipped one, on tab) and that sixteen slots "is not reachab
 culling neither the engine nor this port has" -- which D-192 and D-196 between them retract twice
 over. meep does have the hook (`scope_filter`, fully wired), and 245 KB/s at sixteen players is 1.96
 Mbit/s and not a problem; what is left is a hosting cost line, and that is what the README now says.
+
+### D-199: the scoreboard key cost the pointer lock, because a poll is not a subscription
+
+Holding tab opened the board and then ended the game: focus left the document, the pointer lock went
+with it, and the next press started cycling the browser's own UI.
+
+**The mechanism is a good engine rule meeting a deliberate decision of this port's, and neither is
+wrong.** `KeyboardDevice.#handlerKeyDown` calls `preventDefault` for a key whose own `down` signal
+has a handler -- a key somebody subscribed to is a key the application owns, which is exactly the
+right default and means no consumer has to keep a list of browser-reserved keys. This port *polls*
+tab instead: `held: () => keys['tab']?.is_down`, and D-190 has the reason, which is still good --
+a key released while the window was unfocused cannot get stuck down, and for a board you hold that
+is the difference between a board and a board that will not close. A poll registers no handler, so
+the engine's rule does not fire, so tab kept its default action.
+
+Space was already in the same position and already named in `PlayerController.onKeyDown`. Tab joins
+it, which is why this is one line rather than a design.
+
+**It is gated on the pointer lock and space is not, and that is a difference rather than an
+oversight.** Space scrolls a page and this page is a canvas with nowhere to scroll, so taking it
+always costs nothing. Tab moves the focus ring, which is the browser's to move whenever the player is
+not in the game -- a page that cannot be tabbed through at all would be a worse bug than the one
+being fixed, and an accessibility one. Inside the lock there is no focus ring to move and the default
+action is purely destructive. `PlayerController.active` is already exactly "the pointer lock is
+held", so the gate is a field that existed.
+
+The menu needs no special case: `Menu` swallows `keydown` on its own root, so a tab pressed inside a
+settings page never reaches the device and still moves between the controls there.
+
+**Tested at the seam that broke**, in `player-controller.test.ts`, which already had a device fake
+with a `keyDown` signal and an `activate`/`deactivate` pair for the lock -- so the case is three
+assertions and no new harness: tab is cancelled while locked, is *not* cancelled once unlocked, and
+space is cancelled either way. Reverted, the first fails with the browser's behaviour.

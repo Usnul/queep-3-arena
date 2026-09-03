@@ -529,9 +529,32 @@ export class PlayerController {
     /**
      * Weapon select only. Movement is polled from the switches instead, because
      * a held key is a state and an edge is a bad way to track one.
+     *
+     * **Plus the two keys the browser would otherwise take.** `KeyboardDevice`
+     * has a rule for this and it is a good one -- it calls `preventDefault` for
+     * a key whose own `down` signal has a handler, on the grounds that a key
+     * somebody subscribed to is a key the application owns. It does not fire for
+     * either of these, because this port *polls* both: jump reads
+     * `keys['space'].is_down` and the scoreboard reads `keys['tab'].is_down`,
+     * and a poll is not a subscription. So the two are named here.
+     *
+     * **Tab is gated on the pointer lock and space is not**, which is a real
+     * difference rather than an inconsistency. Space scrolls a page, and a page
+     * whose only content is a canvas has nowhere to scroll to, so taking it
+     * always costs nothing. Tab moves the focus ring, which is the browser's to
+     * move whenever the player is not in the game -- and inside the game it is
+     * actively harmful: the focus leaves the document, **the pointer lock goes
+     * with it**, and the next Tab starts walking the browser's own chrome. The
+     * board is `+scores` on the key Q3 bound it to, so the key is not
+     * negotiable; when it is held is.
+     *
+     * Nothing here runs while the menu is open: `Menu` swallows `keydown` on its
+     * own root, so a Tab pressed inside a settings page never reaches the device
+     * and still moves between the controls there.
      */
     private readonly onKeyDown = (e: KeyboardEvent): void => {
         if (e.code === 'Space') e.preventDefault();
+        if (e.code === 'Tab' && this.active) e.preventDefault();
 
         const digit = e.code.startsWith('Digit') ? e.code.slice(5) : e.key;
         const weapon = KEY_WEAPON.get(digit);

@@ -1613,3 +1613,64 @@ describe('PlayerController -> the weapon rack', () => {
         expect(rig.player.weaponSelectVisible).toBe(false);
     });
 });
+
+describe('the keys the browser would otherwise take', () => {
+    /** A `keydown` the controller can cancel, and a record of whether it did. */
+    function press(rig: Rig, code: string): boolean {
+        let prevented = false;
+        const event = {
+            code,
+            key: code,
+            preventDefault: () => {
+                prevented = true;
+            },
+        } as unknown as KeyboardEvent;
+
+        rig.devices.keyDown.emit((h) => h(event));
+        return prevented;
+    }
+
+    /*
+     `KeyboardDevice` cancels a key whose own `down` signal has a handler --
+     a key somebody subscribed to is a key the application owns -- and this port
+     *polls* both of these instead: jump reads `keys['space'].is_down` and the
+     scoreboard reads `keys['tab'].is_down`. A poll is not a subscription, so
+     neither is cancelled by that rule and both are named in `onKeyDown`.
+    */
+    it('takes tab while the pointer is locked, so the board does not cost the lock', () => {
+        const rig = new Rig('oa_dm1', 'meep');
+        rig.activate();
+
+        /*
+         The failure this is about is not a missing scoreboard: the board opened
+         fine. Tab's *default* action moved the focus ring out of the document,
+         the pointer lock went with it, and the next press started walking the
+         browser's own chrome -- so holding `+scores` on the key Q3 bound it to
+         ended the game.
+        */
+        expect(press(rig, 'Tab'), 'tab still moves the focus ring mid-game').toBe(true);
+    });
+
+    it('gives tab back the moment the game does not have the pointer', () => {
+        const rig = new Rig('oa_dm1', 'meep');
+        rig.activate();
+        rig.deactivate();
+
+        /*
+         Unlocked, the page is an ordinary page and the focus ring is the
+         browser's business. This is the half that keeps the fix from being a
+         page that cannot be tabbed through at all.
+        */
+        expect(press(rig, 'Tab'), 'tab is still swallowed with the game unfocused').toBe(false);
+    });
+
+    it('takes space either way, because a canvas has nowhere to scroll to', () => {
+        const rig = new Rig('oa_dm1', 'meep');
+
+        // Ungated on purpose, and the asymmetry with tab is the point: space
+        // scrolls, and there is nothing here to scroll.
+        expect(press(rig, 'Space')).toBe(true);
+        rig.activate();
+        expect(press(rig, 'Space')).toBe(true);
+    });
+});
