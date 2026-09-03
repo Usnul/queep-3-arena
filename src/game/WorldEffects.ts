@@ -73,6 +73,24 @@ export interface MoverWorld {
     touchButtons(playerMinsQ3: ArrayLike<number>, playerMaxsQ3: ArrayLike<number>): void;
 }
 
+/**
+ * The mover simulation with its clock already advanced.
+ *
+ * A host has N players and one level, so it cannot call `update` per player:
+ * `advance` would run N times a frame and every door on the map would open N
+ * times too fast, which is the arithmetic `MoverSystem` split `advance` from
+ * `touch` for. This is the half a per-player pass needs.
+ */
+export interface MoverTouchWorld {
+    readonly movers: readonly Mover[];
+    touch(
+        playerMinsQ3: ArrayLike<number>,
+        playerMaxsQ3: ArrayLike<number>,
+        alive: boolean
+    ): void;
+    touchButtons(playerMinsQ3: ArrayLike<number>, playerMaxsQ3: ArrayLike<number>): void;
+}
+
 export interface WorldEffectResult {
     /** Damage from `trigger_hurt` this frame, for the caller's inventory. */
     readonly damage: number;
@@ -130,28 +148,69 @@ export class WorldEffects {
         deltaSeconds: number,
         alive = true
     ): WorldEffectResult {
-        const ps = player.ps;
-
-        /*
-         The box is read from the player rather than assumed, because
-         `PM_CheckDuck` shortens it while crouched and a trigger test against the
-         standing box opens a door you cannot fit through. It is also the field
-         D-075 found was never being written at all, which is why this is one
-         line rather than a constant.
-        */
-        for (let i = 0; i < 3; i++) {
-            this.playerMins[i] = ps.origin[i]! + player.mins[i]!;
-            this.playerMaxs[i] = ps.origin[i]! + player.maxs[i]!;
-        }
+        this.box(player);
 
         movers.update(deltaSeconds, this.playerMins, this.playerMaxs, alive);
         movers.touchButtons(this.playerMins, this.playerMaxs);
 
-        if (carryDisplacement(movers.movers, this.playerMins, this.playerMaxs, this.carry)) {
+        this.carried(player, movers.movers);
+
+        return this.settle(player);
+    }
+
+    /**
+     * The per-player half of {@link apply}, for a caller that advances the
+     * mover clock itself.
+     *
+     * **It does not carry, and that is a decision rather than an omission.**
+     * `carryDisplacement` moves a player standing on a mover that moved, and a
+     * dedicated host has no solid movers at all -- `HeadlessPhysics` builds BSP
+     * model 0 and nothing else (GAP-041), so nobody can be standing on a plat
+     * there to be carried by one. Applying the displacement anyway would move a
+     * player who had fallen through the plat, which is motion the host would
+     * invent and no client would predict. The day the host grows mover bodies,
+     * this is one line and the entry that closes is GAP-041's.
+     *
+     * @param alive `G_RunFrame` does not touch triggers for a dead client.
+     */
+    applyTouch(player: EffectTarget, movers: MoverTouchWorld, alive = true): WorldEffectResult {
+        this.box(player);
+
+        movers.touch(this.playerMins, this.playerMaxs, alive);
+        movers.touchButtons(this.playerMins, this.playerMaxs);
+
+        return this.settle(player);
+    }
+
+    /**
+     * The player's world-space box.
+     *
+     * Read from the player rather than assumed, because `PM_CheckDuck` shortens
+     * it while crouched and a trigger test against the standing box opens a
+     * door you cannot fit through. It is also the field D-075 found was never
+     * being written at all, which is why this is a method rather than a
+     * constant.
+     */
+    private box(player: EffectTarget): void {
+        const ps = player.ps;
+        for (let i = 0; i < 3; i++) {
+            this.playerMins[i] = ps.origin[i]! + player.mins[i]!;
+            this.playerMaxs[i] = ps.origin[i]! + player.maxs[i]!;
+        }
+    }
+
+    private carried(player: EffectTarget, movers: readonly Mover[]): void {
+        const ps = player.ps;
+        if (carryDisplacement(movers, this.playerMins, this.playerMaxs, this.carry)) {
             ps.origin[0] = ps.origin[0]! + this.carry[0];
             ps.origin[1] = ps.origin[1]! + this.carry[1];
             ps.origin[2] = ps.origin[2]! + this.carry[2];
         }
+    }
+
+    /** Everything the triggers asked for, applied and cleared. */
+    private settle(player: EffectTarget): WorldEffectResult {
+        const ps = player.ps;
 
         const teleported = this.teleportTo !== null;
         if (this.teleportTo !== null) {

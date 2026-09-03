@@ -51,6 +51,12 @@ import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/Netwo
 import { BspFile } from '../q3/bsp/BspFile.ts';
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { advanceBobCycle, isWalking } from '../game/bobCycle.ts';
+import {
+    MoverSystem,
+    type MoverEvents,
+    type TeleportDestination,
+} from '../game/Movers.ts';
+import { WorldEffects, type EffectTarget } from '../game/WorldEffects.ts';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import { HeadlessPhysics } from '../../tools/pipeline/headless-physics.ts';
@@ -83,7 +89,12 @@ import {
     NET_PMF_WALKING,
     weaponIndex,
 } from '../net/components.ts';
-import { EffectKind, type ActionContext, type ProtocolActions } from '../net/actions.ts';
+import {
+    EffectKind,
+    WORLD_OWNER,
+    type ActionContext,
+    type ProtocolActions,
+} from '../net/actions.ts';
 import { registerProtocol } from '../net/registerProtocol.ts';
 import { createSession } from '../net/session.ts';
 import {
@@ -105,7 +116,16 @@ const SOLVER_DT = SESSION_TICK_SECONDS;
 /** Q3's `player_die` to `ClientSpawn` gap. */
 const RESPAWN_SECONDS = 2;
 
-interface SceneEntity {
+/**
+ * One entry from the built `scene.json`.
+ *
+ * The index signature is what makes this assignable to `MoverEntity`, which is
+ * `Record<string, unknown>` plus a classname and an origin: `MoverSystem` reads
+ * arbitrary keys off a brush entity (`speed`, `lip`, `wait`, `dmg`, `height`)
+ * through its own `num`/`str` helpers rather than through a typed shape, because
+ * the set of keys is the map's and not the port's.
+ */
+interface SceneEntity extends Record<string, unknown> {
     classname?: string;
     _originQ3: number[];
     target?: unknown;
@@ -186,6 +206,101 @@ interface MissileEntry {
     projectileId: number;
 }
 
+/**
+ * `MoverEvents`, routed to whichever slot is being tested right now.
+ *
+ * The events fire synchronously from inside `MoverSystem.fire`, which is inside
+ * `touch`, which the host calls **once per slot** -- so "the current slot" is a
+ * well-defined thing for exactly the length of one call, and `slot` is set
+ * immediately before it. One `MoverSystem` and one clock with N recorders is
+ * the arrangement the `advance`/`touch` split was made for; N mover systems
+ * would give each player their own `nextFire` per trigger, so a pad two players
+ * crossed together would fire twice as the same trigger.
+ *
+ * Sound is not routed anywhere. A teleport and a jump pad both make a noise in
+ * Q3 and both are presentation: the joined client's `effect` hook still counts
+ * and drops every `EffectEvent` (see `main.ts`), so a teleport sound would be
+ * the first transient this port presented over the wire and it belongs with the
+ * rest of them rather than ahead of them. D-191 records the shortfall.
+ */
+class HostMoverEvents implements MoverEvents {
+    /** The recorder the next `touch` belongs to, or null between slots. */
+    slot: WorldEffects | null = null;
+
+    moverSound(): void {
+        // Host-side, and nothing on a headless host listens.
+    }
+
+    teleport(destination: TeleportDestination): void {
+        this.slot?.teleport(destination.origin, destination.angle);
+    }
+
+    hurt(damage: number): void {
+        this.slot?.hurt(damage);
+    }
+
+    push(velocityQ3: readonly number[]): void {
+        this.slot?.push(velocityQ3);
+    }
+}
+
+/**
+ * `EffectTarget` over a host slot, which is `SetClientViewAngle` and a box.
+ *
+ * `PlayerController` satisfies `EffectTarget` in single-player and a host has no
+ * `PlayerController`. Two of the four members are simply forwarded; the other
+ * two are the interesting half.
+ *
+ * **The box comes from `pmove`**, not from a constant, because `PM_CheckDuck`
+ * shortens `maxs[2]` from 32 to 16 while crouched and a trigger test against the
+ * standing box opens a door you cannot fit through (D-075).
+ *
+ * **The turn is `SetClientViewAngle`**, which is the one thing a host cannot do
+ * by writing `viewangles`: the client owns its aim and would overwrite it on the
+ * next command. Q3 writes the *difference* into `delta_angles` --
+ * `ANGLE2SHORT(target) - cmd.angles[i]` -- and `PM_UpdateViewAngles` adds that
+ * offset to every subsequent command, so the client's own mouse keeps working
+ * from the new facing. `deltaAngles` is replicated for exactly this
+ * (`NetPlayerState`'s docblock calls it "the host's only way to turn a client"),
+ * and until now nothing wrote it.
+ */
+class SlotEffectTarget implements EffectTarget {
+    private readonly slot: PlayerSlot;
+
+    constructor(slot: PlayerSlot) {
+        this.slot = slot;
+    }
+
+    get ps(): PlayerSlot['ps'] {
+        return this.slot.ps;
+    }
+
+    get mins(): ArrayLike<number> {
+        return this.slot.pmove.mins;
+    }
+
+    get maxs(): ArrayLike<number> {
+        return this.slot.pmove.maxs;
+    }
+
+    setYaw(degrees: number): void {
+        const ps = this.slot.ps;
+        const cmd = this.slot.pmove.cmd;
+
+        /*
+         Yaw only, and pitch and roll levelled, which is `TeleportPlayer`: it
+         builds the destination's angles with pitch and roll zero and hands the
+         lot to `SetClientViewAngle`. Coming out of a teleporter looking at the
+         floor is not a thing Q3 does.
+        */
+        const shorts = [0, Math.round((degrees * 65536) / 360) & 0xffff, 0];
+        for (let i = 0; i < 3; i++) {
+            ps.delta_angles[i] = (shorts[i]! - cmd.angles[i]!) | 0;
+            ps.viewangles[i] = (shorts[i]! * 360) / 65536;
+        }
+    }
+}
+
 export class Host {
     readonly entityManager: EntityManager;
     readonly world: EntityComponentDataset;
@@ -215,6 +330,32 @@ export class Host {
     private readonly random: () => number;
     private readonly events: HostWeaponEvents;
 
+    /**
+     * Doors, plats and triggers. One clock; see `HostMoverEvents`.
+     *
+     * Public because a test needs the trigger bounds to put a player inside
+     * one: walking to a jump pad depends on the pathfinding finding it, and a
+     * fixture whose subject appears only when the AI cooperates is a fixture
+     * that passes by not running (D-187). It is also what a `NetMover` producer
+     * will publish from.
+     */
+    readonly movers: MoverSystem;
+    private readonly moverEvents: HostMoverEvents;
+
+    /**
+     * One recorder per slot, because the deferred state is per player.
+     *
+     * `WorldEffects` holds the teleport, push and damage a trigger asked for
+     * until the end of the pass -- the events fire from inside the mover
+     * iteration and moving a player mid-iteration would have the loop finish
+     * against a position that no longer exists. Sharing one across sixteen
+     * slots would hand slot 3 the teleport slot 2 stepped into.
+     */
+    private readonly worldEffects: WorldEffects[] = [];
+
+    /** One `EffectTarget` per slot, built once; see {@link SlotEffectTarget}. */
+    private readonly effectTargets: SlotEffectTarget[] = [];
+
     /** Wall frame; `session.tick` advances it and the sim runs `- delay` behind. */
     private wallFrame = 0;
 
@@ -236,6 +377,8 @@ export class Host {
         events: HostWeaponEvents;
         matchEntity: number;
         session: NetworkSession;
+        movers: MoverSystem;
+        moverEvents: HostMoverEvents;
     }) {
         this.entityManager = parts.entityManager;
         this.world = parts.world;
@@ -251,6 +394,10 @@ export class Host {
         this.events = parts.events;
         this.matchEntity = parts.matchEntity;
         this.session = parts.session;
+        this.movers = parts.movers;
+        this.moverEvents = parts.moverEvents;
+
+        for (let i = 0; i < MAX_CLIENTS; i++) this.worldEffects.push(new WorldEffects());
     }
 
     static async create(options: HostOptions): Promise<Host> {
@@ -294,6 +441,33 @@ export class Host {
 
         const events = new HostWeaponEvents();
         const weapons = new WeaponSystem(cm, events, missiles, damageQueries);
+
+        /*
+         Doors, plats and the triggers that drive them.
+
+         **The triggers work here and the movers do not**, and the difference is
+         worth being precise about because GAP-041 reads as though it blocked
+         both. A mover has to be *solid* -- a kinematic body the player's sweep
+         hits and can stand on -- and `HeadlessPhysics` builds BSP model 0 and
+         nothing else, so the host has no such body and a door there blocks
+         nobody. A trigger is not solid and never moves: `MoverSystem.touch` is
+         a box-overlap test against the bounds the BSP submodel table already
+         carries, and it needs no physics world at all. So teleporters, jump
+         pads and hurt volumes are reachable on a headless host today, and
+         `NETWORK_PLAN.md` step 6's "teleporters and pads through
+         `SetClientViewAngle` and velocity writes on the host" was never blocked
+         on anything. See D-191.
+
+         The doors and plats are spawned and advanced anyway, because their
+         state machine is what a `NetMover` producer will publish from on the day
+         the host grows bodies, and a `func_door` whose clock has been running
+         since the match started is in the right place when that happens. They
+         change nothing observable in the meantime -- nothing reads their
+         origins and nothing collides with them.
+        */
+        const moverEvents = new HostMoverEvents();
+        const movers = new MoverSystem(moverEvents);
+        movers.spawn(scene.entities, scene.submodels);
 
         const entrances = spawnPoints(scene.entities);
         const spawns = entrances.points.map((e) => e._originQ3);
@@ -385,6 +559,8 @@ export class Host {
             events,
             matchEntity,
             session,
+            movers,
+            moverEvents,
         });
         hostRef = host;
         events.host = host;
@@ -492,6 +668,7 @@ export class Host {
 
             this.slots.push(record);
             this.slotByEntity.set(entity, record);
+            this.effectTargets.push(new SlotEffectTarget(slot));
             this.weapons.targets.push(this.damageableFor(record));
         }
 
@@ -701,7 +878,57 @@ export class Host {
             }
         }
 
-        // 4. Movers: none on this host yet (GAP-041).
+        /*
+         4. Movers: one clock, then one trigger pass per live human slot.
+
+         The split is the same as the items' above and for the same arithmetic
+         reason -- `advance` per player would run `level.time` sixteen times a
+         frame and open every door on the map sixteen times too fast, which is
+         what `MoverSystem` separated `advance` from `touch` for.
+
+         **Human slots only, and bots use no trigger on either path.** A bot is
+         not a `PlayerSlot`: it has no `pmove.mins`, and its aim is a private
+         accumulator rather than `delta_angles`, so `SlotEffectTarget` does not
+         fit one. Single-player has the same hole from the other direction --
+         `WorldEffectSystem` is handed the player and nothing else -- so bots
+         have never ridden a jump pad or been teleported in this port at all.
+         Leaving it symmetric is deliberate: a host whose bots take the pads and
+         a single-player game whose bots do not would be two different games,
+         and the fix belongs in one place for both. D-191 records it, and
+         `linkMapPortals` means the *pathing* already knows the routes exist.
+        */
+        this.movers.advance(dt);
+
+        for (const record of this.slots) {
+            if (!record.connected || !record.alive || record.bot !== null) continue;
+
+            const effects = this.worldEffects[record.index]!;
+            const target = this.effectTargets[record.index]!;
+
+            /*
+             The recorder for this slot, for the length of this call. The mover
+             events fire synchronously from inside `touch`, so this is what
+             routes a teleport to the player who stepped on it.
+            */
+            this.moverEvents.slot = effects;
+            const result = effects.applyTouch(target, this.movers, true);
+            this.moverEvents.slot = null;
+
+            if (result.damage > 0) {
+                record.slot.inventory.health -= result.damage;
+                /*
+                 And the client is told, so it gets the view kick a
+                 `trigger_hurt` gives you in Q3 -- `EV_DAMAGE` there, and the
+                 same `HitEvent` a rocket raises here. Owner 255 is the world,
+                 which is the convention `EffectEventData` already uses.
+                */
+                this.events.hits.push({
+                    attacker: WORLD_OWNER,
+                    victim: record.index,
+                    damage: result.damage,
+                });
+            }
+        }
 
         // 5. Mortality and respawn.
         for (const record of this.slots) {

@@ -89,6 +89,17 @@ export const EffectKind = Object.freeze({
 });
 
 /**
+ * The `owner` a happening the world caused carries.
+ *
+ * `EffectEventData.owner` and `HitEventData.attacker` are both slot indices in a
+ * byte, and both need a value for "nobody did this": a rocket that hits a wall,
+ * a `trigger_hurt` that burns a player who walked into it. 255 rather than -1
+ * so it survives the `uint8` on the wire, and named rather than spelled out at
+ * each site so that grepping for the world's damage finds all of it.
+ */
+export const WORLD_OWNER = 255;
+
+/**
  * One transient effect.
  *
  * `aux` is the second vector each kind needs and they are not the same vector:

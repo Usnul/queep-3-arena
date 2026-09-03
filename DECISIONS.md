@@ -10653,3 +10653,103 @@ see one value and produce no spurious crossing. Blending a `& 255` counter would
 between 255 and 0 and a crossing that never happened; the adapter is why that cannot occur.
 
 **What is still missing from step 6:** teleporters and jump pads, which is D-191.
+
+### D-191: teleporters, pads and lava on the host, and GAP-041 was never blocking them
+
+Step 6's last missing piece, and the finding is that it was not blocked. The tracking table said
+"teleport/pad handling not built; GAP-045 open upstream" and §6 said movers were the host's "in
+principle, and are simulated locally for now because a headless host has no kinematic brush entities
+to replicate -- GAP-041". That is true of movers and false of triggers, and the distinction is the
+whole of this entry:
+
+**A mover has to be solid; a trigger does not.** GAP-041 is about `HeadlessPhysics` building BSP
+model 0 and nothing else, so the host has no kinematic body for a `func_door`: a door there blocks
+nobody and a plat carries nobody. But `MoverSystem.touch` is a box-overlap test against bounds the
+BSP submodel table already carries, and a `trigger_teleport` never moves and is never solid. The
+trigger half needed no physics world at all and had been reachable since step 3. GAP-041 is
+narrowed rather than closed -- it now says what it actually blocks.
+
+**What runs.** `Host.create` builds a `MoverSystem` from `scene.entities` and `scene.submodels`, the
+same two arguments `main.ts` hands it. `worldStep` advances the clock **once** and then runs one
+trigger pass per live human slot -- the same `advance`/`touch` split the items use, for the same
+reason: `advance` per player would run `level.time` sixteen times a frame and open every door on the
+map sixteen times too fast.
+
+**Three things had to be built rather than wired.**
+
+1. **`WorldEffects.applyTouch`.** `apply` was one method doing box, `movers.update`, carry and
+   settle; it is now box + settle shared between `apply` (unchanged for single-player) and a
+   touch-only path. **`applyTouch` deliberately does not carry.** `carryDisplacement` moves a player
+   standing on a mover that moved, and a host with no solid movers has nobody standing on a plat to
+   carry -- applying the displacement anyway would move a player who had fallen *through* the plat,
+   which is motion the host invents and no client predicts.
+
+2. **`HostMoverEvents`.** `MoverEvents` is one set of callbacks and a host has sixteen players. The
+   events fire synchronously from inside `MoverSystem.fire`, which is inside `touch`, which is called
+   once per slot -- so "the current slot" is well defined for exactly the length of one call, and the
+   recorder is pointed at it immediately before. One `MoverSystem` with N recorders rather than N
+   mover systems, because `nextFire` is per trigger and shared: a pad two players cross together is
+   one trigger, and sixteen copies of it would be sixteen independent cooldowns.
+
+3. **`SlotEffectTarget`, and `delta_angles` finally being written.** `PlayerController` satisfies
+   `EffectTarget` in single-player; a host has none. The box comes from `pmove.mins`/`maxs` because
+   `PM_CheckDuck` shortens `maxs[2]` while crouched (D-075). The turn is the interesting half:
+   **a host cannot turn a client by writing `viewangles`**, because the client owns its aim and
+   overwrites it on the next command. Q3's `SetClientViewAngle` writes the *difference* into
+   `delta_angles` -- `ANGLE2SHORT(target) - cmd.angles[i]` -- and `PM_UpdateViewAngles` adds that to
+   everything after, so the player's own mouse keeps working from the new facing. `NetPlayerState`
+   has carried `deltaAngles` since step 1 with its docblock calling it "the host's only way to turn a
+   client", and **nothing had ever written it**. Measured: 0 to 16,384, which is the destination's
+   90 degrees.
+
+**Measured.** `test/net-triggers.test.ts`. The teleporter on `oa_dm1`: 620 units to the mark,
+velocity zeroed, `delta_angles[1]` 0 to 16,384, and the client's own replicated origin follows within
+96 units. All **eight** jump pads on `am_thornish`: the published velocity is the vector
+`AimAtTarget` solved for, exactly -- 612, 611, 612, 612, 470, 470, 470, 470 in z against the same
+eight numbers -- which is also the regression test for D-139, since four of the eight target an
+`info_notnull` and had `pushVelocity` null before that fix. The hurt volume on `oa_dm1`: 100 health
+over twelve frames at `dmg` 10, and **ten `HitEvent`s reaching the client**, so a player burning to
+death gets the view kick `EV_DAMAGE` gives them in Q3 rather than watching the health bar move in
+silence.
+
+**Two measurement traps, both of which produced a confident wrong answer.**
+
+- **Write the component, not `ps`.** A host frame is `stepSlot` -- which is `load` from the
+  replicated components, step, `store` back -- then `worldStep`, then `publish`. So a test that
+  writes `record.slot.ps.origin` before the frame has it discarded by the `load` at the top of it.
+  `record.state` is the authority between frames and `ps` is scratch inside one. The mistake read as
+  a teleporter landing 176 units off, pads that did not fire, and a hurt volume that **healed 24** --
+  the last being the replicated inventory restored over the test's own write. (It also proves the
+  ordering the feature depends on: mutations `worldStep` makes to `ps` are captured by the `publish`
+  that follows it, which is why a teleport survives at all.)
+- **The centre of a trigger is not a place you can stand.** Where inside a brush a player can stand
+  is a fact about the map's geometry: at the centre of a pad's volume the feet are 24 units lower and
+  often inside the world, and the solver ejects them -- 59 to 64 units of drop and 30 sideways, every
+  frame, so the trigger pass never saw them inside anything. Two candidates cover the set and are
+  complementary: feet just above the volume's floor fires the four thin pads and both `oa_dm1`
+  volumes, head near its ceiling fires the four thick pads whose floor is below the level's.
+
+**What is deliberately not built, and named rather than left to be discovered.**
+
+- **No prediction.** The pad's velocity write happens on the host and arrives in an AUTH_STATE, so
+  using one costs a correction -- the same path the once-a-second health bleed already takes (D-170).
+  Q3 predicts pads client-side, which is why `BG_TouchJumpPad` is in `bg_` code, and the trigger set
+  is static map data both peers could build. What stops it being a wiring job is `nextFire`: it is
+  per trigger and shared across all sixteen slots on the host, and single-player state on a client,
+  so a bot crossing a pad 200 ms before a human would make the two peers disagree about whether the
+  human's crossing fires. That is a design question, not a gap.
+- **No sound.** A teleport and a jump pad both make a noise in Q3 and both are presentation. The
+  joined client's `effect` hook still counts and drops every `EffectEvent` (`main.ts` says so), so a
+  teleport sound would be the first transient this port presented over the wire; it belongs with the
+  rest of them rather than ahead of them.
+- **No bots.** A bot is not a `PlayerSlot`: no `pmove.mins`, and its aim is a private accumulator
+  rather than `delta_angles`, so `SlotEffectTarget` does not fit one. Single-player has the same hole
+  from the other side -- `WorldEffectSystem` is handed the player and nothing else -- so **bots have
+  never ridden a jump pad or been teleported in this port at all**. Left symmetric on purpose: a host
+  whose bots take the pads and a single-player game whose bots do not would be two different games,
+  and the fix belongs in one place for both. `linkMapPortals` means the *pathing* already knows the
+  routes exist, which is why this reads as bots ignoring a shortcut rather than bots stuck.
+- **Doors and plats are spawned and advanced anyway**, because their state machine is what a
+  `NetMover` producer will publish from, and a `func_door` whose clock has been running since the
+  match started is in the right place on the day the host grows bodies. They change nothing
+  observable meanwhile: nothing reads their origins and nothing collides with them.
