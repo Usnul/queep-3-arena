@@ -53,6 +53,7 @@ import type { MoverHost } from './MeepMove.ts';
 import { BUTTON_CROUCH, PlayerSlot, type StepSink } from '../game/PlayerSlot.ts';
 import type { MoverSource, PhysicsTraceBackend } from '../game/PmoveHost.ts';
 import { takePointerLock } from './pointerLock.ts';
+import { weaponIndex } from '../net/components.ts';
 import {
     DEAD_VIEW_PITCH,
     DEAD_VIEW_ROLL,
@@ -782,7 +783,18 @@ export class PlayerController {
         cmd.angles[1] = this.yaw;
         cmd.angles[2] = 0;
         cmd.buttons = 0;
-        cmd.weapon = 0;
+
+        /*
+         The weapon in hand, as the command's request for it. Index plus one,
+         because zero is `WP_NONE` -- see `PlayerSlot.selectFromCommand`.
+
+         Single-player round-trips through this without noticing: `selectWeapon`
+         has already set the slot's weapon by the time this runs, so the step
+         reads back the value it is already holding. The networked branch is
+         where it matters, and it is the only way the host hears about a
+         weapon change at all.
+        */
+        cmd.weapon = weaponIndex(this.weapon) + 1;
 
         this.attacking =
             this.active && !this.dead && this.devices.pointer.mouseButtonLeft.is_down;

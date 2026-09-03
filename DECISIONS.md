@@ -10112,3 +10112,35 @@ said so: on this branch the session *is* the interpolation, sampling the replica
 `AdaptiveRenderDelay` and handing this system blended values once per rendered frame. A second
 smoothing stage on top would be `PoseRecorderSystem` snapshotting, on the fixed step, what the render
 step had just written -- a frame of delay and a jitter, bought for nothing. Removed.
+
+### D-182: a weapon change rides the command, because the step runs on a machine with no keyboard
+
+Single-player switches weapons by writing `slot.weapon` from `PlayerController.selectWeapon`, and
+is right to: it is the only machine running the simulation. A networked client doing the same would
+be telling itself and nothing else. The host's copy of that slot would go on firing the machinegun
+while the player's screen showed a gauntlet -- and because the weapon is a byte of
+`NetPlayerState`, the two ends would disagree on every frame, so the prediction short-circuit would
+miss every time and the client would rewind and replay its whole lead sixty times a second until a
+reconcile pulled it back onto the host's choice. Exactly D-178's failure, from a different cause.
+
+So `usercmd_t.weapon` carries it, which is where Q3 puts it, and `PlayerSlot.selectFromCommand`
+applies it -- the same move `BUTTON_ATTACK` made in step 2 and for the same reason.
+
+**Zero means "no change", so the value is the index plus one.** Q3's own convention (`WP_NONE` is 0,
+weapons start at 1), and load-bearing rather than cosmetic: `NET_WEAPONS[0]` is a real weapon, so a
+raw index would make "I am not asking for anything" -- which is what every command in this port sent
+until today, and what every test fixture still sends -- indistinguishable from "give me the
+gauntlet".
+
+**`canSelect` on the host as well as the client**, which is the interesting half. Q3 ignores a
+select of a weapon you do not have rather than beeping or picking the nearest, and that is the
+behaviour; but the command is also the one thing in this protocol a *client* authors, so it is the
+one thing a client could lie with. A slot that is asked for a rocket launcher it does not own keeps
+what it had, on both ends, and `test/net-loopback.test.ts` holds it.
+
+Single-player round-trips through the new field without noticing: `selectWeapon` has already set the
+slot's weapon by the time `sampleCommand` runs, so the step reads back what it is already holding.
+Measured unchanged across `player-slot`, `player-controller` and `match`.
+
+Switching twice a second -- faster than anybody plays -- short-circuits **590 of 600**, which is the
+same rate as standing still, so the change costs the prediction nothing.

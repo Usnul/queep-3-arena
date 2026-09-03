@@ -270,6 +270,8 @@ export class PlayerSlot {
         own.buttons = cmd.buttons;
         own.weapon = cmd.weapon;
 
+        this.selectFromCommand(cmd.weapon);
+
         if (this.movement === null) {
             const wasAirborne = ps.groundEntityNum === C.ENTITYNUM_NONE;
             const fallSpeed = -ps.velocity[2]!;
@@ -415,6 +417,42 @@ export class PlayerSlot {
      * switching to the nearest usable one, which matters -- pressing 5 with no
      * rocket launcher must leave you holding what you had, mid-fight.
      */
+    /**
+     * The weapon the command asks for, if the slot may hold it.
+     *
+     * `usercmd_t.weapon` is where Q3 puts a weapon change, and it has to be
+     * here for the same reason `BUTTON_ATTACK` had to move onto the command in
+     * step 2: the step now runs on a machine with no keyboard. A client that
+     * set `slot.weapon` directly -- which is what single-player did, and did
+     * correctly -- would be telling only itself, and the host's copy of the same
+     * slot would keep firing the machinegun while the player's screen showed a
+     * rocket launcher. The disagreement is in `NetPlayerState.weapon`, so it
+     * also costs the prediction short-circuit on every frame until the next
+     * reconcile puts the client back on the host's weapon.
+     *
+     * **Zero means "no change", so the value is the index plus one.** That is
+     * Q3's own convention -- `WP_NONE` is 0 and the weapons start at 1 -- and it
+     * is load-bearing rather than cosmetic here: `NET_WEAPONS[0]` is a real
+     * weapon, so a raw index would make "I am not asking for anything", which
+     * is what every command in the port sent before today, indistinguishable
+     * from "give me the gauntlet".
+     *
+     * `canSelect` for the same reason {@link PlayerController.selectWeapon}
+     * checks it: Q3 ignores a select of a weapon you do not have or have no
+     * ammunition for, rather than beeping or picking the nearest. A client
+     * asking for one it cannot hold is a client that is wrong, or lying, and
+     * either way the answer is to keep holding what it had.
+     */
+    private selectFromCommand(wanted: number): void {
+        if (wanted <= 0) return;
+
+        const weapon = weaponAt(wanted - 1) as WeaponId;
+        if (weapon === this.weapon) return;
+        if (!this.canSelect(weapon)) return;
+
+        this.weapon = weapon;
+    }
+
     canSelect(weapon: WeaponId): boolean {
         if (!this.inventory.weapons.has(weapon)) return false;
         return (this.inventory.ammo[weapon] ?? 0) !== 0;

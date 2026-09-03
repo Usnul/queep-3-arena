@@ -31,6 +31,7 @@ import { MAX_CLIENTS, MAX_MISSILES } from '../src/net/protocol.ts';
 import { NetworkIdentity } from '@woosh/meep-engine/src/engine/network/ecs/components/NetworkIdentity.js';
 import * as C from '../src/q3/pmove/constants.ts';
 import { FORWARDMOVE, RIGHTMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
+import { weaponIndex } from '../src/net/components.ts';
 
 /**
  * The seed the fight cases run on, and it is a chosen number rather than an
@@ -255,6 +256,112 @@ describe('every miss the short-circuit takes is accounted for', () => {
 
         // And the frames it never predicted are the join, not a continuing gap.
         expect(client.net.shortCircuitNoRing).toBeLessThan(20);
+    });
+});
+
+describe('a weapon change on the client', () => {
+    /**
+     * `usercmd_t.weapon` is the only way a host hears about one.
+     *
+     * Single-player switches by writing `slot.weapon` and is right to: it is the
+     * only machine running the simulation. A networked client that did the same
+     * would be telling itself, and nothing else -- the host's copy of that slot
+     * would keep firing the machinegun while the player's screen showed a
+     * gauntlet, and `NetPlayerState.weapon` would disagree on every frame until
+     * a reconcile pulled the client back onto the host's choice. So the request
+     * rides the command, and this is the test that it arrives.
+     */
+    it('reaches the host, and both ends agree about what is in hand', async () => {
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 0, clients: 1, seed: 31, warmup: 40 });
+        const client = rig.clients[0]!;
+        const slot = rig.host.slots[client.net.slotIndex]!;
+
+        // Everyone spawns holding the machinegun, with the gauntlet also in the
+        // loadout -- `newInventory` -- so this is a change between two weapons
+        // the slot really has.
+        rig.step(60);
+        expect(slot.slot.weapon, 'the fixture does not start on the machinegun').toBe(
+            'WP_MACHINEGUN'
+        );
+
+        client.script = (cmd) => {
+            cmd.weapon = weaponIndex('WP_GAUNTLET') + 1;
+        };
+        rig.step(60);
+
+        expect(client.net.slot.weapon, 'the client did not switch').toBe('WP_GAUNTLET');
+        expect(slot.slot.weapon, 'the host never heard about the switch').toBe('WP_GAUNTLET');
+        expect(
+            client.net.ownSlot.state.weapon,
+            'the replicated weapon disagrees with the host'
+        ).toBe(weaponIndex('WP_GAUNTLET'));
+    });
+
+    it('is refused for a weapon the slot does not have, on both ends', async () => {
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 0, clients: 1, seed: 31, warmup: 40 });
+        const client = rig.clients[0]!;
+        const slot = rig.host.slots[client.net.slotIndex]!;
+
+        rig.step(60);
+
+        /*
+         Q3 ignores a select of a weapon you do not have rather than beeping or
+         switching to the nearest usable one. Here it also matters that the
+         *host* ignores it: the command is the one thing in this protocol that
+         a client authors, so it is the one thing a client could lie with.
+        */
+        client.script = (cmd) => {
+            cmd.weapon = weaponIndex('WP_ROCKET_LAUNCHER') + 1;
+        };
+        rig.step(60);
+
+        expect(client.net.slot.weapon, 'the client armed itself with a weapon it has not got').toBe(
+            'WP_MACHINEGUN'
+        );
+        expect(slot.slot.weapon, 'the host believed a client that asked for a rocket launcher').toBe(
+            'WP_MACHINEGUN'
+        );
+    });
+
+    it('does not cost the prediction short-circuit', async () => {
+        /*
+         The reason the request rides the command rather than being sent beside
+         it. A weapon the two ends disagree about is a byte of `NetPlayerState`
+         they disagree about, and that is the whole of what the short-circuit
+         compares -- so a switch done the wrong way would not merely look wrong,
+         it would put the client back to rewinding and replaying its lead sixty
+         times a second, exactly as D-178's unbounded cooldown did.
+        */
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 0, clients: 1, seed: 31, warmup: 40 });
+        const client = rig.clients[0]!;
+        const net = client.net;
+
+        let frame = 0;
+        client.script = (cmd) => {
+            // Switch back and forth every half second, which is faster than
+            // anybody plays and is the point.
+            frame += 1;
+            cmd.weapon =
+                weaponIndex(frame % 60 < 30 ? 'WP_GAUNTLET' : 'WP_MACHINEGUN') + 1;
+        };
+
+        rig.step(120);
+        net.shortCircuitHits = 0;
+        net.shortCircuitMisses = 0;
+        rig.step(600);
+
+        const total = net.shortCircuitHits + net.shortCircuitMisses;
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-loopback] switching weapons twice a second: short-circuit ` +
+                `${net.shortCircuitHits}/${total}`
+        );
+
+        expect(
+            net.shortCircuitHits / total,
+            'switching weapons collapsed the prediction short-circuit'
+        ).toBeGreaterThan(0.9);
     });
 });
 
