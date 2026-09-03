@@ -279,6 +279,7 @@ export class NetRig {
         // The host's side too, so its queue is drained.
         this.hostTransports.push(hostRig);
         this.rawHostTransports.push(hostSide);
+        this.rawClientTransports.push(clientSide);
 
         return self;
     }
@@ -287,6 +288,15 @@ export class NetRig {
 
     /** The unwrapped host-side adapters, for a test that wants their stats. */
     readonly rawHostTransports: object[] = [];
+
+    /**
+     * The unwrapped client-side adapters, in the same order.
+     *
+     * `send` on one of these is a client talking to the host, which is the only
+     * way to measure upstream: the host-side pair carries the other direction
+     * and the wrappers above carry neither.
+     */
+    readonly rawClientTransports: object[] = [];
 
     /**
      * Build the pair, and wrap each one in the two calls the rig makes of it.

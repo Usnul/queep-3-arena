@@ -3254,6 +3254,44 @@ rates, because the comparison is the most useful thing in them.
 | loopback, 0 ms | 88.7 KB/s | **45.8 KB/s** | 2.9 | 1.5 |
 | 80 ms RTT, 10 ms jitter, 1% loss | 540 KB/s | **201 KB/s** | 9.5 | 3.5 |
 
+#### The same thing at sixteen players, which is what the protocol is sized for
+
+Taken separately (`test/net-bandwidth.test.ts`), at 30 Hz, eight clients and eight bots all running
+and firing, counting **every byte across the transport** — channel and fragment headers included,
+which the rows above do not have. Latency is **one way**, so the 80 ms row is a 160 ms round trip.
+
+| link | players | down / client | up / client | host out, total |
+|---|---:|---:|---:|---:|
+| loopback | 16 | **62.6 KB/s** | 1.5 KB/s | 501 KB/s |
+| 80 ms each way, 20 ms jitter, 2% loss | 16 | **245 KB/s** | 9.8 KB/s | 1,960 KB/s |
+| loopback | 10 | 46.3 KB/s | 1.5 KB/s | 278 KB/s |
+
+**Upstream is not the problem and never becomes one**: a client sends its own command and nothing
+else, so it does not grow with the population — only with the link, because the client re-sends its
+unacked frames exactly as the host does. 1.5 KB/s clean, 9.8 on a real link.
+
+**Downstream is the problem, and it is one payload under two multipliers.**
+
+1. **A tick does not fit a packet.** Sixteen players' state is **2,136 bytes** to one client against
+   a channel payload of **1,191** (MTU 1,200 less a 9-byte header), so every tick is fragmented —
+   **93% of the downstream is FRAGMENT packets on a loopback**, where the re-send window is one frame
+   deep and cannot be blamed. At ten players it is still 90%, so the crossing is below the population
+   this port already supports.
+2. **Every frame is on the wire once per frame of round trip.** `flush_outbound` packs
+   `[last_acked + 1, current]` each tick, so the 160 ms link costs **3.9×** the loopback. This term
+   is invisible on a loopback and dominates everywhere else.
+
+Against the 48 KB/s budget: a sixteen-player match is **1.3× over on a perfect link and 5× over on a
+realistic one**. The host's side is the sharper constraint — 1,960 KB/s out is about 16 Mbit/s of
+upstream for eight connected humans, which is a hosting decision rather than a tuning one.
+
+**What that means for the levers.** The payload is multiplied twice before it reaches the wire, so a
+byte removed from `NetPlayerState` is worth several times its face value, and getting a tick under
+the MTU removes the first multiplier outright rather than shrinking it. **27 of its 70 bytes are
+`float32`** — position, velocity and ground normal — where Q3 sent quantised 16-bit; that alone is
+most of the way to the MTU at sixteen players. Publishing remote slots at a lower rate than the local
+prediction attacks the same payload from the other side. Neither is built.
+
 **The 48 KB/s downstream budget is met at 30 Hz and was not at 60.** Halving the rate halved the
 clean-link cost, which is what a per-tick replication model should do, and cut the delayed-link cost
 by 63% — more than half, because the action stream's owed range is counted in *frames* and there are
