@@ -11511,3 +11511,77 @@ arrive a round trip after the flash. That is Q3's arrangement and it no longer l
 D-200 stopped the trail hinging off the drawn barrel: both of its ends now come from the same host
 frame, so it is a straight line slightly behind the gun rather than one that bends away from the
 direction of travel.
+
+### D-202: the camera's other clock, the host's missing collision, and the tracer's second end
+
+Three more from the same browser session, and the first two are both **my own previous fix, half
+applied**.
+
+**The camera still juddered, and D-200 had made it worse rather than better.** That entry moved the
+eye-pose recording from once per engine frame to once per session step, which is right: the pair
+`recordView` keeps only means something if exactly one simulation step separates them. What it did
+not move is the *blend*. `ViewSystem` interpolates the pair with
+`EntityManager.getFixedStepAlpha()`, which sweeps 0 to 1 over one **engine** step -- half a session
+period at the shipping rates. So the camera ran the whole move in the first half of the interval and
+then ran it again in the second. Before D-200 it was the mirror image: poses at the engine's rate,
+half of them identical, so the camera moved for one step and froze for the next. Both are a 30 Hz
+judder and both look like being rubber-banded a frame.
+
+`NetClientSystem.alpha` is the fraction the poses actually span: whole unspent periods from the
+accumulator, plus the part-step the engine is currently inside, over the session period. The second
+term is not a refinement -- without it the alpha changes 60 times a second on a 144 Hz display and
+the camera is a slideshow between engine steps. `ViewSystem` takes it as an option and falls back to
+the engine's own on the single-player branch, where the two clocks are the same clock.
+
+**Walking onto the platform on `oa_dm1` dropped the player into the lava**, and that is GAP-041
+reaching the point where it hurts. The host has run the movers since D-191 and built no *bodies* for
+them, because `HeadlessPhysics` builds BSP model 0 alone; a `func_door` there stops nobody. That was
+invisible for as long as the mover did not move on a client's screen either -- and D-200 made it
+move, so the platform extended, invited a player on and the authority dropped them through itself.
+
+The comment that kept model 0 alone said why: models 1..n "are brush entities whose positions are
+owned by a mover simulation the harness has never had". **True when it was written and retired by
+D-191.** `HeadlessPhysics.addMover` now builds them, through the same `hullShape` and as the same
+`KinematicVelocity` bodies `PhysicsWorld.addMover` does, and `Host.worldStep` writes each mover's
+origin into them every frame -- which is `MoversView.update` minus the half that draws. It is
+**opt-in**, because the divergence harness still has no movers and brush entities at their authored
+positions there is exactly the D-036 failure the old comment warns about.
+
+**And the tracer, which the last attempt did not fix and made honest instead.** A beam has two
+visible ends, and over a wire they cannot both be right: offered to the view weapon the near end is
+the barrel drawn *this* frame and the far end is a round trip old, so the line hinges away from the
+direction of travel; drawn in the world both ends agree and the line floats fourteen units in front
+of the eye attached to nothing, because `CalcMuzzlePoint` is not where the gun is drawn (D-164). The
+second is what D-200 shipped and what was reported back as "they don't even attempt to attach to the
+muzzle now". There is no third answer that keeps a stale far end.
+
+So the local tracer is predicted, alongside the flash D-201 predicts, and the host's copy is dropped
+with it. `WeaponSystem.traceShot` is the "where does it stop" half of `hitscanShot`, extracted and
+made public: the same clipmap trace and the same broadphase query, against this client's own world --
+which holds every other player's replicated body, so a predicted shot stops on the person it hit
+rather than the wall behind them. **Down the aim rather than into the spread cone**, because the
+host draws each pellet from a seeded generator this client does not have: a predicted spread would
+be a *different* random cone, and the one thing a player can check a tracer against is the
+crosshair. Q3's tracers are drawn from the predicted state and do not match the server's dispersion
+either. It costs the machinegun and the chaingun a few units between where the line stops and where
+the host's impact mark lands, at the far end of a room.
+
+**Three fixtures had to be thrown away before one of them measured anything**, all on the plat, and
+the pattern is worth the space because it is the same one four times over now:
+
+1. *Stand a player on the top face and assert they do not fall.* Passed **without the fix** -- what
+   caught them was the world floor underneath, which is solid either way.
+2. *Sweep down onto the top face.* The face is recessed **below** that floor, so the sweep began
+   inside the level and reported a hit at fraction zero from the wrong thing entirely.
+3. *Lift the mover by hand and sweep at its new face.* `worldStep` advances the mover state machine
+   before it writes the bodies, so the hand-set origin was overwritten in the same frame. This one
+   at least failed loudly.
+
+What works is a **control**: move the body somewhere the test first proves is empty, then ask again.
+The second sweep can only be answered by the thing that was moved. It also caught a property worth
+knowing -- the collision follows on the *next step*, because `setOffset` writes a `Transform` and the
+broadphase learns about it when the simulation next runs. The browser and the host have the same
+one-step relationship.
+
+Reverted, the host wiring fails on `moverBodyCount`, which is zero for the host that shipped
+yesterday and six on `oa_dm1` today.

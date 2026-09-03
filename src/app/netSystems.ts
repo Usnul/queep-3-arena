@@ -185,6 +185,46 @@ export class NetClientSystem extends System<never> {
         }
     };
 
+    /**
+     * How far the camera is between the last session step and the next one.
+     *
+     * **The other half of the fix above, and without it that one made the
+     * stutter worse rather than better.** `ViewSystem` blends the two recorded
+     * eye poses with `EntityManager.getFixedStepAlpha()`, which sweeps 0 to 1
+     * over one *engine* step. Once the poses are recorded once per *session*
+     * step, that alpha runs the whole interpolation in the first half of the
+     * interval and then runs it again in the second -- the camera arrives early
+     * and jumps back, sixty times a second. The old arrangement was the mirror
+     * image: poses at the engine's rate, half of them identical, so the camera
+     * moved for one step and froze for the next. Either way it is a 30 Hz
+     * judder, and either way it looks like being rubber-banded a frame.
+     *
+     * The blend has to span whatever the poses span, so this is the session's
+     * own fraction: whole steps of unspent time from the accumulator, plus the
+     * part-step the engine is currently inside, over the session period. The
+     * second term is what keeps the camera smooth at the display's rate rather
+     * than at the engine's -- without it the alpha would only change 60 times a
+     * second on a 144 Hz screen.
+     *
+     * Clamped, because the two clocks are read at different moments: the
+     * accumulator is as of the last `fixedUpdate` and the engine's remainder is
+     * as of now, so their sum can just exceed one period. Past the newest pose
+     * there is nothing to extrapolate to, and 1 is "show the newest", which is
+     * what `ViewSystem` already defaults to.
+     */
+    get alpha(): number {
+        const em = this.entityManager as
+            | { getFixedStepAlpha(): number; fixedUpdateStepSize: number }
+            | null
+            | undefined;
+
+        const partial = em === null || em === undefined
+            ? 0
+            : em.getFixedStepAlpha() * em.fixedUpdateStepSize;
+
+        return Math.min(1, (this.accumulator + partial) / SESSION_TICK_SECONDS);
+    }
+
     /** Unspent time, in seconds. See the class docblock. */
     private accumulator = 0;
 
@@ -830,8 +870,8 @@ export interface TransientCounts {
     jumpPads: number;
     pickups: number;
     /**
-     * This client's own muzzle flashes, arrived and dropped because they were
-     * already drawn on the frame the trigger was pulled. See
+     * This client's own flashes and tracers, arrived and dropped because they
+     * were already drawn on the frame the trigger was pulled. See
      * {@link NetTransients} and `ClientHooks.predictedFire`.
      */
     ownFlashesPredicted: number;
@@ -922,13 +962,13 @@ export class NetTransients {
         /** Milliseconds, for the pickup label's fade. Defaults to the wall clock. */
         now?: () => number;
         /**
-         * Whether this client draws its own muzzle flash when it fires.
+         * Whether this client draws its own shot when it fires.
          *
          * True means somebody is subscribed to `ClientHooks.predictedFire` and
-         * has already drawn it, so the host's copy of the same shot must be
-         * dropped rather than drawn a round trip late on top of it. False -- the
-         * default, and what a test without a renderer wants -- presents every
-         * flash from the wire, whoever fired it.
+         * has already drawn the flash *and the tracer*, so the host's copies of
+         * the same shot must be dropped rather than drawn a round trip late on
+         * top of them. False -- the default, and what a test without a renderer
+         * wants -- presents everything from the wire, whoever fired it.
          */
         predictsOwnFlash?: boolean;
     }) {
@@ -973,6 +1013,27 @@ export class NetTransients {
 
             case EffectKind.HitscanTrail: {
                 this.counts.trails += 1;
+
+                /*
+                 **This client's own tracer, already drawn, and it is the one
+                 this port cannot afford to present late.** A beam has two
+                 visible ends. Offered to the view weapon, the near end is the
+                 barrel being drawn *this* frame and the far end is where the
+                 shot landed a round trip ago, so the line hinges away from the
+                 direction of travel to reach a decal behind the player. Drawn
+                 in the world instead, both ends agree with each other and the
+                 line floats fourteen units in front of the eye, attached to
+                 nothing -- `CalcMuzzlePoint` is not where the gun is drawn, and
+                 D-164 is the entry about how far apart those two are.
+
+                 There is no third answer that keeps a stale far end, which is
+                 why the local tracer is predicted and this one is dropped.
+                */
+                if (mine && this.predictsOwnFlash) {
+                    this.counts.ownFlashesPredicted += 1;
+                    return;
+                }
+
                 effects?.hitscanTrail(event.origin, event.aux, weaponAt(event.weapon), mine);
                 return;
             }

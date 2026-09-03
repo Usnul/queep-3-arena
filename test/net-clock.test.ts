@@ -341,3 +341,125 @@ describe('NetClientSystem, driven by the engine rather than by the session', () 
         expect(steps - before).toBe(TICK_HZ);
     });
 });
+
+describe('the fraction the camera blends its two eye poses with', () => {
+    /**
+     * A `NetClientSystem` with the engine's own clock underneath it.
+     *
+     * `entityManager` is `protected` on `System` and is assigned by `addSystem`;
+     * a test that wants to drive the alpha has to put one there, and the two
+     * members read are the two the alpha reads.
+     */
+    function withEngine(remainder: () => number): NetClientSystem {
+        const system = new NetClientSystem({
+            client: { step: () => {} } as never,
+            player: { updatePresentation: () => {} } as never,
+        });
+
+        (system as unknown as { entityManager: unknown }).entityManager = {
+            getFixedStepAlpha: remainder,
+            fixedUpdateStepSize: 0.016666666666,
+        };
+
+        return system;
+    }
+
+    /*
+     **This is the other half of "record one pose per session step", and without
+     it that change made the judder worse rather than better.** `ViewSystem`
+     blends the two recorded poses with `EntityManager.getFixedStepAlpha()`,
+     which sweeps 0 to 1 over one *engine* step. Poses recorded once per
+     *session* step span two of those at the shipping rates, so the engine's
+     alpha runs the whole camera move in the first half of the interval and then
+     runs it again in the second: the camera arrives early and jumps back, sixty
+     times a second.
+    */
+    it('spans the session period, not the engine step', () => {
+        let steps = 0;
+        const system = new NetClientSystem({
+            client: { step: () => (steps += 1) } as never,
+            player: { updatePresentation: () => {} } as never,
+        });
+
+        (system as unknown as { entityManager: unknown }).entityManager = {
+            getFixedStepAlpha: () => 0,
+            fixedUpdateStepSize: 0.016666666666,
+        };
+
+        /*
+         Asserted against **whether a step just ran** rather than against a call
+         number, because the phase is not the caller's to know: the first fixed
+         update of all runs no session step, since half a period of the engine's
+         clock is not yet a whole one of the session's. Two engine steps to one
+         session step at the shipping rates, so the sequence is
+         half-way, on-the-pose, half-way, on-the-pose.
+        */
+        for (let call = 0; call < 20; call++) {
+            const before = steps;
+            system.fixedUpdate(0.016666666666);
+
+            if (steps > before) {
+                expect(
+                    system.alpha,
+                    `call ${call} ran a session step and did not land on its pose`
+                ).toBeCloseTo(0, 3);
+            } else {
+                expect(
+                    system.alpha,
+                    `call ${call} ran no step and should be half way between two poses`
+                ).toBeCloseTo(0.5, 3);
+            }
+        }
+
+        expect(steps, 'two engine steps to one session step').toBe(10);
+    });
+
+    it('keeps moving between engine steps, so a fast display is not a slideshow', () => {
+        /*
+         The accumulator only changes on `fixedUpdate`, so an alpha built from it
+         alone would be a staircase with one tread per engine step -- 60 of them
+         a second, however many frames the display draws. The part-step the
+         engine is currently inside is what fills them in.
+        */
+        let remainder = 0;
+        const system = withEngine(() => remainder);
+
+        system.fixedUpdate(0.016666666666);
+
+        const start = system.alpha;
+        remainder = 0.5;
+        const middle = system.alpha;
+        remainder = 0.99;
+        const end = system.alpha;
+
+        expect(middle, 'the alpha is frozen between engine steps').toBeGreaterThan(start);
+        expect(end).toBeGreaterThan(middle);
+
+        // Half an engine step is a quarter of a session period, at these rates.
+        expect(middle - start).toBeCloseTo(0.25, 2);
+    });
+
+    it('never runs past the newest pose it has', () => {
+        /*
+         The two clocks are read at different moments -- the accumulator as of
+         the last `fixedUpdate`, the engine's remainder as of now -- so their sum
+         can exceed one period. There is nothing beyond the newest pose to
+         extrapolate towards, and 1 is what `ViewSystem` already means by "show
+         the newest".
+
+         **Defensive at the shipping rates and not at every rate**, which is why
+         it is here rather than assumed away: two engine steps to one session
+         step puts the worst honest sum at a whisker under 1, and a slower engine
+         step -- or a session rate raised to the engine's, which this port ran at
+         until D-184 -- puts it over.
+        */
+        const system = withEngine(() => 0.999);
+
+        // A whole session period unspent, which is what a 30 Hz engine step
+        // against a 30 Hz session leaves behind.
+        system.fixedUpdate(0.033333333332);
+        system.fixedUpdate(0.033333333332);
+
+        expect(system.alpha).toBeLessThanOrEqual(1);
+    });
+});

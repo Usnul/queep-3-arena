@@ -706,6 +706,19 @@ describe("the muzzle flash of this client's own shot", () => {
         flash(3);
         flash(4);
 
+        // And the tracer, which travels the same road for a sharper reason: a
+        // beam has two visible ends and a stale one hinges or floats.
+        for (const owner of [3, 4]) {
+            transients.effect({
+                kind: EffectKind.HitscanTrail,
+                weapon: weaponIndex('WP_RAILGUN'),
+                owner,
+                origin: Float32Array.from([1, 2, 3]),
+                aux: Float32Array.from([100, 2, 3]),
+                radius: 0,
+            });
+        }
+
         /*
          Mine drawn once, by the prediction, and not again here; somebody else's
          drawn here, because there is nothing else to draw it. The suppressed one
@@ -715,8 +728,11 @@ describe("the muzzle flash of this client's own shot", () => {
         */
         expect(log.of('muzzleFlash').length, "somebody else's flash was dropped too").toBe(1);
         expect(log.of('muzzleFlash')[0]!.mine).toBe(false);
+        expect(log.of('hitscanTrail').length, "somebody else's tracer was dropped too").toBe(1);
+        expect(log.of('hitscanTrail')[0]!.mine).toBe(false);
         expect(transients.counts.muzzleFlashes, 'both arrivals are counted').toBe(2);
-        expect(transients.counts.ownFlashesPredicted).toBe(1);
+        expect(transients.counts.trails, 'both arrivals are counted').toBe(2);
+        expect(transients.counts.ownFlashesPredicted).toBe(2);
     });
 
     it('is presented from the wire when nobody is predicting it', () => {

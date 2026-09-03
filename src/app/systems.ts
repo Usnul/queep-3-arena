@@ -268,6 +268,7 @@ export class ViewSystem extends System<never> {
     private readonly cameraTransform: TransformLike;
     private readonly lens: CameraLens;
     private readonly surface: LensSurface;
+    private readonly alpha: (() => number) | null;
 
     constructor(options: {
         player: PlayerController;
@@ -275,6 +276,21 @@ export class ViewSystem extends System<never> {
         lens: CameraLens;
         /** The renderer's own camera, which is where the aspect ratio lives. */
         surface: LensSurface;
+        /**
+         * How far between the two recorded eye poses to blend, when it is not
+         * the engine's own fixed-step fraction.
+         *
+         * **The two have to describe the same interval or the camera judders**,
+         * and on a joined client they do not: the poses are recorded once per
+         * *session* step (see `NetClientSystem`), and `getFixedStepAlpha` sweeps
+         * over an *engine* step, which is half as long at the shipping rates. An
+         * alpha that reaches 1 halfway through the interval it is blending runs
+         * the whole camera move in the first half and repeats it in the second.
+         *
+         * Null on the single-player branch, where the two rates are the same
+         * clock and the engine's own fraction is exactly right.
+         */
+        alpha?: (() => number) | null;
     }) {
         super();
 
@@ -282,6 +298,7 @@ export class ViewSystem extends System<never> {
         this.cameraTransform = options.cameraTransform;
         this.lens = options.lens;
         this.surface = options.surface;
+        this.alpha = options.alpha ?? null;
     }
 
     override update = (): void => {
@@ -293,7 +310,8 @@ export class ViewSystem extends System<never> {
          the first step has run: 1 is "show the newest pose", which is what a
          camera with no history should do.
         */
-        const alpha = em === null || em === undefined ? 1 : em.getFixedStepAlpha();
+        const alpha =
+            this.alpha?.() ?? (em === null || em === undefined ? 1 : em.getFixedStepAlpha());
 
         this.player.writeCamera(this.cameraTransform, alpha);
 

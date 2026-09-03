@@ -36,8 +36,15 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { NetRig } from './net/rig.ts';
 import { holdAt, standIn, standingSpots } from './net/triggers.ts';
+import { createTrace } from '../src/q3/cm/trace.ts';
+import { ClipMap, MASK_PLAYERSOLID } from '../src/q3/cm/ClipMap.ts';
+import { BspFile } from '../src/q3/bsp/BspFile.ts';
+import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
 
 describe('a teleporter on the host', () => {
     it('moves the client, turns it, and stops it dead', async () => {
@@ -291,5 +298,130 @@ describe('a hurt trigger on the host', () => {
          and feels nothing, which reads as a bug in the health bar.
         */
         expect(hits, 'the client was never told it was being hurt').toBeGreaterThan(0);
+    }, 120_000);
+});
+
+describe('the brush entities a host can be stopped by', () => {
+    /**
+     * A sweep through one point, as a yes-or-no.
+     *
+     * Two units either side of `z`, which is short enough that nothing but the
+     * body under test can be inside it.
+     */
+    function solidAt(
+        physics: { trace: HeadlessPhysics['trace'] },
+        x: number,
+        y: number,
+        z: number
+    ): boolean {
+        const hit = createTrace();
+        physics.trace(hit, [x, y, z + 2], [x, y, z - 2], [0, 0, 0], [0, 0, 0], MASK_PLAYERSOLID);
+        return hit.fraction < 1 || hit.startsolid;
+    }
+
+    it('are built, and the collision follows them when they move', async () => {
+        /*
+         **GAP-041, from the end that hurt.** The host ran the movers from D-191
+         and built no bodies for them, because `HeadlessPhysics` deliberately
+         built BSP model 0 alone; a brush entity there stopped nobody. That was
+         invisible for as long as the mover did not move on a client's screen
+         either -- and D-200 made it move, so the platform extended, invited a
+         player onto it, and the authority dropped them straight through. The
+         floor under `oa_dm1`'s is a pit of lava.
+
+         **Measured against its own control, and the first two attempts were
+         not.** A player stood on the top face and asked not to fall passed
+         *without the fix*, because the world floor underneath caught them --
+         solid either way. A sweep at the face fared no better: the face is
+         recessed below that floor, so the sweep began inside the level. Both
+         are the shape this suite has been caught by four times: a fixture whose
+         subject is whatever the map happens to have there.
+
+         So the body is moved somewhere nothing else is, and the test proves the
+         somewhere is empty *first*. Then the only thing that can answer the
+         second sweep is the thing that was moved.
+        */
+        const raw = readFileSync(
+            join(process.cwd(), 'assets', 'built', 'oa_dm1', 'collision.bsp')
+        );
+        const cm = new ClipMap(
+            new BspFile(
+                raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength),
+                'oa_dm1'
+            )
+        );
+        const physics = await HeadlessPhysics.create(cm);
+
+        // Model 1 is the first brush entity; model 0 is the level.
+        const submodel = cm.models[1]!;
+        const x = (submodel.mins[0]! + submodel.maxs[0]!) * 0.5;
+        const y = (submodel.mins[1]! + submodel.maxs[1]!) * 0.5;
+        const top = submodel.maxs[2]!;
+
+        const bodies = physics.addMover(1);
+        expect(bodies, 'model 1 produced no bodies at all').not.toBeNull();
+        expect(bodies!.count).toBeGreaterThan(0);
+
+        /*
+         The control: 256 units above the entity's own top, which on this map is
+         open air. If this ever fires, the number is the thing to change -- not
+         the assertion below it.
+        */
+        const above = top + 256;
+        expect(solidAt(physics, x, y, above), 'the empty point chosen is not empty').toBe(false);
+
+        /*
+         And now it is -- **after a step**, which is a property rather than a
+         detail of the fixture. `setOffset` writes the body's `Transform` and the
+         broadphase learns about it when the simulation next runs, so a mover's
+         collision is where it was one step ago. The browser has exactly the same
+         relationship (`MoversView.update` writes, `PhysicsSystem` steps) and so
+         does the host, where `worldStep` writes and the next `step` picks it up.
+        */
+        bodies!.setOffset(0, 0, 256);
+        physics.step(1 / 60);
+        expect(
+            solidAt(physics, x, y, above),
+            'the collision did not follow the mover'
+        ).toBe(true);
+
+        // ...and is no longer where it was.
+        bodies!.setOffset(0, 0, 512);
+        physics.step(1 / 60);
+        expect(
+            solidAt(physics, x, y, above),
+            'the collision was left behind at the old offset'
+        ).toBe(false);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-triggers] model 1: ${bodies!.count} kinematic bodies, solid at ` +
+                `z ${above.toFixed(0)} only where the offset put them`
+        );
+    }, 120_000);
+
+    it('are wired on the host, which is where the player fell through one', async () => {
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 0,
+            clients: 0,
+            seed: 42,
+            warmup: 40,
+        });
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-triggers] host: ${rig.host.movers.movers.length} brush entities, ` +
+                `${rig.host.moverBodyCount} kinematic bodies`
+        );
+
+        /*
+         The wiring, as a number. `Host.create` asks `HeadlessPhysics` for the
+         bodies and `worldStep` writes each mover's origin into them every frame;
+         zero here is a host whose doors stop nobody, which is precisely the
+         state this was in.
+        */
+        expect(rig.host.movers.movers.length, 'oa_dm1 has no brush entities').toBeGreaterThan(0);
+        expect(rig.host.moverBodyCount, 'the host built no mover collision').toBeGreaterThan(0);
     }, 120_000);
 });

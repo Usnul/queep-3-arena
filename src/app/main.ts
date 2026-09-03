@@ -41,7 +41,7 @@ import { ItemSystem, newInventory, type DropTrace } from '../game/Items.ts';
 import { MoverSystem, type Vec3 } from '../game/Movers.ts';
 import { WorldEffects } from '../game/WorldEffects.ts';
 import type { Damageable } from '../game/Weapons.ts';
-import { calcMuzzlePoint, isWeaponId } from '../game/Weapons.ts';
+import { calcMuzzlePoint, isWeaponId, weaponStats } from '../game/Weapons.ts';
 import { vec3 as q3vec3, type Vec3Like } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS, sceneFromQ3 } from '../client/Characters.ts';
@@ -1676,6 +1676,13 @@ async function main(): Promise<void> {
         */
         const pickups = new PickupSystem({ items, itemsView, player, audio });
 
+        /*
+         Held rather than only registered, because the camera reads its clock:
+         the eye poses are recorded on this system's session step and the blend
+         between them has to span the same interval. See `NetClientSystem.alpha`.
+        */
+        let netClientSystem: NetClientSystem | null = null;
+
         if (netClient === null) {
             await em.addSystem(
                 new PlayerSystem({
@@ -1692,19 +1699,19 @@ async function main(): Promise<void> {
              clock rides beside it; the world copy runs after, while every
              replicated component is still canonical.
             */
-            await em.addSystem(
-                new NetClientSystem({
-                    client: netClient,
-                    player,
+            netClientSystem = new NetClientSystem({
+                client: netClient,
+                player,
                     /*
                      The player's own stride, landing and weapon click, which
                      `PlayerSystem` plays in single-player and nothing played
                      here -- so this branch had everybody's footsteps except the
                      ones belonging to the person listening.
                     */
-                    sounds: new BodySounds(audio),
-                })
-            );
+                sounds: new BodySounds(audio),
+            });
+
+            await em.addSystem(netClientSystem);
             await em.addSystem(new NetWorldSystem({ client: netClient, items }));
         }
 
@@ -1722,6 +1729,13 @@ async function main(): Promise<void> {
                 cameraTransform: transform,
                 lens,
                 surface: graphics.camera.camera,
+                /*
+                 The session's fraction on a joined client and the engine's own
+                 in single-player, which is what `null` selects. The two branches
+                 record their eye poses on different clocks and the blend has to
+                 follow whichever one recorded them.
+                */
+                alpha: netClientSystem === null ? null : () => netClientSystem.alpha,
             })
         );
         /*
@@ -1946,12 +1960,49 @@ async function main(): Promise<void> {
             */
             const predictedMuzzle = q3vec3();
             const predictedForward = q3vec3();
+            const predictedEnd = q3vec3();
+            const predictedFar = q3vec3();
 
             predictedFlash = (weapon, eyeQ3, anglesQ3): void => {
                 if (!isWeaponId(weapon)) return;
 
                 calcMuzzlePoint(eyeQ3, anglesQ3, predictedMuzzle, predictedForward);
                 arena.muzzleFlash(predictedMuzzle, predictedForward, weapon, LOCAL_CLIENT);
+
+                /*
+                 And the tracer, for the weapons that draw one.
+
+                 **Down the aim rather than into the spread cone.** The host
+                 draws each pellet's direction from a seeded generator this
+                 client does not have, so a predicted spread would be a
+                 *different* random cone rather than the same one -- and the one
+                 thing a player can check against is the crosshair. Q3's own
+                 tracers are drawn from the predicted state and do not match the
+                 server's dispersion either. The two weapons this costs anything
+                 for are the machinegun and the chaingun, whose cone is a few
+                 units wide at the far end of a room; the impact mark still comes
+                 from the host, so it can sit that far from where the line stops.
+
+                 `traceShot` is the host's own answer to "where does it end",
+                 against this client's clipmap and its broadphase -- which holds
+                 every other player's replicated body, so a shot stops on the
+                 person it hit rather than on the wall behind them.
+                */
+                // `stats.range ?? 8192`, which is what `WeaponSystem.fire` uses
+                // to build the far end of the same segment.
+                const range = weaponStats(weapon).range ?? 8192;
+                for (let i = 0; i < 3; i++) {
+                    predictedEnd[i] = predictedMuzzle[i]! + predictedForward[i]! * range;
+                }
+
+                arena.weapons.traceShot(
+                    predictedMuzzle,
+                    predictedEnd,
+                    netClient.slotIndex,
+                    predictedFar
+                );
+
+                arena.hitscanTrail(predictedMuzzle, predictedFar, weapon, LOCAL_CLIENT);
             };
 
             netTransients = new NetTransients({

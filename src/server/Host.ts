@@ -53,6 +53,7 @@ import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { advanceBobCycle, isWalking } from '../game/bobCycle.ts';
 import {
     MoverSystem,
+    type Mover,
     type MoverEvents,
     type TeleportDestination,
 } from '../game/Movers.ts';
@@ -60,7 +61,10 @@ import { WorldEffects, type EffectTarget } from '../game/WorldEffects.ts';
 import { snapshotter_emit } from '@woosh/meep-engine/src/engine/network/sim/Snapshotter.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
-import { HeadlessPhysics } from '../../tools/pipeline/headless-physics.ts';
+import {
+    HeadlessPhysics,
+    type HeadlessMoverBodies,
+} from '../../tools/pipeline/headless-physics.ts';
 import { ItemSystem, type DropTrace } from '../game/Items.ts';
 import { buildWaypoints, linkMapPortals, type WaypointGraph } from '../game/Waypoints.ts';
 import { spawnPoints } from '../game/Spawns.ts';
@@ -437,6 +441,14 @@ export class Host {
     private readonly moverEvents: HostMoverEvents;
 
     /**
+     * Every brush entity's kinematic bodies, beside the mover that moves them.
+     *
+     * Dense: a `func_door` whose submodel produced no hull at all is absent
+     * rather than null, because the only thing done with the list is walking it.
+     */
+    private readonly moverBodies: readonly { mover: Mover; bodies: HeadlessMoverBodies }[];
+
+    /**
      * One recorder per slot, because the deferred state is per player.
      *
      * `WorldEffects` holds the teleport, push and damage a trigger asked for
@@ -473,6 +485,7 @@ export class Host {
         session: NetworkSession;
         movers: MoverSystem;
         moverEvents: HostMoverEvents;
+        moverBodies: readonly { mover: Mover; bodies: HeadlessMoverBodies }[];
         capacity: number;
     }) {
         this.entityManager = parts.entityManager;
@@ -491,6 +504,7 @@ export class Host {
         this.session = parts.session;
         this.movers = parts.movers;
         this.moverEvents = parts.moverEvents;
+        this.moverBodies = parts.moverBodies;
         this.capacity = parts.capacity;
 
         for (let i = 0; i < MAX_CLIENTS; i++) this.worldEffects.push(new WorldEffects());
@@ -567,6 +581,29 @@ export class Host {
         moverEvents.events = events;
         const movers = new MoverSystem(moverEvents);
         movers.spawn(scene.entities, scene.submodels);
+
+        /*
+         And their collision, which is GAP-041 closing.
+
+         A host that runs the movers and does not build their bodies is worse
+         than one that does neither: with D-200 the door opens on every client's
+         screen, and here it stops nobody -- so a plat extends, invites a player
+         onto it, and the authority drops them straight through. On `oa_dm1` the
+         floor under that plat is lava, which is how it was reported.
+
+         `HeadlessPhysics.addMover` builds the same hulls `PhysicsWorld.addMover`
+         does, through the same `hullShape`, as `KinematicVelocity` bodies. The
+         reason the headless harness built model 0 alone was that it "has no
+         mover simulation to drive" models 1..n, and that stopped being true at
+         D-191. It is opt-in rather than default because the *divergence* harness
+         still has none, and brush entities at their authored positions there is
+         the D-036 failure.
+        */
+        const moverBodies: { mover: Mover; bodies: HeadlessMoverBodies }[] = [];
+        for (const mover of movers.movers) {
+            const bodies = physics.addMover(mover.model);
+            if (bodies !== null) moverBodies.push({ mover, bodies });
+        }
 
         const entrances = spawnPoints(scene.entities);
         const spawns = entrances.points.map((e) => e._originQ3);
@@ -660,6 +697,7 @@ export class Host {
             session,
             movers,
             moverEvents,
+            moverBodies,
             capacity: Math.max(1, options.capacity ?? MAX_CLIENTS),
         });
         hostRef = host;
@@ -1120,6 +1158,21 @@ export class Host {
          `linkMapPortals` means the *pathing* already knows the routes exist.
         */
         this.movers.advance(dt);
+
+        /*
+         And into the bodies, which is what makes a door solid here rather than
+         only visible on a client. `MoversView.update` is the browser's copy of
+         these two lines and writes the drawn transform beside them; there is
+         nothing drawn here, so this is the half that is left.
+
+         Every mover every frame, including the ones that have not moved --
+         `MoversView` explains why it stopped skipping them, and the reason
+         (`Vector3.set` already compares before it assigns) applies equally.
+        */
+        for (const bound of this.moverBodies) {
+            const [x, y, z] = bound.mover.origin;
+            bound.bodies.setOffset(x, y, z);
+        }
 
         for (const record of this.players) {
             if (!record.connected || !record.alive || record.bot !== null) continue;
@@ -1949,6 +2002,19 @@ export class Host {
             out.push({ originQ3: record.slot.ps.origin, id: record.index });
         }
         return out;
+    }
+
+    /**
+     * Kinematic bodies built for brush entities, for the load log and the tests.
+     *
+     * Zero means a host whose doors stop nobody, which is what GAP-041 was and
+     * is the shape of failure that is invisible until somebody walks onto a
+     * platform over a pit.
+     */
+    get moverBodyCount(): number {
+        let n = 0;
+        for (const bound of this.moverBodies) n += bound.bodies.count;
+        return n;
     }
 
     /** Every effect the host has raised, for the rig and the tests. */

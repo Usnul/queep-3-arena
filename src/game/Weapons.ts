@@ -679,20 +679,35 @@ export class WeaponSystem {
     }
 
     /** One hitscan ray: trace the world, then look for a closer target. */
-    private hitscanShot(
-        weapon: WeaponId,
+    /**
+     * Where one hitscan ray stops, and what stopped it.
+     *
+     * Three sources, and `bestFraction` is the nearest of them by construction:
+     * a client the broadphase found, a surface the ported `cm_trace` found, or
+     * nothing at all, in which case the shot reached the end of its range and
+     * the line runs the whole way.
+     *
+     * The clipmap is asked as well as the broadphase and not instead of it,
+     * because it is the only one of the two that carries Q3's surface flags --
+     * `SURF_NOIMPACT` decides whether a bullet leaves a mark, and a broadphase
+     * has no opinion about it.
+     *
+     * **Public because a joined client predicts its own tracer with it.** The
+     * *damage* is the host's and stays the host's; what a client needs is the
+     * far end of a line it is drawing this frame, and computing that is exactly
+     * this method minus everything after it. Sharing it is what keeps the drawn
+     * line and the authoritative shot the same shape -- see D-203, and
+     * `hitscanShot` below for the rest of what a real shot then does.
+     *
+     * @param out where the shot stopped, in Q3 units.
+     * @returns what it stopped on, or null for a surface or the open air.
+     */
+    traceShot(
         start: ArrayLike<number>,
         end: ArrayLike<number>,
-        damage: number,
-        ownerId: number
-    ): void {
-        /*
-         The world through the ported `cm_trace`, which is the only thing that
-         carries Q3's surface flags -- `SURF_NOIMPACT` is what
-         decides whether a bullet leaves a mark, and the broadphase has no
-         opinion about it. The clients come from the collision the game actually
-         runs on; the nearer answer wins.
-        */
+        ownerId: number,
+        out: Vec3
+    ): Damageable | null {
         boxTrace(trace, this.cm, start, end, ZERO, ZERO, MASK_SHOT);
 
         let bestFraction = trace.fraction;
@@ -718,19 +733,21 @@ export class WeaponSystem {
             }
         }
 
-        /*
-         Where the shot stopped, whatever stopped it -- which is the one thing
-         every branch below needs and none of them used to compute. The trail is
-         drawn to it, and it has three sources: a client the broadphase found, a
-         surface the clipmap found, or nothing at all, in which case the shot
-         reached the end of its range and the line runs the whole way.
+        out[0] = start[0]! + (end[0]! - start[0]!) * bestFraction;
+        out[1] = start[1]! + (end[1]! - start[1]!) * bestFraction;
+        out[2] = start[2]! + (end[2]! - start[2]!) * bestFraction;
 
-         `bestFraction` is already the nearest of the three by construction, so
-         this is one lerp rather than a branch.
-        */
-        t_hit[0] = start[0]! + (end[0]! - start[0]!) * bestFraction;
-        t_hit[1] = start[1]! + (end[1]! - start[1]!) * bestFraction;
-        t_hit[2] = start[2]! + (end[2]! - start[2]!) * bestFraction;
+        return bestTarget;
+    }
+
+    private hitscanShot(
+        weapon: WeaponId,
+        start: ArrayLike<number>,
+        end: ArrayLike<number>,
+        damage: number,
+        ownerId: number
+    ): void {
+        const bestTarget = this.traceShot(start, end, ownerId, t_hit);
 
         if (bestTarget !== null) {
             this.damage(bestTarget, damage, ownerId);

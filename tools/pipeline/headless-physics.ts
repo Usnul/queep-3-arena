@@ -90,6 +90,23 @@ interface Stats {
     readonly optimizeMilliseconds: number;
 }
 
+/**
+ * Handle for one brush entity's collision on a headless host.
+ *
+ * The same three members `PhysicsWorld.MoverBodies` has and for the same
+ * reason: the thing driving a door should not care which of the two worlds it
+ * is moving one in.
+ */
+export interface HeadlessMoverBodies {
+    readonly model: number;
+    readonly count: number;
+    /** Offset from the submodel's authored position, in Q3 units and Q3 axes. */
+    setOffset(q3x: number, q3y: number, q3z: number): void;
+}
+
+/** Scene metres per Q3 unit; must match `PhysicsWorld`'s. */
+const WORLD_SCALE = 1 / 32;
+
 export class HeadlessPhysics {
     readonly system: PhysicsSystem;
 
@@ -168,15 +185,18 @@ export class HeadlessPhysics {
         const queries = new PhysicsTrace(system, cm);
 
         /*
-         Model 0 only, matching `PhysicsWorld`. Models 1..n are brush entities --
-         doors, buttons, triggers -- which the browser build makes kinematic
-         bodies driven by the mover simulation, and which this harness has no
-         mover simulation to drive.
+         Model 0 only **by default**, matching `PhysicsWorld` before anything
+         calls `addMover`. Models 1..n are brush entities -- doors, plats,
+         buttons, triggers -- and building them here at their *authored*
+         positions made the harness disagree with both the clipmap control and
+         the shipping build, which is the same class of drift as D-036 and
+         D-061: a harness that is not measuring what runs.
 
-         Including them here put every one at its *authored* position and made
-         the harness disagree with both the clipmap control and the shipping
-         build. It is the same class of drift as D-036 and D-061: a harness that
-         is not measuring what runs.
+         That is still true of the divergence harness and is no longer true of
+         every caller. The reason this said "which this harness has no mover
+         simulation to drive" was retired by D-191, which gave the host one, and
+         a caller that runs the movers can now ask for their bodies through
+         {@link addMover} and drive them. See GAP-041 and D-202.
         */
         const world = cm.models[0]!;
         const set = buildHulls(cm, MASK_PLAYERSOLID, world.firstBrush, world.numBrushes);
@@ -197,10 +217,10 @@ export class HeadlessPhysics {
         let bodies = 0;
 
         for (const hull of set.hulls) {
-            if (HeadlessPhysics.addHull(ecd, queries, hull)) bodies += 1;
+            if (HeadlessPhysics.addHull(ecd, queries, hull) !== null) bodies += 1;
         }
         for (const hull of patches.hulls) {
-            if (HeadlessPhysics.addHull(ecd, queries, hull)) bodies += 1;
+            if (HeadlessPhysics.addHull(ecd, queries, hull) !== null) bodies += 1;
         }
 
         const bodyMilliseconds = performance.now() - t0;
@@ -243,15 +263,16 @@ export class HeadlessPhysics {
     private static addHull(
         ecd: EntityComponentDataset,
         queries: PhysicsTrace,
-        hull: BrushHull
-    ): boolean {
+        hull: BrushHull,
+        kind: number = BodyKind.Static
+    ): Transform | null {
         const placed = hullShape(hull);
-        if (placed === null) return false;
+        if (placed === null) return null;
 
         const shape = placed.shape;
 
         const body = new RigidBody();
-        body.kind = BodyKind.Static;
+        body.kind = kind;
         // `MASK_SHOT` versus `MASK_PLAYERSOLID`, as a layer -- see `layers.ts`.
         body.layer = layerForContents(hull.contents);
 
@@ -283,7 +304,97 @@ export class HeadlessPhysics {
         // `link` stamps the packed body id onto the component as it goes in.
         queries.register(builder.id, (body as unknown as { _bodyId: number })._bodyId, hull);
 
-        return true;
+        return transform;
+    }
+
+    /**
+     * One brush entity, as kinematic bodies a player can stand on.
+     *
+     * **This is GAP-041's other half and the comment above used to be the whole
+     * reason it was open.** Models 1..n were left out because they are "brush
+     * entities whose positions are owned by a mover simulation the harness has
+     * never had" -- true when it was written, and false since D-191 gave the
+     * host a `MoverSystem`. A host that runs the movers and does not build their
+     * bodies is worse than one that does neither: the door opens on every
+     * client's screen and stops nobody on the authority, and a plat extends,
+     * invites a player on and drops them through itself. On `oa_dm1` that is a
+     * pit of lava, which is how this was reported.
+     *
+     * **Opt-in, and the opt-out is the point.** The divergence harness measures
+     * `bg_pmove` against the clipmap control, and both of those know nothing
+     * about movers -- so building brush entities at their *authored* positions
+     * there is exactly the D-036 failure the comment above describes, a harness
+     * that is not measuring what runs. The host asks for them; nothing else
+     * does.
+     *
+     * The shape is `PhysicsWorld.addMover`'s, deliberately: the same hulls
+     * through the same `hullShape`, the same rest positions captured once, and
+     * the same Q3-to-meep offset applied per frame. Two ways of making a door
+     * solid would be two doors.
+     */
+    addMover(model: number): HeadlessMoverBodies | null {
+        const submodel = this.cm.models[model];
+        if (submodel === undefined) return null;
+
+        const set = buildHulls(
+            this.cm,
+            MASK_PLAYERSOLID,
+            submodel.firstBrush,
+            submodel.numBrushes
+        );
+        /*
+         And the curved trim, which moves with it: the facets are built in the
+         submodel's authored position and carried by the same transforms as its
+         brushes, so a curved door closes as one piece.
+        */
+        const patches = buildPatchHulls(
+            this.cm,
+            MASK_PLAYERSOLID,
+            submodel.firstSurface,
+            submodel.numSurfaces
+        );
+
+        const transforms: Transform[] = [];
+
+        for (const hull of set.hulls) {
+            const t = HeadlessPhysics.addHull(
+                this.ecd,
+                this.queries,
+                hull,
+                BodyKind.KinematicVelocity
+            );
+            if (t !== null) transforms.push(t);
+        }
+        for (const hull of patches.hulls) {
+            const t = HeadlessPhysics.addHull(
+                this.ecd,
+                this.queries,
+                hull,
+                BodyKind.KinematicVelocity
+            );
+            if (t !== null) transforms.push(t);
+        }
+
+        if (transforms.length === 0) return null;
+
+        // Where each body sits with the mover at rest, so an offset costs no
+        // re-derivation of the centroid.
+        const rest = transforms.map((t) => [t.position.x, t.position.y, t.position.z] as const);
+
+        return {
+            model,
+            count: transforms.length,
+            setOffset(q3x: number, q3y: number, q3z: number): void {
+                const mx = q3x * WORLD_SCALE;
+                const my = q3z * WORLD_SCALE;
+                const mz = -q3y * WORLD_SCALE;
+
+                for (let i = 0; i < transforms.length; i++) {
+                    const at = rest[i]!;
+                    transforms[i]!.position.set(at[0] + mx, at[1] + my, at[2] + mz);
+                }
+            },
+        };
     }
 
     /**
