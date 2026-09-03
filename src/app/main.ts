@@ -1902,8 +1902,10 @@ async function main(): Promise<void> {
                      handler, and a poll is not a subscription -- so tab reached
                      the browser, moved the focus ring out of the document, took
                      the pointer lock with it, and made the second press walk the
-                     browser's chrome. `PlayerController.onKeyDown` names it
-                     alongside space. See D-199.
+                     browser's chrome. `PlayerController.onBrowserKeyDown` names
+                     it alongside space -- from a DOM listener rather than the
+                     device's signal, because the device drops auto-repeats and a
+                     board you *hold* is nothing but repeats. See D-199.
                     */
                     held: () => engine.devices.keyboard.keys['tab']?.is_down === true,
                 })

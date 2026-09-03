@@ -11328,8 +11328,32 @@ a key released while the window was unfocused cannot get stuck down, and for a b
 is the difference between a board and a board that will not close. A poll registers no handler, so
 the engine's rule does not fire, so tab kept its default action.
 
-Space was already in the same position and already named in `PlayerController.onKeyDown`. Tab joins
-it, which is why this is one line rather than a design.
+Space was already in the same position and already named in `PlayerController.onKeyDown`. Tab joined
+it there, which looked like one line rather than a design -- and **was wrong, in a way that took a
+second bug report to see**.
+
+**The first fix worked for about a second and then failed for as long as the key was held**, which
+is auto-repeat. `#handlerKeyDown` returns early on `event.repeat`, and it does so *before* both the
+signal and its own `preventDefault`. That early return is correct: a repeat is not a new press, and
+a device that reported one would make every edge-driven binding in the engine fire sixty times a
+second. What it means is that a **held** key produces exactly one cancellable event and then a
+stream of uncancelled ones. So tab was suppressed for the length of the operating system's repeat
+delay and then began traversing the focus ring once per repeat, still held -- the board opened, and
+then the game ended anyway, slightly later.
+
+So the suppression is a DOM `keydown` listener of its own, on `this.element`, which is the element
+the device itself listens on (`viewStack.el`) and in the same bubble phase -- so `Menu`, which stops
+`keydown` on its own root, keeps shielding both of them identically. Weapon select stays on the
+device's signal, where dropping repeats is exactly right: holding `3` should select the shotgun once.
+The two halves want opposite things from the same event, which is the argument for two listeners.
+
+**And the first test passed while the bug was still there**, which is the part worth keeping. It
+emitted through `devices.keyDown` -- the signal -- and the signal is precisely where a repeat never
+arrives, so the fixture could not express a held key at all. A test that cannot represent the
+failure is a test that will pass whatever the code does. The suite now dispatches at the element,
+and the case that matters presses tab once and then thirty times with `repeat: true`; with the
+device's own repeat filter copied into the listener it fails on `repeat 0`, which is the bug as
+reported.
 
 **It is gated on the pointer lock and space is not, and that is a difference rather than an
 oversight.** Space scrolls a page and this page is a canvas with nowhere to scroll, so taking it
@@ -11342,7 +11366,9 @@ held", so the gate is a field that existed.
 The menu needs no special case: `Menu` swallows `keydown` on its own root, so a tab pressed inside a
 settings page never reaches the device and still moves between the controls there.
 
-**Tested at the seam that broke**, in `player-controller.test.ts`, which already had a device fake
-with a `keyDown` signal and an `activate`/`deactivate` pair for the lock -- so the case is three
-assertions and no new harness: tab is cancelled while locked, is *not* cancelled once unlocked, and
-space is cancelled either way. Reverted, the first fails with the browser's behaviour.
+**Tested at the seam that broke.** `player-controller.test.ts` already had an `activate`/`deactivate`
+pair for the lock; what it did not have was an element that could receive a listener, because
+nothing had ever put one there. `dom.element()` now carries `addEventListener` and a `press(code,
+repeat)` that dispatches to whatever registered -- five cases: tab cancelled while locked, cancelled
+through thirty repeats, *not* cancelled once unlocked (repeats included, so the gate cannot be
+outrun), space cancelled either way, and both released on `detach`.

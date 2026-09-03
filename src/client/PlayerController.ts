@@ -509,6 +509,14 @@ export class PlayerController {
         this.devices.pointer.on.down.add(this.onPointerDown);
         this.devices.pointer.on.wheel.add(this.onWheel);
 
+        /*
+         The keys the browser must not act on, which cannot go through the
+         device -- see {@link onBrowserKeyDown}. On the same element the device
+         itself listens on, in the same phase, so the menu keeps shielding both
+         of them identically.
+        */
+        this.element.addEventListener('keydown', this.onBrowserKeyDown);
+
         // Pointer lock is a DOM capability, not an input one, so this stays a
         // document listener. It is the only one left.
         document.addEventListener('pointerlockchange', this.onPointerLockChange);
@@ -523,42 +531,65 @@ export class PlayerController {
         this.devices.pointer.on.down.remove(this.onPointerDown);
         this.devices.pointer.on.wheel.remove(this.onWheel);
 
+        this.element.removeEventListener('keydown', this.onBrowserKeyDown);
+
         document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     }
 
     /**
      * Weapon select only. Movement is polled from the switches instead, because
      * a held key is a state and an edge is a bad way to track one.
+     */
+    private readonly onKeyDown = (e: KeyboardEvent): void => {
+        const digit = e.code.startsWith('Digit') ? e.code.slice(5) : e.key;
+        const weapon = KEY_WEAPON.get(digit);
+        if (weapon !== undefined) this.selectWeapon(weapon);
+    };
+
+    /**
+     * The two keys the browser must not act on, cancelled on every press
+     * including the repeats.
      *
-     * **Plus the two keys the browser would otherwise take.** `KeyboardDevice`
-     * has a rule for this and it is a good one -- it calls `preventDefault` for
-     * a key whose own `down` signal has a handler, on the grounds that a key
-     * somebody subscribed to is a key the application owns. It does not fire for
-     * either of these, because this port *polls* both: jump reads
-     * `keys['space'].is_down` and the scoreboard reads `keys['tab'].is_down`,
-     * and a poll is not a subscription. So the two are named here.
+     * **`KeyboardDevice` has a rule for this and it is a good one**: it calls
+     * `preventDefault` for a key whose own `down` signal has a handler, on the
+     * grounds that a key somebody subscribed to is a key the application owns.
+     * It does not fire for either of these, because this port *polls* both --
+     * jump reads `keys['space'].is_down` and the scoreboard reads
+     * `keys['tab'].is_down` -- and a poll is not a subscription.
+     *
+     * **And it is a DOM listener rather than a line in {@link onKeyDown},
+     * because of auto-repeat.** `#handlerKeyDown` returns early on
+     * `event.repeat` -- correctly, since a repeat is not a new press and a
+     * device that reported one would make every edge-driven binding in the
+     * engine fire sixty times a second -- and it returns *before* both the
+     * signal and its own `preventDefault`. So a held key produces exactly one
+     * cancellable event and then a stream of uncancelled ones. Tab was
+     * suppressed for the length of the operating system's repeat delay, about a
+     * second, and then began traversing the focus ring once per repeat while
+     * still held: the board opened, and then the game ended anyway. Cancelling
+     * the repeats needs an event the device drops, so it needs a listener of its
+     * own.
+     *
+     * On `this.element`, which is the element the device itself listens on
+     * (`viewStack.el`, see `main.ts`), in the same bubble phase. That is what
+     * keeps the menu shielding this exactly as it shields the device: `Menu`
+     * stops `keydown` on its own root, which is a descendant, so a Tab pressed
+     * inside a settings page never reaches either listener and still moves
+     * between the controls there.
      *
      * **Tab is gated on the pointer lock and space is not**, which is a real
      * difference rather than an inconsistency. Space scrolls a page, and a page
      * whose only content is a canvas has nowhere to scroll to, so taking it
      * always costs nothing. Tab moves the focus ring, which is the browser's to
-     * move whenever the player is not in the game -- and inside the game it is
-     * actively harmful: the focus leaves the document, **the pointer lock goes
-     * with it**, and the next Tab starts walking the browser's own chrome. The
-     * board is `+scores` on the key Q3 bound it to, so the key is not
-     * negotiable; when it is held is.
-     *
-     * Nothing here runs while the menu is open: `Menu` swallows `keydown` on its
-     * own root, so a Tab pressed inside a settings page never reaches the device
-     * and still moves between the controls there.
+     * move whenever the player is not in the game -- a page that could not be
+     * tabbed through at all would be a worse bug than this one, and an
+     * accessibility one. Inside the lock there is no focus ring to move and the
+     * default action is purely destructive. The board is `+scores` on the key Q3
+     * bound it to, so the key is not negotiable; when it is held is.
      */
-    private readonly onKeyDown = (e: KeyboardEvent): void => {
+    private readonly onBrowserKeyDown = (e: KeyboardEvent): void => {
         if (e.code === 'Space') e.preventDefault();
         if (e.code === 'Tab' && this.active) e.preventDefault();
-
-        const digit = e.code.startsWith('Digit') ? e.code.slice(5) : e.key;
-        const weapon = KEY_WEAPON.get(digit);
-        if (weapon !== undefined) this.selectWeapon(weapon);
     };
 
     /**

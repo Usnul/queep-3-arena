@@ -169,6 +169,16 @@ class CameraTransform {
  * first -- which reads exactly like a controller that ignores input, and cost
  * twenty minutes of looking at the controller.
  */
+/**
+ * The lock target, plus the keydown path the controller listens on.
+ *
+ * `HTMLElement` structurally, with the one extra the tests drive it through.
+ */
+interface FakeElement extends HTMLElement {
+    /** Dispatch one `keydown`; true if a listener cancelled it. */
+    press(code: string, repeat?: boolean): boolean;
+}
+
 const dom = (() => {
     const listeners: (() => void)[] = [];
 
@@ -186,13 +196,51 @@ const dom = (() => {
     (globalThis as { document?: unknown }).document = doc;
 
     return {
-        /** A fresh lock target, one per controller. */
-        element(): HTMLElement {
+        /**
+         * A fresh lock target, one per controller.
+         *
+         * It carries listeners as well as the lock, because the controller now
+         * puts one on it: the keys the browser must not act on are cancelled
+         * from a DOM `keydown` rather than from the device's signal, and the
+         * reason is auto-repeat -- `KeyboardDevice` drops a repeat before it
+         * reaches either the signal or its own `preventDefault`. A fake that
+         * only carried `requestPointerLock` could not see that path at all,
+         * which is exactly how the first version of the tab fix passed while
+         * the bug it was written for was still there. See {@link FakeElement}.
+         */
+        element(): FakeElement {
+            const handlers: ((event: KeyboardEvent) => void)[] = [];
+
             return {
                 requestPointerLock(): Promise<void> {
                     return Promise.resolve();
                 },
-            } as unknown as HTMLElement;
+                addEventListener(_type: string, handler: (event: KeyboardEvent) => void): void {
+                    handlers.push(handler);
+                },
+                removeEventListener(
+                    _type: string,
+                    handler: (event: KeyboardEvent) => void
+                ): void {
+                    const at = handlers.indexOf(handler);
+                    if (at >= 0) handlers.splice(at, 1);
+                },
+                /** Dispatch one `keydown` and report whether anybody cancelled it. */
+                press(code: string, repeat = false): boolean {
+                    let prevented = false;
+                    const event = {
+                        code,
+                        key: code,
+                        repeat,
+                        preventDefault: () => {
+                            prevented = true;
+                        },
+                    } as unknown as KeyboardEvent;
+
+                    for (const handler of handlers.slice()) handler(event);
+                    return prevented;
+                },
+            } as unknown as FakeElement;
         },
         get locked(): HTMLElement | null {
             return doc.pointerLockElement as HTMLElement | null;
@@ -286,7 +334,8 @@ class Rig {
         touchButtons: () => {},
     };
 
-    private readonly element = dom.element();
+    /** Public, because the browser-key tests dispatch through it. */
+    readonly element = dom.element();
 
     constructor(mapName: string, solver: Solver, spawnIndex = 0) {
         const { physics, spawns } = world(mapName);
@@ -1615,40 +1664,51 @@ describe('PlayerController -> the weapon rack', () => {
 });
 
 describe('the keys the browser would otherwise take', () => {
-    /** A `keydown` the controller can cancel, and a record of whether it did. */
-    function press(rig: Rig, code: string): boolean {
-        let prevented = false;
-        const event = {
-            code,
-            key: code,
-            preventDefault: () => {
-                prevented = true;
-            },
-        } as unknown as KeyboardEvent;
-
-        rig.devices.keyDown.emit((h) => h(event));
-        return prevented;
-    }
-
     /*
-     `KeyboardDevice` cancels a key whose own `down` signal has a handler --
-     a key somebody subscribed to is a key the application owns -- and this port
+     `KeyboardDevice` cancels a key whose own `down` signal has a handler -- a
+     key somebody subscribed to is a key the application owns -- and this port
      *polls* both of these instead: jump reads `keys['space'].is_down` and the
      scoreboard reads `keys['tab'].is_down`. A poll is not a subscription, so
-     neither is cancelled by that rule and both are named in `onKeyDown`.
+     neither is cancelled by that rule.
+
+     **Dispatched at the element rather than through `devices.keyDown`, and that
+     is the whole reason these read the way they do.** The device drops a repeat
+     before it reaches its signal, so a test that emitted through the signal
+     could not express a held key at all -- and the first version of this suite
+     did exactly that, passed, and left the bug in place.
     */
     it('takes tab while the pointer is locked, so the board does not cost the lock', () => {
         const rig = new Rig('oa_dm1', 'meep');
         rig.activate();
 
         /*
-         The failure this is about is not a missing scoreboard: the board opened
-         fine. Tab's *default* action moved the focus ring out of the document,
-         the pointer lock went with it, and the next press started walking the
-         browser's own chrome -- so holding `+scores` on the key Q3 bound it to
-         ended the game.
+         The failure is not a missing scoreboard: the board opened fine. Tab's
+         *default* action moved the focus ring out of the document, the pointer
+         lock went with it, and the next press started walking the browser's own
+         chrome -- so holding `+scores` on the key Q3 bound it to ended the game.
         */
-        expect(press(rig, 'Tab'), 'tab still moves the focus ring mid-game').toBe(true);
+        expect(rig.element.press('Tab'), 'tab still moves the focus ring mid-game').toBe(true);
+    });
+
+    it('keeps taking it for as long as it is held, which is what a board you hold is', () => {
+        const rig = new Rig('oa_dm1', 'meep');
+        rig.activate();
+
+        /*
+         **The repeats, which is the half that was still broken.** The first
+         press is cancelled and then the operating system's repeat delay expires
+         -- about a second -- and every repeat after it is a fresh `keydown` with
+         `repeat: true`. `KeyboardDevice.#handlerKeyDown` returns on that flag
+         *before* both its signal and its own `preventDefault`, correctly (a
+         repeat is not a new press, and a device that reported one would make
+         every edge-driven binding fire sixty times a second) -- but it means a
+         held key produces one cancellable event and then a stream of
+         uncancelled ones. The board opened, and then the game ended anyway.
+        */
+        expect(rig.element.press('Tab'), 'the first press').toBe(true);
+        for (let n = 0; n < 30; n++) {
+            expect(rig.element.press('Tab', true), `repeat ${n}`).toBe(true);
+        }
     });
 
     it('gives tab back the moment the game does not have the pointer', () => {
@@ -1661,7 +1721,10 @@ describe('the keys the browser would otherwise take', () => {
          browser's business. This is the half that keeps the fix from being a
          page that cannot be tabbed through at all.
         */
-        expect(press(rig, 'Tab'), 'tab is still swallowed with the game unfocused').toBe(false);
+        expect(rig.element.press('Tab'), 'tab is still swallowed with the game unfocused').toBe(
+            false
+        );
+        expect(rig.element.press('Tab', true), 'a repeat outruns the gate').toBe(false);
     });
 
     it('takes space either way, because a canvas has nowhere to scroll to', () => {
@@ -1669,8 +1732,20 @@ describe('the keys the browser would otherwise take', () => {
 
         // Ungated on purpose, and the asymmetry with tab is the point: space
         // scrolls, and there is nothing here to scroll.
-        expect(press(rig, 'Space')).toBe(true);
+        expect(rig.element.press('Space')).toBe(true);
+        expect(rig.element.press('Space', true)).toBe(true);
         rig.activate();
-        expect(press(rig, 'Space')).toBe(true);
+        expect(rig.element.press('Space')).toBe(true);
+    });
+
+    it('stops taking either of them once the controller is detached', () => {
+        const rig = new Rig('oa_dm1', 'meep');
+        rig.activate();
+        rig.player.detach();
+
+        // The listener is added in `attach` and has to come off in `detach`,
+        // like every other one there.
+        expect(rig.element.press('Tab')).toBe(false);
+        expect(rig.element.press('Space')).toBe(false);
     });
 });
