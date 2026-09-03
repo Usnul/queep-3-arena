@@ -159,7 +159,7 @@ export interface PlayerSlotOptions {
     physics?: PhysicsTraceBackend | null;
     /**
      * Non-null runs the shipping movement path (D-071). Null runs the ported
-     * `bg_pmove` whole, which is `?move=q3` and is single-player only.
+     * `bg_pmove` whole, which is the reference path the tests drive directly.
      */
     moverHost?: MoverHost | null;
 }

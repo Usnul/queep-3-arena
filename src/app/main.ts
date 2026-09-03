@@ -331,28 +331,6 @@ function bakeRequested(): boolean {
     return new URLSearchParams(window.location.search).get('bake') === 'lightmap';
 }
 
-/**
- * `?move=q3` runs the ported `bg_pmove.c` whole -- slide-move, ground trace and
- * all -- instead of Q3's motor on meep's `KinematicMover`.
- *
- * The meep-native path is the default (D-071): the brief's "movement fidelity is
- * non-negotiable" was reversed in favour of porting Q3 in spirit rather than in
- * body, and reproducing Q3's contact semantics through a general-purpose sweep
- * was what made that expensive. The ported path stays because it is the one
- * held against the C oracle, and is therefore the reference any claim about the
- * new one is measured against. It agreed with the C bit for bit until D-174.
- *
- * **`?trace=clipmap` used to force this on**, and is gone (D-203): it selected a
- * *third* collision backend inside the browser -- ported movement over the
- * ported `cm_trace` -- so the shipping build carried an A/B switch nobody
- * shipping ever set. The comparison it existed for is `pmove.diff.test.ts` and
- * `physics-divergence.test.ts`, which run the same two paths against the C
- * oracle without a running game. The trace backend is meep's, everywhere.
- */
-function usePortedPmove(): boolean {
-    return new URLSearchParams(window.location.search).get('move') === 'q3';
-}
-
 async function main(): Promise<void> {
     const engine = await EngineHarness.bootstrap();
 
@@ -1015,12 +993,7 @@ async function main(): Promise<void> {
             loaded, clipMap, fly, audio, mapSound, hud, menu, settings, camera, profile,
         });
     } else {
-        /*
-         Built even on `?move=q3`, because that parameter picks a *movement*
-         backend and missiles are the engine's now either way. Taking the rockets
-         away with the movement would make one A/B mean two things, and the cost
-         of the bodies nobody sweeps against is about 18 ms at load.
-        */
+
         const physicsWorld = await PhysicsWorld.create(em, ecd, clipMap);
 
         {
@@ -1060,8 +1033,22 @@ async function main(): Promise<void> {
             );
         }
 
+        /*
+         Movement is Q3's motor on meep's `KinematicMover`, and there is no
+         longer a switch off it.
+
+         `?move=q3` ran the ported `bg_pmove.c` whole instead -- slide move,
+         ground trace and all -- and was kept as "the reference any claim about
+         the new one is measured against". It is still that, and being that has
+         never needed a URL: `pmove.diff.test.ts` holds it against the C oracle
+         and `physics-divergence.test.ts` holds the two backends against each
+         other, both under Node with no browser in sight. What the parameter
+         added was a second movement backend inside the shipping build, which is
+         the same objection that took `?trace=clipmap` out one entry earlier
+         (D-203). Removed in D-205.
+        */
         const moverHost =
-            usePortedPmove() || physicsWorld.ecd === null
+            physicsWorld.ecd === null
                 ? null
                 : { system: physicsWorld.system, ecd: physicsWorld.ecd };
 
@@ -2098,7 +2085,7 @@ async function main(): Promise<void> {
                 arena,
                 describe: () => ({
                     map: mapName,
-                    backend: usePortedPmove() ? 'q3/physics' : 'meep',
+                    backend: 'meep',
                 }),
             })
         );

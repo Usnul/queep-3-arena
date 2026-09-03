@@ -51,6 +51,7 @@ import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform
 
 import { ClipMap, MASK_PLAYERSOLID } from '../../src/q3/cm/ClipMap.ts';
 import { hullShape } from '../../src/client/hullShape.ts';
+import { movePlanes } from '../../src/client/PhysicsWorld.ts';
 import { SurfaceMetadata } from '../../src/client/SurfaceMetadata.ts';
 import { PhysicsTrace } from '../../src/client/PhysicsTrace.ts';
 import { layerForContents } from '../../src/client/layers.ts';
@@ -358,24 +359,18 @@ export class HeadlessPhysics {
         );
 
         const transforms: Transform[] = [];
+        const hulls: BrushHull[] = [];
 
-        for (const hull of set.hulls) {
+        for (const hull of [...set.hulls, ...patches.hulls]) {
             const t = HeadlessPhysics.addHull(
                 this.ecd,
                 this.queries,
                 hull,
                 BodyKind.KinematicVelocity
             );
-            if (t !== null) transforms.push(t);
-        }
-        for (const hull of patches.hulls) {
-            const t = HeadlessPhysics.addHull(
-                this.ecd,
-                this.queries,
-                hull,
-                BodyKind.KinematicVelocity
-            );
-            if (t !== null) transforms.push(t);
+            if (t === null) continue;
+            transforms.push(t);
+            hulls.push(hull);
         }
 
         if (transforms.length === 0) return null;
@@ -383,6 +378,7 @@ export class HeadlessPhysics {
         // Where each body sits with the mover at rest, so an offset costs no
         // re-derivation of the centroid.
         const rest = transforms.map((t) => [t.position.x, t.position.y, t.position.z] as const);
+        const restPlanes = hulls.map((h) => Float32Array.from(h.planes));
 
         return {
             model,
@@ -395,6 +391,8 @@ export class HeadlessPhysics {
                 for (let i = 0; i < transforms.length; i++) {
                     const at = rest[i]!;
                     transforms[i]!.position.set(at[0] + mx, at[1] + my, at[2] + mz);
+                    // The half-spaces travel too; see `movePlanes`.
+                    movePlanes(hulls[i]!.planes, restPlanes[i]!, q3x, q3y, q3z);
                 }
             },
         };

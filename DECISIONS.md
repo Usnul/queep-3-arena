@@ -11715,3 +11715,73 @@ what D-203 was still leaning on, is gone.
   paragraphs above already described the property that is actually true: a client holds a board the
   host **really had**. That is what it asserts now, the window supplies the set, and where the host
   does hold still it is exactly the old assertion.
+
+### D-205: seven findings from reviewing my own week, and `?move=q3` goes the way of `?trace=clipmap`
+
+An adversarial pass over D-197 to D-204. Four of the seven were real defects in that work, two were
+pre-existing and newly reachable because of it, and one was a dead store. All are fixed.
+
+**The one that mattered: `NetClient.replaying` could latch.** D-197 added a flag that suppresses
+`effect`, `hit` and `pickup` while the engine re-executes arrived records inside a rewind (GAP-048).
+It is raised on `onBeforeReconcile` and lowered on `onReconcileComplete` and
+`onReconcileAbandoned` -- the two ways a reconciliation *returns*. **A throw between them is
+neither**, and the path between them runs this port's own `onApplyAuthState` adapters and then its
+own actions in the replay loop, so an exception there is reachable rather than theoretical. What it
+strands is a flag whose entire job is suppression: every transient **and every damage view kick**
+dropped for the rest of the session, silently, because being silent is what the flag is for. The
+docblock I wrote claimed both exits were covered and did not consider the third.
+
+Cleared at the top of `step`, which bounds it to one tick and cannot lose a first delivery -- the
+re-execution it guards against only re-runs records already in the action log, and every
+reconciliation happens inside the `session.tick` that follows. The test asks for the property
+directly rather than through a second forced death, because a respawning player cannot be killed on
+demand: `mortality` takes the respawn branch and restores the health the write had zeroed, so that
+fixture would report nothing and mean nothing.
+
+**A mover's half-spaces did not move with it.** D-202 gave the host kinematic bodies for its brush
+entities and wrote each mover's origin into the body's `Transform` every frame, which is enough for
+`shape_cast` to find a door where it now is. It is not enough for anything that then asks *which
+face*: `PhysicsTrace` keeps each body's `BrushHull` and applies `CM_TraceThroughBrush` to its
+`planes`, and those were written once at the authored position. So an opened door had its contacts
+ruled on against the closed one, and `alreadyRuledOn` can rule a real contact out entirely -- a
+player walking through a door that is drawn in front of them. **Pre-existing in the browser**, where
+`PhysicsWorld.addMover` has the same shape and has since movers existed; D-202 made it reachable on
+the authority. A mover only translates, so the correction is exact and is one number per plane:
+`(n, d)` moved by `t` is `(n, d + n . t)`. `movePlanes` is shared by both worlds and rewrites from
+the *rest* planes each time, so a door that has opened and closed a hundred times has not drifted a
+hundred times.
+
+**And `applyTouch` still did not carry.** Its comment said a dedicated host "has no solid movers at
+all -- so nobody can be standing on a plat there to be carried by one", which was true and is the
+premise D-202 removed. GAP-041's own entry named this: "`WorldEffects.applyTouch`'s deliberately
+absent carry step is the one line that changes with it." A player now stands on a plat on the host
+and was not carried by it -- while the browser client, which has always carried through `apply`, was
+predicting that they were, and getting corrected off it.
+
+**`?move=q3` is deleted**, on the maintainer's call and for `?trace=clipmap`'s reason one entry
+earlier: a query parameter that swaps the shipping build's *movement* backend is a second code path
+nobody shipping ever selects. The ported `bg_pmove.c` remains exactly what it was for -- the
+reference the shipping path is judged against -- and being that has never needed a URL:
+`pmove.diff.test.ts` holds it against the C oracle and `physics-divergence.test.ts` holds the two
+backends against each other, both under Node.
+
+That also **dissolves a finding rather than fixing it**. D-204 made `PhysicsTrace` report
+`surfaceFlags`, and `bg_pmove` reads them for `SURF_SLICK` and `SURF_NOSTEPS`; on the physics-backed
+ported path those bits had always been zero, so ice was not slippery there and no-step surfaces
+could be stepped onto. That was an unannounced, untested change to a reachable path. With the
+parameter gone the path is not reachable from the browser at all, and the ported pmove the tests
+drive runs on the clipmap, which always reported the flags correctly.
+
+**Three smaller ones.** `WeaponSystem.fire` computed `angleVectors` twice per shot after D-201
+extracted `calcMuzzlePoint` -- six trig evaluations where three would do, on a path that runs eleven
+times for a shotgun; the helper now hands back the two axes it was discarding. `net-match.test.ts`
+guarded a per-client check with `stale.length > 0` against an accumulator shared across the whole
+loop, so one client's failure skipped every later client's board comparison. And a dead store in
+`surface-metadata.test.ts`.
+
+**What the review is worth recording for, beyond the fixes.** Two of the four real defects were
+places where I had written a docblock asserting the very thing that was wrong -- "both signals a
+reconciliation can end with", "a dedicated host has no solid movers at all" -- and one was a premise
+of mine that a later change of mine had invalidated three entries later. Prose that argues for the
+code is load-bearing here and it is also what makes a stale assumption invisible: it reads as a
+decision rather than as a fact that has expired.

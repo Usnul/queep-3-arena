@@ -247,6 +247,11 @@ describe('two clients and four bots, over a loopback', () => {
         */
         const stale: string[] = [];
         for (const client of rig.clients) {
+            // This client's own faults, not the accumulated ones: `stale` is
+            // shared across the loop, so a mark is what makes the guard below
+            // about the client being checked rather than about client 0.
+            const before = stale.length;
+
             for (const hostPlayer of rig.host.players) {
                 const mine = client.net.playerById(hostPlayer.index);
                 if (mine === undefined) {
@@ -263,7 +268,9 @@ describe('two clients and four bots, over a loopback', () => {
                 }
             }
 
-            if (stale.length > 0) continue;
+            // A client that is missing players or holding ghosts has already
+            // failed; comparing its board would only add noise to the report.
+            if (stale.length > before) continue;
 
             /*
              **A board the host really had**, which is the property the prose

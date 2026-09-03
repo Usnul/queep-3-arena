@@ -759,6 +759,81 @@ describe("the muzzle flash of this client's own shot", () => {
     });
 });
 
+describe('the gate that stops a replay re-firing a transient', () => {
+    it('cannot survive a tick, however the reconciliation that raised it ended', async () => {
+        /*
+         **A latch, and the review that found it was of my own code.** `replaying`
+         goes up on `onBeforeReconcile` and comes down on `onReconcileComplete`
+         and `onReconcileAbandoned` -- the two ways a reconciliation *returns*.
+         A throw between them is neither, and the path between them runs this
+         port's own `onApplyAuthState` adapters and then its own actions in the
+         replay loop, so an exception there is reachable rather than theoretical.
+
+         What it strands is a flag whose entire job is suppression: every
+         `EffectEvent`, every `PickupEvent`, and **every `HitEvent`** would be
+         dropped for the rest of the session -- so the player takes damage with
+         no view kick, in silence, with nothing logged. The docblock I wrote for
+         it claimed both exits were covered and did not consider the third.
+
+         Cleared at the top of `step`, which bounds it to a single tick and
+         cannot lose a first delivery: the re-execution the flag exists for only
+         re-runs records already in the action log, and every reconciliation
+         happens inside the `session.tick` that follows.
+        */
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 0,
+            clients: 1,
+            seed: 42,
+            warmup: 40,
+        });
+
+        const client = rig.clients[0]!;
+        rig.step(30);
+
+        /*
+         The control first: this fixture has to produce a transient at all, or
+         the assertion below passes for the wrong reason. A forced death is the
+         one transient a client with no bots and no trigger finger can be made
+         to raise on a named frame.
+        */
+        const record = rig.host.playerById(client.net.slotIndex)!;
+        const control = client.effects.length;
+        record.inventory.health = 0;
+        for (let n = 0; n < 40; n++) rig.step(1);
+
+        expect(
+            client.effects.length,
+            'the fixture raised no transient at all, so it measures nothing'
+        ).toBeGreaterThan(control);
+
+        /*
+         Now strand it, exactly as a throw mid-reconciliation would, and ask for
+         the property directly rather than through a second death: a respawning
+         player cannot be killed again on demand -- `mortality` takes the respawn
+         branch and restores the health the write had zeroed -- so a second
+         forced death is a fixture that reports nothing and means nothing. The
+         flag itself is the thing under test and reading it is exact.
+        */
+        const gate = client.net as unknown as { replaying: boolean };
+        gate.replaying = true;
+
+        rig.step(1);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-effects] the suppression gate after one tick with it stranded: ` +
+                `${String(gate.replaying)}`
+        );
+
+        expect(
+            gate.replaying,
+            'a stranded gate survived a tick, and would swallow every transient ' +
+                'and every view kick for the rest of the session'
+        ).toBe(false);
+    }, 180_000);
+});
+
 describe('an explosion with no surface under it', () => {
     it('is drawn without a mark, because Q3 marks walls and never marks people', () => {
         /*

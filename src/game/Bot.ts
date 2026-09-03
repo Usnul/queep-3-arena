@@ -22,7 +22,7 @@
  *
  * "The same movement code" now means `MeepMove` -- Q3's motor on meep's
  * `KinematicMover` (D-071) -- with the ported `bg_pmove` still built and still
- * selected by `?move=q3`. Both write the same `playerState_t`, so everything
+ * the tests measure against. Both write the same `playerState_t`, so everything
  * below this line is indifferent to which ran.
  *
  * That indifference is the point of the arrangement rather than a convenience.
@@ -87,7 +87,7 @@ export interface BotOptions extends PmoveHostOptions {
     readonly character: string;
     /**
      * Physics for the meep-native movement path. Null runs the ported
-     * `bg_pmove` instead, which is what `?move=q3` and the divergence harness
+     * `bg_pmove` instead, which is what `pmove.diff.test.ts` and the divergence harness
      * select.
      */
     readonly moverHost?: MoverHost | null;

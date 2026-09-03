@@ -400,15 +400,25 @@ export function calcMuzzlePoint(
     eyeQ3: Vec3Like,
     anglesQ3: ArrayLike<number>,
     out: Vec3,
-    forward: Vec3
+    forward: Vec3,
+    /**
+     * The other two axes, for a caller that wants them.
+     *
+     * `angleVectors` computes all three whatever it is asked for, so a caller
+     * that needs `right` and `up` as well -- `WeaponSystem.fire` does, for the
+     * spread cone -- takes them from here rather than calling it a second time.
+     * Omitted, they go to scratch and are dropped.
+     */
+    right: Vec3 = m_right,
+    up: Vec3 = m_up
 ): void {
-    angleVectors(anglesQ3, forward, m_right, m_up);
+    angleVectors(anglesQ3, forward, right, up);
 
     v3_copy_array(out, 0, eyeQ3, 0);
     v3_displace_in_direction_array(out, 0, out, 0, forward, 0, 14);
 }
 
-/** Scratch for {@link calcMuzzlePoint}'s two unwanted axes. */
+/** Scratch for {@link calcMuzzlePoint}'s two axes, when nobody wants them. */
 const m_right = vec3();
 const m_up = vec3();
 
@@ -462,9 +472,8 @@ export class WeaponSystem {
     /**
      * @param missiles where projectiles fly. Null leaves projectile weapons
      *   flashing and firing nothing, which is only ever a misconfiguration --
-     *   `main.ts` builds a `PhysicsWorld` for missiles even on `?move=q3`,
-     *   because that parameter selects a *movement* backend and taking the
-     *   rockets away with it would make the A/B mean two things.
+     *   `main.ts` always builds a `PhysicsWorld` for missiles, because a
+     *   missile is the engine's whatever is moving the players.
      */
     constructor(
         cm: ClipMap,
@@ -508,8 +517,7 @@ export class WeaponSystem {
     ): void {
         const stats = weaponStats(weapon);
 
-        calcMuzzlePoint(eyeQ3, anglesQ3, t_muzzle, t_forward);
-        angleVectors(anglesQ3, t_forward, t_right, t_up);
+        calcMuzzlePoint(eyeQ3, anglesQ3, t_muzzle, t_forward, t_right, t_up);
 
         this.events.muzzleFlash(t_muzzle, t_forward, weapon, ownerId);
 

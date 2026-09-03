@@ -45,7 +45,7 @@
  * ramp jump launches at a slightly different angle and a corner is rounded
  * rather than clipped. `bg_pmove` is still here, still measured against the C
  * step by step (D-174 traded its bit-exactness for meep's own vector maths), and
- * still reachable with `?move=q3` -- as a reference and an A/B, not as the
+ * still the reference the tests measure this against, and no longer reachable
  * shipping path.
  */
 

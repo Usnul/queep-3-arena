@@ -162,14 +162,16 @@ export class WorldEffects {
      * The per-player half of {@link apply}, for a caller that advances the
      * mover clock itself.
      *
-     * **It does not carry, and that is a decision rather than an omission.**
-     * `carryDisplacement` moves a player standing on a mover that moved, and a
-     * dedicated host has no solid movers at all -- `HeadlessPhysics` builds BSP
-     * model 0 and nothing else (GAP-041), so nobody can be standing on a plat
-     * there to be carried by one. Applying the displacement anyway would move a
-     * player who had fallen through the plat, which is motion the host would
-     * invent and no client would predict. The day the host grows mover bodies,
-     * this is one line and the entry that closes is GAP-041's.
+     * **It carries, and until D-205 it deliberately did not.** The reasoning was
+     * sound and its premise expired: `carryDisplacement` moves a player standing
+     * on a mover that moved, and a dedicated host had no solid movers at all --
+     * `HeadlessPhysics` built BSP model 0 and nothing else -- so applying the
+     * displacement would have moved a player who had fallen *through* the plat,
+     * which is motion the host invents and no client predicts. D-202 gave the
+     * host mover bodies and closed GAP-041, which is the day that entry named:
+     * a player can now stand on a plat there, and one that is not carried
+     * watches it slide out from under them while the client that predicted the
+     * carry gets corrected off it.
      *
      * @param alive `G_RunFrame` does not touch triggers for a dead client.
      */
@@ -178,6 +180,8 @@ export class WorldEffects {
 
         movers.touch(this.playerMins, this.playerMaxs, alive);
         movers.touchButtons(this.playerMins, this.playerMaxs);
+
+        this.carried(player, movers.movers);
 
         return this.settle(player);
     }

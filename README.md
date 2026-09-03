@@ -76,7 +76,6 @@ that is not optional.
 | `?map=<name>` | which level to load |
 | `?fly=1` | swaps the player for a noclip camera, for inspecting conversions |
 | `?join=ws://host:port` | joins a match on a dedicated host instead of running one locally. `?name=` and `?character=` go with it. The map must be the host's, and the client says so plainly if it is not |
-| `?move=q3` | runs the ported `bg_pmove.c` whole -- slide-move, ground trace and all -- instead of Q3's motor on meep's `KinematicMover` |
 | `?targets=1` | puts the phase-3 shootable boxes back, for testing damage without the bots |
 | `?crosshair=<0-9>` | `cg_drawCrosshair`: which of Q3's ten reticles to draw. Beats the saved setting for the session; out of range is ignored rather than clamped |
 | `?fog=off` | empties the air, taking the map's volumetric lighting with it -- the volume is what turns Shade's volumetrics on at all, so this is the whole feature and its frame cost (D-151, D-154) |
@@ -165,8 +164,10 @@ Three findings in the report reproduce on their own:
 - **Movement**: Q3's motor on meep's kinematic solver. Strafe jumping survives because it lives
   entirely in the acceleration function and never touches a trace — flat headings top out at
   exactly 320 u/s and a scripted strafe chain reaches 354 (D-071).
-- **The ported `bg_pmove.c`**, measured against the C step by step and reachable with `?move=q3`.
-  It is the reference the new path is judged against rather than the shipping path.
+- **The ported `bg_pmove.c`**, measured against the C step by step. It is the reference the
+  shipping path is judged against and is not itself reachable in the browser: `pmove.diff.test.ts`
+  holds it against the C oracle and `physics-divergence.test.ts` holds the two backends against
+  each other, neither of which needs a running game (D-205).
 - **Multiplayer**, on meep's server-authoritative session: a dedicated host, browser clients that
   predict their own player and reconcile against the host, remote players drawn exactly where the
   host put them, and bots that shoot at every human rather than the first one. Two clients and four

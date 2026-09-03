@@ -108,6 +108,41 @@ export interface PhysicsWorldStats {
     readonly bodyMilliseconds: number;
 }
 
+/**
+ * Move a mover's hulls with it, planes included.
+ *
+ * **The planes are the half of this that was missing and the half Q3's rules are
+ * defined over.** A body's `Transform` is what the broadphase and the
+ * narrowphase follow, and moving it is enough for `shape_cast` to find the door
+ * where it now is. It is not enough for anything that then asks *which face*:
+ * `PhysicsTrace` keeps each body's `BrushHull` and applies `CM_TraceThroughBrush`
+ * to its `planes` to pick the contact plane and to decide whether Q3 says the
+ * brush blocks at all. Those planes were written once, at the authored position,
+ * and never moved -- so an opened door was resolved against the closed one, and
+ * `alreadyRuledOn` could rule a real contact out entirely.
+ *
+ * A mover only ever translates, so the correction is exact and is one number per
+ * plane: a plane `(n, d)` moved by `t` is `(n, d + n . t)`. The normals do not
+ * change, which is why this can rewrite distances in place rather than rebuild
+ * anything.
+ *
+ * See D-205.
+ */
+export function movePlanes(
+    planes: Float32Array,
+    rest: Float32Array,
+    q3x: number,
+    q3y: number,
+    q3z: number
+): void {
+    for (let p = 0; p < rest.length; p += 4) {
+        const nx = rest[p]!;
+        const ny = rest[p + 1]!;
+        const nz = rest[p + 2]!;
+        planes[p + 3] = rest[p + 3]! + nx * q3x + ny * q3y + nz * q3z;
+    }
+}
+
 /** Handle for one brush entity's collision, returned by `PhysicsWorld.addMover`. */
 export interface MoverBodies {
     readonly model: number;
@@ -340,14 +375,13 @@ export class PhysicsWorld {
         if (set.hulls.length === 0 && patches.hulls.length === 0) return null;
 
         const transforms: Transform[] = [];
+        const hulls: BrushHull[] = [];
 
-        for (const hull of set.hulls) {
+        for (const hull of [...set.hulls, ...patches.hulls]) {
             const transform = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
-            if (transform !== null) transforms.push(transform);
-        }
-        for (const hull of patches.hulls) {
-            const transform = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
-            if (transform !== null) transforms.push(transform);
+            if (transform === null) continue;
+            transforms.push(transform);
+            hulls.push(hull);
         }
 
         if (transforms.length === 0) return null;
@@ -355,6 +389,7 @@ export class PhysicsWorld {
         // Where each body sits with the mover at rest, so an offset can be
         // applied without re-deriving the centroid every frame.
         const rest = transforms.map((t) => [t.position.x, t.position.y, t.position.z] as const);
+        const restPlanes = hulls.map((h) => Float32Array.from(h.planes));
 
         return {
             model,
@@ -367,6 +402,7 @@ export class PhysicsWorld {
                 for (let i = 0; i < transforms.length; i++) {
                     const at = rest[i]!;
                     transforms[i]!.position.set(at[0] + mx, at[1] + my, at[2] + mz);
+                    movePlanes(hulls[i]!.planes, restPlanes[i]!, q3x, q3y, q3z);
                 }
             },
         };

@@ -484,7 +484,7 @@ export class PlayerController {
         /*
          The simulation, built once and shared with nothing on this path -- but
          the same class the host builds one of per player and a networked client
-         builds one of for itself. `?move=q3` is `moverHost === null`, which
+         builds one of for itself. A caller with no physics world is `moverHost === null`, which
          runs the ported `bg_pmove` whole; both solvers write the same
          `playerState_t`, so nothing downstream can tell which one ran.
 

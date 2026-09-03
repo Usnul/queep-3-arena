@@ -583,6 +583,43 @@ describe('the movers a joined client runs for the picture alone', () => {
         expect(player.yaws, 'the client turned itself').toEqual([]);
     });
 
+    it('carries a rider on the host, now that the host has something to stand on', () => {
+        /*
+         **`applyTouch` deliberately did not carry, and the reason expired.** Its
+         comment said a dedicated host "has no solid movers at all -- so nobody
+         can be standing on a plat there to be carried by one", and applying the
+         displacement anyway would move a player who had fallen *through* it.
+         D-202 gave the host mover bodies and closed GAP-041, which is the day
+         that comment named: a player stands on the plat now, and one who is not
+         carried watches it slide out from under them while the browser client,
+         which has always carried through `apply`, gets corrected off it.
+        */
+        const world = build({ classname: 'func_plat' }, [64, 64, 128]);
+        const plat = world.movers[0]!;
+
+        plat.previousOrigin[2] = -120;
+        plat.origin[2] = -110;
+
+        const effects = new WorldEffects();
+        const player = target();
+        // Feet on the plat's top surface, as `carrying riders` above places them.
+        player.ps.origin[0] = 25;
+        player.ps.origin[1] = 25;
+        player.ps.origin[2] = 32;
+
+        effects.applyTouch(player, {
+            movers: world.movers,
+            touch(): void {},
+            touchButtons(): void {},
+        });
+
+        expect(player.ps.origin[2], 'the rider was left behind by the plat').toBe(42);
+        expect(
+            [player.ps.origin[0], player.ps.origin[1]],
+            'a vertical plat moved the rider sideways'
+        ).toEqual([25, 25]);
+    });
+
     it('leaves nothing queued for a later settle to find', () => {
         const effects = new WorldEffects();
         const movers = stub(effects);

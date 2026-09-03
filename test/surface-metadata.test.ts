@@ -39,6 +39,7 @@ import { MASK_SHOT } from '../src/game/Weapons.ts';
 import { brushToHull } from '../src/q3/cm/brushHull.ts';
 import { boxTrace, createTrace } from '../src/q3/cm/trace.ts';
 import { SurfaceMetadata } from '../src/client/SurfaceMetadata.ts';
+import { movePlanes } from '../src/client/PhysicsWorld.ts';
 import { HeadlessPhysics } from '../tools/pipeline/headless-physics.ts';
 
 const MAP = 'oa_dm1';
@@ -72,7 +73,7 @@ describe('the flags a brush carries into its hull', () => {
                 'a hull has a flag per plane or the two are not parallel'
             ).toBe(hull.planes.length / 4);
 
-            let first = hull.sideFlags[0]!;
+            const first = hull.sideFlags[0]!;
             let differs = false;
             for (let i = 0; i < hull.sideFlags.length; i++) {
                 const v = hull.sideFlags[i]!;
@@ -80,7 +81,6 @@ describe('the flags a brush carries into its hull', () => {
                 if (v !== 0) flagged += 1;
                 if (v !== first) differs = true;
             }
-            first = 0;
             if (differs) mixed += 1;
         }
 
@@ -290,6 +290,49 @@ describe('the physics trace, asked what it hit', () => {
         expect(nonZero, 'every surface reported zero, so the agreement is vacuous').toBeGreaterThan(
             0
         );
+    });
+});
+
+describe("a mover's half-spaces", () => {
+    it('travel with it, so a moved door is not resolved against the closed one', () => {
+        /*
+         **The `Transform` was moving and the planes were not.** `shape_cast`
+         follows the body and finds a door where it now is; everything that then
+         asks *which face* goes through `PhysicsTrace`, which keeps each body's
+         `BrushHull` and applies `CM_TraceThroughBrush` to its `planes`. Those
+         were written once at the authored position, so an opened door had its
+         contacts ruled on against the closed one -- and `alreadyRuledOn` can
+         rule a real contact out entirely, which is a player walking through a
+         door that is drawn in front of them.
+
+         A mover only translates, so the correction is exact: a plane `(n, d)`
+         moved by `t` is `(n, d + n . t)`, and the normals do not move at all.
+        */
+        // Two faces: +x at 10, and a diagonal, so the dot product is doing work
+        // rather than copying one component.
+        const k = Math.SQRT1_2;
+        const rest = Float32Array.from([1, 0, 0, 10, k, k, 0, 20]);
+        const planes = Float32Array.from(rest);
+
+        movePlanes(planes, rest, 5, 3, 0);
+
+        // +x face: 10 + 5 = 15.
+        expect(planes[3]).toBeCloseTo(15, 5);
+        // diagonal: 20 + (5 + 3) / sqrt(2).
+        expect(planes[7]).toBeCloseTo(20 + 8 * k, 5);
+
+        // Normals untouched, which is what makes the rewrite legal in place.
+        expect([planes[0], planes[1], planes[2]]).toEqual([1, 0, 0]);
+        expect(planes[4]).toBeCloseTo(k, 5);
+
+        /*
+         And **from the rest planes every time**, not from the last offset: a
+         mover returning to its closed position must land back on its authored
+         half-spaces exactly, or a door that has opened and closed a hundred
+         times has drifted a hundred times.
+        */
+        movePlanes(planes, rest, 0, 0, 0);
+        expect([...planes]).toEqual([...rest]);
     });
 });
 

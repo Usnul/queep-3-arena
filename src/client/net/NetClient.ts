@@ -1062,6 +1062,23 @@ export class NetClient {
      * thing to read them is simulation.
      */
     step(): void {
+        /*
+         Nothing is replaying yet, whatever happened last tick.
+
+         `replaying` is raised on `onBeforeReconcile` and lowered on both signals
+         a reconciliation can end with -- and a *throw* between them is neither.
+         `onApplyAuthState` runs this port's own adapters and the replay loop
+         runs its own actions, so an exception there is reachable, and the flag
+         it strands is one that silently drops every transient **and the damage
+         view kick** for the rest of the session. Nothing reports it, because
+         suppression is what the flag is for.
+
+         Clearing it here bounds that to a single tick and cannot lose a first
+         delivery: `#execute_harvested` only re-runs records already in the
+         action log, and every reconciliation happens inside the `tick` below.
+        */
+        this.replaying = false;
+
         this.physicsStep();
         this.session.tick(SESSION_TICK_SECONDS);
 
