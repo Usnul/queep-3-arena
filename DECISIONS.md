@@ -11257,3 +11257,59 @@ rather than a `string` -- `NET_WEAPONS` is `isWeaponId`'s own output, so the tag
 through D-114's one crossing and two call sites stop casting it back -- and `net/triggers.ts` holds
 the standing-spot geometry `net-triggers.test.ts` paid three runs each for, because this file needs
 the same two facts to stand a client on a teleporter and hear it.
+
+### D-198: meep closes GAP-015 by removing the argument, and every character in the game threw
+
+`Animation`'s constructor takes no arguments as of 3.15.0 and asserts if it is given any. This port
+had exactly one call site -- `Character`, in `Characters.ts` -- so **every character in the game,
+single-player and networked alike, threw on construction**:
+
+```
+Failed during update of system 'NetPresentationSystem':
+  Error: Animation takes no constructor arguments; use Animation.fromJSON(json) for the
+  serialized form, or clips.add(clip) for clips you already hold. 1 !== 0
+```
+
+The migration is one line: `Animation.fromJSON({ clips })` where `new Animation({ clips })` was.
+The argument's *shape* is unchanged -- it was always the accepted one, which is what GAP-015 was
+about -- so nothing else moved.
+
+**The fix upstream is better than the one this port asked for, and worth recording as such.**
+GAP-015 and BUG-1 both suggested accepting both forms: pass an `AnimationClip` through rather than
+rebuilding it from JSON that does not describe it. 3.15.0 did neither and removed the constructor
+argument instead, and its new docblock says why: "The ambiguity is removed rather than widened:
+there is now one way in per representation, and neither is the constructor." That is the right call.
+Accepting both would have left two ways to be right and one of them still subtly wrong, and this
+port's own workaround -- build from JSON, then read the constructed clips back out to hold them --
+is exactly what the `clips.add(clip)` path is for. The docblock also cites the report by number and
+by cost, which is the first time this repository's output has come back as an upstream comment.
+
+**The expensive part is not the migration. It is that `npm run check` was green through all of it.**
+
+- **`tsc` had nothing to say**, because the emitted declaration is `constructor(...args: any[])`.
+  That is BUG-5's family -- the `.d.ts` files do not describe what the JavaScript does -- and here
+  it turned a hard, deliberate, loudly-asserted breaking change into a runtime error for a
+  TypeScript consumer. A removal that is loud at runtime and silent at compile time is louder than
+  no removal and quieter than it looks.
+- **No test had ever built a `Character`.** `characters.test.ts` is 34 assertions about the
+  character pipeline and every one of them stops at the glTF on disk: it parses the MD3, evaluates
+  the emitted skinning by hand, and compares. The component that *plays* the result was outside it,
+  so the file that is named after this class could not catch a class that no longer constructs.
+- **So it surfaced in the browser**, out of `NetPresentationSystem.characterFor`, which is the first
+  thing on the networked branch to build one -- and it would have surfaced identically in
+  single-player, from `buildRoster`.
+
+**The test that closes it is cheap and should have existed since phase 4.** `SGMesh.fromURL` stores
+a URL and fetches nothing, so a whole `Character` goes together against a bare
+`EntityComponentDataset` in a Node test. It asserts the two clips exist, that their names are
+`LEGS_IDLE` and `TORSO_STAND` rather than the empty strings GAP-015 produced, that `setLegs` and
+`setTorso` reach the same clips, and that `repeatCount` is -1 for a run and 1 for an attack. Reverted
+against the old call it fails with the browser's exact message, and against the old *engine* it
+would have failed on the names -- one test for both sides of one seam, which is what a seam that has
+now broken this port twice deserves.
+
+Also here, because they were two lines and both were false: `README.md` said the port has no
+scoreboard UI (D-190 shipped one, on tab) and that sixteen slots "is not reachable without relevance
+culling neither the engine nor this port has" -- which D-192 and D-196 between them retract twice
+over. meep does have the hook (`scope_filter`, fully wired), and 245 KB/s at sixteen players is 1.96
+Mbit/s and not a problem; what is left is a hosting cost line, and that is what the README now says.

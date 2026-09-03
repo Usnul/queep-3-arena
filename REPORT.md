@@ -1491,9 +1491,26 @@ the expensive way.
   `PhysicsSystem.register(em)` that adds both, which would make the pairing unmissable.
 - **Evidence:** `src/client/PhysicsWorld.ts` `PhysicsWorld.create`. Recorded during phase 3b.
 
-### GAP-015: `new Animation({clips})` takes JSON, is documented as taking components, and silently accepts either
+### GAP-015: FIXED IN 3.15.0 -- `new Animation({clips})` took JSON, was documented as taking components, and silently accepted either
 
-- **Severity:** major -- a wrong-but-plausible call that produces no error and no animation.
+- **Fixed, and fixed by removal rather than by widening.** `Animation`'s constructor now takes no
+  arguments at all and asserts if it is given any; `Animation.fromJSON(json)` is the one way in for
+  the serialized form and `clips.add(clip)` for clips already held. Its new docblock cites this
+  report by number and by cost ("Reported from a port as GAP-015, at 40 minutes spent believing the
+  model had not loaded"), and states the reasoning: "The ambiguity is removed rather than widened:
+  there is now one way in per representation, and neither is the constructor." That is a better
+  answer than the one suggested below -- accepting both forms would have kept two ways to be right
+  and one of them still wrong for `AnimationClip` instances that carry a `flags` value.
+- **What it cost this port to take, and the number that matters.** The removal is a hard break and
+  `Character` was the one call site, so every character in the game -- single-player and networked
+  alike -- threw on construction the moment the engine moved. `npm run check` was **green through
+  all of it**: the constructor is typed `constructor(...args: any[])` in the emitted `.d.ts`, so
+  `tsc` had nothing to say, and no test in this suite had ever built a `Character` (the character
+  tests stop at the glTF on disk). It surfaced in the browser, out of
+  `NetPresentationSystem.characterFor`. `test/characters.test.ts` now builds one; it reproduces the
+  throw exactly when the fix is reverted, and it also pins the *original* failure, because the two
+  are the same seam seen from either side. See D-198.
+- **Severity when open:** major -- a wrong-but-plausible call that produced no error and no animation.
 - **What happened:** `new Animation({ clips: [clip1, clip2] })` with real `AnimationClip`
   instances builds an `Animation` whose list is the right length, whose clips are real
   `AnimationClip`s, and whose every clip name is the **empty string**. Nothing then matches any
@@ -1519,9 +1536,13 @@ the expensive way.
   ```
 
 - **What would fix it:** accept both -- `fromJSON` could pass through anything already an
-  `AnimationClip` -- or type the parameter as the JSON it is. Either removes the trap.
-- **Cost:** ~40 minutes, most of it spent believing the *model* had not loaded.
-- **Evidence:** `src/client/Characters.ts` `clipJson`. Recorded during the character phase.
+  `AnimationClip` -- or type the parameter as the JSON it is. Either removes the trap. *(3.15.0 did
+  neither and removed the constructor argument instead, which is better; see the top of this entry.)*
+- **Cost:** ~40 minutes, most of it spent believing the *model* had not loaded. Plus the migration,
+  which was one line of code and one test that should have existed since phase 4.
+- **Evidence:** `src/client/Characters.ts` `clipJson`, `test/characters.test.ts` ("builds a playable
+  Animation"), `node_modules/@woosh/meep-engine/src/engine/ecs/animation/Animation.js` (the
+  constructor's new docblock). Recorded during the character phase; closed at D-198.
 
 ### GAP-016: A navmesh needs a surface, and brush-based level geometry is a pile of solids
 
@@ -3459,7 +3480,14 @@ These are separated from the gap register on purpose. A gap is "the engine does 
 bug is "the engine says it does this and does something else". The second kind is more expensive
 per line of documentation, because the reader who checks first is the one who gets caught.
 
-### BUG-1: `new Animation({ clips })` accepts the documented type and silently discards it
+### BUG-1 (fixed in 3.15.0): `new Animation({ clips })` accepted the documented type and silently discarded it
+
+**Fixed by removing the constructor argument entirely** -- `Animation.fromJSON(json)` or
+`clips.add(clip)`, and the constructor asserts if it is handed anything. Kept in full because a
+reader's copy of the package may be older, because the *shape* is the transferable part, and because
+the migration has a sting in it: the argument is still typed `constructor(...args: any[])` in the
+emitted `.d.ts` (BUG-5's family), so a TypeScript consumer gets no compile error and finds out at
+runtime. See GAP-015's entry and D-198.
 
 `Animation`'s constructor documents `@property {List.<AnimationClip>} clips` and its field is
 `@type {List<AnimationClip>}`. It forwards to `fromJSON`, which rebuilds each entry with
@@ -3490,7 +3518,9 @@ the *model* pipeline, since the clip list looked correct.
 
 Fix: accept both forms — `if (c instanceof AnimationClip) use it` before falling through to
 `fromJSON` — or make the JSDoc say `Object[]`. Either is a two-line change. Filed at phase 4 as
-GAP-015; restated here because it is a contradiction rather than an absence.
+GAP-015; restated here because it is a contradiction rather than an absence. *(3.15.0 took a third
+option and removed the constructor argument, which resolves the contradiction rather than choosing
+a side of it.)*
 
 ### BUG-2: `EngineHarness` hard-imports a peer dependency the package's own manifest marks optional
 

@@ -21,15 +21,29 @@
  * a renderer would, and compares against the MD3 frames it came from. It is the
  * whole pipeline end to end, and the tolerance is the rig's own measured error
  * rather than a number chosen to make it pass.
+ *
+ * **There is a fifth place, and it is at the other end.** A perfect glTF still
+ * plays nothing if the `Animation` component naming its clips is built wrong,
+ * and that component has now broken this port twice from the same seam: once
+ * silently, when `new Animation({clips})` accepted real `AnimationClip`
+ * instances and produced clips whose names were empty strings (GAP-015), and
+ * once loudly, when meep removed the constructor argument that had made the
+ * ambiguity possible and every `Character` this port built started throwing.
+ * Neither was visible to a suite that stopped at the file on disk. `builds a
+ * playable Animation` below is the runtime end, and it is cheap: `SGMesh.fromURL`
+ * stores a URL and fetches nothing, so a whole `Character` goes together against
+ * a bare dataset. See D-198.
  */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
+
 import { parseMd3 } from '../tools/pipeline/md3.ts';
 import { parseAnimationConfig } from '../tools/convert-characters.ts';
-import { sceneFromQ3 } from '../src/client/Characters.ts';
+import { Character, sceneFromQ3 } from '../src/client/Characters.ts';
 import { SURFACE_CLIP_EPSILON } from '../src/q3/cm/ClipMap.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built', 'characters');
@@ -541,5 +555,51 @@ describe('sarge, end to end', () => {
             expect(uy).toBeCloseTo(tag.axis[2][2], 3);
             expect(uz).toBeCloseTo(-tag.axis[2][1], 3);
         }
+    });
+});
+
+describe('the Animation component a Character hangs on its model', () => {
+    it('builds a playable Animation, with the clip names the model is keyed by', () => {
+        const ecd = new EntityComponentDataset();
+        ecd.setComponentTypeMap([]);
+
+        /*
+         Constructed at all, which is the half that broke in the browser and was
+         green here: `Animation`'s constructor now asserts it was given no
+         arguments, and nothing in this suite had ever built a `Character`. The
+         model name is not loaded -- `SGMesh.fromURL` stores a URL -- so any
+         name does.
+        */
+        const character = new Character(ecd, 'sarge');
+
+        expect(character.animation.clips.length, 'a character with no clips').toBe(2);
+
+        /*
+         And **named**, which is the half that broke silently for forty minutes
+         (GAP-015): `ClipListPlayer` matches a clip to the model by this string,
+         so two clips called `''` are two clips that will never play and no error
+         anywhere. The default pose is what `NetPresentationSystem` parks an
+         unoccupied slot in and what every character starts in.
+        */
+        const names = (): string[] => [
+            character.animation.clips.get(0)!.name.getValue(),
+            character.animation.clips.get(1)!.name.getValue(),
+        ];
+
+        expect(names()).toEqual(['LEGS_IDLE', 'TORSO_STAND']);
+
+        // And the two setters reach the same clips, which is what the networked
+        // presentation drives a remote player's legs and torso through.
+        character.setLegs('LEGS_RUN');
+        character.setTorso('TORSO_ATTACK');
+        expect(names()).toEqual(['LEGS_RUN', 'TORSO_ATTACK']);
+
+        /*
+         `repeatCount` is a count and not a flag -- -1 is "forever" -- and the
+         two animations chosen above are on opposite sides of Q3's own rule: a
+         run cycle loops and an attack plays once.
+        */
+        expect(character.animation.clips.get(0)!.repeatCount.getValue()).toBe(-1);
+        expect(character.animation.clips.get(1)!.repeatCount.getValue()).toBe(1);
     });
 });

@@ -74,13 +74,18 @@ const LOOPING = new Set<string>([
 /**
  * The JSON one clip in an `Animation`'s list is built from.
  *
- * `new Animation({ clips })` documents its parameter as `List<AnimationClip>`
- * and in fact routes it through `fromJSON`, which builds its own clips from
- * plain objects. Handing it real `AnimationClip` instances therefore *appears*
- * to work -- no error, a list of the right length -- and produces clips whose
- * name is the empty string, so nothing ever matches a clip in the model and the
- * entity plays nothing. Measured, not inferred: constructing both ways and
- * reading the names back gives `''` and `'LEGS_RUN'`. See REPORT.md ergonomics.
+ * **The trap this used to describe is closed upstream, and the constructor went
+ * with it.** `new Animation({ clips })` documented its parameter as
+ * `List<AnimationClip>` and routed it through `fromJSON`, which builds its own
+ * clips from plain objects -- so handing it real `AnimationClip` instances
+ * appeared to work, produced clips whose name was the empty string, and played
+ * nothing. That was GAP-015 and BUG-1, reported from here; the engine's fix
+ * cites it by number. The ambiguity was removed rather than widened: the
+ * constructor now takes no arguments at all and asserts if it is given any, and
+ * `Animation.fromJSON(json)` is the one way in for this representation.
+ *
+ * So the shape below is unchanged -- it was always the accepted one -- and the
+ * call site is `Animation.fromJSON` rather than `new Animation`. See D-198.
  */
 function clipJson(name: string): Record<string, unknown> {
     return {
@@ -138,7 +143,7 @@ export class Character {
         // The glTF is in Q3 units, like every other converted asset (D-011).
         this.transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
 
-        this.animation = new Animation({ clips: [clipJson(legs), clipJson(torso)] });
+        this.animation = Animation.fromJSON({ clips: [clipJson(legs), clipJson(torso)] });
         this.animation.isPlaying = true;
 
         this.legsClip = this.animation.clips.get(0)!;

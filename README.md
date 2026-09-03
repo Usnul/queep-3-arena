@@ -102,7 +102,8 @@ predicts its own player and is corrected by the host. Up to sixteen slots, bots 
 return to the menu and a second join is a new player who happens to get the same slot; no kick, ban
 or anti-cheat beyond ownership — a client cannot drive somebody else's player, which is tested, but
 it can send whatever it likes for its own; no idle reaping, so a socket that dies without closing
-holds its slot until TCP notices; no chat, no scoreboard UI, no server browser (join by address).
+holds its slot until TCP notices; no chat and no server browser (join by address). There **is** a
+scoreboard: hold tab, and it is built from `NetPlayerInfo` while you hold it (D-190).
 
 The session runs at **30 Hz**, which is half single-player's rate. That is a deliberate trade and it
 costs something real: `bg_pmove` is stepped at the session rate, so a networked strafe jump tops out
@@ -168,11 +169,13 @@ Three findings in the report reproduce on their own:
 - **The ported `bg_pmove.c`**, measured against the C step by step and reachable with `?move=q3`.
   It is the reference the new path is judged against rather than the shipping path.
 - **Multiplayer**, on meep's server-authoritative session: a dedicated host, browser clients that
-  predict their own player and reconcile against the host, remote players drawn from replicated
-  state 0.6 frames behind the truth, and bots that shoot at every human rather than the first one.
-  Two clients and four bots for 45 seconds is a test, not a demo. What it costs on the wire and on
-  the host's CPU is in REPORT section 5, and the honest headline is that sixteen slots is not
-  reachable without relevance culling neither the engine nor this port has.
+  predict their own player and reconcile against the host, remote players drawn exactly where the
+  host put them, and bots that shoot at every human rather than the first one. Two clients and four
+  bots for 45 seconds is a test, not a demo. What it costs on the wire and on the host's CPU is in
+  REPORT section 5, and sixteen slots costs a client **245 KB/s** down on an 80 ms link — 1.96
+  Mbit/s, which is not a problem and was only ever reported as one because it was measured against
+  an undated 48 KB/s line in the plan (D-196). What is left is a hosting cost: roughly 16 Mbit/s of
+  host egress per eight humans, multiplied by concurrent matches.
 - **Weapons** with Q3's own damage numbers and fire rates, extracted from the sources rather than
   transcribed.
 - **Items** that spawn, drop to the floor, bob, spin, obey `BG_CanItemBeGrabbed` and respawn on
