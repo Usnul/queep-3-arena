@@ -185,12 +185,18 @@ class SoundLog implements RemoteSounds {
 /**
  * The client's own gun, refilled through the component the host reads.
  *
- * **Not `record.slot.inventory`**, which is the trap `net/triggers.ts` names:
- * `stepSlot` is `load` from the replicated components, then step, then `store`,
- * so a write to the `PlayerSlot`'s scratch inventory before a frame is wiped by
- * the `load` at the top of it. Written every frame rather than once, so a
- * fixture that fires for twenty seconds cannot run itself dry and stop being a
- * fixture halfway through.
+ * **The replicated component rather than `record.slot.inventory`**, which is
+ * the same choice `net/triggers.ts` makes for origins and for the same reason:
+ * `stepSlot` is `load` from the components, then step, then `store`, so the
+ * component is the authority between frames and the `PlayerSlot`'s own
+ * inventory is scratch inside one. Writing the scratch happens to survive --
+ * measured -- because the `store` at the end of the frame puts it back; writing
+ * the component is the version that does not depend on that.
+ *
+ * **Every frame rather than once**, which is the part that matters here: a
+ * client holding the trigger for twenty seconds empties a magazine, and a
+ * fixture whose subject stops appearing halfway through is the failure this
+ * file's header is about.
  */
 function arm(rig: NetRig, slotIndex: number, weapons: readonly WeaponId[]): void {
     const inventory = rig.host.playerById(slotIndex)!.inventory;

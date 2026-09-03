@@ -11229,18 +11229,22 @@ them a run. The flag is free and covers the case that exists.
 - A hundred transients through a real `Effects` in a headless dataset: **220 entities created and
   220 retired** once the clock has run past the marks' ten seconds.
 
-**Two traps this fixture walked into, both of which produced a confident wrong answer.**
+**One trap this fixture walked into, and it produced a confident wrong answer.** **Take both ends of
+a measured window at the same instant.** The first version started the presenter at zero and the
+host count at "now", so it presented the warm-up backlog and compared it against a host that had
+forgotten it: **660 presented against 543 raised** -- which reads exactly like the duplication the
+file is there to rule out, and would have been reported as it.
 
-- **Arm the client through the replicated component.** `net-presentation.test.ts` grants its
-  rocket launcher by writing `record.slot.inventory`, which is the `PlayerSlot`'s scratch: a host
-  frame is `load` from the components, step, `store` back, so the write is wiped by the `load` at
-  the top of the next frame. `net-triggers.test.ts` already names this trap for origins. Writing
-  `record.inventory` every frame is what makes "the client holds the trigger" a property of the
-  script rather than of how much ammunition it started with.
-- **Take both ends of a measured window at the same instant.** The first version started the
-  presenter at zero and the host count at "now", so it presented the warm-up backlog and compared
-  it against a host that had forgotten it: **660 presented against 543 raised** -- which reads
-  exactly like the duplication the file is there to rule out, and would have been reported as it.
+**And one thing that looked like a trap and is not**, checked rather than assumed because the
+opposite claim was nearly written down here. Arming the client through `record.slot.inventory` --
+which is what `net-presentation.test.ts` does -- looks like the `ps`-versus-component mistake
+`net-triggers.test.ts` names, since a host frame is `load` from the components, step, `store` back.
+It survives: the `store` at the end of the frame puts the scratch write into the component, and the
+grant is still there eleven frames later with its 400 rounds. This file writes the component anyway,
+because that is the version that does not depend on the ordering -- and writes it *every frame*,
+which is the part that actually matters, since a client holding the trigger for twenty seconds
+empties a magazine and a fixture whose subject stops appearing halfway through is the failure the
+paragraph above is about.
 
 **And a fixture fact worth writing down rather than leaving to be rediscovered.** Over the 1,200
 measured frames with three bots on seed 23, the bots fire **nothing**. That is the fourth time this
