@@ -72,7 +72,52 @@ export class PhysicsTrace {
      */
     readonly ignored = new Set<number>();
 
-    private readonly notIgnored = (entity: number): boolean => !this.ignored.has(entity);
+    /**
+     * Q3 contents this trace is allowed to stop on.
+     *
+     * Set at the top of every public entry point and read by the filter below.
+     * `MASK_PLAYERSOLID` is the resting value because that is what the bodies
+     * were *built* with, so a caller that does not care sees exactly what it saw
+     * before the mask was honoured at all.
+     */
+    private mask = MASK_PLAYERSOLID;
+
+    /**
+     * Which bodies this query may stop on.
+     *
+     * Two rules, and the second one was missing.
+     *
+     * **`ignored`** is the set of bodies a trace passes through -- characters,
+     * missiles in flight -- and it has to be a filter rather than a layer,
+     * because meep's queries consult the callback and nothing else.
+     *
+     * **The content mask** is Q3's `CM_BoxTrace` argument, and `trace` used to
+     * take it as `_contentMask` and drop it: the bodies are pre-filtered to
+     * `MASK_PLAYERSOLID` at load, so every caller got that mask whatever it
+     * asked for. Harmless while the only callers were movement, which asks for
+     * exactly that -- and wrong the moment the *shot* path arrived, because
+     * `MASK_SHOT` excludes `CONTENTS_PLAYERCLIP` and a bullet would have stopped
+     * on an invisible wall. Found by a surface-flag comparison disagreeing on
+     * one brush in seventy-four, which was a clip brush the two traces
+     * disagreed about *hitting* rather than about naming (D-204).
+     *
+     * `shape_cast` takes the predicate, so this is where it belongs -- no second
+     * broadphase, no post-filter that would already have discarded the nearer
+     * body.
+     */
+    private readonly notIgnored = (entity: number): boolean => {
+        if (this.ignored.has(entity)) return false;
+
+        const hull = this.hullByEntity.get(entity);
+        /*
+         A body with no hull of ours is not level geometry: a character, a
+         missile, an application's own thing. Those are governed by `ignored`
+         and have no Q3 contents to test.
+        */
+        if (hull === undefined) return true;
+
+        return (hull.contents & this.mask) !== 0;
+    };
 
     /** Reused query output; `shape_cast` is an output-parameter API. */
     private readonly hit = new PhysicsSurfacePoint();
@@ -343,8 +388,11 @@ export class PhysicsTrace {
         endQ3: ArrayLike<number>,
         minsQ3: ArrayLike<number>,
         maxsQ3: ArrayLike<number>,
-        _contentMask: number
+        contentMask: number
     ): void {
+        // What this sweep is allowed to stop on. See `notIgnored`.
+        this.mask = contentMask;
+
         // Recentre, exactly as `CM_Trace` does.
         const ox = (minsQ3[0]! + maxsQ3[0]!) * 0.5;
         const oy = (minsQ3[1]! + maxsQ3[1]!) * 0.5;
@@ -629,5 +677,54 @@ export class PhysicsTrace {
                 out.planeNormal[1] * out.endpos[1] +
                 out.planeNormal[2] * out.endpos[2];
         }
+
+        /*
+         And what the surface is made of, which used to be left at zero here --
+         so anything that needed it opened the clipmap instead, and the comment
+         at the one call site that did said a broadphase "has no opinion about
+         surface flags".
+
+         It has whatever opinion is attached to it. The plane above is already
+         the face the sweep entered, so the flags are that face's: one dot
+         product per side over a hull that has six of them. See `SurfaceMetadata`
+         and D-204.
+        */
+        const hull = this.hullByEntity.get(this.hit.entity);
+        if (hull !== undefined) {
+            out.contents = hull.contents;
+            out.surfaceFlags = flagsForNormal(hull, out.planeNormal);
+        }
     }
+}
+
+/**
+ * The flags of the face `normal` belongs to, off a hull.
+ *
+ * The same rule `SurfaceMetadata.flagsFor` applies, against the hull this class
+ * already keeps per body rather than against the component -- they carry the
+ * same two arrays, and this one is on the hot path and has the hull in hand.
+ * Nearest by dot product, because a contact normal is a narrowphase result and a
+ * plane is authored data: on a bevelled brush the contact can legitimately sit
+ * between two faces, and the more aligned of the two is the side Q3's
+ * `leadside` names.
+ */
+function flagsForNormal(hull: BrushHull, normal: ArrayLike<number>): number {
+    const planes = hull.planes;
+    const flags = hull.sideFlags;
+    if (flags.length === 0) return hull.surfaceFlags;
+
+    let best = -Infinity;
+    let at = 0;
+
+    for (let i = 0; i < flags.length; i++) {
+        const p = i * 4;
+        const dot =
+            planes[p]! * normal[0]! + planes[p + 1]! * normal[1]! + planes[p + 2]! * normal[2]!;
+        if (dot > best) {
+            best = dot;
+            at = i;
+        }
+    }
+
+    return flags[at]!;
 }

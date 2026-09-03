@@ -47,6 +47,7 @@ import type { TraceResult } from '../q3/cm/trace.ts';
 import { addAcousticBody } from './Acoustics.ts';
 import { hullShape } from './hullShape.ts';
 import { PhysicsTrace } from './PhysicsTrace.ts';
+import { SurfaceMetadata } from './SurfaceMetadata.ts';
 import { layerForContents } from './layers.ts';
 
 /** Scene units per Q3 unit. */
@@ -416,7 +417,18 @@ export class PhysicsWorld {
         transform.position.set(placed.x, placed.y, placed.z);
 
         const builder = new Entity();
-        builder.add(transform).add(body).add(collider as unknown as Collider).build(ecd);
+        builder
+            .add(transform)
+            .add(body)
+            .add(collider as unknown as Collider)
+            /*
+             What this piece of geometry is made of, on the body rather than in
+             the clipmap. See `SurfaceMetadata`: it is what lets a `shape_cast`
+             hit answer `SURF_NOIMPACT` without anything downstream knowing a
+             BSP was involved.
+            */
+            .add(SurfaceMetadata.from(hull))
+            .build(ecd);
 
         /*
          And the same body is what sound is occluded by, if it is the kind of

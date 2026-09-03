@@ -51,6 +51,7 @@ import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform
 
 import { ClipMap, MASK_PLAYERSOLID } from '../../src/q3/cm/ClipMap.ts';
 import { hullShape } from '../../src/client/hullShape.ts';
+import { SurfaceMetadata } from '../../src/client/SurfaceMetadata.ts';
 import { PhysicsTrace } from '../../src/client/PhysicsTrace.ts';
 import { layerForContents } from '../../src/client/layers.ts';
 import { buildHulls, type BrushHull } from '../../src/q3/cm/brushHull.ts';
@@ -299,6 +300,8 @@ export class HeadlessPhysics {
             .add(transform)
             .add(body)
             .add(collider as unknown as Collider)
+            // The same material facts the browser attaches; see `SurfaceMetadata`.
+            .add(SurfaceMetadata.from(hull))
             .build(ecd);
 
         // `link` stamps the packed body id onto the component as it goes in.

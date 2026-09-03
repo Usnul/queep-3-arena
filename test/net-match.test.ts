@@ -98,6 +98,15 @@ function hunt(cmd: UserCmd, frame: number, self: RigClient): void {
  * Two seconds. A client's copy has to be one of the host's from inside this
  * window; anything older is a client that stopped being told.
  */
+/**
+ * Frames at the end of the match over which the host's scoreboards are recorded.
+ *
+ * **Not a window that has to be quiet, which is what it used to be.** The
+ * comparison below asks whether each client holds a board the host *really
+ * had*, so a host that scores during the window is fine -- it simply adds
+ * another board to the set. See the assertion for why that is the property
+ * worth holding and the instant comparison was not.
+ */
 const SETTLE_FRAMES = 120;
 
 interface Outcome {
@@ -244,16 +253,7 @@ describe('two clients and four bots, over a loopback', () => {
                     stale.push(
                         `client ${client.net.slotIndex} never heard of player ${hostPlayer.index}`
                     );
-                    continue;
                 }
-
-                const host = hostPlayer.info;
-                if (mine.info.kills === host.kills && mine.info.deaths === host.deaths) continue;
-                stale.push(
-                    `client ${client.net.slotIndex} player ${hostPlayer.index}: ` +
-                        `${mine.info.kills}/${mine.info.deaths} against the host's ` +
-                        `${host.kills}/${host.deaths}`
-                );
             }
 
             // And nobody the host does not have.
@@ -261,6 +261,38 @@ describe('two clients and four bots, over a loopback', () => {
                 if (rig.host.playerById(mine.index) === undefined) {
                     stale.push(`client ${client.net.slotIndex} kept a ghost at ${mine.index}`);
                 }
+            }
+
+            if (stale.length > 0) continue;
+
+            /*
+             **A board the host really had**, which is the property the prose
+             above already describes and the assertion did not implement.
+
+             It compared each client against the host's board *at the instant the
+             window ended*, and leaned on a second assertion -- that the host
+             passed through exactly one board in the window -- to make that
+             legal. With six fighters scoring every second or two, whether that
+             holds is luck: it did until D-204 moved a few pickups, and then the
+             host scored twice in the tail and the file failed on its own
+             precondition rather than on anything about replication. Lengthening
+             the window, which is what its message suggests, makes it *more*
+             likely to catch a frag, not less.
+
+             Set membership is the claim that is true whatever the host does: a
+             client is a few frames behind by design, so its board must be one
+             the host held, and the window is what supplies the set. Where the
+             host does hold still, this is exactly the old assertion.
+            */
+            const board = scoreboardOf(
+                rig.host.players.map((h) => client.net.playerById(h.index)!)
+            );
+
+            if (!hostBoards.has(board)) {
+                stale.push(
+                    `client ${client.net.slotIndex} holds "${board}", which the host ` +
+                        `never had in the last ${SETTLE_FRAMES} frames`
+                );
             }
         }
 
@@ -301,11 +333,6 @@ describe('two clients and four bots, over a loopback', () => {
             'the scoreboard went stale again; GAP-045 has regressed'
         ).toBe(0);
 
-        expect(
-            hostBoards.size,
-            'the match was still scoring during the settling window, so this ' +
-                'measurement is about lag rather than about loss -- lengthen it'
-        ).toBe(1);
     });
 
     it('knows which slots are bots, on both clients', () => {

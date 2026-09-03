@@ -11648,3 +11648,70 @@ since D-071 put the shipping player on `KinematicMover`, and that the machinery 
 `?trace=clipmap` and the divergence harness". One of those two is now gone. What is left of the
 hull cross-check is a reference path and its test, which is exactly where a bit-for-bit
 reimplementation of somebody else's arithmetic belongs.
+
+### D-204: the surface flags go on the body, and the shape_cast filter was being thrown away
+
+The maintainer, on D-203's defence of the ported trace: *"If what you want is not to spawn surface
+impacts on some things -- just don't do it. SURF_NOIMPACT is a solution to the fact that Q3 had no
+proper modern physics engine, meep does. Have a component per RigidBody entity that carries all the
+flags you need."* Correct, and the shape of the mistake is worth naming: I had taken Q3's *mechanism*
+as the requirement. The requirement is "a bullet does not mark the sky". Q3 answers it inside the
+collision trace because its trace is a brush walk; a port whose bodies are entities can answer it off
+the entity, and this one had been reading the fact back out of the source format instead of
+attaching it to the thing it built.
+
+**`SurfaceMetadata` is that component.** It rides beside `RigidBody` and `Collider` on every body
+built from level geometry, in both worlds, and carries the brush's contents, its planes, and its
+flags **per face**. Anything holding a cast result can ask it; nothing downstream has to know a BSP
+was involved.
+
+**Per face, because that was free and I had claimed it was impossible.** `brushHull.ts` shipped
+`surfaceFlags: 0` for every brush hull under a comment saying the flags "cannot be carried here"
+since they are per side. The loop that would carry them was three lines above the comment: it already
+walks the brush's sides in `firstSide` order, which is exactly how `cm.sideSurfaceFlags` is indexed.
+Measured on `oa_dm1`: 575 brush hulls, **360 faces carrying flags, 66 brushes whose faces disagree
+with each other, 12 distinct values**. All of it was being discarded.
+
+`PhysicsTrace` now fills `TraceResult.surfaceFlags` from the face the sweep entered -- the plane it
+has already chosen -- so every meep trace in the port reports what Q3's does. Measured: **74 of 74**
+sweeps onto a flagged face report identical flags to the ported `cm_trace`, where before the physics
+trace reported a flat zero for every surface in the game.
+
+**And the filter objection from D-203 turned out to be load-bearing after all.** That entry said
+`shape_cast`'s predicate "chooses which bodies are candidates" and could not fix GAP-019's fraction
+disagreement -- true, and it stopped there. `PhysicsTrace.trace` took a `_contentMask` and **dropped
+it**: the bodies are pre-filtered to `MASK_PLAYERSOLID` at load, so every caller got that mask
+whatever it asked for. Harmless while the only callers were movement, which asks for exactly that,
+and a real bug for anything else -- an item dropping with `CONTENTS_SOLID` landed on
+`CONTENTS_PLAYERCLIP` brushes it should have fallen through. The predicate is where that belongs and
+is now where it is.
+
+**Found by a test disagreeing on one case in seventy-four**, which is the part worth keeping. The
+sweep comparison came back 73/74; the instinct was to widen the tolerance until it passed, and
+excluding contacts that land on a *seam* between two faces -- a real ambiguity, since Q3 picks the
+plane with the largest entering fraction and this picks the most aligned -- removed fourteen cases
+and not that one. Printing it showed a brush whose six faces all carry 19632
+(`NONSOLID|NODRAW|NOLIGHTMAP|POINTLIGHT|NOMARKS|NOIMPACT`), which the two traces disagreed about
+*hitting* rather than about naming. That is the dropped mask, and a tolerance would have buried it.
+
+**What is not done, and why it is now a different argument.** The shot path still traces the ported
+ray. Routing it through the physics world was written and reverted in the same session: it changes
+hitscan contact fractions and puts the bots' line of sight back on `shape_cast`, which D-159
+deliberately moved off it (a six-bot match went 185 µs a frame to 113, and the shipping path to zero
+`PhysicsTrace` calls). GAP-019 puts one ported ray at 0.29 µs against 3.72 µs. That is a measured
+performance trade to make deliberately, not a capability claim -- and the capability claim, which is
+what D-203 was still leaning on, is gone.
+
+**Two fixtures moved because the game did, and neither was tuned.**
+
+- `net-latency`'s worst link lost **fifteen events before and fifteen after**; the match produced 300
+  where it had produced 302, and the ratio went from 4.97% to exactly 5.00% against a `< 0.05` bound.
+  A bound a two-event denominator change can cross is not measuring what its comment says ("here to
+  catch a regression to 41%, not to bless the residual"), so it is stated against that: a tenth.
+- `net-match` compared each client's board against the host's *at the instant the window ended*, and
+  leaned on a second assertion that the host passed through exactly one board in that window. With
+  six fighters scoring every second or two that is luck, and it ran out. Its failure message says
+  "lengthen it", which is backwards -- a longer tail catches *more* frags. The file's own prose two
+  paragraphs above already described the property that is actually true: a client holds a board the
+  host **really had**. That is what it asserts now, the window supplies the set, and where the host
+  does hold still it is exactly the old assertion.

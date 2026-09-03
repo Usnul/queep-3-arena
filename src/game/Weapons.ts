@@ -683,26 +683,27 @@ export class WeaponSystem {
      * Where one hitscan ray stops, and what stopped it.
      *
      * Three sources, and `bestFraction` is the nearest of them by construction:
-     * a client the broadphase found, a surface the ported `cm_trace` found, or
-     * nothing at all, in which case the shot reached the end of its range and
-     * the line runs the whole way.
+     * a client the broadphase found, a surface the world trace found, or nothing
+     * at all, in which case the shot reached the end of its range and the line
+     * runs the whole way.
      *
-     * The clipmap is asked as well as the broadphase and not instead of it,
-     * because it is the one of the two that reports Q3's surface flags.
+     * **The world trace is the ported ray, and the reason is no longer the one
+     * that used to be written here.** This said the clipmap had to be asked
+     * because it alone reported Q3's surface flags and "a broadphase has no
+     * opinion" about `SURF_NOIMPACT`. That was wrong, and D-204 removed it: a
+     * broadphase has whatever opinion is attached to it, `SurfaceMetadata` now
+     * rides on every body built from level geometry carrying the flags per face,
+     * and `PhysicsTrace` reports them off the face the sweep entered. The flags
+     * were a fact about the geometry that this port was reading back out of the
+     * source format instead of putting on the thing it built.
      *
-     * **That is a smaller reason than it used to claim, and the claim was
-     * challenged and did not hold** (D-203). It said a broadphase "has no
-     * opinion" about `SURF_NOIMPACT`, which is not the problem:
-     * `layerForContents` already puts a brush's contents on its body and
-     * `PhysicsTrace.register` already keeps the `BrushHull` beside each body id,
-     * so a `shape_cast` hit resolves to its brush today. The real obstacle is
-     * that `SURF_NOIMPACT` is per brush **side** -- `cm.sideSurfaceFlags[leadside]`
-     * -- and `BrushHull.surfaceFlags` is deliberately zero for a brush hull,
-     * because one value per hull is the wrong answer for five of a box's six
-     * faces. A cast returns a body and a normal, so what is missing is the step
-     * that matches that normal to the hull's own `planes` and picks the side --
-     * which `traceBrushList` already does for movement. One lookup away rather
-     * than blocked.
+     * What is left is a **measured** reason and a different argument: GAP-019
+     * puts one ported ray at 0.29 µs against 3.72 µs through `shape_cast`, and
+     * D-159 moved the bots' line of sight here for exactly that, taking a
+     * six-bot match from 185 µs a frame to 113. Swapping it back changes the
+     * game -- different contact fractions, different bot sightlines, two
+     * networked fixtures moving -- so it is a change to make deliberately and
+     * measure, not a side effect of proving the flags were never the obstacle.
      *
      * **Public because a joined client predicts its own tracer with it.** The
      * *damage* is the host's and stays the host's; what a client needs is the

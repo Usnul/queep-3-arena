@@ -73,15 +73,29 @@ export interface BrushHull {
     readonly indices: Uint32Array;
     readonly contents: number;
     /**
-     * Surface flags a contact with this hull reports.
+     * Surface flags for the hull as a whole.
      *
-     * Zero for a brush hull, and deliberately: `CM_TraceThroughBrush` reports
-     * the flags of the *side* the sweep entered through, which it reads from
-     * the clipmap, so a single per-hull value would be the wrong answer for
-     * five of a box's six faces. A patch facet has one shader across the whole
-     * piece, so for those it is the real value and footsteps read it.
+     * A patch facet has one shader across the whole piece, so for those this is
+     * the real value. For a brush it is the flags of its first contributing
+     * side, and {@link sideFlags} is the answer that is actually right.
      */
     readonly surfaceFlags: number;
+    /**
+     * Surface flags per plane, in {@link planes} order.
+     *
+     * **This used to be a single zero and a comment saying it could not be
+     * carried.** `CM_TraceThroughBrush` reports the flags of the *side* the
+     * sweep entered through, which is per-face, so one value per hull is the
+     * wrong answer for five of a box's six faces -- all true, and not a reason
+     * to throw the other five away. The loop that builds `planes` walks the
+     * brush's sides in order and `cm.sideSurfaceFlags` is indexed by exactly
+     * that, so carrying them costs one array.
+     *
+     * What it buys is that the flags stop being something only the ported
+     * clipmap trace knows: `SurfaceMetadata` puts this on the body, and any
+     * `shape_cast` hit can be resolved to the side it struck. See D-204.
+     */
+    readonly sideFlags: Int32Array;
     /** Axis-aligned bounds, `[minX, minY, minZ, maxX, maxY, maxZ]`. */
     readonly bounds: Float32Array;
     /**
@@ -257,13 +271,27 @@ export function hullFromPlanes(
     numPlanes: number,
     brush: number,
     contents: number,
-    surfaceFlags: number
+    surfaceFlags: number,
+    /**
+     * Flags per input side, if the caller has them per side.
+     *
+     * A brush does: its sides come out of the clipmap with a shader each.
+     * A patch facet does not -- one shader covers the piece -- so it passes
+     * nothing and every kept plane takes `surfaceFlags`.
+     */
+    inputSideFlags?: ArrayLike<number>
 ): BrushHull | null {
     if (numPlanes < 4) return null;
 
     const vertices: number[] = [];
     const indices: number[] = [];
     const planes: number[] = [];
+    /*
+     Parallel to `planes` rather than to `input`, because a side that
+     contributes no face contributes no plane either -- so this is pushed at
+     the same moment and stays in step by construction.
+    */
+    const sideFlags: number[] = [];
 
     /** Weld a point into the vertex list, returning its index. */
     const addVertex = (x: number, y: number, z: number): number => {
@@ -313,6 +341,7 @@ export function hullFromPlanes(
 
         // This side contributes a real face, so its plane is part of the hull.
         planes.push(nx, ny, nz, dist);
+        sideFlags.push(inputSideFlags === undefined ? surfaceFlags : inputSideFlags[s]! | 0);
 
         const fan: number[] = [];
         for (let i = 0; i < pointCount; i++) {
@@ -362,7 +391,10 @@ export function hullFromPlanes(
         vertices: new Float32Array(vertices),
         indices: new Uint32Array(indices),
         contents,
-        surfaceFlags,
+        // The first face that survived, which is a better default than zero and
+        // is exactly right for the patch facets that have one shader anyway.
+        surfaceFlags: sideFlags[0] ?? surfaceFlags,
+        sideFlags: Int32Array.from(sideFlags),
         bounds,
         planes: new Float32Array(planes),
     };
@@ -391,11 +423,21 @@ export function brushToHull(cm: ClipMap, brushIndex: number): BrushHull | null {
     }
 
     /*
-     Zero surface flags: the contact-plane rule reports the entered *side*'s
-     flags out of the clipmap, which is per-face and cannot be carried here.
-     See `BrushHull.surfaceFlags`.
+     And the sides' own flags, which used to be dropped here with a comment
+     saying they could not be carried -- see `BrushHull.sideFlags`. The loop
+     above already walks the sides in `firstSide` order, which is exactly how
+     `cm.sideSurfaceFlags` is indexed.
     */
-    return hullFromPlanes(gathered, numSides, brushIndex, cm.brushContents[brushIndex]!, 0);
+    const flags = cm.sideSurfaceFlags.subarray(firstSide, firstSide + numSides);
+
+    return hullFromPlanes(
+        gathered,
+        numSides,
+        brushIndex,
+        cm.brushContents[brushIndex]!,
+        0,
+        flags
+    );
 }
 
 
