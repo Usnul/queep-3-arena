@@ -183,6 +183,62 @@ export class WorldEffects {
     }
 
     /**
+     * The movers, run for the picture alone.
+     *
+     * **A joined client's copy of a simulation whose authority is somewhere
+     * else.** The host runs the same movers and owns everything they do to a
+     * player; what a client still has to do is *move the geometry* -- a door
+     * that never opens on your screen is a door you walk into -- and ring the
+     * bell, because a mover's sound is presentation and there is no `NetMover`
+     * producer to carry either (GAP-041).
+     *
+     * So this is {@link apply} with both of the halves that touch the player
+     * taken out. **No carry**, for the reason `applyTouch` gives: the host does
+     * not carry either, and a client that did would move a predicted player the
+     * host never moved and pay for it in corrections. **No settle**, because the
+     * teleport, the push and the damage all arrive as replicated state and an
+     * AUTH_STATE; a client that applied its own would apply them twice.
+     *
+     * The trigger *tests* still run, and that is the point rather than an
+     * oversight: `movers.update` is what opens a door whose button somebody
+     * pressed and what advances one already opening, and `touchButtons` is what
+     * presses the one under this player's feet. Both are how the geometry on
+     * screen ends up in the same place the host has it.
+     *
+     * **Whatever they queued is dropped on the way out**, and that is a
+     * correctness requirement rather than tidiness. `settle` is what empties the
+     * queue, and a pass that fills it without one leaves a teleport pending for
+     * the next caller and grows `hurtPending` without bound -- so an instance
+     * shared with anything that does settle would apply a trigger the host
+     * already applied, late, on a frame nobody asked for. Dropping here makes
+     * the method safe on its own terms instead of on a promise about how its
+     * caller wired `MoverEvents`. The caller on this branch drops them a second
+     * time by not raising them at all, for a different reason: a teleport and a
+     * pad make a *noise*, and that noise arrives from the host as an
+     * `EffectEvent`.
+     */
+    applyPresentation(
+        player: EffectTarget,
+        movers: MoverWorld,
+        deltaSeconds: number,
+        alive = true
+    ): void {
+        this.box(player);
+
+        movers.update(deltaSeconds, this.playerMins, this.playerMaxs, alive);
+        movers.touchButtons(this.playerMins, this.playerMaxs);
+
+        this.discard();
+    }
+
+    /** Forget everything the triggers asked for. See {@link applyPresentation}. */
+    private discard(): void {
+        this.teleportTo = null;
+        this.pushVelocity = null;
+        this.hurtPending = 0;
+    }
+
+    /**
      * The player's world-space box.
      *
      * Read from the player rather than assumed, because `PM_CheckDuck` shortens

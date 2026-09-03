@@ -67,8 +67,8 @@ import { InterpolationLog } from '@woosh/meep-engine/src/engine/interpolation/In
 import type { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
 
 import type { Arena } from '../client/Arena.ts';
-import type { AudioBank } from '../client/Audio.ts';
-import { Footsteps } from '../client/Audio.ts';
+import type { AudioBank, BodyState } from '../client/Audio.ts';
+import { BodySounds } from '../client/Audio.ts';
 import type { BotRuntime } from '../client/Bots.ts';
 import type { CharacterBodies } from '../client/CharacterBody.ts';
 import { APP_INTERPOLATION_SOURCE } from '../client/interpolation.ts';
@@ -95,8 +95,7 @@ export class PlayerSystem extends System<never> {
     private readonly audio: AudioBank;
     private readonly spawns: readonly (readonly number[])[];
 
-    private readonly footsteps = new Footsteps();
-    private lastWeapon: string;
+    private readonly sounds: BodySounds;
 
     /** Seconds until the player respawns; negative means alive. */
     private respawnIn = -1;
@@ -113,7 +112,7 @@ export class PlayerSystem extends System<never> {
         this.arena = options.arena;
         this.audio = options.audio;
         this.spawns = options.spawns;
-        this.lastWeapon = options.player.weapon;
+        this.sounds = new BodySounds(options.audio);
     }
 
     override fixedUpdate = (deltaSeconds: number): void => {
@@ -174,24 +173,35 @@ export class PlayerSystem extends System<never> {
      * detectors over `ps.bobCycle`, which only advances on the fixed step: run
      * at render rate they would fire twice for one stride at high frame rates
      * and miss strides at low ones.
+     *
+     * The detectors themselves moved to `BodySounds` when a joined client turned
+     * out to have none of this -- `PlayerSystem` is not registered there, so the
+     * player heard everybody's footsteps except their own. Shared rather than
+     * copied, because the thing being shared is a pair of edge detectors and two
+     * copies of an edge detector drift.
      */
     private bodySounds(): void {
-        const player = this.player;
-
-        const step = this.footsteps.update(
-            player.ps.bobCycle,
-            player.onGround,
-            player.ducked,
-            player.walking
-        );
-        if (step === 'step') this.audio.play('player/footstep', player.ps.origin);
-        else if (step === 'land') this.audio.play('player/land', player.ps.origin);
-
-        if (player.weapon !== this.lastWeapon) {
-            this.lastWeapon = player.weapon;
-            this.audio.playLocal('weapon/change');
-        }
+        this.sounds.update(bodyStateOf(this.player));
     }
+}
+
+/**
+ * `BodyState` off a `PlayerController`, for whichever branch is driving one.
+ *
+ * Exported because both are: `PlayerSystem` above and `NetClientSystem`, which
+ * runs the same call once per session tick. A function rather than a method on
+ * the controller because it is a view *for the sound layer*, and the controller
+ * already has more surface than it needs.
+ */
+export function bodyStateOf(player: PlayerController): BodyState {
+    return {
+        bobCycle: player.ps.bobCycle,
+        onGround: player.onGround,
+        ducked: player.ducked,
+        walking: player.walking,
+        originQ3: player.ps.origin,
+        weapon: player.weapon,
+    };
 }
 
 /**

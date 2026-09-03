@@ -230,10 +230,16 @@ describe('NetClientSystem, driven by the engine rather than by the session', () 
     it('runs the session at the session rate, not the engine rate', () => {
         let steps = 0;
         let presented = 0;
+        let presentedSeconds = 0;
 
         const system = new NetClientSystem({
             client: { step: () => (steps += 1) } as never,
-            player: { updatePresentation: () => (presented += 1) } as never,
+            player: {
+                updatePresentation: (dt: number) => {
+                    presented += 1;
+                    presentedSeconds += dt;
+                },
+            } as never,
         });
 
         const ENGINE_HZ = 60;
@@ -244,12 +250,49 @@ describe('NetClientSystem, driven by the engine rather than by the session', () 
         // the value `EntityManager` really uses.
         for (let call = 0; call < calls; call++) system.fixedUpdate(0.016666666666);
 
-        expect(presented, 'the presentation clock should run every engine frame').toBe(calls);
         expect(
             steps,
             `the session ran ${steps} steps in ${SECONDS} s; it should run ` +
                 `${TICK_HZ * SECONDS} at ${TICK_HZ} Hz`
         ).toBe(TICK_HZ * SECONDS);
+
+        /*
+         **One presentation tick per simulation step, and this assertion used to
+         say the opposite.** It read `toBe(calls)` -- once per engine frame --
+         which is what the code did and what the design intended at the time, on
+         the grounds that the view kick and the weapon rack are wall-clock things
+         no rollback may undo. That reasoning is about *rollback* and is still
+         satisfied: the tick runs after `client.step()` returns, outside any
+         replay.
+
+         What it got wrong is the rate. `updatePresentation` ends in
+         `recordView`, which keeps the two-entry eye-pose history the camera is
+         blended between -- copy `latest` down to `previous`, recompute `latest`
+         from `ps`. The pair only means anything if exactly one simulation step
+         separates them, which is what single-player gets for free from
+         `update()`: advance clock, step, present. At 30 Hz on a 60 Hz fixed step
+         the old placement recorded two poses per step, one spanning a real 33 ms
+         of motion and one spanning nothing at all, so the camera blended half
+         its frames over a doubled interval and half over a frozen one. That is a
+         30 Hz stutter, and it read as the player jittering while walking rather
+         than as a clock.
+        */
+        expect(
+            presented,
+            'the presentation clock and the simulation have to advance together'
+        ).toBe(steps);
+
+        /*
+         And with the *session's* period, not the engine's. The clock inside
+         `updatePresentation` is integer Q3 milliseconds; handing it 16.67 ms
+         while stepping at 33.3 would run the view kick, the stair detector and
+         the rack countdown at half speed -- which is the failure this half
+         would otherwise trade for the one above.
+        */
+        expect(presentedSeconds, 'the presentation clock runs at the wrong rate').toBeCloseTo(
+            SECONDS,
+            1
+        );
     });
 
     it('does not drift over an hour of frames', () => {

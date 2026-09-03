@@ -604,6 +604,70 @@ export class AudioBank {
  * `((old + 64) ^ (bobCycle + 64)) & 128` says, and it is why the sound lands
  * with the gun at the top of its sway rather than the bottom.
  */
+/**
+ * The noises a player's own body makes, for whoever is driving that player.
+ *
+ * `PlayerSystem` had these inline and they were single-player's alone, which
+ * made them **missing from a joined client entirely**: `PlayerSystem` is not
+ * registered there, so the person at the keyboard heard every other player's
+ * footsteps and none of their own. That is a strange thing to play a shooter
+ * with -- your own stride is the sound you navigate by -- and it read as the
+ * footsteps being broken rather than as one of them being absent.
+ *
+ * A class rather than a function because two of the three are edge detectors and
+ * an edge detector is state. Driven **once per simulation step** by both
+ * branches, which is the same requirement `Footsteps` has and for the same
+ * reason: `bobCycle` only advances on that step, so a caller running at render
+ * rate would fire twice for one stride at 120 Hz and miss strides at 30.
+ */
+export class BodySounds {
+    private readonly audio: BodyAudio;
+    private readonly footsteps = new Footsteps();
+
+    /** Null until the first step, so the first weapon does not click. */
+    private lastWeapon: string | null = null;
+
+    constructor(audio: BodyAudio) {
+        this.audio = audio;
+    }
+
+    update(player: BodyState): void {
+        const step = this.footsteps.update(
+            player.bobCycle,
+            player.onGround,
+            player.ducked,
+            player.walking
+        );
+
+        if (step === 'step') this.audio.play('player/footstep', player.originQ3);
+        else if (step === 'land') this.audio.play('player/land', player.originQ3);
+
+        if (this.lastWeapon !== null && player.weapon !== this.lastWeapon) {
+            this.audio.playLocal('weapon/change');
+        }
+        this.lastWeapon = player.weapon;
+    }
+}
+
+/** What {@link BodySounds} reads off whoever is driving the player. */
+export interface BodyState {
+    /** `ps.bobCycle`, maintained by whichever solver is running. */
+    readonly bobCycle: number;
+    readonly onGround: boolean;
+    readonly ducked: boolean;
+    /** `BUTTON_WALKING`: crossing the floor without being heard. */
+    readonly walking: boolean;
+    readonly originQ3: ArrayLike<number>;
+    /** The weapon in hand, for `weapon/change`. */
+    readonly weapon: string;
+}
+
+/** As much of the bank as {@link BodySounds} needs. `AudioBank` satisfies it. */
+export interface BodyAudio {
+    play(name: string, originQ3: ArrayLike<number>): void;
+    playLocal(name: string): void;
+}
+
 export class Footsteps {
     private previousCycle = 0;
     private wasOnGround = true;

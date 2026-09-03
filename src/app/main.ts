@@ -44,7 +44,7 @@ import type { Damageable } from '../game/Weapons.ts';
 import { vec3 as q3vec3 } from '../q3/math.ts';
 import { MoversView } from '../client/MoversView.ts';
 import { Character, CHARACTERS, sceneFromQ3 } from '../client/Characters.ts';
-import { AudioBank, LOOP_BUDGET } from '../client/Audio.ts';
+import { AudioBank, BodySounds, LOOP_BUDGET } from '../client/Audio.ts';
 import { MapSound } from '../client/MapSound.ts';
 import { Bot } from '../game/Bot.ts';
 import { BotRuntime, type BotWorld } from '../client/Bots.ts';
@@ -107,6 +107,8 @@ import { JoinRefused, joinHost } from '../client/net/join.ts';
 import {
     NetClientSystem,
     NetEffectSystem,
+    NetItemsSystem,
+    NetMoverSystem,
     NetPresentationSystem,
     NetRenderSystem,
     NetScoreboardSystem,
@@ -1431,15 +1433,32 @@ async function main(): Promise<void> {
                 const kind = mover.classname === 'func_plat' ? 'plat' : 'door';
                 audio.play(`mover/${kind}_${which}`, centre);
             },
+            /*
+             The three a trigger does to a player, and **on the joined branch
+             every one of them is the host's**. The client still runs the movers
+             -- see `NetMoverSystem`, and GAP-041 for why they are not
+             replicated -- so these callbacks still fire there, and if they wrote
+             into `effects` the client would teleport, launch and burn itself on
+             top of the AUTH_STATE that already did all three. The sounds are
+             the host's too on that branch, as `EffectKind.Teleport` and
+             `EffectKind.JumpPad` (D-197), so they are not played twice either.
+
+             `moverSound` above is the exception and stays on both: a door's
+             noise comes from a state machine no client can see, so the only
+             copy of it is the local one.
+            */
             teleport: (destination) => {
+                if (netClient !== null) return;
                 audio.play('world/telein', player.ps.origin);
                 audio.play('world/teleout', destination.origin);
                 effects.teleport(destination.origin, destination.angle);
             },
             hurt: (damage) => {
+                if (netClient !== null) return;
                 effects.hurt(damage);
             },
             push: (velocity) => {
+                if (netClient !== null) return;
                 effects.push(velocity);
                 audio.playLocal('world/jumppad');
             },
@@ -1650,7 +1669,19 @@ async function main(): Promise<void> {
              clock rides beside it; the world copy runs after, while every
              replicated component is still canonical.
             */
-            await em.addSystem(new NetClientSystem({ client: netClient, player }));
+            await em.addSystem(
+                new NetClientSystem({
+                    client: netClient,
+                    player,
+                    /*
+                     The player's own stride, landing and weapon click, which
+                     `PlayerSystem` plays in single-player and nothing played
+                     here -- so this branch had everybody's footsteps except the
+                     ones belonging to the person listening.
+                    */
+                    sounds: new BodySounds(audio),
+                })
+            );
             await em.addSystem(new NetWorldSystem({ client: netClient, items }));
         }
 
@@ -1687,6 +1718,32 @@ async function main(): Promise<void> {
             await em.addSystem(new WorldEffectSystem({ effects, player, movers, moversView }));
         } else {
             if (bodies !== null) await em.addSystem(new CharacterBodySystem(bodies));
+
+            /*
+             Doors, plats and buttons, for the picture. Everything else in
+             `WorldEffectSystem` is the host's -- see `NetMoverSystem`, and the
+             `MoverEvents` split where `movers` is built -- but the geometry has
+             to move on this screen too, and until this was registered it never
+             did: a button did not go down, its door did not open, and neither
+             made a sound.
+            */
+            await em.addSystem(
+                new NetMoverSystem({
+                    effects,
+                    player,
+                    movers,
+                    view: moversView,
+                })
+            );
+
+            /*
+             And the shards. `PickupSystem` runs `ItemsView.update` in
+             single-player and is not registered here, which left every item on
+             the map unplaced and undrawn -- `ItemsView.update` is what writes
+             the transforms and what adds the `ShadedGeometry` back when
+             `present` returns.
+            */
+            await em.addSystem(new NetItemsSystem({ items, view: itemsView }));
 
             /*
              The render pass first, then the pass that reads what it wrote:
@@ -1797,13 +1854,27 @@ async function main(): Promise<void> {
                         mine ? LOCAL_CLIENT : WORLD_OWNER
                     );
                 },
-                hitscanTrail: (startQ3, endQ3, weapon, mine) => {
-                    arena.hitscanTrail(
-                        startQ3,
-                        endQ3,
-                        weapon,
-                        mine ? LOCAL_CLIENT : WORLD_OWNER
-                    );
+                /*
+                 **Never on the gun, not even this client's own shot**, which is
+                 the one place the local/remote translation above is deliberately
+                 not made. `ViewWeapon.hitscanTrail` anchors the near end at the
+                 barrel *being drawn this frame* -- blended eye, live angles,
+                 bob, kick and sway -- and that is strictly the better answer in
+                 single-player, where the shot happened on the frame being drawn
+                 (D-164). Here it did not: the event is the host's and is a round
+                 trip old, so its far end is where the shot landed a hundred
+                 milliseconds ago while its near end would be where the gun is
+                 now. The beam bends away from the direction of travel to reach a
+                 decal behind you, which is exactly what it looked like.
+
+                 Both ends from the same host frame instead. The line is then a
+                 straight one in the world, slightly behind the gun rather than
+                 hinged to it -- the honest picture of a shot resolved somewhere
+                 else. Predicting it locally is the real answer and is
+                 `ClientHooks.predictedFire`'s job; nothing subscribes to it yet.
+                */
+                hitscanTrail: (startQ3, endQ3, weapon) => {
+                    arena.hitscanTrail(startQ3, endQ3, weapon, WORLD_OWNER);
                 },
                 bulletImpact: (originQ3, normalQ3, weapon) => {
                     arena.bulletImpact(originQ3, normalQ3, weapon);

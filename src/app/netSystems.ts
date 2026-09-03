@@ -46,7 +46,14 @@ import {
     type NetPlayerState,
 } from '../net/components.ts';
 import { SESSION_TICK_SECONDS } from '../net/protocol.ts';
-import { Footsteps } from '../client/Audio.ts';
+import { BodySounds, Footsteps } from '../client/Audio.ts';
+import { bodyStateOf } from './systems.ts';
+import type { ItemsView } from '../client/ItemsView.ts';
+import type {
+    EffectTarget,
+    MoverWorld,
+    WorldEffects,
+} from '../game/WorldEffects.ts';
 import {
     scoreboardRows,
     type ScoreboardRow,
@@ -99,20 +106,56 @@ import * as C from '../q3/pmove/constants.ts';
  * -- which is right for measuring the protocol and blind to how it is driven.
  * `test/net-clock.test.ts` is where the pacing is held instead.
  *
- * `updatePresentation` stays outside the loop, once per fixed update rather
- * than once per session tick: it is the view kick, the weapon rack's countdown
- * and the eye-pose history the camera is blended from, all measured in
- * wall-clock milliseconds, and none of them is rolled back by a reconciliation.
+ * **`updatePresentation` runs inside the loop, once per session tick, and used
+ * to run outside it once per fixed update.** The reasoning for putting it
+ * outside was about *rollback* -- the view kick and the weapon rack are
+ * wall-clock things that no reconciliation may undo -- and that is still true
+ * and is still satisfied here, because the loop body is one `client.step()` and
+ * this runs after it. What the old placement got wrong is the *rate*.
+ *
+ * `PlayerController.updatePresentation` ends in `recordView`, which keeps the
+ * two-entry eye-pose history the camera is blended between: it copies `latest`
+ * down to `previous` and recomputes `latest` from `ps`. That pair is only
+ * meaningful if exactly one simulation step separates them, which is what
+ * single-player gets for free -- `update()` is advance-clock, step,
+ * presentation-tick, in one call. At a 30 Hz session on a 60 Hz fixed step the
+ * old placement recorded **two** poses per step: one across a real 33 ms of
+ * motion and one across nothing at all, since `ps` had not moved. The camera
+ * then blended half its frames over a doubled interval and half over a frozen
+ * one, which is a 30 Hz stutter that reads as the player jittering while
+ * walking -- and reads, wrongly, like a prediction fault.
+ *
+ * So it is called once per step, with the **session's** period rather than the
+ * engine's: the clock inside it is integer Q3 milliseconds and handing it the
+ * engine's 16.67 ms while stepping at 33.3 would run the view kick, the stair
+ * detector and the rack countdown at half speed.
+ *
+ * `sounds` is here for the same reason and not as a convenience. Footsteps are
+ * an edge detector over `ps.bobCycle`, which advances once per session step; a
+ * caller running at any other rate double-counts strides or misses them.
  */
 export class NetClientSystem extends System<never> {
     private readonly client: NetClient;
     private readonly player: PlayerController;
+    private readonly sounds: BodySounds | null;
 
-    constructor(options: { client: NetClient; player: PlayerController }) {
+    constructor(options: {
+        client: NetClient;
+        player: PlayerController;
+        /**
+         * The local player's own footsteps, landing and weapon click.
+         *
+         * Optional because a headless driver has no bank; null in the tests and
+         * in `NetRig`. Absent it, a joined client hears every other player's
+         * stride and none of its own -- which is what it did.
+         */
+        sounds?: BodySounds | null;
+    }) {
         super();
 
         this.client = options.client;
         this.player = options.player;
+        this.sounds = options.sounds ?? null;
     }
 
     override fixedUpdate = (deltaSeconds: number): void => {
@@ -136,9 +179,10 @@ export class NetClientSystem extends System<never> {
             this.accumulator -= SESSION_TICK_SECONDS;
             this.client.step();
             steps += 1;
-        }
 
-        this.player.updatePresentation(deltaSeconds);
+            this.player.updatePresentation(SESSION_TICK_SECONDS);
+            this.sounds?.update(bodyStateOf(this.player));
+        }
     };
 
     /** Unspent time, in seconds. See the class docblock. */
@@ -155,8 +199,17 @@ export class NetClientSystem extends System<never> {
  *
  * **Items.** `NetItem.present` is the host's authority on whether a shard is
  * standing there, and `ItemsView` polls `ItemInstance.present` every render
- * frame -- so one assignment is the whole of item presentation on a client, and
- * the client never runs a respawn timer of its own.
+ * frame -- so one assignment is the whole of item *state* on a client.
+ *
+ * The clock in front of it is not: `ItemSystem.advance` is called first, and its
+ * own respawns are then overwritten by the authority in the same call. That
+ * looks redundant and is not -- `items.now` is what `ItemsView` bobs and spins
+ * every shard on the map by, and nothing on this branch was advancing it, so
+ * every item on a joined client sat at phase zero. (It sat *invisible*, in fact:
+ * `ItemsView.update` is also what places each piece and what adds and removes
+ * its `ShadedGeometry` as `present` moves, and it was never being called at
+ * all -- `PickupSystem` is what runs it in single-player and is not registered
+ * here. See `NetItemsSystem`.)
  *
  * **Bodies.** Every slot's `CharacterSlot` follows its replicated origin
  * through a closure `NetClient` installed; `sync()` is what pushes those into
@@ -180,7 +233,16 @@ export class NetWorldSystem extends System<never> {
         this.items = options.items;
     }
 
-    override fixedUpdate = (): void => {
+    override fixedUpdate = (deltaSeconds: number): void => {
+        /*
+         The clock, then the authority over it. `advance` respawns locally on a
+         timer this client has no business believing; every one of those
+         decisions is overwritten two lines down by the host's own `present`,
+         which is why the order is not negotiable. What survives is `items.now`,
+         and that is the whole reason to call it.
+        */
+        this.items.advance(deltaSeconds);
+
         const items = this.items.items;
 
         for (const entry of this.client.items) {
@@ -190,6 +252,87 @@ export class NetWorldSystem extends System<never> {
         }
 
         this.client.syncBodies();
+    };
+}
+
+/**
+ * The bob, the spin, and whether a shard is drawn at all.
+ *
+ * `PickupSystem.update` is the single-player half of this and it is not
+ * registered on a joined client, because everything *else* in that system is the
+ * host's. So nothing called `ItemsView.update`, and `ItemsView.update` is not
+ * only the animation: it is what writes each piece's transform and what adds and
+ * removes the `ShadedGeometry` that makes an item visible when `present` moves.
+ * The result was a map whose every pickup was inaudible to look at and audible
+ * to walk into -- the sound played, the model was never anywhere.
+ *
+ * On `update` rather than `fixedUpdate`, exactly as `PickupSystem` runs it: a
+ * spin is presentation and wants the display's rate.
+ */
+export class NetItemsSystem extends System<never> {
+    private readonly items: ItemSystem;
+    private readonly view: ItemsView;
+
+    constructor(options: { items: ItemSystem; view: ItemsView }) {
+        super();
+
+        this.items = options.items;
+        this.view = options.view;
+    }
+
+    override update = (): void => {
+        this.view.update(this.items.now);
+    };
+}
+
+/**
+ * Doors, plats and buttons, moved for the picture.
+ *
+ * **The host runs these and replicates nothing**, which is GAP-041: there is no
+ * `NetMover` producer because `HeadlessPhysics` builds BSP model 0 and the host
+ * has no kinematic brush bodies to publish from. `main.ts` has said since step 6
+ * that they are "simulated locally for now" as a result -- and they were not
+ * simulated at all, because the system that does it in single-player is
+ * `WorldEffectSystem` and that one also applies teleports, pushes and damage to
+ * the player, all of which are the host's. So the whole pass was dropped rather
+ * than split, and on a joined client a door never opened, a plat never moved and
+ * a button never went down or made a sound.
+ *
+ * This is the half that is not the host's. `WorldEffects.applyPresentation` runs
+ * the mover clock and both trigger tests against this player's box and applies
+ * *nothing* to them; the caller wires `MoverEvents` so the noise still plays and
+ * the teleport, push and hurt go nowhere, because each of those arrives instead
+ * as replicated state or as a `HitEvent`.
+ *
+ * **Both peers therefore run the same movers from the same map**, one frame or
+ * so apart, which is what makes a locally-simulated door open at the moment the
+ * host's does: the button that starts it is pressed on both sides by the same
+ * player standing in the same place. It is not replication and it is not exact;
+ * it is a door that works, until the day the host grows bodies to publish.
+ */
+export class NetMoverSystem extends System<never> {
+    private readonly effects: WorldEffects;
+    private readonly player: EffectTarget;
+    private readonly movers: MoverWorld;
+    private readonly view: { update(): void };
+
+    constructor(options: {
+        effects: WorldEffects;
+        player: EffectTarget;
+        movers: MoverWorld;
+        view: { update(): void };
+    }) {
+        super();
+
+        this.effects = options.effects;
+        this.player = options.player;
+        this.movers = options.movers;
+        this.view = options.view;
+    }
+
+    override fixedUpdate = (deltaSeconds: number): void => {
+        this.effects.applyPresentation(this.player, this.movers, deltaSeconds);
+        this.view.update();
     };
 }
 

@@ -33,6 +33,11 @@ import {
     type MoverEvents,
     type Vec3,
 } from '../src/game/Movers.ts';
+import {
+    WorldEffects,
+    type EffectTarget,
+    type MoverWorld,
+} from '../src/game/WorldEffects.ts';
 
 function silent(): MoverEvents {
     return {
@@ -494,5 +499,115 @@ describe('am_thornish, whose jump pads were the bug report', () => {
         watched.update(0.016, mins, maxs, true);
 
         expect(pushed).toBe(false);
+    });
+});
+
+describe('the movers a joined client runs for the picture alone', () => {
+    /**
+     * A mover world that records what it was asked and queues one of each event.
+     *
+     * Synthetic rather than a map's, because what is under test is which of
+     * `WorldEffects`' phases run -- not what any particular door does.
+     */
+    function stub(effects: WorldEffects): MoverWorld & { calls: string[] } {
+        const calls: string[] = [];
+        return {
+            calls,
+            movers: [],
+            update(deltaSeconds: number): void {
+                calls.push(`update:${deltaSeconds.toFixed(5)}`);
+                // The three a trigger does to a player, queued exactly as
+                // `MoverSystem.fire` queues them from inside this call.
+                effects.teleport([100, 200, 300], 90);
+                effects.push([0, 0, 500]);
+                effects.hurt(25);
+            },
+            touchButtons(): void {
+                calls.push('touchButtons');
+            },
+        };
+    }
+
+    /** `EffectTarget` over a plain origin, which is all these need. */
+    function target(): EffectTarget & { yaws: number[] } {
+        return {
+            ps: { origin: [10, 20, 30], velocity: [1, 2, 3] },
+            mins: [-15, -15, -24],
+            maxs: [15, 15, 32],
+            yaws: [] as number[],
+            setYaw(degrees: number): void {
+                this.yaws.push(degrees);
+            },
+        };
+    }
+
+    it('advances the movers and presses the buttons, which is what a door needs', () => {
+        const effects = new WorldEffects();
+        const movers = stub(effects);
+        const player = target();
+
+        effects.applyPresentation(player, movers, 1 / 60);
+
+        /*
+         Both trigger tests, in `G_RunFrame`'s order. This is the half that was
+         missing entirely on a joined client: `WorldEffectSystem` is not
+         registered there, because everything *else* it does is the host's, so
+         the whole pass went with it -- and a door never opened, a plat never
+         moved, and a button never went down or made a sound.
+        */
+        expect(movers.calls).toEqual([`update:${(1 / 60).toFixed(5)}`, 'touchButtons']);
+
+        // And the box they were tested with is the player's, posture included
+        // (D-075), rather than a constant.
+        expect([...effects.playerMins]).toEqual([-5, 5, 6]);
+        expect([...effects.playerMaxs]).toEqual([25, 35, 62]);
+    });
+
+    it('applies none of what the triggers asked for, because the host already did', () => {
+        const effects = new WorldEffects();
+        const movers = stub(effects);
+        const player = target();
+
+        effects.applyPresentation(player, movers, 1 / 60);
+
+        /*
+         A teleport, a launch and 25 points of damage were all queued by the call
+         above, and every one of them is the host's: the origin and the velocity
+         arrive in an AUTH_STATE and the damage as a `HitEvent`. A client that
+         applied its own copy would apply each of them twice -- a correction, a
+         doubled view kick, and a player who reaches the teleporter's mark and is
+         then put there again.
+        */
+        expect(player.ps.origin, 'the client teleported itself').toEqual([10, 20, 30]);
+        expect(player.ps.velocity, 'the client launched itself').toEqual([1, 2, 3]);
+        expect(player.yaws, 'the client turned itself').toEqual([]);
+    });
+
+    it('leaves nothing queued for a later settle to find', () => {
+        const effects = new WorldEffects();
+        const movers = stub(effects);
+        const player = target();
+
+        effects.applyPresentation(player, movers, 1 / 60);
+
+        /*
+         The way this arrangement could go wrong quietly. `settle` is what empties
+         the queue; a pass that fills it without one leaves a teleport pending and
+         grows `hurtPending` every frame, so the next caller that *does* settle
+         applies a trigger the host handled seconds ago -- and applies all of the
+         damage at once. `applyPresentation` drops them itself rather than relying
+         on how its caller happened to wire `MoverEvents`.
+        */
+        const world = effects.applyTouch(player, {
+            movers: [],
+            touch(): void {},
+            touchButtons(): void {},
+        });
+
+        expect(world.damage, 'damage the host already billed arrived late').toBe(0);
+        expect(world.teleported, 'a teleport the host already did arrived late').toBe(false);
+        expect(player.ps.origin, 'a queued teleport landed on the next settle').toEqual([
+            10, 20, 30,
+        ]);
     });
 });

@@ -11372,3 +11372,96 @@ nothing had ever put one there. `dom.element()` now carries `addEventListener` a
 repeat)` that dispatches to whatever registered -- five cases: tab cancelled while locked, cancelled
 through thirty repeats, *not* cancelled once unlocked (repeats included, so the gate cannot be
 outrun), space cancelled either way, and both released on `detach`.
+
+### D-200: four things a joined client was not doing, and one clock that made it look like a fifth
+
+Five defects reported from a real browser against a real host. Four of them are one mistake, and it
+is a mistake about a *shape* rather than about any of the four:
+
+```ts
+if (netClient === null) {
+    await em.addSystem(new CombatSystem(arena));
+    await em.addSystem(pickups);
+    await em.addSystem(new BotSystem(...));
+    await em.addSystem(new WorldEffectSystem(...));
+} else {
+    ...the net systems...
+}
+```
+
+**Each of those five single-player systems is a simulation pass with a presentation pass welded to
+it**, and the branch drops them whole. Everything the host owns goes -- correctly -- and everything
+that is merely *drawing what the host owns* goes with it, silently, because nothing names the
+difference. This is the third time: GAP-046 was the missile models, D-197 was `Effects.update`, and
+this is the remaining three at once.
+
+- **Doors, plats and buttons did nothing.** `WorldEffectSystem` is what runs `MoverSystem` and
+  `MoversView`, and it also applies teleports, pushes and damage to the player -- which are the
+  host's. So the pass was dropped rather than split, and `main.ts`'s own comment saying movers are
+  "simulated locally for now" described something that was not happening. `WorldEffects` gains
+  `applyPresentation`: box, `movers.update`, `touchButtons`, and **nothing applied to the player** --
+  no carry (the host does not carry either, and a client that did would invent motion the host never
+  made) and no settle. Both peers then run the same movers from the same map a frame or so apart,
+  which is enough for a door to open when the host's does, because the button that starts it is
+  pressed on both sides by the same player standing in the same place.
+- **Every pickup on the map was invisible.** `ItemsView.update` is not only the bob and the spin: it
+  writes each piece's transform and adds and removes the `ShadedGeometry` as `present` moves. Nothing
+  called it -- `PickupSystem` does, in single-player -- so the models were never placed and never
+  shown, while the *sound* played, because that had just been fixed (D-197). "I hear pickups and see
+  none" is exactly what those two facts predict.
+- **The player heard everybody's footsteps except their own.** The only footstep call sites were
+  `PlayerSystem`, which is single-player's, and `NetPresentationSystem`, which is remote players'.
+  A joined client therefore had the set exactly inverted. `BodySounds` is the shared half --
+  footsteps, landing, weapon click, all edge detectors over `ps.bobCycle` -- and both branches drive
+  it. It reads as a spatialisation fault because four bots' strides with none of your own is what
+  spatialisation failing sounds like.
+- **Hitscan tracers bent away from the direction of travel** to reach a decal behind the player.
+  `Arena.hitscanTrail` offers the local player's beam to `ViewWeapon`, which anchors the near end at
+  the barrel *being drawn this frame* -- blended eye, live angles, bob, kick, sway. That is strictly
+  the better answer in single-player, where the shot happened on the frame being drawn (D-164), and
+  it is the wrong one for an event that is a round trip old: the far end is where the shot landed
+  100 ms ago and the near end is where the gun is now, so the line hinges. Both ends now come from
+  the same host frame. It sits slightly behind the gun, which is the honest picture of a shot
+  resolved somewhere else.
+
+**And the fifth was not a prediction fault, which is what it looked like.** A player walking in a
+straight line jittered. `NetClientSystem` called `player.updatePresentation` once per *engine* fixed
+update, outside the session loop, and the docblock argued for it: the view kick and the weapon rack
+are wall-clock things no rollback may undo. That argument is about rollback and is still satisfied --
+the call sits after `client.step()` returns. What it got wrong is the rate.
+
+`updatePresentation` ends in `recordView`, which maintains the **two-entry** eye-pose history the
+camera is blended between: copy `latest` down to `previous`, recompute `latest` from `ps`. The pair
+means something only if exactly one simulation step separates them, which is what single-player gets
+for free from `update()` -- advance clock, step, present, in one call. At a 30 Hz session on a 60 Hz
+fixed step the old placement recorded **two poses per step**: one spanning a real 33 ms of motion and
+one spanning nothing at all, because `ps` had not moved. The camera blended half its frames across a
+doubled interval and half across a frozen one. That is a 30 Hz stutter, and a stutter that scales
+with speed is indistinguishable from rubber-banding by eye.
+
+One tick per step now, with the **session's** period rather than the engine's -- the clock inside is
+integer Q3 milliseconds, and handing it 16.67 ms while stepping at 33.3 would run the view kick, the
+stair detector and the rack countdown at half speed, which is the failure this would otherwise trade
+for the one it fixes.
+
+**A test had to be un-pinned to do it**, which is the entry's other half. `net-clock.test.ts`
+asserted `presented === calls` -- once per engine frame -- because that is what the code did and what
+the design intended when it was written. It is now `presented === steps` plus a check that the
+elapsed presentation seconds match real seconds, so the two ways of getting the rate wrong are both
+covered. A test that pins the intent of the day is a test that will argue with the fix.
+
+**One landmine closed on the way past.** `applyPresentation` runs the trigger tests, so a caller that
+wired `MoverEvents` normally would queue a teleport, a push and a damage on every frame and never
+settle -- leaving a pending teleport for whatever settles next and growing `hurtPending` without
+bound. It drops them itself rather than trusting how it was wired. `main.ts` also drops them, at the
+callback, and for a different reason: a teleport and a pad make a *noise*, and that noise arrives
+from the host as an `EffectEvent` (D-197), so playing the local copy would play it twice.
+
+Measured: `movers.test.ts` gains three cases -- both trigger tests run in `G_RunFrame`'s order
+against the player's own posture-dependent box, none of the three writes reaches the player, and a
+later settle finds an empty queue. `npm run check` is green at 1,171 tests.
+
+**What is still open, and named rather than left to be found.** The local player's own muzzle flash
+and trail still arrive from the host rather than being predicted, so both are a round trip late;
+`ClientHooks.predictedFire` is the seam and nothing subscribes to it. That is what Q3 predicts with
+`CG_FireWeapon`, and it is the next piece of step 6 rather than part of this one.
