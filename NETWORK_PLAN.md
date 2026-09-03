@@ -848,7 +848,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 
 ## 9. Tracking
 
-**Engine: meep 3.14.6.** What each upgrade moved, so the numbers below can be read against the
+**Engine: meep 3.15.0.** What each upgrade moved, so the numbers below can be read against the
 version that produced them:
 
 | version | what it changed here |
@@ -856,6 +856,7 @@ version that produced them:
 | 3.14.4 | the host's rollback loop on a clean link (D-176) |
 | 3.14.5 | the event loss under reordering, by slicing a tick's owed range across up to `max_packets_per_tick` packets (D-177) |
 | 3.14.6 | **closes GAP-042** -- `onInitialSync` now seeks a joining client to the host's frame and `seek_to_frame` is public, so `NetClient.fastForward` is redundant. **Removed in D-188**, and the join burst is identical on both sides of the removal -- 42 rewinds at 40 ms and 80 at 80 ms either way -- because the loop ran immediately before a seek that overwrote it. Adds `remote_entity_count`, which makes GAP-040's symptom visible. Adds `delivery_stats(peer)`, the instrument GAP-043's residual needed -- **and it reports 10/29/225 frames skipped unapplied at 40/80/150 ms on the default configuration, which its own docblock says should be zero**. Settled in D-189: the field counts the receiver's own held slices, because `#hold_slice` validates with `min_frame = Infinity` and the skip branch is where the accounting lives. The honest loss, taken from `onFrameApplied` and the slice headers, is **0/0/13**, and filtered to head slices the counter matches it within one. A real residual does survive on the default at 150 ms with jitter -- 10 frames on a lossless link, nine of them inside the first six seconds after the join -- and none at 40 or 80 ms (GAP-047). Fixes a `.d.ts` generation bug in `NavigationMesh.build` (GAP-001's family), which turned this port's workaround cast into the compile error. Join-time behaviour changed with it: a client now converges for about a second on a delayed link and the host rolls back while it does, after which it rolls back **not at all** -- steady-state coherence rose from 91.2% to 96.6% at 80 ms |
+| 3.15.0 | **closes GAP-045** -- `ServerAuthoritativeClient` now reapplies the records in a rewound window that *arrived* from a peer, which is the other half of the rule `SimAction` states and the host already implemented. One file under `engine/network` changed; the rest of the release is `shade/`. `test/net-match.test.ts` goes from one stale slot in thirty-two to **zero** and its bound becomes an equality, and `tools/repro/meep-mutate-rewind.mjs` passes with 596 rewinds walked. Adds `replayed_arrived_count` (36,489 records over 45 s with six clients) and **`onReconcileAbandoned`**, which makes a second, different loss visible for the first time -- 2 on a loopback, 34 at 150 ms with 5% loss. Also corrects a number this port was misreading: `net-presentation.test.ts`'s "render delay" was replication fidelity all along, and it is now 0.00 where it was 0.04 mean and **23.05** worst (D-193). GAP-047 is untouched -- `Replicator.js` is byte-identical |
 
 | step | state |
 |---|---|

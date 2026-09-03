@@ -1404,8 +1404,10 @@ export class Host {
      * asks about and nothing before that test looked.
      *
      * The parting publish is repeated for the same window `publishInfo` uses,
-     * and for the same reason (GAP-045): this is a single edge, there is no
-     * second chance at it, and a lost one is permanent.
+     * and for the same reason it still has one: this is a single edge, there is
+     * no second chance at it, and a lost one is permanent. GAP-045 was that
+     * reason until meep 3.15.0 fixed it; what is left is the abandoned
+     * reconciliation `INFO_RESEND_FRAMES`' docblock describes.
      */
     private publishPresence(record: Slot): void {
         if (record.connected) {
@@ -1725,8 +1727,24 @@ const PARKED_BOT = vec3(0, 4096, -1e6);
  *
  * Ten is a sixth of a second, which is long enough to cross any link this port
  * has measured and short enough that the cost never shows up in a bandwidth
- * census. It is a workaround for GAP-045 rather than a tuning knob: if the
- * engine's single-mutation delivery becomes reliable, this becomes one.
+ * census.
+ *
+ * **It was GAP-045's workaround and it is now something else's**, which is the
+ * kind of thing worth writing down rather than leaving as a constant nobody
+ * dares touch. GAP-045 -- a rewind about one entity discarding every other
+ * entity's published state -- is fixed in meep 3.15.0, and this was tested for
+ * removal rather than assumed. At 1, meaning publish once with no redundancy,
+ * the loopback and 80 ms cases are still zero stale slots and the worst link is
+ * not: five of ninety-six at 150 ms with 40 ms jitter and 5% loss with six
+ * clients, alongside **2,874** abandoned reconciliations against 34 with the
+ * republish in place.
+ *
+ * So what it covers now is `onReconcileAbandoned` -- the reconciliation the
+ * engine gives up on because the action log has already rolled past the frame
+ * its rewind needs, which is a real loss of replicated state that 3.15.0 made
+ * visible and no version repairs. It becomes a tuning knob on the day this port
+ * implements the `RECOVERY_REQUEST`/`STATE_BURST` round trip the engine names
+ * for that (D-167's follow-up list). See D-193.
  */
 const INFO_RESEND_FRAMES = 10;
 

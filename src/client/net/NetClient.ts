@@ -184,6 +184,41 @@ export class NetClient {
     predictedFrames = 0;
 
     /**
+     * Reconciliations the engine gave up on, new in meep 3.15.0.
+     *
+     * **This is a real loss of replicated state and it used to be silent.**
+     * `ServerAuthoritativeClient` rewinds to `server_frame - 1` before applying
+     * an AUTH_STATE, and when the action log has already rolled past that frame
+     * the rewind throws and the reconciliation is skipped -- taking with it
+     * whatever that window carried for every entity *other* than the one the
+     * AUTH_STATE names. An owner that publishes on change never sends it again,
+     * so it is gone. Until 3.15.0 the engine caught the throw and returned;
+     * `onReconcileAbandoned` is the same event with a signal attached.
+     *
+     * Counted here rather than acted on, because the repair is a
+     * `RECOVERY_REQUEST`/`STATE_BURST` round trip this port does not implement
+     * (D-167 lists resume and recovery as follow-ups). What it buys today is
+     * that the failure is *visible*: measured at 34 over 45 s with six clients
+     * on a 150 ms link with 5% loss, and 2 on a loopback. See D-193.
+     */
+    reconcileAbandoned = 0;
+
+    /**
+     * Records that arrived from a peer and were reapplied by a replay.
+     *
+     * meep 3.15.0's counter for GAP-045's fix doing work: before it, a rewind
+     * about one entity discarded every other entity's published state in the
+     * window. Non-zero means the repair is running. Measured in the thousands
+     * over a 45-second match, which is the scale of what used to be thrown
+     * away.
+     */
+    get replayedArrived(): number {
+        return (
+            this.session.client as unknown as { replayed_arrived_count?: number }
+        ).replayed_arrived_count ?? 0;
+    }
+
+    /**
      * The owned slot's bytes at the end of every predicted frame.
      *
      * This is what the AUTH_STATE short-circuit hashes against: when the host
@@ -666,6 +701,21 @@ export class NetClient {
         client.onReconcileComplete.add((_serverFrame: number, replayCount: number) => {
             this.reconcileCount += 1;
             this.replayFrames += replayCount;
+        });
+
+        /*
+         And the reconciliations that did not complete, which is the half that
+         had no signal before 3.15.0. Subscribed even though nothing acts on it,
+         because an unobserved counter is how GAP-045 stayed open for three
+         releases: the failure this reports is silent by construction, and a
+         port that cannot see it happen cannot report it either.
+        */
+        (
+            client as unknown as {
+                onReconcileAbandoned?: { add(fn: (frame: number, id: number) => void): void };
+            }
+        ).onReconcileAbandoned?.add(() => {
+            this.reconcileAbandoned += 1;
         });
     }
 

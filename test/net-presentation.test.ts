@@ -22,11 +22,25 @@
  * told it to draw: where each remote player was placed, which animation was
  * chosen, and how far the drawn position sits from the host's own truth.
  *
- * The last of those is the number worth having. A client draws remote players
- * *behind* the present on purpose -- `AdaptiveRenderDelay` samples the
- * interpolation log a few frames back so the motion is smooth -- so the honest
- * question is not "is it exact" but "is the lag bounded and is it the lag we
- * asked for".
+ * The last of those is the number worth having, and **what it measures is not
+ * what this file said it was for two releases.** It was written as the render
+ * delay -- a client draws remote players behind the present on purpose, because
+ * `AdaptiveRenderDelay` samples the interpolation log a few frames back -- and
+ * it is not: `NetClient.step` ends with `normalize_if_dirty()`, which puts every
+ * remote component back to its canonical value precisely so that simulation does
+ * not read a blend, and this harness has no `NetRenderSystem`, so
+ * `system.update()` runs after that. The number is therefore **replication
+ * fidelity**: how far the client's canonical copy of a remote slot is from the
+ * host's own.
+ *
+ * Which makes zero the right answer rather than a suspicious one, and meep
+ * 3.15.0 produces it. On 3.14.6 this read 0.04 units mean and **23.05 worst**,
+ * and that was GAP-045: a rewind about one entity discarded every other entity's
+ * published state in the window, so the client's copy of a bot was whatever
+ * survived. 3.15.0 reapplies the arrived records and the drawn position is the
+ * host's, exactly, on every one of 2,400 frames. The render delay is real and
+ * still applies in the browser, where `NetRenderSystem` blends immediately
+ * before this system reads; it is simply not what this file can see. See D-193.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -309,23 +323,32 @@ describe('what a client draws of the other players', () => {
         );
 
         /*
-         The render delay, as a distance. `AdaptiveRenderDelay` starts at six
-         frames and clamps to 2..30, so a bot moving `meanStep` units a frame is
-         drawn somewhere under thirty frames of motion behind the host -- and a
-         great deal less than that in practice. The bound is on *frames of its
-         own motion* rather than on units, because units would be a statement
-         about how fast bots run rather than about the netcode.
+         **Exactly the host's position, on every frame.** See the file header:
+         this reads canonical values rather than blended ones, so the quantity
+         is replication fidelity and its target is zero -- where the comment
+         that used to sit here called it the render delay and asserted the
+         opposite, that zero "would be wrong here, not right".
 
-         Zero would be wrong here, not right: it would mean the client was
-         drawing the newest snapshot it had and stuttering between them.
+         It was neither wrong nor right; it was GAP-045. On meep 3.14.6 this
+         read 0.04 units mean and 23.05 worst, because a rewind about one entity
+         discarded every other entity's published state for the window and
+         nothing re-sent it. 3.15.0 reapplies those records and the disagreement
+         is gone: 0.00 mean and 0.00 worst over 2,400 frames and four bots.
+
+         Asserted at zero rather than at a small bound, because that is what the
+         fix promises and a bound would let it rot back. `worst` as well as the
+         mean: an average of 0.00 with one 23-unit spike in it is exactly the
+         old failure, and only the maximum can see it.
         */
-        expect(meanLag, 'remote players are drawn at the host position exactly').toBeGreaterThan(
-            0
-        );
         expect(
-            meanLag / Math.max(meanStep, 1e-6),
-            'remote players are drawn further behind than the render delay allows'
-        ).toBeLessThan(30);
+            meanLag,
+            'the client no longer agrees with the host about where remote players are'
+        ).toBe(0);
+        expect(
+            Math.max(...lag),
+            'a remote player was drawn somewhere the host never put them'
+        ).toBe(0);
+        void meanStep;
     });
 
     it('animates from replicated velocity, not from a guess', () => {

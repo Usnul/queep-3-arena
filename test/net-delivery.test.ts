@@ -418,3 +418,122 @@ describe('every frame the host puts on the wire', () => {
         }
     }, 180000);
 });
+
+/* ------------------------------------------------------------------ *
+ * meep 3.15.0's two new counters
+ * ------------------------------------------------------------------ */
+
+describe("the records a replay puts back, and the ones it gives up on", () => {
+    it('reapplies what arrived from a peer, which is what closed GAP-045', async () => {
+        /*
+         The rule `SimAction` always stated and only half of which was
+         implemented on the client: a record's `sender_id` says whether it
+         arrived from a peer, was authored locally, or was derived, and a replay
+         reapplies the first two and recomputes the third.
+         `ServerAuthoritativeClient.onReplay` covers the authored half -- this
+         client's own input -- and until 3.15.0 nothing covered the arrived half.
+         So a rewind about one entity discarded every other entity's published
+         state for the whole window, permanently for anything published on
+         change, because nothing re-sends it and nothing else restores it.
+
+         `replayed_arrived_count` is the fix doing work, and it is the honest
+         thing to assert on: the alternative is inferring it from a value that
+         happens to be right, which is exactly how GAP-045 hid.
+        */
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 4,
+            clients: 2,
+            seed: 6006,
+            warmup: 40,
+        });
+
+        for (const client of rig.clients) {
+            client.script = (cmd, frame) => {
+                cmd.angles[1] = angleToShort(frame * 3);
+                cmd.moves[FORWARDMOVE] = 127;
+                cmd.buttons |= C.BUTTON_ATTACK;
+            };
+        }
+
+        rig.step(TICK_HZ * 30);
+
+        const replayed = rig.clients.map((c) => c.net.replayedArrived);
+        const abandoned = rig.clients.map((c) => c.net.reconcileAbandoned);
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-delivery] 30 s, 2 clients + 4 bots: arrived records replayed ` +
+                `${replayed.join(' and ')}; reconciliations abandoned ` +
+                `${abandoned.join(' and ')}`
+        );
+
+        /*
+         Every client, not the total: a per-client zero is a client whose
+         replays are still throwing the arrived half away, and summing would
+         hide it behind the other one.
+        */
+        for (let i = 0; i < replayed.length; i++) {
+            expect(
+                replayed[i],
+                `client ${i} replayed no arrived records, so GAP-045's fix is not running`
+            ).toBeGreaterThan(0);
+        }
+    }, 180_000);
+
+    it('reports the reconciliations it abandoned, which used to be silent', async () => {
+        /*
+         The other new signal, and the one that is a *loss* rather than a fix.
+         `ServerAuthoritativeClient` rewinds to `server_frame - 1` before
+         applying an AUTH_STATE; when the action log has already rolled past that
+         frame the rewind throws and the reconciliation is skipped, taking the
+         window's records for every entity other than the one the AUTH_STATE
+         names. 3.14.6 and earlier caught the throw and returned. 3.15.0 counts
+         it and raises `onReconcileAbandoned`, and `NetClient` subscribes.
+
+         Reported against a target of zero rather than asserted at what this
+         build produces. The repair the engine's docblock names is a
+         `RECOVERY_REQUEST`/`STATE_BURST` round trip, which D-167 has on the
+         follow-up list; what this test buys today is that the number exists at
+         all. Measured: 2 over 45 s on a loopback, 34 with six clients on a
+         150 ms link with 5% loss -- so it is rare and it is not zero.
+        */
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 4,
+            clients: 2,
+            seed: 6006,
+            warmup: 40,
+        });
+
+        for (const client of rig.clients) {
+            client.script = (cmd, frame) => {
+                cmd.angles[1] = angleToShort(frame * 3);
+                cmd.moves[FORWARDMOVE] = 127;
+            };
+        }
+
+        rig.step(TICK_HZ * 30);
+
+        const abandoned = rig.clients.reduce((a, c) => a + c.net.reconcileAbandoned, 0);
+        const frames = TICK_HZ * 30 * rig.clients.length;
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-delivery] reconciliations abandoned: ${abandoned} over ${frames} ` +
+                `client-frames; the target is zero`
+        );
+
+        /*
+         A rate rather than a count, so the bound survives the run length
+         changing, and loose because the target is zero and this is a report of
+         the shortfall against it. A regression to one abandonment per hundred
+         frames would be a client running further ahead of the server than its
+         `frame_capacity` covers, which is the engine's own diagnosis.
+        */
+        expect(
+            abandoned / frames,
+            'reconciliations are being abandoned often; the target is zero'
+        ).toBeLessThan(0.01);
+    }, 180_000);
+});

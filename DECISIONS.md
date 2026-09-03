@@ -10846,3 +10846,70 @@ Two smaller decisions inside the filter, both recorded where they are made:
 - **No area portals.** Q3 refines the PVS with `areaportal` state so a closed door hides a room; that
   needs solid movers on the host (GAP-041) and it only ever *removes* entities, so leaving it out is
   conservative in the direction that keeps the game correct.
+
+### D-193: meep 3.15.0 closes GAP-045, and the number it fixes was being read as a render delay
+
+Upgraded from 3.14.6. **One file under `engine/network` changed** --
+`orchestrator/ServerAuthoritativeClient.js` -- and it closes the port's oldest open upstream gap.
+Everything else in the release is `shade/`, which this port cannot exercise in the preview browser.
+
+**GAP-045 is fixed, and the fix is the other half of a rule `SimAction` already stated.** A record's
+`sender_id` says whether it arrived from a peer, was authored locally, or was derived, and a replay
+is supposed to reapply the first two and recompute the third.
+`ServerAuthoritativeServer.#read_historical` did that on the host; the client did not. `onReplay`
+covers the authored half -- this client's own input -- and nothing covered the arrived half, so a
+rewind about one entity discarded every **other** entity's published state for the whole window,
+permanently for anything published on change, because nothing re-sends it and nothing else restores
+it. 3.15.0 harvests the arrived records out of each frame before reopening it (copied out, because
+`begin_frame` rewinds the buffer over the bytes being read) and re-executes them through the
+executor, so the reopened frame describes what is now live and the next rewind can undo it.
+
+**Measured here, and the residual is gone.** `test/net-match.test.ts` reported one slot in
+thirty-two stale over 45 seconds with two clients and four bots; it now reports **zero**, and the
+assertion is exact rather than the `<= 2` bound that let "nearly right" sit for three releases.
+Across four configurations, with the in-flight window drained so the number is loss rather than lag:
+zero stale on a loopback with two clients, zero with six, zero at 80 ms with four, and zero at
+150 ms with 40 ms jitter and 5% loss with six. `replayed_arrived_count` -- the engine's counter for
+the fix doing work -- runs to **36,489** records over 45 seconds with six clients on a loopback,
+which is the scale of what used to be thrown away.
+
+**And it corrects a number this port has been misreading.** `test/net-presentation.test.ts` measured
+how far a drawn remote player sat from the host's own position and called it the render delay, with
+a comment saying zero "would be wrong here, not right: it would mean the client was drawing the
+newest snapshot it had and stuttering between them." It was neither. `NetClient.step` ends with
+`normalize_if_dirty()`, which puts every remote component back to canonical precisely so simulation
+does not read a blend, and the test harness has no `NetRenderSystem` -- so `system.update()` runs
+after the normalize and reads canonical values. **The quantity was replication fidelity, not render
+delay**, and 0.04 units mean with a **23.05** worst was GAP-045 in a file that never mentioned it.
+On 3.15.0 it is 0.00 and 0.00 over 2,400 frames and four bots, and the assertion is now exact on
+both the mean and the maximum -- the maximum because an average of zero with one 23-unit spike in it
+is precisely the old failure. The render delay is real and still applies in the browser, where
+`NetRenderSystem` blends immediately before this system reads; it is simply not what this file can
+see. The missile census moved the same way: worst single-frame move 60.0 units to **30.0**.
+
+**A second new signal, and it is a loss rather than a fix.** `onReconcileAbandoned` and
+`reconcile_abandoned_count`: `ServerAuthoritativeClient` rewinds to `server_frame - 1` before
+applying an AUTH_STATE, and when the action log has already rolled past that frame the rewind throws
+and the reconciliation is skipped -- taking the window's records for every entity other than the one
+the AUTH_STATE names. 3.14.6 and earlier caught the throw and returned; the comment said "for now
+skip this reconciliation". It is now counted and announced. `NetClient` subscribes and
+`net-delivery.test.ts` reports it against a target of zero: **2 over 45 s on a loopback, 34 with six
+clients at 150 ms and 5% loss**. Nothing acts on it, because the repair the engine names is a
+`RECOVERY_REQUEST`/`STATE_BURST` round trip that D-167 has on the follow-up list. What it buys today
+is that the failure is visible, which is the thing GAP-045 spent three releases not being.
+
+**`INFO_RESEND_FRAMES` stays, and what it covers has changed.** GAP-045's entry said the ten-frame
+republish "becomes a tuning knob rather than a workaround on the day it lands", so it was tested for
+removal rather than assumed. At 1 -- publish once, no redundancy -- the loopback and 80 ms cases are
+still zero stale, and the worst link is not: **five slots of ninety-six**, alongside **2,874**
+abandoned reconciliations against 34 with the republish in place. So it is still doing work at
+150 ms and 5% loss, and what it is covering there is the abandonment above rather than the rewind
+discard. Kept, with the reason rewritten to say which failure it is for. Removing it on the strength
+of the loopback case would have been the same mistake as reading the presentation number as a render
+delay: the right measurement at the wrong link.
+
+**GAP-047 is unchanged and the upstream report still stands.** `Replicator.js` is byte-identical
+between 3.14.6 and 3.15.0, so `skipped_unapplied` still reads 185 and 214 over ten and twenty
+seconds where ten frames are lost, and `#hold_slice` still validates with `min_frame = Infinity`.
+D-189's measurement and `tools/repro/meep-delivery-counter.mjs` need no re-running, and did not
+change when re-run.

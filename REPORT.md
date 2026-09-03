@@ -2231,13 +2231,32 @@ That is an accurate description of a component that cannot be used for its state
 - **Standalone reproduction:** `tools/repro/meep-delivery-counter.mjs`, which depends on the engine and nothing else. On a **lossless** seeded link with 40 ms of jitter it reports `skipped_unapplied` 234 with **zero** event actions never applied; `JITTER_MS=0` is the control and reports zero. The jitter sweep is 30 / 101 / 234 / 309 at 10 / 20 / 40 / 80 ms with the loss at zero throughout. Its header records why a deliberate packet swap -- the technique `meep-event-reorder.mjs` uses -- reports nothing here: the re-send window overlaps consecutive ticks almost entirely, so the frontier advances one frame a tick and a swap inside one tick trades the new frame against a duplicate. Every copy of a frame has to be late, which takes reordering across ticks.
 - **Evidence:** `test/net-delivery.test.ts` (the whole file, and the two measurement traps in its header), `tools/repro/meep-delivery-counter.mjs`, `test/net-latency.test.ts` ("delivers every event a reordering link can reach it with", which prints the counter and no longer claims it proves anything), `node_modules/@woosh/meep-engine/src/engine/network/replication/Replicator.js` (`#delivery`, `#apply_groups`'s skip branch, `#hold_slice`'s `Infinity`), D-189.
 
-### GAP-045: OPEN, upstream — a rollback about one entity discards replicated state on every other
+### GAP-045: FIXED IN 3.15.0 — a rollback about one entity discarded replicated state on every other
 
-**Re-diagnosed. The first version of this entry said a published-once component was "sometimes
-never delivered"; it is delivered, applied, and then rolled back.** The bug report filed with meep
-is <https://claude.ai/code/artifact/e493ed7b-d2b4-4efc-8cf2-68459909687f>; the standalone
-reproduction is `tools/repro/meep-mutate-rewind.mjs` and **it reproduces**, unlike GAP-043's. Every
-number below is re-taken at `TICK_HZ` 30 (D-184) against meep 3.14.6.
+**Fixed in meep 3.15.0, and the fix is the other half of a rule `SimAction` already stated.** A
+record's `sender_id` says whether it arrived from a peer, was authored locally, or was derived, and
+a replay reapplies the first two and recomputes the third.
+`ServerAuthoritativeServer.#read_historical` did that on the host; the client did not, so `onReplay`
+covered the authored half and nothing covered the arrived half.
+`ServerAuthoritativeClient` now harvests each frame's arrived records before reopening it -- copied
+out, because `begin_frame` rewinds the buffer over the bytes being read -- and re-executes them
+through the executor. It also adds `replayed_arrived_count`, the counter for that work, and
+`onReconcileAbandoned` for the case it cannot repair (see the Status bullet).
+
+**Verified rather than assumed.** `tools/repro/meep-mutate-rewind.mjs`, which reproduced on 3.14.6,
+now **passes with 596 reconciliations and 596 rewinds walked** -- so it entered the failing regime
+and the value held, which is the distinction its own output warns about. `tools/repro/gap045-measure.ts
+--repeat 3` reports **zero reversions in every regime**, where reversion was this entry's signature,
+and `once` (publish on change, no redundancy) now matches `resend` and `always` at zero stale.
+`test/net-match.test.ts` went from one stale slot in thirty-two to **zero**, and its assertion is now
+exact rather than a bound. See D-193.
+
+**Re-diagnosed once before that. The first version of this entry said a published-once component was
+"sometimes never delivered"; it is delivered, applied, and then rolled back.** The bug report filed
+with meep is <https://claude.ai/code/artifact/e493ed7b-d2b4-4efc-8cf2-68459909687f>. Everything below
+is kept as filed, because the cost it records was paid whether or not the cause survives, and
+because how the wrong first diagnosis was reached is the part a maintainer can act on. Every number
+in it was taken at `TICK_HZ` 30 (D-184) against meep 3.14.6.
 
 - **Needed:** a scoreboard, and items that are where the host says they are. `NetPlayerInfo` and
   `NetItem.present` both change a handful of times a match, so both are published when `equals`
@@ -2307,13 +2326,24 @@ number below is re-taken at `TICK_HZ` 30 (D-184) against meep 3.14.6.
   ranges.
 - **Severity: moderate for the scoreboard, and a real gameplay bug for items.** An item one client
   can see and the host says is gone is not cosmetic.
-- **Status:** open upstream, with the standalone reproduction filed. The workaround stays and the
-  residual is reported rather than chased further from this side; `test/net-match.test.ts` should
-  tighten to zero stale slots on the day it lands.
-- **Evidence:** `tools/repro/meep-mutate-rewind.mjs` (engine-only, exits non-zero),
-  `tools/repro/gap045-measure.ts` (`--repeat 3`), `src/server/Host.ts` (`publishInfo`,
-  `INFO_RESEND_FRAMES`, the `NetItem` loop in `publish`), `test/net-match.test.ts` ("shows a
-  scoreboard within one slot of the host"), D-180.
+- **Status: fixed in 3.15.0**, and `test/net-match.test.ts` has tightened to zero as this bullet
+  said it should. **`INFO_RESEND_FRAMES` stays, and what it covers has changed** — it was tested for
+  removal rather than assumed. At 1 (publish once, no redundancy) the loopback and 80 ms cases are
+  still zero stale and the worst link is not: five slots of ninety-six at 150 ms with 40 ms jitter
+  and 5% loss with six clients, alongside **2,874 abandoned reconciliations** against 34 with the
+  republish in place. So it is still doing work there, and what it covers is `onReconcileAbandoned`
+  rather than the rewind discard — 3.15.0's second new signal, for the case where the action log has
+  already rolled past the frame a rewind needs, which 3.14.6 caught and returned from with the
+  comment "for now skip this reconciliation". That is a real loss of replicated state with no repair
+  in this port (the engine names `RECOVERY_REQUEST`/`STATE_BURST`, which D-167 has on the follow-up
+  list), and it is now counted on `NetClient.reconcileAbandoned` and reported against a target of
+  zero by `test/net-delivery.test.ts`: **2 over 45 s on a loopback, 34 at the worst link**.
+- **Evidence:** `tools/repro/meep-mutate-rewind.mjs` (engine-only; exited non-zero on 3.14.6 and
+  **passes on 3.15.0 with 596 rewinds walked**, which is the distinction its own output warns
+  about), `tools/repro/gap045-measure.ts` (`--repeat 3`: zero reversions in every regime),
+  `src/server/Host.ts` (`publishInfo`, `INFO_RESEND_FRAMES`, the `NetItem` loop in `publish`),
+  `test/net-match.test.ts` ("shows exactly the host scoreboard"), `test/net-delivery.test.ts` (the
+  two new counters), D-180 and D-193.
 
 ### GAP-044: FIXED — the client gave a body to slots nobody was playing, and stood a player's width off the host for ever
 

@@ -226,7 +226,7 @@ describe('two clients and four bots, over a loopback', () => {
         }
     });
 
-    it('shows a scoreboard within one slot of the host, which is GAP-045 short of right', () => {
+    it('shows exactly the host scoreboard, which GAP-045 used to make impossible', () => {
         const { rig, hostBoards } = outcome;
 
         const stale: string[] = [];
@@ -246,30 +246,38 @@ describe('two clients and four bots, over a loopback', () => {
         console.log(
             `[net-match] host held ${hostBoards.size} scoreboard(s) in the last ` +
                 `${SETTLE_FRAMES} frames; ${stale.length} slot(s) stale on the clients` +
-                (stale.length > 0 ? ` -- ${stale.join('; ')} -- TARGET IS ZERO, GAP-045` : '')
+                (stale.length > 0 ? ` -- ${stale.join('; ')} -- TARGET IS ZERO` : '')
         );
 
         /*
-         The target is zero and this is not it.
+         **The target is zero and this is now it**, which it was not for three
+         releases.
 
-         `NetPlayerInfo` is published on change, and a change published once is
-         sometimes never delivered -- on a **loopback with no loss**. Measured
-         directly: a bot's first frag was published on the frame it happened and
-         the client's copy still read zero eleven frames later and for the rest
-         of the match, while a frag on another slot eight hundred frames later
-         arrived on the next frame. Republishing for ten frames after each change
-         (`Host.publishInfo`) fixes most of it and not all of it; publishing
-         unconditionally every frame fixes it completely, at 320 bytes a frame of
-         names that never change. GAP-045 has the numbers and the experiment.
+         `NetPlayerInfo` is published on change, and a change published once used
+         to arrive, be applied by the client, and then be **rolled back** -- on a
+         loopback with no loss. A reconciliation about the client's own slot
+         rewinds the whole world past the frame the update landed in, and
+         `ServerAuthoritativeClient` repaired only the entity the AUTH_STATE
+         covered and replayed only that client's own input; the host, having
+         published on change, never sent it again. That is GAP-045, and
+         `Host.publishInfo`'s ten-frame republish raced the rewind and won most
+         of the time, leaving one slot in thirty-two stale over 45 seconds.
 
-         So this asserts the *shape* -- the scoreboard is nearly right and is
-         never ahead of the host -- and reports the shortfall against its target,
-         which means a real fix breaks this test rather than passing quietly.
+         **meep 3.15.0 reapplies the records that arrived from a peer** as part of
+         the replay, which is the other half of the rule `SimAction` always
+         stated -- a record's `sender_id` says whether it arrived, was authored
+         or was derived, and a replay reapplies the first two. The residual is
+         zero, and the assertion is exact rather than a bound, because a bound is
+         what let the last one sit at "nearly right" for three releases. D-193.
+
+         The republish stays for now and is no longer load-bearing here: what it
+         still covers is a different failure with its own new signal, measured in
+         `net-delivery.test.ts` and recorded in D-193.
         */
         expect(
             stale.length,
-            'more of the scoreboard went stale; GAP-045 got worse'
-        ).toBeLessThanOrEqual(2);
+            'the scoreboard went stale again; GAP-045 has regressed'
+        ).toBe(0);
 
         expect(
             hostBoards.size,
