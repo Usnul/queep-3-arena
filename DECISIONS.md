@@ -9932,3 +9932,58 @@ idle for different lengths of time hold the same cooldown after the same shot (-
 without). `ReferenceController` -- the transcription that is the control for the extraction -- takes
 the guard too, with a note saying why it is a correction to the control rather than a hole in it:
 a control that encodes the defect would hold the port to it for ever.
+
+### D-179: the client gave a body to slots nobody was playing, and stood 30 units off the host for ever
+
+**GAP-044, closed.** A browser client standing still short-circuited its prediction **0 times in
+3,808** -- measured by the user in a real browser, which is what turned this from "possibly my
+measurement rig" into a defect. Every AUTH_STATE disagreed, so the client rewound and replayed its
+whole lead sixty times a second, for a match that looked completely correct on screen.
+
+The cause is one rule the host has carried since step 3 and the client never got. `Host.buildPools`
+parks an unconnected slot's body a million units below the map, and its comment says why: a body is
+solid, `MAX_CLIENTS` is 16, and sixteen bodies left at whatever origin they happen to hold put
+collision where no player is. `NetClient.buildPools` builds the same pool of sixteen, tracked every
+one of them to its replicated origin, and parked none.
+
+So the local player's own sweep hit a box the host does not have, and the solver depenetrated it
+**30.16 units in x -- one whole player box**. Its position then disagreed with the host's on every
+frame, for ever. The fix is four lines: park a slot whose replicated `connected` is zero, at the
+host's own spot and spacing.
+
+| `oa_dm1`, one idle client, two bots, 600 frames | short-circuit | reconciles | drift from the host |
+|---|---:|---:|---:|
+| before | 0 / 600 | 600 | 30.160 units |
+| after | 590 / 600 | 10 | 0.000 units |
+
+In a real browser against a real `npm run host`, standing still: **0 of 3,808 before, 323 of 329
+after** -- and the ten and the six are the once-a-second health bleed (D-170), which is host-only
+state no client can predict.
+
+**Why no existing test caught it, which is the part worth keeping.** Every other client in the suite
+*walks*. A walking player leaves the parked body behind within a second and agrees from then on, so
+the whole rig reported 97-98% throughout. The failing case is a player standing still -- the cheapest
+case there is, and the one anybody in a menu or reading a scoreboard is actually in.
+`test/net-loopback.test.ts` now has it, asserting the drift is **zero** rather than small, and
+confirmed to fail at 30.160 without the fix.
+
+**And two measurement traps cost most of an afternoon between them. Both are worth writing down,
+because both produced confident, empty, wrong answers.**
+
+*Comparing the wrong frame.* The obvious diff -- the client's `predictionTrace` for frame F against
+the slot's live component -- is nonsense, because `onReconcileComplete` fires **after** the replay,
+so the component holds the client's *current* frame, not F. While standing still every frame looks
+identical, so the diff came back empty on all 600 and read as "the data agrees, so the hash function
+must be broken". It is not: snapshotting at `onComputeExpected` and decoding the host's state out of
+the AUTH_STATE payload named `origin[0]` immediately.
+
+*Tracing half the hash.* `hashOwned` covers `NetPlayerState` **and** `NetInventory`, and
+`predictionTrace` held only the first, so an inventory difference would have been invisible in the
+same way. `inventoryTrace` is now beside it for exactly that reason.
+
+Two things were ruled out along the way and are worth not re-suspecting. `HeadlessPhysics` and
+`PhysicsWorld` -- the host's collision world and the browser's -- agree exactly: same fraction, same
+startsolid, same floor height at every spawn point on `oa_dm1`, over 35 probes. And meep's
+`uint8_array_hash` is deterministic over identical bytes at these lengths; it returns values outside
+the 32-bit range, which is startling to read in a debugger, but it is consistent, and both sides of
+the comparison were correct for their own data all along.

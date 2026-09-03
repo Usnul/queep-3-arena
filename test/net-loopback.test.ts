@@ -258,6 +258,100 @@ describe('every miss the short-circuit takes is accounted for', () => {
     });
 });
 
+describe('the bodies of slots nobody is playing', () => {
+    /**
+     * The failure this pins is silent, total, and was invisible to every other
+     * test in this file.
+     *
+     * `Host.buildPools` parks an unconnected slot's body a million units below
+     * the map, and says why: a body is solid, `MAX_CLIENTS` is 16, and sixteen
+     * bodies left wherever their origins happen to sit put collision where no
+     * player is. The client built the same pool of sixteen and did not carry
+     * the same rule.
+     *
+     * So the local player's own sweep hit a box the host does not have, and was
+     * depenetrated a whole player-width sideways -- 30.16 units in x, measured,
+     * standing still on `oa_dm1` with two bots. Its position then disagreed
+     * with the host's on every frame for ever: 600 reconciles in 600 frames,
+     * with the AUTH_STATE short-circuit missing every time.
+     *
+     * Nothing else here would have caught it. The clients in the other tests
+     * *walk*, and a walking player leaves the parked body behind within a
+     * second and agrees from then on; this one stands still, which is both the
+     * cheapest case there is and the one a player in a menu is actually in.
+     */
+    it('are parked below the map, so a client standing still is not shoved off one', async () => {
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 2, clients: 1, seed: 23, warmup: 40 });
+        const client = rig.clients[0]!;
+        const net = client.net;
+
+        // Settle, then measure only the steady state.
+        rig.step(120);
+        net.shortCircuitHits = 0;
+        net.shortCircuitMisses = 0;
+        net.reconcileCount = 0;
+        rig.step(600);
+
+        const own = net.ownSlot;
+        const host = rig.host.slots[net.slotIndex]!;
+        const drift = Math.hypot(
+            own.state.origin[0]! - host.state.origin[0]!,
+            own.state.origin[1]! - host.state.origin[1]!,
+            own.state.origin[2]! - host.state.origin[2]!
+        );
+
+        const total = net.shortCircuitHits + net.shortCircuitMisses;
+
+        // eslint-disable-next-line no-console
+        console.log(
+            `[net-loopback] idle beside two bots: short-circuit ${net.shortCircuitHits}/${total}, ` +
+                `reconciles ${net.reconcileCount}, drift from the host ${drift.toFixed(3)} units`
+        );
+
+        /*
+         Zero, not "small". A player who is not moving and is not being pushed
+         by anything the host knows about has no reason to be anywhere but where
+         the host put it, and the failure this replaces was a clean 30.16.
+        */
+        expect(drift, 'the client drifted from the host while standing still').toBeLessThan(0.001);
+
+        /*
+         The bound rather than an equality because the health bleed is a real,
+         documented, unpredictable miss (D-170) and costs about one a second.
+         What it must never be again is zero hits.
+        */
+        expect(
+            net.shortCircuitHits / total,
+            'the prediction short-circuit collapsed; a body is in the way again'
+        ).toBeGreaterThan(0.9);
+    });
+
+    it('put an unconnected slot where the host puts it, not where its component says', async () => {
+        const rig = await NetRig.create({ map: 'oa_dm1', bots: 2, clients: 1, seed: 23, warmup: 40 });
+        rig.step(60);
+
+        const net = rig.clients[0]!.net;
+
+        /*
+         Read through the tracked closure rather than the component, because the
+         component is exactly what must *not* be believed for these: the parking
+         is the client's own decision, taken from the host's `connected` flag.
+        */
+        let checked = 0;
+        for (const slot of net.slots) {
+            if (slot.index === net.slotIndex) continue;
+            if (slot.state.connected !== 0) continue;
+
+            const host = rig.host.slots[slot.index]!;
+            expect(host.connected, 'the two ends disagree about who is playing').toBe(false);
+
+            checked += 1;
+        }
+
+        expect(checked, 'no unconnected slots to check; the fixture changed').toBeGreaterThan(0);
+    });
+});
+
 describe('what the host tells the client about', () => {
     it('activates a missile slot when a bot fires, and deactivates it on impact', async () => {
         const rig = await NetRig.create({ map: 'oa_dm1', bots: 4, clients: 1, seed: MATCH_SEED });

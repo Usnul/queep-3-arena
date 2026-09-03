@@ -79,6 +79,17 @@ import type { UserCmd } from '../../q3/pmove/types.ts';
 const SOLVER_DT = SESSION_TICK_SECONDS;
 
 /**
+ * Where a slot nobody is playing keeps its body, matching `Host.buildPools`.
+ *
+ * A million units down, and spaced sideways so the parked bodies do not
+ * depenetrate each other either. Both numbers are the host's; they are repeated
+ * rather than imported because `src/client` must not reach into `src/server`,
+ * and `test/net-loopback.test.ts` holds the two to the same value.
+ */
+const PARKED_SLOT_DEPTH = -1e6;
+const PARKED_SLOT_SPACING = 64;
+
+/**
  * What the client is told to do each frame, and what it reports back.
  *
  * The browser fills `sample` from `PlayerController.sampleCommand()`; a test
@@ -349,10 +360,33 @@ export class NetClient {
              included -- for the local one that is its own prediction, which is
              what makes a client's sweeps collide with the same boxes the host's
              did. `NetWorldSystem` in the plan is these two lines and the sync.
+
+             **And a slot nobody is in is parked far below the map, exactly as
+             `Host.buildPools` parks its own.** The host has carried that rule
+             since step 3 and wrote down why: a body is solid, `MAX_CLIENTS` is
+             16, and a pool of sixteen bodies at whatever origin they happen to
+             hold puts collision where no player is. This side had the same pool
+             and not the same rule, and the cost was not a visible obstacle --
+             it was silent and total.
+
+             Measured, client standing still with two bots on `oa_dm1`: the
+             local player was depenetrated **30.16 units** in x, one whole player
+             box, off a body for a slot nobody was playing. Its position then
+             disagreed with the host's on every frame for ever, so the AUTH_STATE
+             short-circuit missed **600 times in 600 frames** and the client
+             rewound and replayed its lead sixty times a second. Parking these
+             takes the same run to 590 of 600 and the position difference to
+             zero. See GAP-044 and D-179.
+
+             `connected` rather than a local flag because it is the host's own
+             answer, replicated in `NetPlayerState`, so the two ends park the
+             same slots on the same frame.
             */
-            body.track(() =>
-                i === this.slotIndex ? this.slot.ps.origin : record.state.origin
-            );
+            const parked = [i * PARKED_SLOT_SPACING, 0, PARKED_SLOT_DEPTH];
+            body.track(() => {
+                if (i === this.slotIndex) return this.slot.ps.origin;
+                return record.state.connected === 0 ? parked : record.state.origin;
+            });
         }
 
         for (let i = 0; i < MAX_MISSILES; i++) {
@@ -506,6 +540,9 @@ export class NetClient {
                 this.ring.set(frame, this.hashOwned(record));
                 if (this.predictionTrace !== null) {
                     this.predictionTrace.set(frame, new NetPlayerState().copy(record.state));
+                }
+                if (this.inventoryTrace !== null) {
+                    this.inventoryTrace.set(frame, new NetInventory().copy(record.inventory));
                 }
                 this.bodies.sync();
             },
@@ -685,6 +722,17 @@ export class NetClient {
      * the first version of the loopback test read a fall as a desync.
      */
     predictionTrace: Map<number, NetPlayerState> | null = null;
+
+    /**
+     * The other half of the prediction, and the half that is easy to forget.
+     *
+     * `hashOwned` hashes `NetPlayerState` *and* `NetInventory`, so a harness
+     * that traces only the first can watch every visible field agree while the
+     * short-circuit misses on every frame -- which is exactly what happened,
+     * and cost an afternoon. Traced beside it for the same reason and read the
+     * same way. See D-179.
+     */
+    inventoryTrace: Map<number, NetInventory> | null = null;
 
     /** Look the ring up for a server frame; NaN when it has aged out. */
     ringHash(frame: number): number {

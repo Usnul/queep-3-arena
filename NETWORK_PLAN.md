@@ -647,12 +647,23 @@ throws before `main()` reaches this branch, and the verification drove the same 
 `PhysicsWorld` built by hand in the page instead. Two tabs side by side, and the screenshot, need a
 browser with a GPU.
 
-**`reconcileCount` is not flat**, and finding out why is the most valuable thing this step produced.
-One cause was a real port defect against `bg_pmove.c:1575` -- an unbounded `weaponTime` that no
-lockstep test could ever have shown -- and is fixed (D-178). The other is open and characterised in
-**GAP-044**: the client ends up a fifth of a unit inside the floor the host has it standing on, so
-it reports no ground and applies gravity for ever. Whether that is this branch or the hand-built
-physics world the measurement had to use is exactly what one GPU-capable browser would settle.
+**`reconcileCount` is flat now, and getting it there is the most valuable thing this step produced.**
+Two real defects stood between the branch and its exit criterion, and neither was visible to any
+test in this repository, because every networked client in the suite *walks* and both faults need a
+player standing still.
+
+- An unbounded `weaponTime`, against `bg_pmove.c:1575` (D-178). No lockstep test could show it: the
+  rig steps host and client in one process, so their frame counts never come apart.
+- A body on every slot, including the ones nobody is playing, which shoved the local player 30.16
+  units off the host's position for ever (GAP-044, D-179). The host has parked those since step 3;
+  the client never did.
+
+Measured in a real browser against a real `npm run host`, standing still: **0 of 3,808 AUTH_STATEs
+short-circuited before, 323 of 329 after**, with the predicted origin equal to the host's authority
+and the six remaining misses the once-a-second health bleed. The **renderer** is still unverified
+here -- the preview browser's `requestAdapter()` returns null, so `EngineHarness` throws before
+`main()` reaches this branch -- so two tabs side by side, and the screenshot, still want a machine
+with a GPU. Everything below the renderer is verified end to end.
 
 ### Step 6 — everything a match does, for every slot
 
@@ -831,7 +842,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 2 — `PlayerSlot` extraction, single-player unchanged | **done** |
 | 3 — headless host + client over loopback | **done** |
 | 4 — join in progress | **done** |
-| 5 — WebSocket host, browser client | **built**, both halves; verified against a real host except the renderer, which the preview browser cannot start. `reconcileCount` not yet flat: one cause fixed (D-178), one open (GAP-044) |
+| 5 — WebSocket host, browser client | **done** except the renderer, which the preview browser cannot start. Standing still against a real host: 0/3808 short-circuited before, 323/329 after, two defects fixed (D-178, D-179/GAP-044) |
 | 6 — full match for every slot | not started |
 | 7 — latency, loss, bandwidth | rig + `SimulatedTransport` + `test/net-latency.test.ts` **done**; prediction target met on 3.14.4 (D-176), event delivery met on 3.14.5 (D-177); action-bytes-per-frame census in place; bandwidth table still to write |
 | 8 — robustness | not started |
