@@ -65,6 +65,9 @@ const WORLD_SCALE = 1 / 32;
 export interface BodyDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
+    /** Both needed by {@link CharacterBodies.destroy}; see there for why. */
+    entityExists(entity: number): boolean;
+    removeEntity(entity: number): void;
 }
 
 /** One character's body: the entity it is, and the host its solver should use. */
@@ -223,6 +226,29 @@ export class CharacterBodies {
                 entry.originQ3 = originQ3;
             },
         };
+    }
+
+    /**
+     * Take one character's body away, for a player who has left.
+     *
+     * There was no such method while the pool was fixed: sixteen bodies existed
+     * from the first frame and an unoccupied one was *parked* a million units
+     * below the map rather than destroyed, because destroying it would have
+     * meant re-creating it for the next occupant and the pool's whole point was
+     * that nothing was created. Bodies now come and go with their players
+     * (D-194), so this is the other half of {@link create}.
+     *
+     * The `traceIgnores` entry goes with it, which matters more than it looks:
+     * a stale ignore is a filter that keeps skipping an entity id the physics
+     * world has since handed to something else.
+     */
+    destroy(entity: number): void {
+        const at = this.entries.findIndex((e) => e.entity === entity);
+        if (at < 0) return;
+
+        this.entries.splice(at, 1);
+        this.traceIgnores?.delete(entity);
+        if (this.ecd.entityExists(entity)) this.ecd.removeEntity(entity);
     }
 
     /**

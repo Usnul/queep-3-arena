@@ -35,6 +35,7 @@ import { EntityManager } from '@woosh/meep-engine/src/engine/ecs/EntityManager.j
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { NetworkIdentity } from '@woosh/meep-engine/src/engine/network/ecs/components/NetworkIdentity.js';
 import { OwnerAwareScope } from '@woosh/meep-engine/src/engine/network/replication/ScopeFilter.js';
+import { EntityObserver } from '@woosh/meep-engine/src/engine/ecs/EntityObserver.js';
 import { uint8_array_hash } from '@woosh/meep-engine/src/core/collection/array/typed/uint8_array_hash.js';
 import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/NetworkSession.js';
 import { BinaryBuffer } from '@woosh/meep-engine/src/core/binary/BinaryBuffer.js';
@@ -157,7 +158,14 @@ export class NetClient {
     /** The local player's simulation. The only thing this client predicts. */
     readonly slot: PlayerSlot;
 
-    readonly slots: ClientSlot[] = [];
+    /**
+     * The players this client knows about. Not a table with holes in it.
+     *
+     * Dense and discovered: one entry per player the host has told this client
+     * exists, and nothing for an id nobody is using. Look one up by its
+     * game-level id with {@link playerById}.
+     */
+    readonly players: ClientSlot[] = [];
     readonly missiles: { entity: number; component: NetMissile }[] = [];
     readonly items: { entity: number; component: NetItem }[] = [];
     readonly match = new NetMatch();
@@ -327,6 +335,7 @@ export class NetClient {
         client.wireReconciliation();
         client.wireScope();
         client.wireSyncGate();
+        client.watchForPlayers();
 
         return client;
     }
@@ -368,59 +377,6 @@ export class NetClient {
         world.addComponentToEntity(this.matchEntity, this.identityOwnedBy(HOST_PEER_ID));
         world.addComponentToEntity(this.matchEntity, this.match);
 
-        for (let i = 0; i < MAX_CLIENTS; i++) {
-            const entity = world.createEntity();
-            const body = this.bodies.create(i);
-
-            const state = new NetPlayerState();
-            const inventory = new NetInventory();
-            const info = new NetPlayerInfo();
-
-            world.addComponentToEntity(
-                entity,
-                this.identityOwnedBy(i === options.slotIndex ? this.peerId : HOST_PEER_ID)
-            );
-            world.addComponentToEntity(entity, state);
-            world.addComponentToEntity(entity, inventory);
-            world.addComponentToEntity(entity, info);
-
-            const record: ClientSlot = { index: i, entity, state, inventory, info, body };
-            this.slots.push(record);
-
-            /*
-             Every slot's body follows its replicated origin, the local one
-             included -- for the local one that is its own prediction, which is
-             what makes a client's sweeps collide with the same boxes the host's
-             did. `NetWorldSystem` in the plan is these two lines and the sync.
-
-             **And a slot nobody is in is parked far below the map, exactly as
-             `Host.buildPools` parks its own.** The host has carried that rule
-             since step 3 and wrote down why: a body is solid, `MAX_CLIENTS` is
-             16, and a pool of sixteen bodies at whatever origin they happen to
-             hold puts collision where no player is. This side had the same pool
-             and not the same rule, and the cost was not a visible obstacle --
-             it was silent and total.
-
-             Measured, client standing still with two bots on `oa_dm1`: the
-             local player was depenetrated **30.16 units** in x, one whole player
-             box, off a body for a slot nobody was playing. Its position then
-             disagreed with the host's on every frame for ever, so the AUTH_STATE
-             short-circuit missed **600 times in 600 frames** and the client
-             rewound and replayed its lead sixty times a second. Parking these
-             takes the same run to 590 of 600 and the position difference to
-             zero. See GAP-044 and D-179.
-
-             `connected` rather than a local flag because it is the host's own
-             answer, replicated in `NetPlayerState`, so the two ends park the
-             same slots on the same frame.
-            */
-            const parked = [i * PARKED_SLOT_SPACING, 0, PARKED_SLOT_DEPTH];
-            body.track(() => {
-                if (i === this.slotIndex) return this.slot.ps.origin;
-                return record.state.connected === 0 ? parked : record.state.origin;
-            });
-        }
-
         for (let i = 0; i < MAX_MISSILES; i++) {
             const entity = world.createEntity();
             const component = new NetMissile();
@@ -439,17 +395,29 @@ export class NetClient {
         }
 
         /*
-         The local player's own simulation, built last so its body is the one
-         the pool already made for its slot. `moverHost` carries the filter that
-         names that body, so the player does not sweep against itself.
+         The local player's own simulation and its body, which are the only two
+         things about a player this client builds for itself.
+
+         **They are not the networked entity**, and that separation is what
+         makes a dynamic roster possible here. The entity arrives in
+         INITIAL_SYNC like every other player's and is bound to this pair by
+         {@link discoverPlayers}; the simulation and the collision box have to
+         exist earlier than that, because `main.ts` hands `slot` to
+         `PlayerController` before the socket is even open. A `PlayerSlot` is
+         arithmetic over a `pmove_t` and a `CharacterSlot` is a physics body --
+         neither is replicated, so neither has to wait.
+
+         `moverHost` carries the filter that names this body, so the player does
+         not sweep against itself.
         */
-        const ownBody = this.slots[this.slotIndex]!.body!;
+        this.ownBody = this.bodies.create(options.slotIndex);
         (this as { slot: PlayerSlot }).slot = new PlayerSlot({
             cm: options.cm,
             spawnQ3: options.spawnQ3,
             physics: options.physics,
-            moverHost: ownBody.host,
+            moverHost: this.ownBody.host,
         });
+        this.ownBody.track(() => this.slot.ps.origin);
 
         this.bodies.sync();
     }
@@ -504,6 +472,129 @@ export class NetClient {
         );
     }
 
+    /**
+     * Watch for players appearing, which is how this client learns anybody is
+     * here at all.
+     *
+     * **There is no spawn replication (GAP-038)**, so an entity a client has
+     * never heard of is one no published component can introduce: the host
+     * pushes a fresh INITIAL_SYNC instead, and
+     * `NetworkSession.#apply_initial_sync` creates a local entity for every
+     * `network_id` it does not recognise. By the time anything downstream looks,
+     * the entity exists and its components are attached -- what does not exist
+     * is this port's record of it.
+     *
+     * An `EntityObserver` rather than a scan after each sync, because the
+     * dataset has no entity iterator and because this is the engine's own
+     * answer: the tuple `[NetPlayerState, NetInventory, NetPlayerInfo]`
+     * completing *is* the event "a player exists". It fires for the snapshot
+     * that creates them and, with `immediate`, for anything already present.
+     *
+     * A player is recognised by the components it carries rather than by a
+     * message saying so, which needs no agreement beyond the component registry
+     * both peers already share.
+     */
+    private watchForPlayers(): void {
+        /*
+         The callback's declared type is `(components: Array) => void` and what
+         it is actually called with is the components followed by the entity id
+         -- `args[observer.componentTypeCount] = entity_id` in the dataset. The
+         cast is that discrepancy and nothing else; see REPORT section 4.
+        */
+        const observer = new EntityObserver(
+            [NetPlayerState, NetInventory, NetPlayerInfo],
+            ((
+                state: NetPlayerState,
+                inventory: NetInventory,
+                info: NetPlayerInfo,
+                entity: number
+            ) => this.addDiscovered(entity, state, inventory, info)) as unknown as (
+                components: unknown[]
+            ) => void,
+            (() => {
+                /*
+                 Nothing: a player leaving is `reapPlayer`'s business, and this
+                 fires as a side effect of the removal it has already done.
+                */
+            }) as unknown as (components: unknown[]) => void
+        );
+
+        (
+            this.world as unknown as {
+                addObserver(o: unknown, immediate?: boolean): boolean;
+            }
+        ).addObserver(observer, true);
+    }
+
+    /**
+     * Take up a player the observer has just seen.
+     *
+     * **Which one is this client's is decided by ownership, not by position.**
+     * `Host.admit` writes `owner_peer_id` before the snapshot goes out, so the
+     * entity whose identity names this peer is the one the local `PlayerSlot`
+     * drives. That is strictly better than the array index it replaces: an
+     * index had to be agreed by both peers building the same pool in the same
+     * order, and ownership is stated on the wire.
+     */
+    private addDiscovered(
+        entity: number,
+        state: NetPlayerState,
+        inventory: NetInventory,
+        info: NetPlayerInfo
+    ): void {
+        if (this.playerByEntity.has(entity)) return;
+
+        const identity = this.world.getComponent(entity, NetworkIdentity) as
+            | NetworkIdentity
+            | undefined;
+        const mine = identity !== undefined && identity.owner_peer_id === this.peerId;
+
+        /*
+         The local player already has its body; everybody else gets one here. A
+         remote player's body is what makes this client's sweeps collide with
+         the same boxes the host's did, and it follows the replicated origin
+         rather than any local simulation.
+        */
+        const body = mine ? this.ownBody : this.bodies.create(info.playerId);
+        if (!mine) body.track(() => state.origin);
+
+        const record: ClientSlot = { index: info.playerId, entity, state, inventory, info, body };
+
+        this.players.push(record);
+        this.playerByEntity.set(entity, record);
+        if (mine) this.ownEntity = entity;
+
+        this.bodies.sync();
+    }
+
+    /** This client's own networked entity, once the snapshot has named it. */
+    private ownEntity = -1;
+
+    /** The body the local player sweeps with. Built before the entity exists. */
+    private ownBody!: CharacterSlot;
+
+    /** Every player this client knows about, by entity. */
+    private readonly playerByEntity = new Map<number, ClientSlot>();
+
+    /**
+     * This client's own player, once the snapshot has named it.
+     *
+     * Undefined before INITIAL_SYNC, which is a state the prediction already
+     * gates on (`onPredict` returns nothing until `synced`) -- so a caller that
+     * has to handle it is a caller running earlier than it should.
+     */
+    get ownPlayer(): ClientSlot | undefined {
+        return this.playerByEntity.get(this.ownEntity);
+    }
+
+    /** The player with this game-level id, or undefined if nobody has it. */
+    playerById(id: number): ClientSlot | undefined {
+        for (const record of this.players) {
+            if (record.index === id) return record;
+        }
+        return undefined;
+    }
+
     /** False until the host's INITIAL_SYNC has populated the world. */
     synced = false;
 
@@ -530,10 +621,12 @@ export class NetClient {
     private onPredict(frame: number): SimAction[] {
         if (!this.synced) return [];
 
-        const identity = this.world.getComponent(
-            this.slots[this.slotIndex]!.entity,
-            NetworkIdentity
-        ) as NetworkIdentity | undefined;
+        const owned = this.ownPlayer;
+        if (owned === undefined) return [];
+
+        const identity = this.world.getComponent(owned.entity, NetworkIdentity) as
+            | NetworkIdentity
+            | undefined;
         if (identity === undefined || identity.network_id < 0) return [];
 
         const cmd = this.hooks.sample(frame);
@@ -558,9 +651,9 @@ export class NetClient {
      */
     private actionContext(): ActionContext {
         return {
-            simulates: (entity) => entity === this.slots[this.slotIndex]?.entity,
+            simulates: (entity) => entity === this.ownPlayer?.entity,
             stepSlot: (entity, cmd, frame) => {
-                const record = this.slots[this.slotIndex];
+                const record = this.ownPlayer;
                 if (record === undefined || record.entity !== entity) return;
 
                 this.slot.load(record.state, record.inventory);
@@ -588,7 +681,58 @@ export class NetClient {
             effect: (event) => this.hooks.effect?.(event),
             hit: (event) => this.hooks.hit?.(event),
             pickup: (event) => this.hooks.pickup?.(event),
+
+            /*
+             A player has gone, and the entity that was them goes with it.
+
+             The reap is the application's because removal is the one direction
+             replication does not go: a pushed INITIAL_SYNC teaches a connected
+             client about an entity it has never heard of, and there is no
+             packet type that takes one away -- measured on 3.15.0, where the
+             client kept an entity the host had destroyed and re-snapshotted
+             without. `PlayerLeft` is the host saying which `network_id` is
+             gone; destroying the local copy is something this peer is entitled
+             to do, because it is this peer's entity.
+
+             Silent for an id this client never heard of, which is the ordinary
+             case for somebody who joined and left between two of its snapshots.
+            */
+            playerLeft: (event) => this.reapPlayer(event.networkId),
         };
+    }
+
+    /**
+     * Destroy this client's copy of a player who has left.
+     *
+     * The host names a `network_id` because that is the only name both peers
+     * share for an entity; the local one is looked up through the slot table,
+     * the same route `OwnerAwareScope` takes.
+     *
+     * **Never this client's own.** A `PlayerLeft` for the local player would be
+     * this client being told it has left, which the host does not say and
+     * which would destroy the entity the prediction is driving. Guarded rather
+     * than assumed impossible.
+     */
+    private reapPlayer(networkId: number): void {
+        const table = (
+            this.session.peer as unknown as {
+                slot_table: { entity_for(id: number): number };
+            }
+        ).slot_table;
+
+        const entity = table.entity_for(networkId);
+        if (entity < 0) return;
+        if (entity === this.ownEntity) return;
+
+        const record = this.playerByEntity.get(entity);
+        if (record === undefined) return;
+
+        this.playerByEntity.delete(entity);
+        const at = this.players.indexOf(record);
+        if (at >= 0) this.players.splice(at, 1);
+
+        if (record.body !== null) this.bodies.destroy(record.body.entity);
+        if (this.world.entityExists(entity)) this.world.removeEntity(entity);
     }
 
     /**
@@ -636,10 +780,25 @@ export class NetClient {
         const client = this.session.client;
         if (client === null) throw new Error('NetClient: session is not in client role');
 
-        const owned = this.slots[this.slotIndex]!;
+        /*
+         Resolved per call, not captured here.
 
+         This used to be `const owned = this.ownPlayer` at wiring time, which
+         worked while every player had a pre-created entity and stopped the day
+         they did not: wiring happens in `create`, discovery happens on
+         INITIAL_SYNC, so the captured value was `undefined` for ever. Every
+         `onComputeExpected` then threw on `.entity`, `Signal` logged "Failed to
+         dispatch handler" and carried on, and the short-circuit silently never
+         ran -- the client rewound and replayed its whole lead on every single
+         AUTH_STATE, at a measured 1.03 reconciliations per frame against a
+         budget of 0.05. A swallowed exception in a handler is worth more
+         suspicion than a wrong number.
+        */
         client.onComputeExpected.add(
             (serverFrame: number, networkId: number, buffer: BinaryBuffer) => {
+                const owned = this.ownPlayer;
+                if (owned === undefined) return;
+
                 const identity = this.world.getComponent(owned.entity, NetworkIdentity) as
                     | NetworkIdentity
                     | undefined;
@@ -672,6 +831,9 @@ export class NetClient {
         );
 
         client.onMeasureCurrent.add((networkId: number) => {
+            const owned = this.ownPlayer;
+            if (owned === undefined) return;
+
             const identity = this.world.getComponent(owned.entity, NetworkIdentity) as
                 | NetworkIdentity
                 | undefined;
@@ -862,7 +1024,7 @@ export class NetClient {
 
     /** The slot this client is playing. */
     get ownSlot(): ClientSlot {
-        return this.slots[this.slotIndex]!;
+        return this.ownPlayer!;
     }
 
 }

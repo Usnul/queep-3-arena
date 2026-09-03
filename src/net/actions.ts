@@ -77,6 +77,14 @@ export interface ActionContext {
     effect(event: EffectEventData): void;
     hit(event: HitEventData): void;
     pickup(event: PickupEventData): void;
+    /**
+     * A player has gone; destroy the entity that was them.
+     *
+     * No-op on the host, which raised it, and on a client that never heard of
+     * the id -- which is the ordinary case for a player who joined and left
+     * between two of this client's snapshots.
+     */
+    playerLeft(event: PlayerLeftData): void;
 }
 
 /** The five shapes `WeaponEvents` raises, as one byte. */
@@ -132,12 +140,37 @@ export interface PickupEventData {
     item: number;
 }
 
+/**
+ * A player has gone, and the entity that was them should go with it.
+ *
+ * **This action exists because removal is the one direction replication does
+ * not go.** A host that creates an entity mid-match can teach a connected
+ * client about it by pushing a fresh INITIAL_SYNC -- measured, and the engine's
+ * own `#apply_initial_sync` handles the already-allocated case on purpose. A
+ * host that *destroys* one cannot: there is no CREATE or DESTROY among the
+ * thirteen `NetworkPacketType`s, and a snapshot only creates entities the
+ * receiver does not know, so a client that has an entity the snapshot omits
+ * keeps it. Measured on 3.15.0: after the host destroyed the entity and pushed
+ * a snapshot, the client still held it.
+ *
+ * So the reap is the application's. The host says which network id has gone and
+ * the client destroys its own copy, which it is entitled to do because it owns
+ * its local entities. See GAP-038 and D-194.
+ */
+export interface PlayerLeftData {
+    /** The `network_id` of the entity to destroy, not a game-level player id. */
+    networkId: number;
+    /** The game-level id that has been freed, for the roster. */
+    playerId: number;
+}
+
 /** What {@link makeActions} hands back. The array order is the wire order. */
 export interface ProtocolActions {
     UserCmdAction: UserCmdActionClass;
     EffectEvent: EffectEventClass;
     HitEvent: HitEventClass;
     PickupEvent: PickupEventClass;
+    PlayerLeft: PlayerLeftClass;
     /** In `defineAction` order, which must be identical on every peer. */
     all: readonly Function[];
 }
@@ -152,11 +185,13 @@ export interface UserCmdActionInstance extends SimAction {
 export interface EffectEventInstance extends SimAction, EffectEventData {}
 export interface HitEventInstance extends SimAction, HitEventData {}
 export interface PickupEventInstance extends SimAction, PickupEventData {}
+export interface PlayerLeftInstance extends SimAction, PlayerLeftData {}
 
 type UserCmdActionClass = new () => UserCmdActionInstance;
 type EffectEventClass = new () => EffectEventInstance;
 type HitEventClass = new () => HitEventInstance;
 type PickupEventClass = new () => PickupEventInstance;
+type PlayerLeftClass = new () => PlayerLeftInstance;
 
 /**
  * `SimActionExecutor`, as much of it as an action touches. The engine types the
@@ -368,12 +403,42 @@ export function makeActions(ctx: ActionContext, stepped: SteppedComponents): Pro
         }
     }
 
+    /**
+     * A player has gone. Appended to the action list rather than inserted, so
+     * every action before it keeps its type id and a peer built against the
+     * older protocol disagrees about one id rather than about all of them.
+     */
+    class PlayerLeft extends SimAction implements PlayerLeftInstance {
+        networkId = 0;
+        playerId = 0;
+
+        override apply(): void {
+            ctx.playerLeft(this);
+        }
+
+        override serialize(buffer: BinaryBuffer): void {
+            buffer.writeUintVar(this.networkId);
+            buffer.writeUint8(this.playerId);
+        }
+
+        override deserialize(buffer: BinaryBuffer): void {
+            this.networkId = buffer.readUintVar();
+            this.playerId = buffer.readUint8();
+        }
+
+        override reset(): void {
+            this.networkId = 0;
+            this.playerId = 0;
+        }
+    }
+
     return {
         UserCmdAction,
         EffectEvent,
         HitEvent,
         PickupEvent,
-        all: [UserCmdAction, EffectEvent, HitEvent, PickupEvent],
+        PlayerLeft,
+        all: [UserCmdAction, EffectEvent, HitEvent, PickupEvent, PlayerLeft],
     };
 }
 
@@ -392,4 +457,5 @@ export const INERT_CONTEXT: ActionContext = {
     effect() {},
     hit() {},
     pickup() {},
+    playerLeft() {},
 };

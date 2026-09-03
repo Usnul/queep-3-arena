@@ -169,7 +169,7 @@ export class WsHost {
             slot: record.index,
             frame: this.host.currentFrame,
             map: this.host.cm.name,
-            bots: this.host.slots.filter((s) => s.bot !== null).length,
+            bots: this.host.players.filter((p) => p.bot !== null).length,
             items: this.host.items.items.length,
             v: PROTOCOL_VERSION,
         };

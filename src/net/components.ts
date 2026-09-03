@@ -292,6 +292,22 @@ export class NetInventory {
 export class NetPlayerInfo {
     static readonly typeName = 'NetPlayerInfo';
 
+    /**
+     * The game-level player number: Q3's `clientNum`.
+     *
+     * **On the wire since the entities became dynamic**, and it has to be. It
+     * is the byte `EffectEvent.owner`, `HitEvent.attacker` and
+     * `PickupEvent.slot` already carry, and while every player had a
+     * pre-created entity a client could read it off the array position -- the
+     * pool was built in id order on both peers, so position *was* identity.
+     * Players are now created when they arrive and destroyed when they leave
+     * (D-194), so there is no position to read and the id has to be said.
+     *
+     * Costs nothing at rest: `NetPlayerInfo` is published on change and this
+     * never changes for a player who exists.
+     */
+    playerId = 0;
+
     /** UTF-8, truncated to {@link MAX_NAME_BYTES} by the adapter. */
     name = '';
     /** Index into the character list the client loaded; not a model name. */
@@ -303,6 +319,7 @@ export class NetPlayerInfo {
 
     equals(other: NetPlayerInfo): boolean {
         return (
+            this.playerId === other.playerId &&
             this.name === other.name &&
             this.character === other.character &&
             this.isBot === other.isBot &&
@@ -313,7 +330,7 @@ export class NetPlayerInfo {
     }
 
     hash(): number {
-        let h = 0;
+        let h = mixInt(0, this.playerId);
         for (let i = 0; i < this.name.length; i++) h = mixInt(h, this.name.charCodeAt(i));
         h = mixInt(h, this.character);
         h = mixInt(h, this.isBot);
@@ -323,6 +340,7 @@ export class NetPlayerInfo {
     }
 
     copy(other: NetPlayerInfo): this {
+        this.playerId = other.playerId;
         this.name = other.name;
         this.character = other.character;
         this.isBot = other.isBot;

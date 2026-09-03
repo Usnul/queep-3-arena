@@ -235,7 +235,13 @@ export class NetScoreboardSystem extends System<never> {
     private readonly view: ScoreboardTable;
     private readonly held: () => boolean;
 
-    /** Scratch, so a frame with the board open allocates one array not two. */
+    /**
+     * Scratch, so a frame with the board open allocates one array not two.
+     *
+     * Rebuilt to length rather than pre-sized: the roster is a set of players
+     * who exist rather than a table with holes, so its length is how many
+     * people are here (D-194).
+     */
     private readonly sources: ScoreboardSource[] = [];
 
     constructor(options: {
@@ -250,16 +256,6 @@ export class NetScoreboardSystem extends System<never> {
         this.view = options.view;
         this.held = options.held;
 
-        for (const slot of options.client.slots) {
-            this.sources.push({
-                index: slot.index,
-                connected: false,
-                name: '',
-                isBot: false,
-                kills: 0,
-                deaths: 0,
-            });
-        }
     }
 
     override update = (): void => {
@@ -269,8 +265,9 @@ export class NetScoreboardSystem extends System<never> {
 
         const client = this.client;
 
-        for (let i = 0; i < client.slots.length; i++) {
-            const slot = client.slots[i]!;
+        this.sources.length = 0;
+
+        for (const slot of client.players) {
             const info = slot.info;
 
             /*
@@ -284,14 +281,14 @@ export class NetScoreboardSystem extends System<never> {
              a joining player's row from appearing before it exists and a
              leaver's from lingering.
             */
-            this.sources[i] = {
+            this.sources.push({
                 index: slot.index,
                 connected: slot.state.connected !== 0,
                 name: info.name,
                 isBot: info.isBot !== 0,
                 kills: info.kills,
                 deaths: info.deaths,
-            };
+            });
         }
 
         this.view.update(scoreboardRows(this.sources, client.slotIndex));
@@ -408,7 +405,7 @@ export class NetPresentationSystem extends System<never> {
      * cycle against slot 2's and fire on the difference -- which is a footstep
      * every frame for every pair of players who are not in step.
      */
-    private readonly footsteps: Footsteps[];
+    private readonly footsteps: Map<number, Footsteps>;
 
     /** What each missile pool slot was doing last frame. See {@link drawMissiles}. */
     private readonly missileActive: Uint8Array;
@@ -431,13 +428,13 @@ export class NetPresentationSystem extends System<never> {
         this.audio = options.audio ?? null;
         this.missileActive = new Uint8Array(options.client.missiles.length);
         this.missileGeneration = new Uint16Array(options.client.missiles.length);
-        this.footsteps = options.client.slots.map(() => new Footsteps());
+        this.footsteps = new Map();
     }
 
     override update = (deltaSeconds: number): void => {
         const client = this.client;
 
-        for (const slot of client.slots) {
+        for (const slot of client.players) {
             if (slot.index === client.slotIndex) continue;
 
             const character = this.characterFor(slot.index);
@@ -505,7 +502,18 @@ export class NetPresentationSystem extends System<never> {
         const audio = this.audio;
         if (audio === null) return;
 
-        const tracker = this.footsteps[slot]!;
+        /*
+         Built on first use and keyed by the player's id rather than indexed by
+         a position, because a player who leaves takes their entry with them and
+         a new arrival must not inherit the previous occupant's cycle -- which
+         is exactly the cross-slot comparison the per-slot tracker exists to
+         avoid.
+        */
+        let tracker = this.footsteps.get(slot);
+        if (tracker === undefined) {
+            tracker = new Footsteps();
+            this.footsteps.set(slot, tracker);
+        }
         const onGround = state.groundEntityNum !== C.ENTITYNUM_NONE;
 
         const event = tracker.update(

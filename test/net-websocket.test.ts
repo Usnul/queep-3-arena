@@ -123,8 +123,8 @@ describe('the hello', () => {
         const delay = wsHost.host.session.simulation_delay_ticks;
         expect(parsed.frame).toBe(HOST_WARMUP_STEPS - delay - 1);
 
-        expect(wsHost.host.slots[parsed.slot]!.info.name).toBe('Sarge');
-        expect(wsHost.host.slots[parsed.slot]!.info.character).toBe(3);
+        expect(wsHost.host.playerById(parsed.slot)!.info.name).toBe('Sarge');
+        expect(wsHost.host.playerById(parsed.slot)!.info.character).toBe(3);
 
         socket.close();
         await settle();
@@ -141,11 +141,11 @@ describe('the hello', () => {
         await settle();
     });
 
-    it('frees the slot again when the socket closes', async () => {
+    it('takes the player away again when the socket closes', async () => {
         const { socket, first } = await hello(`v=${PROTOCOL_VERSION}&name=Brief`);
         const parsed = JSON.parse(first) as Hello;
 
-        expect(wsHost.host.slots[parsed.slot]!.connected).toBe(true);
+        expect(wsHost.host.playerById(parsed.slot)!.connected).toBe(true);
 
         socket.close();
 
@@ -156,11 +156,13 @@ describe('the hello', () => {
          nowhere else -- which is exactly how this one failed the first time the
          whole suite ran in parallel.
         */
-        for (let n = 0; n < 200 && wsHost.host.slots[parsed.slot]!.connected; n++) {
+        for (let n = 0; n < 200 && wsHost.host.playerById(parsed.slot) !== undefined; n++) {
             await settle();
         }
 
-        expect(wsHost.host.slots[parsed.slot]!.connected).toBe(false);
+        // Gone, not disconnected: there is no entry for a player who is not
+        // here, so the id is free again. See D-194.
+        expect(wsHost.host.playerById(parsed.slot)).toBeUndefined();
         expect(wsHost.host.lowestFreeSlot()).toBeLessThanOrEqual(parsed.slot);
     });
 });
@@ -215,7 +217,7 @@ describe('a client over a real socket', () => {
         */
         client.session.connect(0, new WebSocketTransport({ socket: socket as never }));
 
-        const slot = wsHost.host.slots[parsed.slot]!;
+        const slot = wsHost.host.playerById(parsed.slot)!;
         const before = [...slot.state.origin];
         let walked = 0;
         let previous = before;

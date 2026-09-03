@@ -89,13 +89,13 @@ describe('a client joining a host at frame 6000', () => {
         expect(client.net.currentFrame).toBeLessThanOrEqual(6000 + SIMULATION_DELAY_TICKS + 4);
 
         const slotIndex = client.net.slotIndex;
-        let previous = [...rig.host.slots[slotIndex]!.state.origin];
+        let previous = [...rig.host.playerById(slotIndex)!.state.origin];
         let walked = 0;
 
         client.script = circleWalk;
         for (let n = 0; n < 120; n++) {
             rig.step(1);
-            const now = [...rig.host.slots[slotIndex]!.state.origin];
+            const now = [...rig.host.playerById(slotIndex)!.state.origin];
             walked += Math.hypot(now[0]! - previous[0]!, now[1]! - previous[1]!);
             previous = now;
         }
@@ -281,8 +281,8 @@ describe('two clients, joined at different times', () => {
         // Let both settle, then watch each one's view of the other.
         rig.step(60);
 
-        const firstSeesSecond = [...first.net.slots[second.net.slotIndex]!.state.origin];
-        const secondSeesFirst = [...second.net.slots[first.net.slotIndex]!.state.origin];
+        const firstSeesSecond = [...first.net.playerById(second.net.slotIndex)!.state.origin];
+        const secondSeesFirst = [...second.net.playerById(first.net.slotIndex)!.state.origin];
 
         let firstWatched = 0;
         let secondWatched = 0;
@@ -291,8 +291,8 @@ describe('two clients, joined at different times', () => {
 
         for (let n = 0; n < 180; n++) {
             rig.step(1);
-            const a = [...first.net.slots[second.net.slotIndex]!.state.origin];
-            const b = [...second.net.slots[first.net.slotIndex]!.state.origin];
+            const a = [...first.net.playerById(second.net.slotIndex)!.state.origin];
+            const b = [...second.net.playerById(first.net.slotIndex)!.state.origin];
             firstWatched += Math.hypot(a[0]! - previousA[0]!, a[1]! - previousA[1]!);
             secondWatched += Math.hypot(b[0]! - previousB[0]!, b[1]! - previousB[1]!);
             previousA = a;
@@ -307,13 +307,13 @@ describe('two clients, joined at different times', () => {
          the end of a step every remote component has been restored to canonical
          form, so this compares numbers rather than a render blend.
         */
-        const hostSecond = rig.host.slots[second.net.slotIndex]!.state.origin;
-        const seen = first.net.slots[second.net.slotIndex]!.state.origin;
+        const hostSecond = rig.host.playerById(second.net.slotIndex)!.state.origin;
+        const seen = first.net.playerById(second.net.slotIndex)!.state.origin;
         const lag = Math.hypot(seen[0]! - hostSecond[0]!, seen[1]! - hostSecond[1]!);
         expect(lag, 'a remote slot is further behind than a frame of travel').toBeLessThan(64);
     });
 
-    it('puts them in different slots and frees one when it leaves', async () => {
+    it('gives them different ids and takes one away when it leaves', async () => {
         const rig = await NetRig.create({ map: 'oa_dm1', bots: 2, clients: 2, seed: 8 });
 
         const [a, b] = rig.clients;
@@ -322,21 +322,29 @@ describe('two clients, joined at different times', () => {
 
         rig.step(30);
 
-        expect(rig.host.slots[0]!.connected).toBe(true);
-        expect(rig.host.slots[1]!.connected).toBe(true);
+        expect(rig.host.playerById(0)!.connected).toBe(true);
+        expect(rig.host.playerById(1)!.connected).toBe(true);
 
         rig.host.release(b!.net.peerId);
 
-        expect(rig.host.slots[1]!.connected).toBe(false);
-        expect(rig.host.slots[1]!.peerId).toBe(-1);
+        /*
+         Gone rather than marked absent: there is no entry for a player who is
+         not here (D-194), so the id is free and the population is one smaller.
+        */
+        expect(rig.host.playerById(1), 'the host kept the leaver').toBeUndefined();
+        expect(rig.host.lowestFreeSlot(), 'the freed id was not reoffered').toBe(1);
+        expect(rig.host.players.length).toBe(3);
 
-        // And the freed slot is the next one handed out.
-        expect(rig.host.lowestFreeSlot()).toBe(1);
-
-        // The host keeps running with a hole in the middle of its roster.
+        /*
+         The host keeps running with the id missing from the middle of its
+         roster -- which is a stronger statement than it used to be. It used to
+         mean a slot sitting there disconnected; it now means the ids are not
+         contiguous and nothing iterates them as though they were.
+        */
         rig.step(60);
-        for (const slot of rig.host.slots) {
-            for (const v of slot.state.origin) expect(Number.isFinite(v)).toBe(true);
+        expect(rig.host.players.map((p) => p.index).sort((x, y) => x - y)).toEqual([0, 14, 15]);
+        for (const player of rig.host.players) {
+            for (const v of player.state.origin) expect(Number.isFinite(v)).toBe(true);
         }
     });
 });

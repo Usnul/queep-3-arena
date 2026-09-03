@@ -306,6 +306,7 @@ export class NetPlayerInfoAdapter extends BinaryClassSerializationAdapter<NetPla
     override version = 1;
 
     override serialize(buffer: BinaryBuffer, value: NetPlayerInfo): void {
+        buffer.writeUint8(value.playerId);
         buffer.writeUTF8String(truncateUtf8(value.name, MAX_NAME_BYTES));
         buffer.writeUint8(value.character);
         buffer.writeUint8(value.isBot);
@@ -315,6 +316,7 @@ export class NetPlayerInfoAdapter extends BinaryClassSerializationAdapter<NetPla
     }
 
     override deserialize(buffer: BinaryBuffer, value: NetPlayerInfo): void {
+        value.playerId = buffer.readUint8();
         value.name = buffer.readUTF8String();
         value.character = buffer.readUint8();
         value.isBot = buffer.readUint8();

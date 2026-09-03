@@ -10913,3 +10913,104 @@ between 3.14.6 and 3.15.0, so `skipped_unapplied` still reads 185 and 214 over t
 seconds where ten frames are lost, and `#hold_slice` still validates with `min_frame = Infinity`.
 D-189's measurement and `tools/repro/meep-delivery-counter.mjs` need no re-running, and did not
 change when re-run.
+
+### D-194: players are created when they arrive, and the network stops having slots
+
+A direction from the brief rather than a defect: *"a new peer/agent is just an extra entry, never a
+slot. We cap how many can join... If we have capacity of, say, 16, it's just a variable somewhere,
+not an actual array of 16 entries."* The pool was never a design preference -- GAP-038 forced it --
+so the first job was to find out how much of it the wire actually requires. Measured on 3.15.0
+rather than taken from the register:
+
+| the host does this, to a client already connected | result |
+|---|---|
+| creates an entity and publishes it for ninety frames | **never arrives** -- `entity_for` stays -1, silently |
+| creates an entity and pushes a fresh INITIAL_SYNC | **arrives**, with its data |
+| destroys the entity and pushes a fresh INITIAL_SYNC | **the client keeps it** |
+
+So growth is reachable and shrinkage is not. `NetworkPeer.send_initial_sync` is public and
+`NetworkSession.#apply_initial_sync` walks the wire format by hand *specifically* so a slot that is
+already allocated does not throw -- re-sync is a case the engine anticipated. There is no CREATE or
+DESTROY among the thirteen `NetworkPacketType`s, and a snapshot only creates entities the receiver
+does not know, so removal has to be the application's.
+
+**What is built.** `Host.players` is dense: one entry per player present, nothing for an id nobody
+is using. `Host.capacity` is a number compared against `players.length`, and `HostOptions.capacity`
+lowers it without allocating or freeing anything. `addPlayer` is the only door and returns null when
+the match is full; `removePlayer` destroys the entity and the character body and queues a
+`PlayerLeft`. Bots go through the same door, because a bot is a player.
+
+**The two directions cost different things and both are in the code where they happen.**
+
+- **Arrival: one whole-world snapshot to each peer already here.** Pushed on the next tick rather
+  than inside `addPlayer`, because a snapshot has to be emitted where the action log is open, and
+  because one push covers any number of arrivals in a frame. Only to peers who were here *before*
+  the arrival -- the joiner gets the engine's own, and sending a second cost real delivery when it
+  was tried: frames lost at 80 ms went 0 to 1 and at 150 ms 10 to 15, because `onInitialSync` calls
+  `seek_to_frame` and a redundant snapshot re-seeks the clock of a client that is already running.
+- **Departure: a `PlayerLeft` action.** The host names the `network_id` and the client destroys its
+  own copy, which it is entitled to do because it is its own entity. Appended to the action list so
+  every existing type id keeps its number.
+
+**Two costs stated rather than buried.** The snapshot push is a spike proportional to the
+population, on every join, and a server churning players would feel it. And it **overwrites the
+peer's session token**: `#peer_session_tokens` is `#`-private, so there is no way to read the one
+the engine issued, and a later RESUME_HELLO would present a token the host does not recognise and be
+answered with RESUME_REJECT -- degrading to a fresh sync rather than failing. Harmless today because
+this port does not enable the reconnect ladder (D-167 has resume on the follow-up list); one
+fabricated token per peer is cached and reused so the client's copy is at least stable.
+
+**The client no longer builds a pool of players and no longer needs to.** It builds the match
+entity, the missile pool and the item pool -- fixed populations, same count on both peers, same
+order, so their network ids line up by construction, which is what GAP-038 actually requires. Players
+arrive in snapshots with their ids carried rather than derived. An `EntityObserver` on
+`[NetPlayerState, NetInventory, NetPlayerInfo]` is how it notices: the tuple completing *is* the
+event "a player exists", it fires for the snapshot that creates them, and the dataset has no entity
+iterator anyway.
+
+**Which player is this client's is now decided by ownership rather than by position.**
+`Host.admit` writes `owner_peer_id` before the snapshot goes out, so the entity whose identity names
+this peer is the one the local `PlayerSlot` drives. That replaced an array index that both peers had
+to agree on by building the same pool in the same order -- the answer is on the wire now instead of
+being reconstructed from a convention.
+
+**One field had to go on the wire.** `NetPlayerInfo.playerId`, a byte. It is Q3's `clientNum` -- what
+`EffectEvent.owner` and `HitEvent.attacker` already carry -- and while every player had a pre-created
+entity the client could read it off the array position, because the pool was built in id order on
+both peers and position *was* identity. There is no position now. It costs nothing at rest: the
+component is published on change and this never changes for a player who exists.
+
+**GAP-044's parking is gone rather than moved.** Sixteen character bodies existed from the first
+frame, an unoccupied one was solid, and the fix was to park it a million units down; the local
+player's own sweep had hit one and been depenetrated 30.16 units off the host's position for ever.
+There are no unoccupied ones. `test/net-loopback.test.ts`'s parking test now asserts that the two
+ends agree about the population, which is the property the parking was protecting.
+
+**What this does not buy, said plainly because the obvious claim is wrong.** It is not bandwidth.
+`publishPresence` gated on `connected`, so an unoccupied slot published nothing after its parting
+window -- downstream is **42.9 KB/s per client before and 43.2 after**, unchanged. What goes away is
+a class of failure: a solid body where no player is, a `connected` byte standing in for existence,
+sixteen entities in every join snapshot, and an id space that had to be agreed by convention.
+
+**A bug this found, and it is the kind only a refactor finds.** `wireReconciliation` captured
+`const owned = this.ownPlayer` at construction time. That was fine while every player had an entity
+from the first frame and became permanently `undefined` the moment discovery moved to INITIAL_SYNC.
+Every `onComputeExpected` then threw on `.entity`, `Signal` logged "Failed to dispatch handler" and
+carried on, and the prediction short-circuit silently never ran -- the client rewound and replayed
+its whole lead on **every** AUTH_STATE, at 1.03 reconciliations per frame against a budget of 0.05.
+A swallowed exception in a handler deserves more suspicion than a wrong number, because a wrong
+number at least gets asserted on.
+
+**And a measurement that moved for a reason worth recording.** `net-delivery.test.ts` asserted an
+exact zero frames lost at 80 ms. Making players dynamic reorders when character bodies are created,
+which reorders their physics entity ids, which changes the broadphase pair order and therefore which
+bots meet -- so the fixture's match is a different match. Rather than re-baseline on the new single
+sample, it was measured across four seeds: **2, 3, 3, 2** at 80 ms and **0, 0, 0** at 40 ms. The old
+zero was one match, not a property of the link, and had been hiding there since the file was written.
+40 ms keeps its exact zero; 80 ms is now a residual reported against a target of zero like the
+150 ms rows beside it.
+
+**What is left.** The naming: a player's game-level id is still called `index` on the record and
+`slotIndex` on the client, because it is Q3's `clientNum` and the brief allows the concept at a
+higher level -- but the words are the pool's and could be better. And `MAX_CLIENTS` is now only the
+default capacity and the width of the id space, which is what it should always have been.

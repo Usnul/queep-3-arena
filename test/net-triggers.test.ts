@@ -103,7 +103,7 @@ function holdAt(
     at: readonly number[],
     options: { zeroVelocity?: boolean } = {}
 ): void {
-    const state = rig.host.slots[slotIndex]!.state;
+    const state = rig.host.playerById(slotIndex)!.state;
     state.origin[0] = at[0]!;
     state.origin[1] = at[1]!;
     state.origin[2] = at[2]!;
@@ -142,7 +142,7 @@ describe('a teleporter on the host', () => {
         expect(candidates.length, "the teleporter's target does not exist").toBeGreaterThan(0);
 
         const client = rig.clients[0]!;
-        const record = rig.host.slots[client.net.slotIndex]!;
+        const record = rig.host.playerById(client.net.slotIndex)!;
         const state = record.state;
 
         // Stand the player in the teleporter, moving fast.
@@ -260,7 +260,7 @@ describe('a jump pad on the host', () => {
         }
 
         const client = rig.clients[0]!;
-        const record = rig.host.slots[client.net.slotIndex]!;
+        const record = rig.host.playerById(client.net.slotIndex)!;
         const state = record.state;
 
         const launched: string[] = [];
@@ -327,7 +327,7 @@ describe('a hurt trigger on the host', () => {
         expect(hurt, 'oa_dm1 has no trigger_hurt, so this measured nothing').toBeDefined();
 
         const client = rig.clients[0]!;
-        const record = rig.host.slots[client.net.slotIndex]!;
+        const record = rig.host.playerById(client.net.slotIndex)!;
         const at = standIn(hurt!);
 
         /*

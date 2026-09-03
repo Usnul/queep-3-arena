@@ -142,7 +142,7 @@ describe('the visibility data these maps actually carry', () => {
 
         for (let n = 0; n < 300; n++) {
             rig.step(1);
-            for (const record of rig.host.slots) {
+            for (const record of rig.host.players) {
                 if (!record.connected) continue;
                 const o = record.state.origin;
                 seen.add(clusterAt(rig.host.cm, o[0]!, o[1]!, o[2]!));
@@ -293,7 +293,7 @@ describe('culling to the PVS, on the maps this port ships', () => {
         rig.step(TICK_HZ * 12);
 
         expect(rig.host.session.server!.pending_dropped_count()).toBe(0);
-        for (const record of rig.host.slots) {
+        for (const record of rig.host.players) {
             for (const v of record.state.origin) expect(Number.isFinite(v)).toBe(true);
         }
         for (const client of rig.clients) {

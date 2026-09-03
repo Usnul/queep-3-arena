@@ -111,6 +111,8 @@ export interface RigOptions {
     frameCapacity?: number;
     /** Cull replication to each client's PVS. See `PvsScope`. */
     pvsCulling?: boolean;
+    /** How many players the host will admit. A number, not a pool size. */
+    capacity?: number;
 }
 
 export class NetRig {
@@ -151,6 +153,7 @@ export class NetRig {
             simulationDelayTicks: options.simulationDelayTicks,
             frameCapacity: options.frameCapacity,
             pvsCulling: options.pvsCulling,
+            capacity: options.capacity,
         });
 
         const rig = new NetRig(host, options.link ?? 'loopback');

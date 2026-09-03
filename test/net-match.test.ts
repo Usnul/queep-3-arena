@@ -63,7 +63,7 @@ function hunt(cmd: UserCmd, frame: number, self: RigClient): void {
     let bestPitch = 0;
     let bestDistance = Infinity;
 
-    for (const slot of net.slots) {
+    for (const slot of net.players) {
         if (slot.index === net.slotIndex) continue;
         if (slot.info.isBot === 0) continue;
         if (slot.state.alive === 0) continue;
@@ -168,10 +168,10 @@ beforeAll(async () => {
      So this records the host's for every frame of the window and the assertion
      is set membership.
     */
-    const hostBoards = new Set<string>([scoreboardOf(rig.host.slots)]);
+    const hostBoards = new Set<string>([scoreboardOf(rig.host.players)]);
     for (let n = 0; n < SETTLE_FRAMES; n++) {
         rig.step(1);
-        hostBoards.add(scoreboardOf(rig.host.slots));
+        hostBoards.add(scoreboardOf(rig.host.players));
     }
 
     outcome = { rig, dealt, taken, droppedActions, hostBoards };
@@ -192,7 +192,7 @@ describe('two clients and four bots, over a loopback', () => {
                 rig.clients
                     .map((c) => {
                         const i = c.net.slotIndex;
-                        const info = rig.host.slots[i]!.info;
+                        const info = rig.host.playerById(i)!.info;
                         return (
                             `client ${i} dealt ${dealt[i]} took ${taken[i]} ` +
                             `${info.kills}/${info.deaths}`
@@ -229,16 +229,38 @@ describe('two clients and four bots, over a loopback', () => {
     it('shows exactly the host scoreboard, which GAP-045 used to make impossible', () => {
         const { rig, hostBoards } = outcome;
 
+        /*
+         Over the host's population rather than over `0..MAX_CLIENTS`: there is
+         an entry for a player who is here and none for anybody else (D-194), so
+         a loop to sixteen would be dereferencing eleven absences. A client
+         missing one of the host's players is itself a failure and is recorded
+         as one rather than crashing the comparison.
+        */
         const stale: string[] = [];
         for (const client of rig.clients) {
-            for (let i = 0; i < MAX_CLIENTS; i++) {
-                const host = rig.host.slots[i]!.info;
-                const mine = client.net.slots[i]!.info;
-                if (mine.kills === host.kills && mine.deaths === host.deaths) continue;
+            for (const hostPlayer of rig.host.players) {
+                const mine = client.net.playerById(hostPlayer.index);
+                if (mine === undefined) {
+                    stale.push(
+                        `client ${client.net.slotIndex} never heard of player ${hostPlayer.index}`
+                    );
+                    continue;
+                }
+
+                const host = hostPlayer.info;
+                if (mine.info.kills === host.kills && mine.info.deaths === host.deaths) continue;
                 stale.push(
-                    `client ${client.net.slotIndex} slot ${i}: ` +
-                        `${mine.kills}/${mine.deaths} against the host's ${host.kills}/${host.deaths}`
+                    `client ${client.net.slotIndex} player ${hostPlayer.index}: ` +
+                        `${mine.info.kills}/${mine.info.deaths} against the host's ` +
+                        `${host.kills}/${host.deaths}`
                 );
+            }
+
+            // And nobody the host does not have.
+            for (const mine of client.net.players) {
+                if (rig.host.playerById(mine.index) === undefined) {
+                    stale.push(`client ${client.net.slotIndex} kept a ghost at ${mine.index}`);
+                }
             }
         }
 
@@ -295,11 +317,18 @@ describe('two clients and four bots, over a loopback', () => {
         const { rig } = outcome;
 
         for (const client of rig.clients) {
-            for (let i = 0; i < MAX_CLIENTS; i++) {
+            expect(
+                client.net.players.length,
+                `client ${client.net.slotIndex} has a different roster from the host`
+            ).toBe(rig.host.players.length);
+
+            for (const hostPlayer of rig.host.players) {
+                const mine = client.net.playerById(hostPlayer.index);
+                expect(mine, `client never heard of player ${hostPlayer.index}`).toBeDefined();
                 expect(
-                    client.net.slots[i]!.info.isBot,
-                    `slot ${i} isBot on client ${client.net.slotIndex}`
-                ).toBe(rig.host.slots[i]!.info.isBot);
+                    mine!.info.isBot,
+                    `player ${hostPlayer.index} isBot on client ${client.net.slotIndex}`
+                ).toBe(hostPlayer.info.isBot);
             }
         }
     });
@@ -316,7 +345,7 @@ describe('two clients and four bots, over a loopback', () => {
 
         let kills = 0;
         let deaths = 0;
-        for (const slot of rig.host.slots) {
+        for (const slot of rig.host.players) {
             kills += slot.info.kills;
             deaths += slot.info.deaths;
         }
@@ -330,19 +359,20 @@ describe('two clients and four bots, over a loopback', () => {
     it('keeps every slot finite, on the host and on both clients', () => {
         const { rig } = outcome;
 
-        for (let i = 0; i < MAX_CLIENTS; i++) {
-            const host = rig.host.slots[i]!;
+        for (const host of rig.host.players) {
+            const i = host.index;
 
             for (const v of [...host.slot.ps.origin, ...host.slot.ps.velocity]) {
-                expect(Number.isFinite(v), `host slot ${i} has a non-finite ${v}`).toBe(true);
+                expect(Number.isFinite(v), `host player ${i} has a non-finite ${v}`).toBe(true);
             }
 
             for (const client of rig.clients) {
-                const state = client.net.slots[i]!.state;
-                for (const v of [...state.origin, ...state.velocity]) {
+                const mine = client.net.playerById(i);
+                expect(mine, `client never heard of player ${i}`).toBeDefined();
+                for (const v of [...mine!.state.origin, ...mine!.state.velocity]) {
                     expect(
                         Number.isFinite(v),
-                        `slot ${i} on client ${client.net.slotIndex} has a non-finite ${v}`
+                        `player ${i} on client ${client.net.slotIndex} has a non-finite ${v}`
                     ).toBe(true);
                 }
             }

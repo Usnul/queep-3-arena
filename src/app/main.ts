@@ -1772,7 +1772,7 @@ async function main(): Promise<void> {
                         const existing = netCharacters.get(slot);
                         if (existing !== undefined) return existing;
 
-                        const record = netClient.slots[slot];
+                        const record = netClient.playerById(slot);
                         if (record === undefined || record.state.connected === 0) return null;
 
                         const name = CHARACTERS[record.info.character % CHARACTERS.length]!;

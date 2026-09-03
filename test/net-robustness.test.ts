@@ -28,7 +28,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { NetRig, type RigClient } from './net/rig.ts';
-import { MAX_CLIENTS, SIMULATION_DELAY_TICKS, TICK_HZ } from '../src/net/protocol.ts';
+import {
+    MAX_CLIENTS,
+    MIN_CLIENT_PEER_ID,
+    SIMULATION_DELAY_TICKS,
+    TICK_HZ,
+} from '../src/net/protocol.ts';
 import { FORWARDMOVE } from '../src/q3/pmove/types.ts';
 import { NetworkIdentity } from '@woosh/meep-engine/src/engine/network/ecs/components/NetworkIdentity.js';
 
@@ -84,7 +89,7 @@ describe('a client that lies', () => {
         const [attacker, victim] = rig.clients;
         rig.step(60);
 
-        const victimSlot = rig.host.slots[victim!.net.slotIndex]!;
+        const victimSlot = rig.host.playerById(victim!.net.slotIndex)!;
         const before = [...victimSlot.slot.ps.origin];
 
         /*
@@ -96,7 +101,7 @@ describe('a client that lies', () => {
          legitimately connected peer.
         */
         const victimId = attacker!.net.world.getComponent(
-            attacker!.net.slots[victim!.net.slotIndex]!.entity,
+            attacker!.net.playerById(victim!.net.slotIndex)!.entity,
             NetworkIdentity
         ) as NetworkIdentity;
 
@@ -154,11 +159,11 @@ describe('a client that lies', () => {
         const [attacker, victim] = rig.clients;
         rig.step(60);
 
-        const victimStart = [...rig.host.slots[victim!.net.slotIndex]!.slot.ps.origin];
-        const attackerStart = [...rig.host.slots[attacker!.net.slotIndex]!.slot.ps.origin];
+        const victimStart = [...rig.host.playerById(victim!.net.slotIndex)!.slot.ps.origin];
+        const attackerStart = [...rig.host.playerById(attacker!.net.slotIndex)!.slot.ps.origin];
 
         const victimId = attacker!.net.world.getComponent(
-            attacker!.net.slots[victim!.net.slotIndex]!.entity,
+            attacker!.net.playerById(victim!.net.slotIndex)!.entity,
             NetworkIdentity
         ) as NetworkIdentity;
 
@@ -177,8 +182,8 @@ describe('a client that lies', () => {
         stopForging();
         rig.step(TICK_HZ * 4);
 
-        const victimNow = rig.host.slots[victim!.net.slotIndex]!.slot.ps.origin;
-        const attackerNow = rig.host.slots[attacker!.net.slotIndex]!.slot.ps.origin;
+        const victimNow = rig.host.playerById(victim!.net.slotIndex)!.slot.ps.origin;
+        const attackerNow = rig.host.playerById(attacker!.net.slotIndex)!.slot.ps.origin;
 
         const victimMoved = Math.hypot(
             victimNow[0]! - victimStart[0]!,
@@ -206,7 +211,7 @@ describe('a client that lies', () => {
 });
 
 describe('a client that leaves', () => {
-    it('frees its slot, and the other clients are told', async () => {
+    it('takes its entity with it, on the host and on everybody else', async () => {
         const rig = await NetRig.create({
             map: 'oa_dm1',
             bots: 0,
@@ -219,7 +224,7 @@ describe('a client that leaves', () => {
         rig.step(60);
 
         const slot = leaving!.net.slotIndex;
-        expect(rig.host.slots[slot]!.connected).toBe(true);
+        expect(rig.host.playerById(slot)!.connected).toBe(true);
 
         rig.host.release(leaving!.net.peerId);
         rig.host.session.drop_peer(leaving!.net.peerId, 'test');
@@ -228,18 +233,40 @@ describe('a client that leaves', () => {
         rig.clients.splice(rig.clients.indexOf(leaving!), 1);
         rig.step(60);
 
-        expect(rig.host.slots[slot]!.connected, 'the host kept the slot').toBe(false);
-        expect(rig.host.lowestFreeSlot(), 'the freed slot was not reoffered').toBe(slot);
+        /*
+         **Gone, not marked absent.** This used to assert `connected === false`
+         on a slot that outlived its occupant; there is no slot now, so the
+         assertion is that there is no player (D-194). The id is free again and
+         will be handed to the next joiner, which is what `capacity` means: a
+         number compared against a population, not an array with a hole in it.
+        */
+        expect(rig.host.playerById(slot), 'the host kept the player').toBeUndefined();
+        expect(rig.host.lowestFreeSlot(), 'the freed id was not reoffered').toBe(slot);
 
         /*
-         And the client still in the match hears about it, which is what makes
-         the character vanish rather than stand there for ever. `connected` is
-         replicated in `NetPlayerState` precisely so this needs no side channel.
+         And the client still in the match has destroyed its copy, which is the
+         end-to-end proof of the `PlayerLeft` action.
+
+         **It has to be an action, because removal is the one direction
+         replication does not go.** A client that has an entity a snapshot omits
+         keeps it -- there is no CREATE or DESTROY among the thirteen
+         `NetworkPacketType`s, and `#apply_initial_sync` only creates entities
+         the receiver does not know. Measured on 3.15.0: the host destroyed an
+         entity, pushed a fresh snapshot, and the client still held it. So the
+         host says which `network_id` has gone and the client destroys its own
+         copy, which it is entitled to do because it is its own entity.
+
+         Without this the leaver is a character standing where somebody logged
+         off, with a body still in the broadphase, for ever -- the same failure
+         D-185 found from the other direction when nothing was published at all.
         */
         expect(
-            staying!.net.slots[slot]!.state.connected,
-            'the remaining client still thinks somebody is in that slot'
-        ).toBe(0);
+            staying!.net.playerById(slot),
+            'the remaining client kept a ghost where the leaver was'
+        ).toBeUndefined();
+
+        expect(staying!.net.players.length, 'the roster did not shrink').toBe(1);
+        expect(staying!.net.players[0]!.index).toBe(staying!.net.slotIndex);
     });
 
     it('gives a rejoining client a new peer id, and the slot back', async () => {
@@ -277,7 +304,7 @@ describe('a client that leaves', () => {
          asserting about the harness.
         */
         expect(second.net.slotIndex, 'the freed slot was not the one offered').toBe(firstSlot);
-        expect(rig.host.slots[firstSlot]!.info.kills, 'the score did not start fresh').toBe(0);
+        expect(rig.host.playerById(firstSlot)!.info.kills, 'the score did not start fresh').toBe(0);
     });
 });
 
@@ -311,12 +338,18 @@ describe('a host that is full', () => {
         expect(rig.host.lowestFreeSlot()).toBe(3);
     });
 
-    it('counts bots against the same sixteen', async () => {
+    it('counts bots against the capacity, and refuses the one past it', async () => {
         /*
-         Worth pinning, because it is the arithmetic that decides how many
-         humans a `--bots 8` server can actually hold, and nothing else states
-         it. Bots occupy real slots; a host started with eight of them has eight
-         left.
+         The arithmetic that decides how many humans a `--bots 8` server can
+         actually hold, and nothing else states it. A bot is a player like any
+         other -- it occupies capacity and it has an entity -- so a host started
+         with four of them has `capacity - 4` left.
+
+         **Capacity is a number now, not a length.** The old version of this
+         asserted `bots + free === MAX_CLIENTS`, counting the disconnected
+         entries in a pool of sixteen; there are no disconnected entries, so
+         what is asserted is the thing the pool was standing in for: how many
+         more players will be admitted (D-194).
         */
         const rig = await NetRig.create({
             map: 'oa_dm1',
@@ -326,12 +359,51 @@ describe('a host that is full', () => {
             warmup: 10,
         });
 
-        const bots = rig.host.slots.filter((slot) => slot.bot !== null).length;
-        let free = 0;
-        for (const slot of rig.host.slots) if (!slot.connected) free += 1;
+        expect(rig.host.players.length, 'a bot is a player and should be present').toBe(4);
+        expect(rig.host.players.every((p) => p.bot !== null)).toBe(true);
+        expect(rig.host.capacity).toBe(MAX_CLIENTS);
 
-        expect(bots).toBe(4);
-        expect(bots + free, 'bots and free slots do not account for the pool').toBe(MAX_CLIENTS);
+        // Fill the rest with humans, one id at a time, and then one too many.
+        const room = rig.host.capacity - rig.host.players.length;
+        for (let n = 0; n < room; n++) {
+            rig.host.admit(MIN_CLIENT_PEER_ID + n, `human${n}`, 1);
+        }
+
+        expect(rig.host.players.length).toBe(rig.host.capacity);
+        expect(rig.host.lowestFreeSlot(), 'a full match still offered an id').toBe(-1);
+
+        /*
+         And the refusal is the capacity check and nothing else: a number
+         compared against a population. No pool to run out of, no slot to fail
+         to find.
+        */
+        expect(() => rig.host.admit(MIN_CLIENT_PEER_ID + room, 'one too many', 1)).toThrow();
+    });
+
+    it('takes a capacity smaller than MAX_CLIENTS, because it is only a number', async () => {
+        /*
+         The other half of "capacity is a variable somewhere": lowering it
+         allocates nothing and removes nothing, it only changes the answer to
+         "is there room". A four-player host is four players, not sixteen
+         entries with twelve of them idle.
+        */
+        const rig = await NetRig.create({
+            map: 'oa_dm1',
+            bots: 2,
+            clients: 0,
+            seed: 1,
+            warmup: 10,
+            capacity: 4,
+        });
+
+        expect(rig.host.capacity).toBe(4);
+        expect(rig.host.players.length).toBe(2);
+
+        rig.host.admit(MIN_CLIENT_PEER_ID, 'a', 1);
+        rig.host.admit(MIN_CLIENT_PEER_ID + 1, 'b', 1);
+
+        expect(rig.host.players.length).toBe(4);
+        expect(() => rig.host.admit(MIN_CLIENT_PEER_ID + 2, 'c', 1)).toThrow();
     });
 });
 
@@ -366,7 +438,7 @@ describe('a client that goes quiet', () => {
         rig.clients.length = 0;
         rig.step(TICK_HZ * 10);
 
-        expect(rig.host.slots[slot]!.connected, 'the slot was reaped after ten seconds').toBe(true);
+        expect(rig.host.playerById(slot)!.connected, 'the slot was reaped after ten seconds').toBe(true);
         expect(rig.host.lowestFreeSlot(), 'the slot was offered to somebody else').not.toBe(slot);
     });
 

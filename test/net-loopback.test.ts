@@ -85,49 +85,78 @@ describe('a client joins a host over a loopback', () => {
         client = rig.clients[0]!;
     });
 
-    it('holds one entity per pool slot, owned the way the host says', () => {
+    it('holds one entity per player who is here, and none for anybody else', () => {
         rig.step(10);
 
         const net = client.net;
 
-        expect(net.slots.length).toBe(MAX_CLIENTS);
+        /*
+         **Five, not sixteen**, and that is the whole of D-194.
+
+         There used to be one entity per *slot*: `MAX_CLIENTS` of them built
+         before anybody connected, on both peers, in the same order so their
+         network ids lined up. Sixteen character bodies parked a million units
+         below the map so their collision hit nobody (GAP-044), sixteen entities
+         in every INITIAL_SYNC whoever was playing, and a `connected` byte doing
+         the work that "the entity exists" should do. **Not sixteen players'
+         worth of bandwidth** -- `publishPresence` gated on `connected`, and
+         downstream measured 42.9 KB/s per client before the change and 43.2
+         after. The win is the failure modes, not the bytes. GAP-038 is why -- nothing is replicated into existence -- and that
+         argument holds for a fixed population, which missiles and items are and
+         players are not.
+
+         So the count is now the population: one client and four bots. The two
+         pools that genuinely cannot grow are still pools, and are asserted
+         beside it so the difference is visible rather than implied.
+        */
+        expect(net.players.length).toBe(rig.host.players.length);
+        expect(net.players.length).toBe(5);
         expect(net.missiles.length).toBe(MAX_MISSILES);
         expect(net.items.length).toBe(rig.host.items.items.length);
 
+        // And no entity is left over for an id nobody is using.
+        for (let id = 0; id < MAX_CLIENTS; id++) {
+            const here = rig.host.playerById(id) !== undefined;
+            expect(
+                net.playerById(id) !== undefined,
+                `the client ${here ? 'is missing' : 'kept'} an entity for player ${id}`
+            ).toBe(here);
+        }
+
         /*
-         Ownership, which is what decides prediction from interpolation. The
-         session sets a negative `owner_peer_id` to the local peer at attach
-         time, so every pool entity a client builds starts out owned by *the
-         client* -- and INITIAL_SYNC does not carry ownership, because
-         `NetworkIdentity`'s adapter is a save-game adapter and the component
-         "doesn't go on the wire" (its own docblock). So the client's own slot
-         being its own is true by construction, and every other slot has to be
-         made the host's by the join. See GAP-040.
+         Ownership, which is what decides prediction from interpolation -- and
+         which is now how the client knows which player is *itself*. The host
+         writes `owner_peer_id` in `admit` before the snapshot goes out, so the
+         entity whose identity names this peer is the one the local `PlayerSlot`
+         drives. That replaced an array index agreed by both peers building the
+         same pool in the same order, and is better for the reason it is
+         shorter: the answer is on the wire rather than reconstructed from a
+         convention. See GAP-040.
         */
         const own = net.world.getComponent(net.ownSlot.entity, NetworkIdentity) as NetworkIdentity;
         expect(own.owner_peer_id).toBe(net.peerId);
         expect(own.network_id).toBeGreaterThanOrEqual(0);
 
         // The client's slot is connected on the host, and the host says so.
-        expect(rig.host.slots[net.slotIndex]!.connected).toBe(true);
-        expect(rig.host.slots[net.slotIndex]!.peerId).toBe(net.peerId);
+        expect(rig.host.playerById(net.slotIndex)!.connected).toBe(true);
+        expect(rig.host.playerById(net.slotIndex)!.peerId).toBe(net.peerId);
 
         // Bots took the highest slots, so the client's is not one of them.
-        expect(rig.host.slots[net.slotIndex]!.bot).toBeNull();
-        const botSlots = rig.host.slots.filter((s) => s.bot !== null);
+        expect(rig.host.playerById(net.slotIndex)!.bot).toBeNull();
+        const botSlots = rig.host.players.filter((s) => s.bot !== null);
         expect(botSlots.length).toBe(4);
         expect(botSlots.every((s) => s.index > net.slotIndex)).toBe(true);
     });
 
     it('moves the client on the host when the client sends input', () => {
         const slotIndex = client.net.slotIndex;
-        let previous = [...rig.host.slots[slotIndex]!.state.origin];
+        let previous = [...rig.host.playerById(slotIndex)!.state.origin];
         let walked = 0;
 
         client.script = circleWalk;
         for (let n = 0; n < 120; n++) {
             rig.step(1);
-            const now = [...rig.host.slots[slotIndex]!.state.origin];
+            const now = [...rig.host.playerById(slotIndex)!.state.origin];
             walked += Math.hypot(now[0]! - previous[0]!, now[1]! - previous[1]!);
             previous = now;
         }
@@ -175,7 +204,7 @@ describe('the prediction against the host, at zero latency', () => {
             const predicted = client.net.predictionTrace!.get(frame);
             if (predicted === undefined) continue;
 
-            const hostOrigin = rig.host.slots[slotIndex]!.state.origin;
+            const hostOrigin = rig.host.playerById(slotIndex)!.state.origin;
             const d = Math.hypot(
                 predicted.origin[0]! - hostOrigin[0]!,
                 predicted.origin[1]! - hostOrigin[1]!,
@@ -225,7 +254,7 @@ describe('every miss the short-circuit takes is accounted for', () => {
         const client = rig.clients[0]!;
         client.script = circleWalk;
 
-        const slot = rig.host.slots[client.net.slotIndex]!;
+        const slot = rig.host.playerById(client.net.slotIndex)!;
         const startHealth = slot.slot.inventory.health;
 
         rig.step(60 * 40);
@@ -279,7 +308,7 @@ describe('a weapon change on the client', () => {
     it('reaches the host, and both ends agree about what is in hand', async () => {
         const rig = await NetRig.create({ map: 'oa_dm1', bots: 0, clients: 1, seed: 31, warmup: 40 });
         const client = rig.clients[0]!;
-        const slot = rig.host.slots[client.net.slotIndex]!;
+        const slot = rig.host.playerById(client.net.slotIndex)!;
 
         // Everyone spawns holding the machinegun, with the gauntlet also in the
         // loadout -- `newInventory` -- so this is a change between two weapons
@@ -305,7 +334,7 @@ describe('a weapon change on the client', () => {
     it('is refused for a weapon the slot does not have, on both ends', async () => {
         const rig = await NetRig.create({ map: 'oa_dm1', bots: 0, clients: 1, seed: 31, warmup: 40 });
         const client = rig.clients[0]!;
-        const slot = rig.host.slots[client.net.slotIndex]!;
+        const slot = rig.host.playerById(client.net.slotIndex)!;
 
         rig.step(60);
 
@@ -405,7 +434,7 @@ describe('the bodies of slots nobody is playing', () => {
         rig.step(600);
 
         const own = net.ownSlot;
-        const host = rig.host.slots[net.slotIndex]!;
+        const host = rig.host.playerById(net.slotIndex)!;
         const drift = Math.hypot(
             own.state.origin[0]! - host.state.origin[0]!,
             own.state.origin[1]! - host.state.origin[1]!,
@@ -438,29 +467,42 @@ describe('the bodies of slots nobody is playing', () => {
         ).toBeGreaterThan(0.9);
     });
 
-    it('put an unconnected slot where the host puts it, not where its component says', async () => {
+    it('has no body for a player who is not here, because it has no player', async () => {
         const rig = await NetRig.create({ map: 'oa_dm1', bots: 2, clients: 1, seed: 23, warmup: 40 });
         rig.step(60);
 
         const net = rig.clients[0]!.net;
 
         /*
-         Read through the tracked closure rather than the component, because the
-         component is exactly what must *not* be believed for these: the parking
-         is the client's own decision, taken from the host's `connected` flag.
+         **The assertion that replaces the parking, and it is stronger.**
+
+         This test used to check that a slot nobody was in had its body put a
+         million units below the map rather than wherever its stale component
+         said -- GAP-044, where the client built sixteen bodies and parked none,
+         and the local player's own sweep hit one of them and was depenetrated
+         30.16 units off the host's position for ever. The workaround was to
+         park the unused ones. There are no unused ones: an entity exists for a
+         player who is here and for nobody else (D-194), so the failure mode has
+         no material to work with rather than being defended against.
+
+         So what is checked is the two ends agreeing about the population, which
+         is the property the parking was protecting.
         */
-        let checked = 0;
-        for (const slot of net.slots) {
-            if (slot.index === net.slotIndex) continue;
-            if (slot.state.connected !== 0) continue;
+        expect(net.players.length).toBe(rig.host.players.length);
 
-            const host = rig.host.slots[slot.index]!;
-            expect(host.connected, 'the two ends disagree about who is playing').toBe(false);
-
-            checked += 1;
+        for (const player of net.players) {
+            const host = rig.host.playerById(player.index);
+            expect(host, `the client has a player ${player.index} the host does not`).toBeDefined();
+            expect(host!.connected, 'the two ends disagree about who is playing').toBe(true);
+            expect(player.state.connected, 'a player who is here is marked absent').not.toBe(0);
         }
 
-        expect(checked, 'no unconnected slots to check; the fixture changed').toBeGreaterThan(0);
+        for (const host of rig.host.players) {
+            expect(
+                net.playerById(host.index),
+                `the host has a player ${host.index} the client never heard of`
+            ).toBeDefined();
+        }
     });
 });
 
@@ -535,7 +577,7 @@ describe('what the host tells the client about', () => {
          compensation in v1), so damage is never predicted and arrives entirely
          through AUTH_STATE.
         */
-        const hostHealth = rig.host.slots[slotIndex]!.slot.inventory.health;
+        const hostHealth = rig.host.playerById(slotIndex)!.slot.inventory.health;
         expect(client.net.ownSlot.inventory.health).toBe(hostHealth);
     });
 
@@ -546,7 +588,7 @@ describe('what the host tells the client about', () => {
         rig.step(20);
 
         const before = rig.host.weaponEvents.shots;
-        const ammoBefore = rig.host.slots[client.net.slotIndex]!.inventory.ammo[1]!;
+        const ammoBefore = rig.host.playerById(client.net.slotIndex)!.inventory.ammo[1]!;
 
         client.script = (cmd) => {
             cmd.buttons = C.BUTTON_ATTACK;
@@ -557,7 +599,7 @@ describe('what the host tells the client about', () => {
         rig.step(2 * TICK_HZ);
 
         const fired = rig.host.weaponEvents.shots - before;
-        const ammoAfter = rig.host.slots[client.net.slotIndex]!.inventory.ammo[1]!;
+        const ammoAfter = rig.host.playerById(client.net.slotIndex)!.inventory.ammo[1]!;
 
         /*
          The machinegun's fire rate is 100 ms, so two seconds of held trigger is
@@ -594,12 +636,12 @@ describe('what the host tells the client about', () => {
 
         rig.step(30);
 
-        const botSlots = rig.host.slots.filter((s) => s.bot !== null).map((s) => s.index);
-        const before = botSlots.map((i) => [...client.net.slots[i]!.state.origin]);
+        const botSlots = rig.host.players.filter((s) => s.bot !== null).map((s) => s.index);
+        const before = botSlots.map((i) => [...client.net.playerById(i)!.state.origin]);
 
         rig.step(240);
 
-        const after = botSlots.map((i) => [...client.net.slots[i]!.state.origin]);
+        const after = botSlots.map((i) => [...client.net.playerById(i)!.state.origin]);
 
         let moved = 0;
         for (let i = 0; i < botSlots.length; i++) {
@@ -613,7 +655,7 @@ describe('what the host tells the client about', () => {
         expect(moved, 'no bot moved on the client').toBeGreaterThan(0);
 
         // Every slot's numbers are finite, connected or not.
-        for (const slot of client.net.slots) {
+        for (const slot of client.net.players) {
             for (const v of slot.state.origin) expect(Number.isFinite(v)).toBe(true);
             for (const v of slot.state.velocity) expect(Number.isFinite(v)).toBe(true);
         }

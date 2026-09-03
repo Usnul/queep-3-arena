@@ -724,7 +724,22 @@ describe('registerProtocol', () => {
             a.all.map((k) => (k as unknown as { type_id: number }).type_id);
 
         expect(idsOf(one.actions)).toEqual(idsOf(two.actions));
-        expect(idsOf(one.actions)).toEqual([0, 1, 2, 3]);
+        /*
+         Five, and the count is asserted rather than the shape, because the
+         wire order is the registration order and a new action appended to the
+         end leaves every existing id alone -- where one inserted in the middle
+         renumbers everything after it and two peers built from different
+         source would disagree about what a byte means. `PlayerLeft` was added
+         at the end (D-194) and this is the assertion that says so.
+        */
+        expect(idsOf(one.actions)).toEqual([0, 1, 2, 3, 4]);
+        expect(one.actions.all.map((k) => k.name)).toEqual([
+            'UserCmdAction',
+            'EffectEvent',
+            'HitEvent',
+            'PickupEvent',
+            'PlayerLeft',
+        ]);
 
         /*
          Which is why the classes are built per session rather than shared:

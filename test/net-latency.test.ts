@@ -196,7 +196,7 @@ async function run(
         if (frame > appliedThrough) appliedThrough = frame;
     });
 
-    const slot = rig.host.slots[client.net.slotIndex]!;
+    const slot = rig.host.playerById(client.net.slotIndex)!;
     let previous = [...slot.state.origin];
     let walked = 0;
 

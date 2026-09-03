@@ -215,7 +215,7 @@ beforeAll(async () => {
      host grants the weapon, `NetInventory` replicates it, `usercmd_t.weapon`
      selects it (D-182) and the cooldown does the rest.
     */
-    const mine = rig.host.slots[client.net.slotIndex]!;
+    const mine = rig.host.playerById(client.net.slotIndex)!;
     mine.slot.inventory.weapons.add('WP_ROCKET_LAUNCHER');
     mine.slot.inventory.ammo['WP_ROCKET_LAUNCHER'] = 400;
 
@@ -249,7 +249,7 @@ beforeAll(async () => {
         audio.frame = n;
         system.update(1 / 60);
 
-        for (const slot of client.net.slots) {
+        for (const slot of client.net.players) {
             if (slot.info.isBot === 0) continue;
             if (slot.state.connected === 0 || slot.state.alive === 0) continue;
 
@@ -263,7 +263,7 @@ beforeAll(async () => {
              this test report 746 units of lag against a stationary zero and
              call it a render delay.
             */
-            const truth = rig.host.slots[slot.index]!.state.origin;
+            const truth = rig.host.playerById(slot.index)!.state.origin;
 
             lag.push(
                 Math.hypot(drawn[0]! - truth[0]!, drawn[1]! - truth[1]!, drawn[2]! - truth[2]!)
@@ -306,7 +306,7 @@ describe('what a client draws of the other players', () => {
         const { rig, recorders, lag, step } = seen;
 
         const drawn = [...recorders.keys()].filter(
-            (i) => rig.host.slots[i]!.info.isBot === 1 && recorders.get(i)!.positions.length > 0
+            (i) => rig.host.playerById(i)!.info.isBot === 1 && recorders.get(i)!.positions.length > 0
         );
 
         expect(drawn.length, 'no bot was ever drawn').toBe(4);
@@ -363,7 +363,7 @@ describe('what a client draws of the other players', () => {
         */
         const chosen = new Set<LegsAnimation>();
         for (const [slot, recorder] of recorders) {
-            if (rig.host.slots[slot]!.info.isBot === 0) continue;
+            if (rig.host.playerById(slot)!.info.isBot === 0) continue;
             for (const legs of recorder.legs) chosen.add(legs);
         }
 
@@ -377,25 +377,53 @@ describe('what a client draws of the other players', () => {
         ).toBeGreaterThan(1);
     });
 
-    it('parks the slots nobody is in, instead of drawing a stranger', () => {
+    it('draws nobody who is not in the match, because there is nobody to draw', () => {
         const { rig, recorders } = seen;
 
-        let parked = 0;
-        for (let i = 0; i < MAX_CLIENTS; i++) {
-            const record = rig.clients[0]!.net.slots[i]!;
-            if (record.state.connected !== 0) continue;
+        /*
+         **The assertion that replaces the parking.**
 
-            const recorder = recorders.get(i);
-            if (recorder === undefined || recorder.positions.length === 0) continue;
+         This used to check that a slot nobody was in was drawn a million units
+         below the map: sixteen player entities existed from the first frame,
+         eleven of them held whatever `NetPlayerState` the host last wrote, and
+         drawing one put a motionless stranger in the middle of the level. The
+         parking was the workaround.
 
-            parked += 1;
+         There is no entity for a player who is not here (D-194), so the
+         presentation is never handed one and the stranger has no material to be
+         made from. What is checked is that: every slot the recorder was asked
+         to draw belongs to a player the host actually has, and every player the
+         host has was drawn -- except the local one, which Q3 never draws.
+        */
+        const client = rig.clients[0]!;
+        const drawn = [...recorders.keys()].filter(
+            (i) => recorders.get(i)!.positions.length > 0
+        );
+
+        for (const id of drawn) {
             expect(
-                recorder.last[2],
-                `slot ${i} is empty and was drawn at z ${recorder.last[2]}`
-            ).toBeLessThan(-1000);
+                rig.host.playerById(id),
+                `player ${id} was drawn and the host has no such player`
+            ).toBeDefined();
+            expect(id, 'the local player was drawn').not.toBe(client.net.slotIndex);
         }
 
-        expect(parked, 'no empty slot was exercised; the fixture changed').toBeGreaterThan(0);
+        for (const player of rig.host.players) {
+            if (player.index === client.net.slotIndex) continue;
+            expect(
+                drawn.includes(player.index),
+                `player ${player.index} is in the match and was never drawn`
+            ).toBe(true);
+        }
+
+        // And nothing was ever placed below the map, which is where the parked
+        // ones used to live.
+        for (const id of drawn) {
+            expect(
+                recorders.get(id)!.last[2],
+                `player ${id} was drawn at z ${recorders.get(id)!.last[2]}, which is parked`
+            ).toBeGreaterThan(-1000);
+        }
     });
 
     it('puts a model on every missile the host fires, and takes it away again', () => {
@@ -488,7 +516,7 @@ describe('what a client hears of the other players', () => {
          arrangement exists to catch, and is silent in a browser because a
          footstep you do not hear sounds like a footstep somewhere else.
         */
-        const bots = rig.host.slots.filter((slot) => slot.bot !== null && slot.connected);
+        const bots = rig.host.players.filter((slot) => slot.bot !== null && slot.connected);
         expect(bots.length).toBeGreaterThan(0);
         for (const slot of bots) {
             expect(

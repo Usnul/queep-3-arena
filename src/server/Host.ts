@@ -59,6 +59,7 @@ import {
 import { WorldEffects, type EffectTarget } from '../game/WorldEffects.ts';
 import { PvsScope } from './PvsScope.ts';
 import { readVisibility } from '../q3/cm/pvs.ts';
+import { snapshotter_emit } from '@woosh/meep-engine/src/engine/network/sim/Snapshotter.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import { HeadlessPhysics } from '../../tools/pipeline/headless-physics.ts';
@@ -152,6 +153,16 @@ export interface HostOptions {
      */
     pvsCulling?: boolean;
 
+    /**
+     * How many players may be in the match at once. Defaults to `MAX_CLIENTS`.
+     *
+     * A number, compared against `players.length` when somebody asks to join.
+     * It allocates nothing: raising it does not build more entities and
+     * lowering it does not remove any, it only changes the answer to "is there
+     * room". See {@link Host.addPlayer}.
+     */
+    capacity?: number;
+
     map: string;
     /** How many bots to fill the map with, from the spawns the humans do not take. */
     bots?: number;
@@ -187,7 +198,15 @@ export interface HostOptions {
  * A slot exists for the whole match whether anyone is in it or not, because
  * the entity behind it does. `connected` is what says whether it is a player.
  */
-interface Slot {
+/**
+ * One player who is here.
+ *
+ * Named for what it is rather than for where it sits, because it no longer sits
+ * anywhere: there is no array of `capacity` of these waiting to be filled, and
+ * `index` is a game-level id looked up through {@link Host.playerById} rather
+ * than a position. See {@link Host.addPlayer}.
+ */
+interface Player {
     readonly index: number;
     readonly entity: number;
     readonly slot: PlayerSlot;
@@ -327,7 +346,33 @@ export class Host {
     readonly graph: WaypointGraph;
     readonly bots: BotRuntime;
 
-    readonly slots: Slot[] = [];
+    /**
+     * The players who are here. Not a table with holes in it.
+     *
+     * Dense: one entry per player present, in the order they arrived, and
+     * nothing for an id nobody is using. `capacity` bounds how many there can
+     * be and is a number rather than the length of anything pre-built. Look one
+     * up by its game-level id with {@link playerById}.
+     */
+    readonly players: Player[] = [];
+
+    /** How many players may be here at once. Compared against, not allocated. */
+    readonly capacity: number;
+
+    /**
+     * Peers that were already here when somebody arrived, and so do not know.
+     *
+     * A published component cannot introduce an entity -- GAP-038 -- so a fresh
+     * INITIAL_SYNC is pushed instead, on the next tick rather than inside
+     * `addPlayer`, because a snapshot has to be emitted from somewhere the
+     * action log is open and one push covers any number of arrivals in a frame.
+     * A set rather than a flag so that two arrivals in one frame cost each peer
+     * one snapshot rather than two.
+     */
+    private readonly resyncOwed = new Set<number>();
+
+    /** Departures owed to the clients as `PlayerLeft` actions. */
+    private readonly departures: { networkId: number; playerId: number }[] = [];
     readonly spawns: number[][];
 
     /** The match entity's replicated state. */
@@ -335,7 +380,7 @@ export class Host {
 
     private readonly bodies: CharacterBodies;
     /** Filled by `buildPools`; the action context reads it lazily. */
-    private readonly slotByEntity = new Map<number, Slot>();
+    private readonly slotByEntity = new Map<number, Player>();
     private readonly missilePool: MissileEntry[] = [];
     /** The same entries by entity, for {@link originOf}. */
     private readonly missileByEntity = new Map<number, MissileEntry>();
@@ -377,8 +422,8 @@ export class Host {
      */
     private readonly worldEffects: WorldEffects[] = [];
 
-    /** One `EffectTarget` per slot, built once; see {@link SlotEffectTarget}. */
-    private readonly effectTargets: SlotEffectTarget[] = [];
+    /** One `EffectTarget` per present player, keyed by its game-level id. */
+    private readonly effectTargets = new Map<number, SlotEffectTarget>();
 
     /** Wall frame; `session.tick` advances it and the sim runs `- delay` behind. */
     private wallFrame = 0;
@@ -404,6 +449,7 @@ export class Host {
         movers: MoverSystem;
         moverEvents: HostMoverEvents;
         scope: PvsScope | null;
+        capacity: number;
     }) {
         this.entityManager = parts.entityManager;
         this.world = parts.world;
@@ -422,6 +468,7 @@ export class Host {
         this.movers = parts.movers;
         this.moverEvents = parts.moverEvents;
         this.scope = parts.scope;
+        this.capacity = parts.capacity;
 
         for (let i = 0; i < MAX_CLIENTS; i++) this.worldEffects.push(new WorldEffects());
     }
@@ -579,9 +626,11 @@ export class Host {
                 visibility,
                 roster: {
                     slotForPeer: (peerId) =>
-                        hostRef?.slots.find((r) => r.peerId === peerId)?.index ?? -1,
+                        hostRef?.players.find((r: { peerId: number; index: number }) =>
+                            r.peerId === peerId
+                        )?.index ?? -1,
                     originOfSlot: (slot) => {
-                        const record = hostRef?.slots[slot];
+                        const record = hostRef?.playerById(slot);
                         if (record === undefined || !record.connected) return null;
                         return record.state.origin;
                     },
@@ -625,6 +674,7 @@ export class Host {
             movers,
             moverEvents,
             scope,
+            capacity: Math.max(1, options.capacity ?? MAX_CLIENTS),
         });
         hostRef = host;
         events.host = host;
@@ -660,81 +710,47 @@ export class Host {
      * Pools -- every networked entity, before the first connect
      * ------------------------------------------------------------------ */
 
+    /**
+     * The entities that must exist before anybody connects, and no others.
+     *
+     * **Players are not among them any more.** GAP-038 is why anything is
+     * pooled at all -- nothing is replicated into existence, so an entity a
+     * client has never heard of is one it never will -- and that argument
+     * applies to a *fixed* population, which missiles and items are: sixty-four
+     * missile slots and one entity per map item, the same count on both peers,
+     * created in the same order so the network ids line up by construction.
+     *
+     * Players are not a fixed population. Sixteen pre-created player entities
+     * meant sixteen character bodies parked a million units below the map so
+     * their collision hit nobody (GAP-044), sixteen entities in every
+     * INITIAL_SYNC whoever was actually playing, and a `connected` byte doing
+     * the work that "the entity exists" should do.
+     *
+     * **It did not mean sixteen players' worth of bandwidth**, and it is worth
+     * saying so rather than implying a win that is not there: `publishPresence`
+     * gates on `connected`, so an unoccupied slot published nothing after its
+     * parting window. Measured across the change, downstream is 42.9 KB/s per
+     * client before and 43.2 after -- unchanged. What this buys is that the
+     * failure modes of a pool go away, not bytes.
+     *
+     * They are now created when somebody arrives and destroyed when they leave,
+     * and the two directions cost different things:
+     * a **pushed INITIAL_SYNC** teaches a connected peer about the new entity,
+     * and a **`PlayerLeft` action** is what takes one away, because removal is
+     * the one direction replication does not go. See {@link addPlayer},
+     * {@link removePlayer} and D-194.
+     *
+     * The order below is the wire order and both peers walk it: the match
+     * entity, then missiles, then items. Players get whatever ids follow, and
+     * they are carried in the snapshot rather than derived, so they do not have
+     * to be guessable.
+     */
     private buildPools(botCount: number): void {
         const world = this.world;
 
         // The match entity first, so it takes the lowest network id.
         world.addComponentToEntity(this.matchEntity, new NetworkIdentity());
         world.addComponentToEntity(this.matchEntity, this.match);
-
-        for (let i = 0; i < MAX_CLIENTS; i++) {
-            const entity = world.createEntity();
-            const body = this.bodies.create(i);
-
-            const slot = new PlayerSlot({
-                cm: this.cm,
-                spawnQ3: this.spawns[i % this.spawns.length]!,
-                physics: this.physics,
-                moverHost: body.host,
-            });
-
-            const state = new NetPlayerState();
-            const inventory = new NetInventory();
-            const info = new NetPlayerInfo();
-
-            const record: Slot = {
-                index: i,
-                entity,
-                slot,
-                body,
-                state,
-                inventory,
-                info,
-                peerId: -1,
-                bot: null,
-                connected: false,
-                alive: false,
-                respawnIn: -1,
-                bleedAccumulator: 0,
-                lastFiredFrame: -1,
-                mins: new Float64Array(3),
-                maxs: new Float64Array(3),
-            };
-
-            /*
-             A slot nobody is in is parked far below the map, and each one at
-             its own spot.
-
-             Every slot has a character body from the first frame, because the
-             pool has to exist before anyone connects -- but a body is *solid*,
-             and `MAX_CLIENTS` is 16 while `oa_dm1` has nine spawn points, so
-             sixteen bodies placed at `spawns[i % spawns.length]` put two
-             players' worth of collision on seven of them. Measured before this:
-             a joining player was depenetrated 63 units downward on its first
-             step, out through the floor, and fell for ever with
-             `groundEntityNum` still reporting ENTITYNUM_WORLD -- because
-             `MeepMove` was right about standing on something and the something
-             was another slot.
-
-             `sync` skips an entry whose closure returns nothing, but that only
-             leaves the body wherever it last was; the parking spot is what puts
-             it somewhere harmless. Spaced by 64 units so the parked bodies do
-             not depenetrate each other either.
-            */
-            const parked = vec3(record.index * 64, 0, -1e6);
-            body.track(() => (record.connected ? record.slot.ps.origin : parked));
-
-            const identity = new NetworkIdentity();
-            world.addComponentToEntity(entity, identity);
-            world.addComponentToEntity(entity, state);
-            world.addComponentToEntity(entity, inventory);
-            world.addComponentToEntity(entity, info);
-
-            this.slots.push(record);
-            this.slotByEntity.set(entity, record);
-            this.effectTargets.push(new SlotEffectTarget(slot));
-            this.weapons.targets.push(this.damageableFor(record));
-        }
 
         for (let i = 0; i < MAX_MISSILES; i++) {
             const entity = world.createEntity();
@@ -765,18 +781,171 @@ export class Host {
          silently absent -- see GAP-041.
         */
 
-        // Bots take the highest slots, humans the lowest, so a joining human
-        // never has to wait for a bot to be moved out of the way.
-        const wanted = Math.min(botCount, MAX_CLIENTS - 1, this.spawns.length - 1);
+        /*
+         Bots take the highest ids and humans the lowest, so a joining human
+         never has to wait for a bot to be moved out of the way. The ids are
+         still a small dense space because `EffectEvent.owner` is a byte and Q3's
+         `clientNum` is what damage is attributed to -- that is the "concept of
+         slots at a higher level", and it is not sixteen entities.
+        */
+        const wanted = Math.min(botCount, this.capacity - 1, this.spawns.length - 1);
         for (let n = 0; n < wanted; n++) {
-            const index = MAX_CLIENTS - 1 - n;
-            this.fillWithBot(this.slots[index]!, n);
+            this.addBot(this.capacity - 1 - n, n);
         }
 
         this.bodies.sync();
     }
 
-    private fillWithBot(record: Slot, ordinal: number): void {
+    /**
+     * Make a player, if there is room. The only door.
+     *
+     * `id` is the game-level player number -- Q3's `clientNum`, the byte
+     * `EffectEvent.owner` and `HitEvent.attacker` carry, and what a scoreboard
+     * sorts on. It is *not* an index into anything: {@link players} holds only
+     * the players who exist, and `id` is looked up rather than indexed.
+     *
+     * Returns null when the match is full, which is the capacity check in its
+     * entirety: a number compared against a length.
+     */
+    private addPlayer(id: number): Player | null {
+        if (this.players.length >= this.capacity) return null;
+        if (this.playerById(id) !== undefined) return null;
+
+        const world = this.world;
+        const entity = world.createEntity();
+        const body = this.bodies.create(id);
+
+        const slot = new PlayerSlot({
+            cm: this.cm,
+            spawnQ3: this.spawns[id % this.spawns.length]!,
+            physics: this.physics,
+            moverHost: body.host,
+        });
+
+        const record: Player = {
+            index: id,
+            entity,
+            slot,
+            body,
+            state: new NetPlayerState(),
+            inventory: new NetInventory(),
+            info: new NetPlayerInfo(),
+            peerId: -1,
+            bot: null,
+            connected: false,
+            alive: false,
+            respawnIn: -1,
+            bleedAccumulator: 0,
+            lastFiredFrame: -1,
+            mins: new Float64Array(3),
+            maxs: new Float64Array(3),
+        };
+
+        /*
+         The body follows the player and nothing else, because there is no
+         longer such a thing as a body for a player who is not here. That is
+         GAP-044's parking rule becoming unnecessary rather than being moved:
+         sixteen solid boxes at `spawns[i % spawns.length]` used to put two
+         players' worth of collision on seven of `oa_dm1`'s nine spawn points,
+         and the fix was to park the unused ones a million units down. There are
+         no unused ones now.
+        */
+        body.track(() => record.slot.ps.origin);
+
+        world.addComponentToEntity(entity, new NetworkIdentity());
+        world.addComponentToEntity(entity, record.state);
+        world.addComponentToEntity(entity, record.inventory);
+        world.addComponentToEntity(entity, record.info);
+
+        this.players.push(record);
+        this.slotByEntity.set(entity, record);
+        this.effectTargets.set(id, new SlotEffectTarget(slot));
+        this.weapons.targets.push(this.damageableFor(record));
+
+        /*
+         Everybody **already here** has to be told the entity exists, and a
+         published component will not do it: `ReplaceComponentAction.apply`
+         returns silently for a `network_id` the receiver has never heard of,
+         which is GAP-038. A fresh INITIAL_SYNC does do it -- the engine's own
+         `#apply_initial_sync` handles the already-allocated case on purpose --
+         so one is pushed to each of them on the next tick.
+         *
+         **Already here, and not the arrival.** The peers are captured now
+         rather than looked up at push time, because by then the new player is
+         connected too and would be sent a snapshot it is about to receive from
+         the engine anyway -- `connect` queues two. That is not merely wasteful:
+         `onInitialSync` calls `seek_to_frame`, so a redundant snapshot re-seeks
+         the clock of a client that is already running, and measured on this
+         port it cost delivery -- frames lost at 80 ms went from 0 to 1 and at
+         150 ms from 10 to 15. A snapshot is not a free thing to send twice.
+        */
+        for (const other of this.players) {
+            if (other === record) continue;
+            if (!other.connected || other.peerId < 0) continue;
+            this.resyncOwed.add(other.peerId);
+        }
+
+        return record;
+    }
+
+    /**
+     * Take a player away, and tell every client to do the same.
+     *
+     * The `PlayerLeft` action is not belt and braces: **there is no packet type
+     * that removes an entity**, and a pushed snapshot only creates ones the
+     * receiver does not know -- measured, a client kept an entity the host had
+     * destroyed and re-snapshotted without. So the reap is the application's,
+     * and this is the message that asks for it.
+     */
+    private removePlayer(record: Player): void {
+        const networkId = this.networkIdOf(record.entity);
+
+        const at = this.players.indexOf(record);
+        if (at >= 0) this.players.splice(at, 1);
+        this.slotByEntity.delete(record.entity);
+        this.effectTargets.delete(record.index);
+
+        const target = this.weapons.targets.findIndex((t) => t.id === record.index);
+        if (target >= 0) this.weapons.targets.splice(target, 1);
+
+        if (record.body !== null) this.bodies.destroy(record.body.entity);
+        if (this.world.entityExists(record.entity)) this.world.removeEntity(record.entity);
+
+        if (networkId >= 0) this.departures.push({ networkId, playerId: record.index });
+    }
+
+    /** The wire's name for a local entity, or -1 before the session has one. */
+    private networkIdOf(entity: number): number {
+        const table = this.session.server?.slot_table;
+        if (table === undefined) return -1;
+        return (
+            table as unknown as { network_for(e: number): number }
+        ).network_for(entity);
+    }
+
+    /** The player with this game-level id, or undefined if nobody has it. */
+    playerById(id: number): Player | undefined {
+        for (const record of this.players) {
+            if (record.index === id) return record;
+        }
+        return undefined;
+    }
+
+    /** The lowest game-level id nobody is using, or -1 when the match is full. */
+    lowestFreeSlot(): number {
+        for (let id = 0; id < this.capacity; id++) {
+            if (this.playerById(id) === undefined) return id;
+        }
+        return -1;
+    }
+
+    private addBot(id: number, ordinal: number): void {
+        const record = this.addPlayer(id);
+        if (record === null) return;
+        this.fillWithBot(record, ordinal);
+    }
+
+    private fillWithBot(record: Player, ordinal: number): void {
         const spawnIndex = 1 + (ordinal % Math.max(1, this.spawns.length - 1));
 
         const bot = new Bot({
@@ -804,6 +973,7 @@ export class Host {
         record.bot = bot;
         record.connected = true;
         record.alive = true;
+        record.info.playerId = record.index;
         record.info.name = bot.name;
         record.info.isBot = 1;
         record.info.character = ordinal + 1;
@@ -915,7 +1085,7 @@ export class Host {
          command that produced this frame's motion is the one the cycle is
          advanced by, exactly as `PM_Footsteps` does inside a `pmove`.
         */
-        for (const record of this.slots) {
+        for (const record of this.players) {
             const bot = record.bot;
             if (bot === null || !record.connected || !record.alive) continue;
             advanceBobCycle(bot.pmove.ps, bot.pmove.cmd, msec);
@@ -927,7 +1097,7 @@ export class Host {
 
         // 3. Items: one clock, then one touch test per live slot.
         this.items.advance(dt);
-        for (const record of this.slots) {
+        for (const record of this.players) {
             if (!record.connected || !record.alive) continue;
             for (const pickup of this.items.touch(
                 record.slot.ps.origin,
@@ -965,11 +1135,11 @@ export class Host {
         */
         this.movers.advance(dt);
 
-        for (const record of this.slots) {
+        for (const record of this.players) {
             if (!record.connected || !record.alive || record.bot !== null) continue;
 
             const effects = this.worldEffects[record.index]!;
-            const target = this.effectTargets[record.index]!;
+            const target = this.effectTargets.get(record.index)!;
 
             /*
              The recorder for this slot, for the length of this call. The mover
@@ -997,7 +1167,7 @@ export class Host {
         }
 
         // 5. Mortality and respawn.
-        for (const record of this.slots) {
+        for (const record of this.players) {
             if (!record.connected) continue;
             this.mortality(record, dt);
         }
@@ -1054,7 +1224,7 @@ export class Host {
      *
      * `OwnerAwareScope` reads `NetworkIdentity.owner_peer_id` off the entity;
      * this reads the roster, which is the same answer by a shorter route --
-     * `Host.admit` writes `owner_peer_id` from `Slot.peerId` and nothing else
+     * `Host.admit` writes `owner_peer_id` from `Player.peerId` and nothing else
      * ever changes it. Missiles, items and the match are the host's, so a
      * client's own entity is the only thing that ever matches.
      */
@@ -1070,7 +1240,7 @@ export class Host {
         return this.slotByEntity.get(entity)?.peerId ?? -1;
     }
 
-    private mortality(record: Slot, dt: number): void {
+    private mortality(record: Player, dt: number): void {
         const health = record.bot === null ? record.slot.inventory.health : record.bot.health;
 
         if (record.alive && health <= 0) {
@@ -1103,7 +1273,7 @@ export class Host {
      *
      * Teams are not modelled, so `OnSameTeam` collapses into the self case.
      */
-    private score(victim: Slot): void {
+    private score(victim: Player): void {
         const attackerId = this.lastAttacker[victim.index] ?? NO_ATTACKER;
         this.lastAttacker[victim.index] = NO_ATTACKER;
 
@@ -1131,9 +1301,9 @@ export class Host {
     }
 
     /** The slot a client id names, or null when it names nobody. */
-    private slotById(id: number): Slot | null {
+    private slotById(id: number): Player | null {
         if (id === NO_ATTACKER) return null;
-        const record = this.slots[id];
+        const record = this.players[id];
         return record === undefined || !record.connected ? null : record;
     }
 
@@ -1146,7 +1316,7 @@ export class Host {
     private readonly lastAttacker = new Uint8Array(MAX_CLIENTS).fill(NO_ATTACKER);
 
     /** `ClientSpawn`: a fresh loadout at a chosen spawn point. */
-    private spawnSlot(record: Slot, spawnIndex: number): void {
+    private spawnSlot(record: Player, spawnIndex: number): void {
         const spawn = this.spawns[spawnIndex % this.spawns.length]!;
 
         if (record.bot !== null) {
@@ -1233,13 +1403,15 @@ export class Host {
         */
         if (this.scope !== null) {
             this.scopePeers.length = 0;
-            for (const record of this.slots) {
+            for (const record of this.players) {
                 if (record.connected && record.peerId >= 0) this.scopePeers.push(record.peerId);
             }
             this.scope.beginFrame(this.scopePeers);
         }
 
-        for (const record of this.slots) {
+        this.publishPopulation(frame);
+
+        for (const record of this.players) {
             this.storeSlot(record);
             this.publishPresence(record);
             this.publishInfo(record);
@@ -1261,7 +1433,7 @@ export class Host {
     }
 
     /** `PlayerSlot.store`, plus the fields only the host knows. */
-    private storeSlot(record: Slot): void {
+    private storeSlot(record: Player): void {
         if (record.bot !== null) {
             this.storeBot(record);
         } else {
@@ -1281,7 +1453,7 @@ export class Host {
      * `match.test.ts` measures. What the wire needs is the pose, and the pose is
      * on `bot.ps` exactly as it is on a slot's.
      */
-    private storeBot(record: Slot): void {
+    private storeBot(record: Player): void {
         const bot = record.bot!;
         const ps = bot.pmove.ps;
         const state = record.state;
@@ -1323,7 +1495,7 @@ export class Host {
 
     private readonly infoShadows = new Map<number, NetPlayerInfo>();
 
-    private infoShadow(record: Slot): NetPlayerInfo {
+    private infoShadow(record: Player): NetPlayerInfo {
         let shadow = this.infoShadows.get(record.index);
         if (shadow === undefined) {
             shadow = new NetPlayerInfo();
@@ -1409,7 +1581,7 @@ export class Host {
      * reason until meep 3.15.0 fixed it; what is left is the abandoned
      * reconciliation `INFO_RESEND_FRAMES`' docblock describes.
      */
-    private publishPresence(record: Slot): void {
+    private publishPresence(record: Player): void {
         if (record.connected) {
             this.presenceResends[record.index] = INFO_RESEND_FRAMES;
             this.mutate(record.entity, NetPlayerState);
@@ -1452,7 +1624,7 @@ export class Host {
      * same trade the action stream makes, send it again a few times rather than
      * hope, and it costs nothing at rest.
      */
-    private publishInfo(record: Slot): void {
+    private publishInfo(record: Player): void {
         const shadow = this.infoShadow(record);
 
         if (!record.info.equals(shadow)) {
@@ -1485,14 +1657,6 @@ export class Host {
      * Joining, and the frame
      * ------------------------------------------------------------------ */
 
-    /** The lowest free slot, or -1 when the server is full. */
-    lowestFreeSlot(): number {
-        for (const record of this.slots) {
-            if (!record.connected) return record.index;
-        }
-        return -1;
-    }
-
     /**
      * Put a peer in a slot. **Before INITIAL_SYNC, which is the host tick after
      * `session.connect`** -- `NetworkSession.#on_identity_attached` decides
@@ -1500,44 +1664,159 @@ export class Host {
      * so this writes `owner_peer_id` directly and the engine's own default never
      * applies.
      */
-    admit(peerId: number, name: string, character: number): Slot {
-        const index = this.lowestFreeSlot();
-        if (index < 0) throw new Error('Host.admit: no free slot');
+    admit(peerId: number, name: string, character: number): Player {
+        const id = this.lowestFreeSlot();
+        if (id < 0) throw new Error('Host.admit: the match is full');
 
-        const record = this.slots[index]!;
+        const record = this.addPlayer(id);
+        if (record === null) throw new Error('Host.admit: the match is full');
+
         record.peerId = peerId;
         record.connected = true;
+        record.info.playerId = id;
         record.info.name = name;
         record.info.character = character;
         record.info.isBot = 0;
         record.info.kills = 0;
         record.info.deaths = 0;
 
+        /*
+         Ownership before INITIAL_SYNC, which is the host tick after `connect`.
+         The joining client has to receive a world in which its own entity is
+         already its own, or `NetworkSession` files it under remote entities and
+         interpolates the thing this client is supposed to be predicting.
+        */
         const identity = this.world.getComponent(record.entity, NetworkIdentity) as
             | NetworkIdentity
             | undefined;
         if (identity !== undefined) identity.owner_peer_id = peerId;
 
-        this.spawnSlot(record, index % this.spawns.length);
+        this.spawnSlot(record, id % this.spawns.length);
         this.storeSlot(record);
 
         return record;
     }
 
-    /** Free a slot when its peer goes away. */
+    /**
+     * A peer has gone: take its player with it.
+     *
+     * **This used to be four assignments and now it is a destroy**, which is
+     * the whole of the change. A slot that outlived its occupant needed
+     * `connected = 0` to say nobody was in it, and every client had to be told
+     * that byte and go on being told it for ever. An entity that does not exist
+     * needs nothing said about it -- except once, that it has gone, because
+     * removal is the one direction replication does not go (GAP-038).
+     */
     release(peerId: number): void {
-        for (const record of this.slots) {
+        for (const record of [...this.players]) {
             if (record.peerId !== peerId) continue;
             record.peerId = -1;
             record.connected = false;
             record.alive = false;
-            record.info.name = '';
-            const identity = this.world.getComponent(record.entity, NetworkIdentity) as
-                | NetworkIdentity
-                | undefined;
-            if (identity !== undefined) identity.owner_peer_id = HOST_PEER_ID;
+            this.removePlayer(record);
         }
     }
+
+    /**
+     * The two things a change of population owes the clients, once a frame.
+     *
+     * Called from `publish`, which runs inside `onLocalSim` -- the only place
+     * the action log has a frame open, which `PlayerLeft` needs, and the only
+     * place a snapshot may be emitted.
+     *
+     * **The order matters and it is departures first.** A player id is reused
+     * as soon as it is free, so an arrival in the same frame as a departure can
+     * carry the id the departure names; sending the arrival's snapshot first
+     * would have the client create the entity and then reap it.
+     */
+    private publishPopulation(frame: number): void {
+        for (const gone of this.departures) {
+            const action = new this.actions.PlayerLeft();
+            action.networkId = gone.networkId;
+            action.playerId = gone.playerId;
+            this.session.send(action as never);
+        }
+        this.departures.length = 0;
+
+        if (this.resyncOwed.size === 0) return;
+        this.pushSnapshot(frame);
+        this.resyncOwed.clear();
+    }
+
+    /**
+     * Push a fresh INITIAL_SYNC to every peer already here.
+     *
+     * **The only way to introduce an entity to a connected peer.**
+     * `ReplaceComponentAction.apply` opens with a silent return for a
+     * `network_id` the receiver has never heard of, and there is no CREATE
+     * among the thirteen `NetworkPacketType`s -- so a component published for a
+     * new entity reaches nobody who was already here, which is GAP-038 and is
+     * measured: ninety frames of publishing, `entity_for` still -1. A snapshot
+     * does reach them, and `NetworkSession.#apply_initial_sync` walks the wire
+     * format by hand rather than using `snapshotter_apply` precisely so that a
+     * slot which is already allocated does not throw -- re-sync is a case the
+     * engine anticipated.
+     *
+     * **What it costs, stated rather than buried.** One whole-world snapshot to
+     * each connected peer per join. Joins are rare and a snapshot is the same
+     * bytes the peer already accepted once, so the cost is a spike rather than
+     * a rate -- but it is a spike proportional to the population, and a server
+     * churning players would feel it.
+     *
+     * **And it overwrites the peer's session token**, because
+     * `#peer_session_tokens` is `#`-private and there is no way to read the one
+     * the engine issued. The client stores whatever the newest INITIAL_SYNC
+     * carried, so a later RESUME_HELLO would present a token the host does not
+     * recognise and be answered with RESUME_REJECT -- which degrades to a fresh
+     * sync rather than failing. Harmless today because this port does not enable
+     * the reconnect ladder (D-167 has resume on the follow-up list) and worth
+     * knowing before it does. One token per peer is generated here and reused,
+     * so the client's copy is at least stable.
+     */
+    private pushSnapshot(frame: number): void {
+        const peer = this.session.peer as unknown as {
+            slot_table: unknown;
+            component_registry: unknown;
+            send_initial_sync(
+                peerId: number,
+                token: Uint8Array,
+                frame: number,
+                write: (buffer: unknown) => void
+            ): void;
+        };
+
+        const live: number[] = [];
+        for (const record of this.players) live.push(record.entity);
+        live.push(this.matchEntity);
+        for (const missile of this.missilePool) live.push(missile.entity);
+        for (const item of this.itemEntities) live.push(item.entity);
+
+        for (const peerId of this.resyncOwed) {
+            let token = this.resyncTokens.get(peerId);
+            if (token === undefined) {
+                token = new Uint8Array(16);
+                // Distinct per peer, so two clients never share a token.
+                token[0] = peerId & 0xff;
+                token[1] = 0xa5;
+                this.resyncTokens.set(peerId, token);
+            }
+
+            peer.send_initial_sync(peerId, token, frame, (buffer) => {
+                snapshotter_emit({
+                    buffer,
+                    world: this.world,
+                    slot_table: peer.slot_table,
+                    component_registry: peer.component_registry,
+                    entity_iter: (cb: (e: number) => void) => {
+                        for (const e of live) cb(e);
+                    },
+                });
+            });
+        }
+    }
+
+    /** One stable fabricated token per peer. See {@link pushSnapshot}. */
+    private readonly resyncTokens = new Map<number, Uint8Array>();
 
     /**
      * One host frame: the engine's step, then the session's.
@@ -1569,6 +1848,12 @@ export class Host {
         const byEntity = this.slotByEntity;
 
         return {
+            /*
+             Raised by this peer and never received by it: a client's outbound
+             stream carries only the entity it owns (`OwnerAwareScope`), and a
+             player leaving is the host's own conclusion.
+            */
+            playerLeft: () => {},
             simulates: (entity) => {
                 const record = byEntity.get(entity);
                 return record !== undefined && record.bot === null && record.connected;
@@ -1614,7 +1899,7 @@ export class Host {
      * they take care of themselves; the shot does not, and `lastFiredFrame` is
      * what stops it.
      */
-    private sinkFor(record: Slot, frame: number): StepSink {
+    private sinkFor(record: Player, frame: number): StepSink {
         return {
             fired: (weapon: WeaponId, eye: Vec3Like, angles: ArrayLike<number>) => {
                 if (frame <= record.lastFiredFrame) return;
@@ -1636,7 +1921,7 @@ export class Host {
      * Helpers the bot world and the weapon system reach through
      * ------------------------------------------------------------------ */
 
-    private damageableFor(record: Slot): Damageable {
+    private damageableFor(record: Player): Damageable {
         const host = this;
         return {
             id: record.index,
@@ -1687,7 +1972,7 @@ export class Host {
      */
     humanTargets(): BotTarget[] {
         const out: BotTarget[] = [];
-        for (const record of this.slots) {
+        for (const record of this.players) {
             if (!record.connected || record.bot !== null || !record.alive) continue;
             out.push({ originQ3: record.slot.ps.origin, id: record.index });
         }
@@ -1699,7 +1984,7 @@ export class Host {
         return this.events;
     }
 
-    private raiseDeath(record: Slot): void {
+    private raiseDeath(record: Player): void {
         this.events.deaths += 1;
         this.events.pending.push({
             kind: EffectKind.Death,
