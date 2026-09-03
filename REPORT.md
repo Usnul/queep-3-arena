@@ -3281,18 +3281,42 @@ unacked frames exactly as the host does. 1.5 KB/s clean, 9.8 on a real link.
    `[last_acked + 1, current]` each tick, so the 160 ms link costs **3.9×** the loopback. This term
    is invisible on a loopback and dominates everywhere else.
 
-Against the 48 KB/s budget: a sixteen-player match is **1.3× over on a perfect link and 5× over on a
-realistic one**. The host's side is the sharper constraint — 1,960 KB/s out is about 16 Mbit/s of
-upstream for eight connected humans, which is a hosting decision rather than a tuning one.
+**And none of that is a problem, which is the conclusion this section had been avoiding.** 245 KB/s
+is **1.96 Mbit/s** down. That fits inside plain HSPA, is nothing on LTE or anything after it, and is
+a quarter of the worst home broadband still being sold. The client side of this is fine and was fine
+at ten players too.
 
-**What that means for the levers.** The payload is multiplied twice before it reaches the wire, so a
-byte removed from `NetPlayerState` is worth several times its face value, and getting a tick under
-the MTU removes the first multiplier outright rather than shrinking it. **27 of its 70 bytes are
-`float32`** — position, velocity and ground normal — where Q3 sent quantised 16-bit; that alone is
-most of the way to the MTU at sixteen players. Publishing remote slots at a lower rate than the local
-prediction attacks the same payload from the other side. Neither is built.
+**The 48 KB/s "budget" does not survive being looked at.** It appears exactly once, in
+`NETWORK_PLAN.md` §7 — "the budget to assert is 48 KB/s downstream at 0 RTT" — with no derivation,
+no target connection and no date. 48 KB/s is 384 kbit/s, which is a 1999 number: Q3's own `rate`
+cvar defaulted to about 25 KB/s because it was written for modems. Measuring a 2026 port against it
+and reporting "5× over budget" is arithmetic against a number nobody has justified, and it is the
+same mistake as D-195 — treating a line in a plan as a specification instead of asking what it is
+for. Every "inside the budget" and "over the budget" claim in this section should be read as "inside
+or over an undated number", including the ones that pass.
 
-**The 48 KB/s downstream budget is met at 30 Hz and was not at 60.** Halving the rate halved the
+**What is worth caring about, stated at its real size.**
+
+- **Host egress**, and only at scale. 1,960 KB/s out is ~16 Mbit/s for eight connected humans. That
+  is unremarkable for one match in a datacentre, awkward for a listen server on a home upstream, and
+  it multiplies by the number of concurrent matches — so it is a hosting cost line, not an
+  engineering blocker.
+- **Metered connections.** 245 KB/s is ~880 MB an hour. A product decision about who the game is for,
+  not a defect.
+- **Packet rate is not a concern**, which is worth writing down because it looks like one: ~326
+  packets/s per client at 80 ms is ~2,600/s out of the host for eight, and a server process handles
+  that without noticing.
+
+**So quantisation is demoted from "the lever" to "worth doing for a different reason".** Not
+bandwidth — getting a tick under the MTU would take the fragment and reassembly path out of the hot
+path and roughly halve the packet count, which is a simplicity and robustness argument. **27 of
+`NetPlayerState`'s 70 bytes are `float32`** — position, velocity and ground normal — where Q3 sent
+quantised 16-bit, and that alone is most of the way there at sixteen players. It is not urgent: no
+measurement in this report currently blames fragmentation for anything, and the delivery census at
+80 ms with 2% loss (`test/net-delivery.test.ts`) does not show reassembly failing.
+
+**The 48 KB/s downstream budget is met at 30 Hz and was not at 60** — read with the caveat above
+about where that number came from. Halving the rate halved the
 clean-link cost, which is what a per-tick replication model should do, and cut the delayed-link cost
 by 63% — more than half, because the action stream's owed range is counted in *frames* and there are
 half as many of them between one acknowledgement and the next.

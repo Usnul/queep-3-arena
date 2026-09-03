@@ -11079,3 +11079,38 @@ are `float32` — position, velocity and ground normal — where Q3 sent quantis
 publishing remote slots less often than the local prediction the short-circuit compares against.
 Both lose precision rather than entities, both are measurable against the same rig, and neither is
 built.
+
+### D-196: 245 KB/s is not a problem, and the budget I measured it against is a modem-era number
+
+D-192's mistake, one layer up. Asked what a sixteen-player match costs a client, I measured it
+honestly -- 62.6 KB/s down on a loopback, 245 on an 80 ms link, 1.5 and 9.8 up -- and then reported
+it as "1.3× over on a perfect link and 5× over on a realistic one", against the 48 KB/s figure in
+`NETWORK_PLAN.md` §7.
+
+**That figure appears exactly once, as "the budget to assert", with no derivation, no target
+connection and no date.** 48 KB/s is 384 kbit/s. Q3's own `rate` cvar defaulted to about 25 KB/s
+because Q3 was written for modems. Measuring a 2026 port against it and calling the result a
+problem is arithmetic dressed as a finding.
+
+**245 KB/s is 1.96 Mbit/s.** It fits inside plain HSPA, is nothing on LTE or anything since, and is
+a quarter of the worst home broadband still sold. There is no client-side bandwidth problem at
+sixteen players and there never was one at ten.
+
+**What is actually worth caring about, at its real size.** Host egress, and only at scale: ~16
+Mbit/s for eight connected humans, unremarkable for one match in a datacentre, awkward for a listen
+server on a home upstream, and multiplied by concurrent matches -- a hosting cost line rather than an
+engineering blocker. Metered connections, at ~880 MB an hour, which is a product decision about who
+the game is for. And **packet rate is not a concern** despite looking like one: ~2,600 packets a
+second out of the host for eight clients is not a number a server process notices.
+
+**So quantisation is demoted rather than dropped.** Not a bandwidth lever: a way to get a tick under
+the 1,191-byte channel payload and out of the fragment and reassembly path, which would roughly halve
+the packet count and simplify the hot path. 27 of `NetPlayerState`'s 70 bytes are `float32` where Q3
+sent quantised 16-bit. It is not urgent, and nothing currently measured blames fragmentation for
+anything -- the delivery census at 80 ms and 2% loss does not show reassembly failing.
+
+**The pattern, twice in two days.** D-195 was taking "relevance culling is the biggest lever" from
+REPORT §5 as a specification and going to find the number. This is taking "the budget to assert is
+48 KB/s" from the plan and going to find the number. Both times the measurement was sound and the
+question was not asked. A number in a plan is a decision somebody made once, and the useful thing to
+know about it is when, and why, and whether it still holds.
