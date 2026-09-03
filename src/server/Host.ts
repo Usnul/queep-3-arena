@@ -57,12 +57,13 @@ import { ItemSystem, type DropTrace } from '../game/Items.ts';
 import { buildWaypoints, linkMapPortals, type WaypointGraph } from '../game/Waypoints.ts';
 import { spawnPoints } from '../game/Spawns.ts';
 import { Bot } from '../game/Bot.ts';
-import { BotRuntime, type BotWorld } from '../client/Bots.ts';
+import { BotRuntime, type BotTarget, type BotWorld } from '../client/Bots.ts';
 import { DEFAULT_DIFFICULTY, difficulty } from '../game/Difficulty.ts';
 import { CharacterBodies, type CharacterSlot } from '../client/CharacterBody.ts';
 import { Missiles } from '../client/Missiles.ts';
 import { DamageQueries } from '../client/DamageQueries.ts';
 import {
+    NO_ATTACKER,
     WeaponSystem,
     type Damageable,
     type WeaponEvents,
@@ -319,13 +320,13 @@ export class Host {
             items: items.items,
             visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
             /*
-             Step 6 replaces this pair with a `targets()` over every connected,
-             alive human. Until then a host with one client behaves exactly as
-             single-player does, which is what makes the loopback test's
-             assertions about bots comparable to `match.test.ts`'s.
+             Every human in the match, which is the whole difference between a
+             host and single-player as far as a bot is concerned. With one
+             client this returns one entry and the bots behave exactly as they
+             do in `match.test.ts`; with two, both get shot at, which was the
+             point of the step.
             */
-            playerOrigin: () => hostRef!.firstHumanOrigin(),
-            playerAlive: () => hostRef!.anyHumanAlive(),
+            targets: () => hostRef!.humanTargets(),
             spawns: snapped,
             fire: (bot, eye, angles, weapon) => {
                 weapons.fire(weapon, eye, angles, bot.id, (random() * 0x10000) | 0);
@@ -384,6 +385,7 @@ export class Host {
             session,
         });
         hostRef = host;
+        events.host = host;
 
         host.match.fragLimit = options.fragLimit ?? 0;
         host.match.phase = 1;
@@ -699,6 +701,7 @@ export class Host {
             record.alive = false;
             record.respawnIn = RESPAWN_SECONDS;
             record.info.deaths += 1;
+            this.score(record);
             this.raiseDeath(record);
             return;
         }
@@ -710,6 +713,61 @@ export class Host {
 
         this.spawnSlot(record, (this.random() * this.spawns.length) | 0);
     }
+
+    /**
+     * `player_die`'s scoring, which is not simply "the killer gets a point".
+     *
+     * `g_combat.c` gives the frag to the attacker when it is somebody else,
+     * takes one *from the attacker* when a player killed itself, and takes one
+     * from the **victim** when there was no attacker at all -- a fall, lava, the
+     * world. That last case is why `kills` is an `int16` on the wire rather than
+     * an unsigned count: a score in this game can be negative, and a format that
+     * could not carry one would quietly clamp a player who kept falling off the
+     * map.
+     *
+     * Teams are not modelled, so `OnSameTeam` collapses into the self case.
+     */
+    private score(victim: Slot): void {
+        const attackerId = this.lastAttacker[victim.index] ?? NO_ATTACKER;
+        this.lastAttacker[victim.index] = NO_ATTACKER;
+
+        const attacker = this.slotById(attackerId);
+
+        if (attacker === null) {
+            victim.info.kills -= 1;
+            return;
+        }
+
+        attacker.info.kills += attacker === victim ? -1 : 1;
+    }
+
+    /**
+     * Remember who last hurt each slot, so `score` can attribute the death.
+     *
+     * The last hit wins, which is Q3's rule too -- `player_die` is handed the
+     * attacker of the blow that took the health below zero, and nothing keeps a
+     * tally of who did the other 90 points. Kept per victim rather than passed
+     * along, because the death is noticed a step later, in `mortality`.
+     */
+    creditDamage(victimId: number, attackerId: number): void {
+        if (victimId < 0 || victimId >= this.lastAttacker.length) return;
+        this.lastAttacker[victimId] = attackerId & 0xff;
+    }
+
+    /** The slot a client id names, or null when it names nobody. */
+    private slotById(id: number): Slot | null {
+        if (id === NO_ATTACKER) return null;
+        const record = this.slots[id];
+        return record === undefined || !record.connected ? null : record;
+    }
+
+    /**
+     * Who last damaged each slot. {@link NO_ATTACKER} where nobody has.
+     *
+     * Reset on death rather than on spawn, so a player who dies twice to the
+     * world in a row is scored the same way both times.
+     */
+    private readonly lastAttacker = new Uint8Array(MAX_CLIENTS).fill(NO_ATTACKER);
 
     /** `ClientSpawn`: a fresh loadout at a chosen spawn point. */
     private spawnSlot(record: Slot, spawnIndex: number): void {
@@ -794,7 +852,7 @@ export class Host {
                 this.mutate(record.entity, NetPlayerState);
                 this.mutate(record.entity, NetInventory);
             }
-            this.mutateIfChanged(record.entity, NetPlayerInfo, record.info, this.infoShadow(record));
+            this.publishInfo(record);
         }
 
         this.publishMissiles();
@@ -933,6 +991,48 @@ export class Host {
     private mutate(entity: number, componentType: Function): void {
         this.world.sendEvent(entity, 'net_mutate_component', { component_type: componentType });
     }
+
+    /**
+     * `NetPlayerInfo`, republished for a few frames after it changes.
+     *
+     * The obvious arrangement -- publish once, when `equals` says something is
+     * different -- loses updates, and does so on a **loopback with no loss at
+     * all**. Measured: a bot's first frag was published on the frame it
+     * happened and the client's copy of that slot still read zero eleven frames
+     * later, and for the rest of the match; a second frag on a different slot
+     * eight hundred frames later arrived on the next frame. So it is not a
+     * systematic failure to send, it is an occasional failure to deliver, and a
+     * value with one chance to arrive keeps whatever it lands on for ever.
+     * Publishing it unconditionally every frame fixes it and is how the defect
+     * was confirmed -- see GAP-045 for that experiment and for what is still
+     * unexplained about the engine's side of it.
+     *
+     * Unconditional publishing is not the fix that ships, because this
+     * component carries a **name string** and there are sixteen slots: about
+     * 320 bytes a frame of nothing changing, against a per-frame action budget
+     * measured at 940 (D-177). So the redundancy is bounded to the frames after
+     * an actual change, which is the same trade the action stream makes -- send
+     * it again a few times rather than hope -- and costs nothing at rest,
+     * because a name, a character and a score change a handful of times a
+     * match.
+     */
+    private publishInfo(record: Slot): void {
+        const shadow = this.infoShadow(record);
+
+        if (!record.info.equals(shadow)) {
+            shadow.copy(record.info);
+            this.infoResends[record.index] = INFO_RESEND_FRAMES;
+        }
+
+        const left = this.infoResends[record.index] ?? 0;
+        if (left <= 0) return;
+
+        this.infoResends[record.index] = left - 1;
+        this.mutate(record.entity, NetPlayerInfo);
+    }
+
+    /** Frames of republishing still owed per slot. See {@link publishInfo}. */
+    private readonly infoResends = new Uint8Array(MAX_CLIENTS);
 
     private mutateIfChanged(
         entity: number,
@@ -1132,20 +1232,30 @@ export class Host {
         } as unknown as Damageable & { host: Host };
     }
 
-    firstHumanOrigin(): Vec3 {
+    /**
+     * Everyone the bots may shoot at: connected, alive, and not a bot.
+     *
+     * The three conditions are the whole of the policy and there is nowhere
+     * else to look for it. `bot === null` is D-055 -- bots never target each
+     * other -- expressed as an absence from this list rather than as a check
+     * inside the AI, so `BotRuntime` has no notion of what a bot is and cannot
+     * grow one by accident. `connected` keeps an empty slot's parked body out
+     * of it, and `alive` stops a bot emptying a magazine into a corpse for the
+     * two seconds before it respawns.
+     *
+     * The array is rebuilt each call rather than kept, because `alive` and
+     * `connected` both change and a stale list is a bot shooting at somebody
+     * who left. One allocation per bot per frame is the cost; it is a
+     * sixteen-element array at worst and the alternative is an invalidation
+     * rule nobody would remember to update.
+     */
+    humanTargets(): BotTarget[] {
+        const out: BotTarget[] = [];
         for (const record of this.slots) {
-            if (record.connected && record.bot === null && record.alive) {
-                return record.slot.ps.origin;
-            }
+            if (!record.connected || record.bot !== null || !record.alive) continue;
+            out.push({ originQ3: record.slot.ps.origin, id: record.index });
         }
-        return FAR_AWAY;
-    }
-
-    anyHumanAlive(): boolean {
-        for (const record of this.slots) {
-            if (record.connected && record.bot === null && record.alive) return true;
-        }
-        return false;
+        return out;
     }
 
     /** Every effect the host has raised, for the rig and the tests. */
@@ -1176,6 +1286,16 @@ const FAR_AWAY = vec3(0, 0, -1e6);
 /** Where a bot's body sits if its slot is ever freed. */
 const PARKED_BOT = vec3(0, 4096, -1e6);
 
+/**
+ * How many frames a changed `NetPlayerInfo` is republished for.
+ *
+ * Ten is a sixth of a second, which is long enough to cross any link this port
+ * has measured and short enough that the cost never shows up in a bandwidth
+ * census. It is a workaround for GAP-045 rather than a tuning knob: if the
+ * engine's single-mutation delivery becomes reliable, this becomes one.
+ */
+const INFO_RESEND_FRAMES = 10;
+
 export interface PendingEffect {
     kind: number;
     weapon: number;
@@ -1196,6 +1316,15 @@ export interface PendingEffect {
  * once per frame that actually happened.
  */
 export class HostWeaponEvents implements WeaponEvents {
+    /**
+     * The host, once it exists, so a hit can be scored where it happens.
+     *
+     * Set rather than injected because the sink is built before the `Host` that
+     * owns it -- `WeaponSystem` needs it in its constructor -- which is the same
+     * ordering knot `hostRef` unties for the bot world above.
+     */
+    host: Host | null = null;
+
     readonly pending: PendingEffect[] = [];
 
     shots = 0;
@@ -1282,10 +1411,25 @@ export class HostWeaponEvents implements WeaponEvents {
         });
     }
 
-    hit(target: Damageable, damage: number): void {
+    hit(target: Damageable, damage: number, attackerId: number): void {
         this.damage += damage;
         if (target.dead) this.kills += 1;
-        this.hits.push({ attacker: 0xff, victim: target.id & 0xff, damage: Math.min(255, damage) });
+
+        /*
+         The attacker rides the event now instead of a hard-coded 0xff, which
+         means a client can draw a kill feed and, more immediately, that the
+         host can score. `credit` is what turns the last hit into a frag; it is
+         called on every damaging hit rather than only the fatal one, because
+         `dead` is set inside `WeaponSystem.damage` and the death is not noticed
+         until `mortality` runs at the end of the frame.
+        */
+        this.host?.creditDamage(target.id, attackerId);
+
+        this.hits.push({
+            attacker: attackerId & 0xff,
+            victim: target.id & 0xff,
+            damage: Math.min(255, damage),
+        });
     }
 
     projectileSpawned(): void {

@@ -36,6 +36,16 @@ export const MASK_SHOT = CONTENTS.SOLID | CONTENTS.BODY | CONTENTS.CORPSE;
 /** `g_combat.c`: the fraction of damage armour takes before health does. */
 export const ARMOR_PROTECTION = 0.66;
 
+/**
+ * `attackerId` for damage nobody fired: the world, a fall, a trigger.
+ *
+ * 255 rather than -1 because it rides the wire as a `uint8` in `HitEvent`, and
+ * a sentinel that survives serialisation is one less thing to get wrong at the
+ * two ends. Q3 spells the same idea `ENTITYNUM_WORLD` and scores it the same
+ * way: the victim loses a point rather than anybody gaining one.
+ */
+export const NO_ATTACKER = 255;
+
 export interface WeaponStats {
     readonly hitscan?: boolean;
     readonly fireRateMs: number;
@@ -241,7 +251,17 @@ export interface WeaponEvents {
         weapon: WeaponId,
         normalQ3?: ArrayLike<number>
     ): void;
-    hit(target: Damageable, damage: number): void;
+    /**
+     * `attackerId` is the client whose shot this was, or {@link NO_ATTACKER}.
+     *
+     * Carried because a kill belongs to somebody. Q3 scores in `player_die`,
+     * which is handed the attacker and gives it the frag -- or takes one away
+     * when a player killed itself, and takes one from the *victim* when the
+     * world did it. None of that can be reconstructed from the target alone,
+     * and every call site here already knows the answer: a hitscan has its
+     * `ownerId` and a blast has its projectile's.
+     */
+    hit(target: Damageable, damage: number, attackerId: number): void;
     /**
      * A projectile was created, as the entity the physics engine is flying.
      *
@@ -681,7 +701,7 @@ export class WeaponSystem {
         t_hit[2] = start[2]! + (end[2]! - start[2]!) * bestFraction;
 
         if (bestTarget !== null) {
-            this.damage(bestTarget, damage);
+            this.damage(bestTarget, damage, ownerId);
             return;
         }
 
@@ -799,7 +819,7 @@ export class WeaponSystem {
         );
 
         if (directHit !== null) {
-            this.damage(directHit, stats.damage);
+            this.damage(directHit, stats.damage, projectile.ownerId);
         }
 
         const splash = stats.splashDamage ?? 0;
@@ -842,7 +862,7 @@ export class WeaponSystem {
             // target and to the corners of its box.
             if (!this.visible(atQ3, target.origin)) continue;
 
-            this.damage(target, points);
+            this.damage(target, points, projectile.ownerId);
         }
     }
 
@@ -911,7 +931,7 @@ export class WeaponSystem {
         return sightTrace.fraction === 1.0;
     }
 
-    private damage(target: Damageable, points: number): void {
+    private damage(target: Damageable, points: number, attackerId: number): void {
         let applied = Math.round(points);
         if (applied <= 0) return;
 
@@ -934,7 +954,7 @@ export class WeaponSystem {
 
             // A hit fully absorbed by armour still counts as a hit.
             if (applied <= 0) {
-                this.events.hit(target, 0);
+                this.events.hit(target, 0, attackerId);
                 return;
             }
         }
@@ -953,7 +973,7 @@ export class WeaponSystem {
             target.dead = true;
         }
 
-        this.events.hit(target, applied);
+        this.events.hit(target, applied, attackerId);
     }
 }
 

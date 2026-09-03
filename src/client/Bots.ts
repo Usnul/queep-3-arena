@@ -137,12 +137,35 @@ export interface BotWorld {
      * See D-159.
      */
     visible(fromQ3: ArrayLike<number>, toQ3: ArrayLike<number>): boolean;
-    /** Where the player is, and whether it is alive. */
-    playerOrigin(): Vec3;
-    playerAlive(): boolean;
+    /**
+     * Everyone this bot may shoot at, as of this frame.
+     *
+     * Replaces the single `playerOrigin`/`playerAlive` pair, which could only
+     * ever describe one human and so made a networked match with two clients a
+     * match in which the bots ignored one of them.
+     *
+     * **The list is the whole of D-055's guarantee.** Bots never target each
+     * other, and that is expressed by this method returning only humans rather
+     * than by any test inside the AI -- so there is one place to read to know it
+     * is true, and `match.test.ts` holds it. A slot that is disconnected or dead
+     * is not in the list either, so a bot stops shooting at a corpse without the
+     * AI knowing what death is.
+     *
+     * Called once per bot per frame and not held: `originQ3` is the live array
+     * behind whichever slot it describes.
+     */
+    targets(): readonly BotTarget[];
     /** Spawn points, for respawning. */
     readonly spawns: readonly number[][];
     fire(bot: Bot, eyeQ3: Vec3Like, anglesQ3: ArrayLike<number>, weapon: WeaponId): void;
+}
+
+/** Somebody a bot may shoot at. See {@link BotWorld.targets}. */
+export interface BotTarget {
+    /** The slot's Q3 origin. Live, so read it rather than keeping it. */
+    readonly originQ3: ArrayLike<number>;
+    /** Client id, so a caller can say which human a bot engaged. */
+    readonly id: number;
 }
 
 /**
@@ -839,31 +862,104 @@ export class BotRuntime {
     }
 
     /**
-     * Can this bot see the player at all, ignoring whether it has noticed?
+     * Can this bot see anybody at all, ignoring whether it has noticed?
      *
-     * Leaves the player's position in `this.playerEye` for the caller, which is
-     * a side effect and is why it is private and named as a question rather than
-     * as a getter: the alternative is tracing twice or allocating a vector per
-     * bot per frame.
+     * Leaves the chosen target's position in `this.playerEye` for the caller,
+     * which is a side effect and is why it is private and named as a question
+     * rather than as a getter: the alternative is tracing twice or allocating a
+     * vector per bot per frame.
+     *
+     * **Nearest visible, not nearest.** The candidates are tried in order of
+     * distance and the first one the world can see is taken, so a bot standing
+     * between two players engages the one it can actually shoot rather than
+     * staring through a wall at somebody four units closer. The trace is the
+     * expensive half of this method, so it is the half that runs last and
+     * usually once -- one per bot per frame with a single opponent, which is
+     * what it cost before this took a list.
      */
     private sighted(bot: Bot): boolean {
-        if (!this.world.playerAlive()) return false;
+        const targets = this.world.targets();
+        if (targets.length === 0) return false;
 
-        const player = this.world.playerOrigin();
+        const range = bot.skill.sightRange;
+        const tried = this.triedTargets;
+        const count = Math.min(targets.length, tried.length);
+        for (let i = 0; i < count; i++) tried[i] = 0;
 
-        this.playerEye[0] = player[0]!;
-        this.playerEye[1] = player[1]!;
-        this.playerEye[2] = player[2]!;
-
-        const dx = this.playerEye[0]! - bot.origin[0]!;
-        const dy = this.playerEye[1]! - bot.origin[1]!;
-        const dz = this.playerEye[2]! - bot.origin[2]!;
-
-        if (Math.hypot(dx, dy, dz) > bot.skill.sightRange) return false;
+        /*
+         The nearest target, whether or not it is in range or visible, so
+         `playerEye` is never stale for the callers that read it after a
+         negative answer -- `attention` scales awareness by where the enemy is
+         standing and is asked on frames when nothing is sighted. The single
+         `playerOrigin()` this replaced was unconditional in exactly this way,
+         and leaving it out was a behaviour change hiding inside a refactor.
+        */
+        this.nearestInto(bot, targets, count, this.playerEye);
 
         bot.eye(this.scratch);
 
-        return this.world.visible(this.scratch, this.playerEye);
+        for (;;) {
+            let best = -1;
+            let bestDistance = range;
+
+            for (let i = 0; i < count; i++) {
+                if (tried[i] === 1) continue;
+
+                const origin = targets[i]!.originQ3;
+                const distance = Math.hypot(
+                    origin[0]! - bot.origin[0]!,
+                    origin[1]! - bot.origin[1]!,
+                    origin[2]! - bot.origin[2]!
+                );
+
+                if (distance > bestDistance) continue;
+                best = i;
+                bestDistance = distance;
+            }
+
+            if (best < 0) return false;
+            tried[best] = 1;
+
+            const origin = targets[best]!.originQ3;
+            this.playerEye[0] = origin[0]!;
+            this.playerEye[1] = origin[1]!;
+            this.playerEye[2] = origin[2]!;
+
+            if (this.world.visible(this.scratch, this.playerEye)) return true;
+        }
+    }
+
+    /**
+     * Which candidates {@link sighted} has already traced against, this call.
+     *
+     * A fixed array rather than a `Set` or a sort, because this runs per bot per
+     * frame and both of those allocate. Sixteen is `MAX_CLIENTS`; a world that
+     * offered more targets than this would simply have the surplus ignored,
+     * which is why the loop bounds itself by the shorter of the two.
+     */
+    private readonly triedTargets = new Uint8Array(16);
+
+    /** The nearest of `targets` by centre distance, written into `out`. */
+    private nearestInto(
+        bot: Bot,
+        targets: readonly BotTarget[],
+        count: number,
+        out: Vec3
+    ): void {
+        let bestDistance = Infinity;
+        for (let i = 0; i < count; i++) {
+            const origin = targets[i]!.originQ3;
+            const distance = Math.hypot(
+                origin[0]! - bot.origin[0]!,
+                origin[1]! - bot.origin[1]!,
+                origin[2]! - bot.origin[2]!
+            );
+            if (distance >= bestDistance) continue;
+            bestDistance = distance;
+            out[0] = origin[0]!;
+            out[1] = origin[1]!;
+            out[2] = origin[2]!;
+        }
     }
 
     /**

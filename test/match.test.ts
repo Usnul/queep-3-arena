@@ -49,6 +49,7 @@ import {
     WeaponSystem, type Damageable, type WeaponEvents, type WeaponId,
 } from '../src/game/Weapons.ts';
 import { vec3 } from '../src/q3/math.ts';
+import { makeRandom } from '../src/server/random.ts';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
 
@@ -171,7 +172,7 @@ class Scoreboard implements WeaponEvents {
     explosion(): void {
         this.explosions += 1;
     }
-    hit(target: Damageable, damage: number): void {
+    hit(target: Damageable, damage: number, _attackerId: number): void {
         this.damage += damage;
         if (target.dead) this.kills += 1;
     }
@@ -234,6 +235,19 @@ interface MatchResult {
  * runs, and the limitation is asserted directly in its own test below.
  */
 function play(mapName: string, seconds: number, botCount: number, usePhysics = true): MatchResult {
+    /*
+     One seeded generator for every draw this fixture makes, so a run is a run.
+     The player's wandering route and every bot's respawn point and goal came
+     off `Math.random` before, which meant a failure here was a coin toss and
+     re-running was a legitimate response to one. It should not be.
+
+     This did **not** on its own fix the flake it was reached for -- a bot
+     ending a run at |z| = 831,167, fallen through the floor and still going.
+     That was D-180's own regression, caught here rather than by the net tests,
+     and the seeding is kept because a fixture in the `npm run check` gate
+     should be deterministic whether or not anything is currently wrong with it.
+    */
+    const random = makeRandom(0x51EED);
     const { cm, scene, physics, trace, items, graph } = arena(mapName, usePhysics);
 
     const board = new Scoreboard();
@@ -349,7 +363,7 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
                 if (candidates.length > 0) {
                     playerRoute = graph.path(
                         from,
-                        candidates[(Math.random() * candidates.length) | 0]!
+                        candidates[(random() * candidates.length) | 0]!
                     );
                     playerAt = 0;
                     playerStuck = 0;
@@ -386,8 +400,7 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
         graph,
         items: items.items,
         visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
-        playerOrigin: () => playerOrigin,
-        playerAlive: () => true,
+        targets: () => [{ originQ3: playerOrigin, id: 0 }],
         spawns: spawns.map(snap),
         fire: (bot, eye, angles, weapon) => {
             weapons.fire(weapon, eye, angles, bot.id, 0x1234);
@@ -395,6 +408,7 @@ function play(mapName: string, seconds: number, botCount: number, usePhysics = t
     };
 
     const runtime = new BotRuntime(world, null);
+    runtime.random = random;
 
     // A slot per bot, made before the bot, because the host it hands back
     // carries the filter that names the bot's own body. See `CharacterSlot`.
@@ -599,9 +613,10 @@ describe.each(['oa_dm1', 'aggressor'])('a match runs unattended [%s]', (mapName)
     /*
      30 simulated seconds at 125 Hz, six bots. Long enough for a bot to plan, walk
      somewhere, find another one and exchange fire; short enough that the whole
-     file runs in a few seconds. Deterministic apart from `Math.random` in weapon
-     spread and respawn choice, which is why every threshold below is set well
-     under what the build achieves rather than at it.
+     file runs in a few seconds. Seeded since D-180, so a failure here is a
+     failure rather than a coin toss -- the thresholds below are still set well
+     under what the build achieves, because they are about the AI working at all
+     rather than about a particular run.
     */
     const result = play(mapName, 60, 6);
 
@@ -738,8 +753,9 @@ describe('what the bots deliberately do not do', () => {
             graph,
             items: items.items,
             visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
-            playerOrigin: () => vec3(0, 0, -1e6),
-            playerAlive: () => false,
+            // Nobody to shoot at, which is what D-055 is about: the only
+            // other things in the level are bots, and they are never listed.
+            targets: () => [],
             spawns,
             fire: (bot, eye, angles, weapon) => {
                 weapons.fire(weapon, eye, angles, bot.id, 0x1234);

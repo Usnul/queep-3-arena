@@ -155,8 +155,7 @@ function harness(options: {
         graph: MAP.graph,
         items: [],
         visible: () => state.visible,
-        playerOrigin: () => target,
-        playerAlive: () => true,
+        targets: () => [{ originQ3: target, id: 0 }],
         spawns: [MAP.spawnQ3],
         fire: (_bot, _eye, angles) => {
             shots.push({ at: state.now, yaw: angles[1]!, pitch: angles[0]! });

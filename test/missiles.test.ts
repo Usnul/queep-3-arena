@@ -117,7 +117,7 @@ class Board implements WeaponEvents {
         });
     }
 
-    hit(target: Damageable, damage: number): void {
+    hit(target: Damageable, damage: number, _attackerId: number): void {
         this.hits.push({ id: target.id, damage });
     }
 

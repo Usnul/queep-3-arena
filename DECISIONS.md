@@ -9987,3 +9987,57 @@ startsolid, same floor height at every spawn point on `oa_dm1`, over 35 probes. 
 `uint8_array_hash` is deterministic over identical bytes at these lengths; it returns values outside
 the 32-bit range, which is startling to read in a debugger, but it is consistent, and both sides of
 the comparison were correct for their own data all along.
+
+### D-180: bots shoot at everybody, kills belong to somebody, and a refactor's own regression
+
+Step 6's host half. Three changes and one mistake worth keeping.
+
+**`BotWorld.targets()` replaces `playerOrigin()`/`playerAlive()`.** A pair of methods that can only
+describe one human made a second client furniture: visible, collidable, and never shot at.
+`targets()` returns every connected, alive, non-bot slot, and `sighted` takes the nearest one it can
+actually see -- candidates in ascending distance, first visible wins, so a bot between two players
+engages the one it can hit rather than the one four units closer through a wall. The visibility
+trace stays the last thing tried and still runs once per bot per frame with a single opponent.
+
+**D-055 is now expressed by the list rather than by a test inside the AI.** `BotRuntime` has no
+notion of what a bot is and cannot grow one by accident; `Host.humanTargets` is the one place the
+policy lives, and `match.test.ts`'s "never targets another bot" passes an empty list and stays
+green.
+
+**Kills belong to whoever fired.** `WeaponEvents.hit` carries an `attackerId` -- `NO_ATTACKER` for
+the world -- threaded from the three `damage()` call sites that all knew it already, and `HitEvent`
+carries it on the wire instead of a hard-coded `0xff`. `Host.score` then does `player_die`'s
+arithmetic rather than a naive increment: a frag to the attacker, **minus one to the attacker** for
+killing itself, and **minus one to the victim** when nobody did it. That last rule is why
+`NetPlayerInfo.kills` is an `int16` and not a count -- a score in this game can be negative, and the
+wire format was already right about it.
+
+**And the mistake.** The `sighted` rewrite dropped one thing the old code did unconditionally:
+write the player's position into `playerEye` whether or not it was in range. `attention()` reads
+that field on frames when nothing is sighted, so it began reading whichever target the *previous*
+bot had looked at. Nothing failed obviously. What happened instead was that
+`match.test.ts`'s "keeps their state finite" started failing about **one run in five**, with a bot
+at |z| = 831,167 -- fallen through the floor and still going. Restoring the unconditional write took
+it to **eighteen consecutive clean runs**.
+
+Two things about that are worth more than the fix. It was caught by the *single-player* suite, not
+by any of the eight networked tests, because the networked clients all walk and this needed a bot's
+awareness to go wrong. And the first diagnosis was wrong: the flake was blamed on unseeded
+`Math.random` in the fixture, a seeded generator was added, and it **did not help** -- a run-to-run
+failure is evidence of non-determinism but says nothing about which non-determinism. The seeding is
+kept, because a fixture in the `npm run check` gate should be deterministic whether or not anything
+is currently wrong with it, but the entry it was originally credited with does not exist.
+
+**`test/net-match.test.ts`** is step 6's exit: two clients, four bots, 45 seconds over the loopback,
+both clients aiming at the nearest bot from replicated state. Measured: client 0 dealt 903 and took
+581, client 1 dealt 147 and took 653 -- both ends of "everybody shoots at everybody", and the second
+number is the one that was zero before `targets()`. No host input was dropped, every slot stayed
+finite on the host and on both clients, and both clients received effect events.
+
+Two of its assertions were wrong before they were right, in ways worth naming. Damage counted from
+`Host.weaponEvents.hits` read zero in a match with seven frags in it, because that array is a
+per-frame queue cleared at the top of every world step -- counting from a *client's* event log is
+both correct and a better test, since it proves the events crossed the wire. And asking a client's
+scoreboard to equal the host's *at an instant* is asking the wrong question: a client is a few
+frames behind by design and the host awards a frag every second or two, so "step until they agree"
+never returns. What is left of that assertion is GAP-045.

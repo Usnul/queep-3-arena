@@ -843,7 +843,7 @@ Take the next free numbers at the time of writing; titles are indicative.
 | 3 — headless host + client over loopback | **done** |
 | 4 — join in progress | **done** |
 | 5 — WebSocket host, browser client | **done** except the renderer, which the preview browser cannot start. Standing still against a real host: 0/3808 short-circuited before, 323/329 after, two defects fixed (D-178, D-179/GAP-044) |
-| 6 — full match for every slot | not started |
+| 6 — full match for every slot | host half **done**: `targets()`, per-slot scoring, `test/net-match.test.ts` (D-180). Presentation of remote state not started; one defect open (GAP-045) |
 | 7 — latency, loss, bandwidth | rig + `SimulatedTransport` + `test/net-latency.test.ts` **done**; prediction target met on 3.14.4 (D-176), event delivery met on 3.14.5 (D-177); action-bytes-per-frame census in place; bandwidth table still to write |
 | 8 — robustness | not started |
 | 9 — documentation, report, trap matrix | not started |

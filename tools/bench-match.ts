@@ -65,7 +65,7 @@ class Counters implements WeaponEvents {
     bulletImpact(): void { this.impacts += 1; }
     hitscanTrail(): void {}
     explosion(): void { this.explosions += 1; }
-    hit(_t: Damageable, damage: number): void { this.damage += damage; }
+    hit(_t: Damageable, damage: number, _a: number): void { this.damage += damage; }
     projectileSpawned(): void { this.projectiles += 1; }
     projectileMoved(): void {}
     projectileGone(): void {}
@@ -192,8 +192,7 @@ async function run(mapName: string, usePhysics: boolean): Promise<Row> {
          `DamageQuery`, so this harness takes the second on both rows. See D-159.
         */
         visible: (fromQ3, toQ3) => weapons.visible(fromQ3, toQ3),
-        playerOrigin: () => playerOrigin,
-        playerAlive: () => true,
+        targets: () => [{ originQ3: playerOrigin, id: 0 }],
         spawns: spawns.map(snap),
         fire: (bot, eye, angles, weapon) => {
             weapons.fire(weapon, eye, angles, bot.id, 0x1234);

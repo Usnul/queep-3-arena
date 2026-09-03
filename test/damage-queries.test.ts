@@ -77,7 +77,7 @@ class Board implements WeaponEvents {
     explosion(): void {
         this.explosions += 1;
     }
-    hit(target: Damageable, points: number): void {
+    hit(target: Damageable, points: number, _attackerId: number): void {
         this.damage.set(target.id, (this.damage.get(target.id) ?? 0) + points);
     }
     projectileSpawned(): void {}

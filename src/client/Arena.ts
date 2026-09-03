@@ -442,7 +442,7 @@ export class Arena implements WeaponEvents {
         this.effects.explosion(originQ3, 90);
     }
 
-    hit(target: Damageable, damage: number): void {
+    hit(target: Damageable, damage: number, _attackerId: number): void {
         /*
          `targets` is the list of boxes this class owns; anything else in
          `weapons.targets` -- bots, since they became `Damageable` -- belongs to

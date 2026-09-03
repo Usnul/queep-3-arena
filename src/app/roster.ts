@@ -86,8 +86,15 @@ export function buildRoster(options: {
          and a zero-size box that `PhysicsTrace` swept as a shape. See D-159.
         */
         visible: (fromQ3, toQ3) => arena.weapons.visible(fromQ3, toQ3),
-        playerOrigin: () => player.ps.origin,
-        playerAlive: () => player.inventory.health > 0,
+        /*
+         Single-player has exactly one human, so the list is one entry or none.
+         Rebuilt rather than cached because `alive` changes and the array is
+         read once per bot per frame -- one allocation a frame against a branch
+         in every bot, and the allocation is the cheaper of the two to be wrong
+         about. Client id 0, matching the `Damageable` built beside it.
+        */
+        targets: () =>
+            player.inventory.health > 0 ? [{ originQ3: player.ps.origin, id: 0 }] : [],
         spawns: botSpawns.map((spawn) => {
             const node = graph.nearestInMainBody(spawn);
             return node < 0
