@@ -3,6 +3,8 @@
 Quake III Arena / OpenArena gameplay ported to [meep](https://meep.company-named.com/), a
 WebGPU/ECS engine.
 
+![Q3's HUD and weapon artwork drawn over meep's materials and reconstructed lighting](assets/shots/hero.png)
+
 **Ported in spirit, not in body.** Balance numbers and map layout are exact. Movement keeps Q3's
 *motor* — the acceleration, friction and command-scale functions that make strafe jumping work —
 and hands collision resolution to meep's own kinematic solver, so contact behaviour differs from
