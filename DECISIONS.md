@@ -11887,8 +11887,9 @@ the same pair for the same reason -- a transform on its own is no longer enough 
 **What is verified and what is not.** `npm run typecheck` is clean and the suite is 1,149 passing,
 identical to the pre-upgrade baseline; the three files that fail are `cm-trace.diff`, `pmove.diff`
 and `physics-divergence`, all of which need `oracle/build` and `.refs/`, and all of which failed the
-same way before the upgrade. The browser got as far as loading all 2,800 modules with no failed
-request, which is the module graph confirmed under the new deep import paths, and no further: the
-preview pane exposes no `navigator.gpu` at all, so the renderer never started and nothing here has
-been seen drawn. The interpolation regression above is exactly the kind of thing a passing headless
+same way before the upgrade. The browser got as far as `requestAdapter`, which is past the whole
+module graph -- about 2,800 requests, of which the 400 the log retained were all 200, and no import
+or export error in the console -- so the deep `@woosh/meep-engine/src/...` paths still resolve. It
+got no further: the preview pane exposes no `navigator.gpu` at all, so the renderer never started
+and **nothing here has been seen drawn.** The interpolation regression above is exactly the kind of thing a passing headless
 suite does not catch, which is why it has a fixture of its own.
