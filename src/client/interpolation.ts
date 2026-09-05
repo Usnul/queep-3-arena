@@ -12,9 +12,14 @@
  *
  * The simulation runs on a fixed step and the display does not, so anything that
  * moves holds a pose for a few frames and then jumps. `InterpolationSystem`
- * blends the last two recorded steps into the live `Transform` every rendered
+ * blends the last two recorded steps into the live `Transform64` every rendered
  * frame; a component is the whole opt-in, and which of these two an entity gets
  * says who recorded it.
+ *
+ * Since meep 3.16.0 the blend is not the whole story: the write-back announces
+ * nothing and refreshes no matrix, so `AnnouncingInterpolationSystem` in
+ * `app/systems.ts` is what actually gets a blended pose onto the screen. See
+ * GAP-050.
  *
  * `interpolands` defaults to an empty list, which would silently blend nothing,
  * so the pose has to be named either way -- which is the only reason these are
@@ -40,7 +45,7 @@ export const APP_INTERPOLATION_SOURCE = 1;
 
 
 
-/** Opt an entity's `Transform` into render-rate blending on the app timeline. */
+/** Opt an entity's `Transform64` into render-rate blending on the app timeline. */
 export function interpolatedPose(): Interpolated {
     const component = new Interpolated();
     component.sourceId = APP_INTERPOLATION_SOURCE;

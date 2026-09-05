@@ -31,7 +31,7 @@
  * the scene in `link` and removes it in `unlink`, and `Node3D` has no per-node
  * visible bit to set. So `show` adds and removes the component, exactly as
  * `ItemsView` does for a collected pickup (D-086, D-088). The entity and its
- * `Transform` outlive the hidden interval, so a weapon is still built once and
+ * `Transform64` outlive the hidden interval, so a weapon is still built once and
  * kept for the rest of the map.
  *
  * **Where it sits is measured, not chosen.** Q3 draws a hands model at the view
@@ -58,7 +58,8 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
@@ -97,6 +98,14 @@ interface EcsDataset {
     registerComponentType(type: unknown): void;
     addComponentToEntity(entity: number, component: unknown): void;
     removeComponentFromEntity(entity: number, type: unknown): void;
+    /**
+     * Where a `Transform64` write is announced.
+     *
+     * meep 3.16.0's transform carries no signals, so a move is invisible to
+     * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
+     * `EventType.ComponentChanged`. See `t64_announce_change`.
+     */
+    sendEvent(entity: number, name: string, payload: unknown): void;
 }
 
 /**
@@ -156,7 +165,7 @@ export interface HitscanTrailSink {
 }
 
 /**
- * Where the eye is and which way it looks. A `Transform` satisfies this.
+ * Where the eye is and which way it looks. A `Transform64` satisfies this.
  *
  * **It has to be the pose the *frame* is drawn from, not the camera entity's.**
  * The two are not the same object and are never the same value: `Engine`
@@ -170,13 +179,14 @@ export interface HitscanTrailSink {
  * like. See D-081.
  */
 export interface CameraPose {
-    readonly position: { readonly x: number; readonly y: number; readonly z: number };
-    readonly rotation: {
-        readonly x: number;
-        readonly y: number;
-        readonly z: number;
-        readonly w: number;
-    };
+    readonly translation_x: number;
+    readonly translation_y: number;
+    readonly translation_z: number;
+
+    readonly rotation_x: number;
+    readonly rotation_y: number;
+    readonly rotation_z: number;
+    readonly rotation_w: number;
 }
 
 export interface ViewWeaponState {
@@ -465,7 +475,17 @@ export function placeViewWeapon(
     outPosition: Vector3,
     outRotation: Quaternion
 ): void {
-    const rotation = camera.rotation as Quaternion;
+    /*
+     meep 3.16.0's transform holds its rotation as four numbers in its own buffer
+     rather than as a `Quaternion`, and the maths below is quaternion maths. Reading
+     the four out into a scratch is what the engine's own `t64_*` helpers do.
+    */
+    const rotation = scratchCameraRotation.set(
+        camera.rotation_x,
+        camera.rotation_y,
+        camera.rotation_z,
+        camera.rotation_w
+    );
 
     /*
      The sway, in the camera's own axes. Q3 adds these to the view angles and
@@ -493,15 +513,15 @@ export function placeViewWeapon(
     outPosition.applyQuaternion(rotation);
 
     outPosition.set(
-        camera.position.x + outPosition.x,
-        camera.position.y + outPosition.y,
-        camera.position.z + outPosition.z
+        camera.translation_x + outPosition.x,
+        camera.translation_y + outPosition.y,
+        camera.translation_z + outPosition.z
     );
 }
 
 /** One weapon's drawable pieces, built once and kept. */
 interface DrawnWeapon {
-    readonly transforms: Transform[];
+    readonly transforms: Transform64[];
     readonly geometries: ShadedGeometry[];
     /** Parallel to `geometries`; the entity each one is linked to and off. */
     readonly entities: number[];
@@ -545,6 +565,13 @@ interface DrawnWeapon {
 
 const scratchPosition = new Vector3();
 const scratchRotation = new Quaternion();
+
+/** The camera's orientation, read out of its transform's buffer. See {@link placeViewWeapon}. */
+const scratchCameraRotation = new Quaternion();
+
+/** Where `placeOnTag` puts the barrel's pose before it is read into the transform. */
+const scratchTagPosition = new Vector3();
+const scratchTagRotation = new Quaternion();
 const scratchFlash = new Vector3();
 const scratchForward = new Vector3();
 
@@ -589,7 +616,7 @@ export class ViewWeapon implements ViewWeaponSink {
      */
     private flashEntity = -1;
     private readonly flashLight = new Light();
-    private readonly flashTransform = new Transform();
+    private readonly flashTransform = new Transform64();
     private flashSeconds = 0;
     private lit = false;
 
@@ -659,7 +686,7 @@ export class ViewWeapon implements ViewWeaponSink {
         this.library = library;
         this.shadows = shadows;
 
-        if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
         if (!ecd.isComponentTypeRegistered(ShadedGeometry)) {
             ecd.registerComponentType(ShadedGeometry);
         }
@@ -714,30 +741,51 @@ export class ViewWeapon implements ViewWeaponSink {
                 const attachment = wanted.attachments[i]!;
 
                 if (attachment === null) {
-                    transform.position.set(
+                    transform.setTranslation(
                         scratchPosition.x,
                         scratchPosition.y,
                         scratchPosition.z
                     );
-                    transform.rotation.copy(scratchRotation);
-                    continue;
+                    transform.setRotation(
+                        scratchRotation.x,
+                        scratchRotation.y,
+                        scratchRotation.z,
+                        scratchRotation.w
+                    );
+                } else {
+                    /*
+                     The barrel, on the gun the gun is on. Written from the same
+                     `scratchPosition`/`scratchRotation` the body was, so it inherits
+                     the sway and the hands offset for free and cannot lag them by a
+                     frame -- which is the failure mode of parenting it to something
+                     that is itself written later in the tick.
+                    */
+                    placeOnTag(
+                        scratchPosition,
+                        scratchRotation,
+                        attachment,
+                        scratchTagPosition,
+                        scratchTagRotation,
+                        barrelRoll
+                    );
+
+                    transform.setTranslation(
+                        scratchTagPosition.x,
+                        scratchTagPosition.y,
+                        scratchTagPosition.z
+                    );
+                    transform.setRotation(
+                        scratchTagRotation.x,
+                        scratchTagRotation.y,
+                        scratchTagRotation.z,
+                        scratchTagRotation.w
+                    );
                 }
 
-                /*
-                 The barrel, on the gun the gun is on. Written from the same
-                 `scratchPosition`/`scratchRotation` the body was, so it inherits
-                 the sway and the hands offset for free and cannot lag them by a
-                 frame -- which is the failure mode of parenting it to something
-                 that is itself written later in the tick.
-                */
-                placeOnTag(
-                    scratchPosition,
-                    scratchRotation,
-                    attachment,
-                    transform.position,
-                    transform.rotation,
-                    barrelRoll
-                );
+                // The rotation owes the matrix a refresh, and `ShadedGeometrySystem`
+                // owes nothing until it is told. See meep 3.16.0's `Transform64`.
+                transform.updateMatrix();
+                t64_announce_change(this.ecd, wanted.entities[i]!, transform);
             }
 
             /*
@@ -952,7 +1000,13 @@ export class ViewWeapon implements ViewWeaponSink {
      * Put the flash on the muzzle {@link worldMuzzle} found for this frame.
      */
     private lightFlash(): void {
-        this.flashTransform.position.set(scratchMuzzle.x, scratchMuzzle.y, scratchMuzzle.z);
+        this.flashTransform.setTranslation(scratchMuzzle.x, scratchMuzzle.y, scratchMuzzle.z);
+
+        // Translation only, so the matrix is already right; the light still has to
+        // be told, and only once it has an entity to be told about.
+        if (this.flashEntity >= 0) {
+            t64_announce_change(this.ecd, this.flashEntity, this.flashTransform);
+        }
 
         if (this.lit) return;
 
@@ -989,9 +1043,9 @@ export class ViewWeapon implements ViewWeaponSink {
 
         this.particles.muzzleFlashParticles(
             [
-                this.flashTransform.position.x,
-                this.flashTransform.position.y,
-                this.flashTransform.position.z,
+                this.flashTransform.translation_x,
+                this.flashTransform.translation_y,
+                this.flashTransform.translation_z,
             ],
             [scratchForward.x, scratchForward.y, scratchForward.z],
             weapon
@@ -1071,7 +1125,7 @@ export class ViewWeapon implements ViewWeaponSink {
             return null;
         }
 
-        const transforms: Transform[] = [];
+        const transforms: Transform64[] = [];
         const geometries: ShadedGeometry[] = [];
         const entities: number[] = [];
         const attachments: (TagAttachment | null)[] = [];
@@ -1102,8 +1156,9 @@ export class ViewWeapon implements ViewWeaponSink {
             */
             geometry.clearFlag(ShadedGeometryFlags.CastShadow);
 
-            const transform = new Transform();
-            transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+            const transform = new Transform64();
+            transform.setScale(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+            transform.updateMatrix();
 
             /*
              Built without its geometry, and handed it by `show` a few lines

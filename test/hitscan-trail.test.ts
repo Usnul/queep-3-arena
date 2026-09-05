@@ -38,7 +38,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Trail3D from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/Trail3D.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
@@ -108,7 +108,15 @@ function newDataset(): EntityComponentDataset {
 
 /** Looking straight down the camera's own +Z, from `eye`. */
 function pose(eye: readonly [number, number, number]): CameraPose {
-    return { position: { x: eye[0], y: eye[1], z: eye[2] }, rotation: new Quaternion() };
+    return {
+        translation_x: eye[0],
+        translation_y: eye[1],
+        translation_z: eye[2],
+        rotation_x: 0,
+        rotation_y: 0,
+        rotation_z: 0,
+        rotation_w: 1,
+    };
 }
 
 function held(weapon: string, visible = true): ViewWeaponState {
@@ -122,7 +130,7 @@ function beamsIn(ecd: EntityComponentDataset): Trail3D[] {
     const found: Trail3D[] = [];
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as Traverse;
 
-    traverse([Trail3D, Transform], ((trail: Trail3D) => {
+    traverse([Trail3D, Transform64], ((trail: Trail3D) => {
         if (trail.tube!.getCount() === 2) found.push(trail);
     }) as never);
 
@@ -147,8 +155,8 @@ function flashPoint(ecd: EntityComponentDataset): [number, number, number] {
     const found: [number, number, number][] = [];
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as Traverse;
 
-    traverse([Light, Transform], ((_light: Light, transform: Transform) => {
-        found.push([transform.position.x, transform.position.y, transform.position.z]);
+    traverse([Light, Transform64], ((_light: Light, transform: Transform64) => {
+        found.push([transform.translation_x, transform.translation_y, transform.translation_z]);
     }) as never);
 
     expect(found.length, 'exactly one flash light').toBe(1);

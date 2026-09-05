@@ -35,7 +35,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 
 import { Effects } from '../src/client/Effects.ts';
@@ -104,14 +104,14 @@ function newDataset(): EntityComponentDataset {
 /** Corrective type for `traverseEntities`; see `first-person.test.ts`. GAP-001. */
 type Traverse = (
     classes: unknown[],
-    visitor: (light: Light, transform: Transform) => void
+    visitor: (light: Light, transform: Transform64) => void
 ) => void;
 
 function lightsIn(ecd: EntityComponentDataset): Light[] {
     const found: Light[] = [];
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as Traverse;
 
-    traverse([Light, Transform], (light) => {
+    traverse([Light, Transform64], (light) => {
         found.push(light);
     });
 

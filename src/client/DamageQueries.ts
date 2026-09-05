@@ -65,8 +65,8 @@ interface QueryablePhysics {
     ): boolean;
     overlap(
         shape: unknown,
-        position: { x: number; y: number; z: number },
-        rotation: { x: number; y: number; z: number; w: number },
+        position: ArrayLike<number>,
+        rotation: ArrayLike<number>,
         output: Uint32Array,
         offset: number,
         filter?: (entity: number, collider: unknown) => boolean
@@ -74,7 +74,32 @@ interface QueryablePhysics {
     entityOf(packedBodyId: number): number;
 }
 
-const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
+/**
+ * Identity rotation, for the queries that take one and never turn it.
+ *
+ * Four numbers rather than the `{x, y, z, w}` literal this was until meep 3.16.0,
+ * where `shape_cast`, `overlap_shape` and `KinematicMover` all moved to reading a
+ * pose *by index*. Their JSDoc and their generated `.d.ts` still say `{x, y, z, w}`,
+ * so a literal type-checks, indexes to `undefined`, and the sweep quietly stops
+ * landing -- which is why this is spelled out rather than left to the types.
+ *
+ * Not a `Quaternion`, which would otherwise be the obvious choice and does alias
+ * `q[0]` onto `q.x`: it shadows `length` with the magnitude method, so it does not
+ * satisfy the `ArrayLike<number>` those signatures ask for.
+ */
+const NO_ROTATION = new Float64Array([0, 0, 0, 1]);
+
+/** Where the blast centre is assembled; see {@link NO_ROTATION}. */
+const scratchBlastCentre = new Float64Array(3);
+
+/** Q3 origin -> the scene-space centre `overlap` is given, in {@link scratchBlastCentre}. */
+function blastCentre(atQ3: ArrayLike<number>): Float64Array {
+    scratchBlastCentre[0] = atQ3[0]! * WORLD_SCALE;
+    scratchBlastCentre[1] = atQ3[2]! * WORLD_SCALE;
+    scratchBlastCentre[2] = -atQ3[1]! * WORLD_SCALE;
+
+    return scratchBlastCentre;
+}
 
 /** `G_RadiusDamage` never has many candidates; the count is capped, not grown. */
 const MAX_IN_RADIUS = 32;
@@ -107,11 +132,7 @@ export class DamageQueries implements DamageQuery {
 
         const count = this.physics.overlap(
             this.blast,
-            {
-                x: atQ3[0]! * WORLD_SCALE,
-                y: atQ3[2]! * WORLD_SCALE,
-                z: -atQ3[1]! * WORLD_SCALE,
-            },
+            blastCentre(atQ3),
             NO_ROTATION,
             this.found,
             0,

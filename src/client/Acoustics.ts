@@ -14,7 +14,7 @@
  * both of them.
  *
  * **Occluders.** `AcousticSimulationSystem` links `AcousticBody + Collider +
- * Transform` and raycasts the collider's shape directly -- so the brush bodies
+ * Transform64` and raycasts the collider's shape directly -- so the brush bodies
  * `PhysicsWorld` already builds *are* the acoustic scene, with one extra
  * component on each. Nothing here builds a second copy of the level.
  *
@@ -343,7 +343,7 @@ export function attachProbeField(ecd: EcsDataset, field: AcousticProbeField): nu
  *
  * Called from `PhysicsWorld` as each body is built, rather than as a second
  * pass over the dataset afterwards: `AcousticSimulationSystem` links on the
- * triple `AcousticBody + Collider + Transform`, and the place that knows an
+ * triple `AcousticBody + Collider + Transform64`, and the place that knows an
  * entity is a solid world brush is the place that made it one.
  *
  * @returns whether the entity became an occluder.

@@ -27,7 +27,7 @@ import { load_model_scene_bundle } from '@woosh/meep-engine/src/engine/asset/loa
 import { ImageBitmapAssetLoader } from '@woosh/meep-engine/src/engine/asset/loaders/image/ImageBitmapAssetLoader.js';
 import { make_default_environment } from '@woosh/meep-engine/src/engine/graphics3/make_default_environment.js';
 import { Camera } from '@woosh/meep-engine/src/engine/graphics/ecs/camera/Camera.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 
 import { BspFile } from '../q3/bsp/BspFile.ts';
@@ -53,7 +53,6 @@ import { DEFAULT_DIFFICULTY, difficulty } from '../game/Difficulty.ts';
 import { buildWaypoints, linkMapPortals } from '../game/Waypoints.ts';
 import { spawnPoints } from '../game/Spawns.ts';
 import { AudioEmitterSystem } from '@woosh/meep-engine/src/engine/sound/ecs/audio/AudioEmitterSystem.js';
-import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
 import SoundListener from '@woosh/meep-engine/src/engine/sound/ecs/SoundListener.js';
 import type { EngineConfiguration } from '@woosh/meep-engine/src/engine/EngineConfiguration.js';
 import type SoundEngine from '@woosh/meep-engine/src/engine/sound/SoundEngine.js';
@@ -128,6 +127,7 @@ import {
     BotSystem,
     CharacterBodySystem,
     CombatSystem,
+    AnnouncingInterpolationSystem,
     FlySystem,
     PickupSystem,
     PlayerSystem,
@@ -404,7 +404,7 @@ async function main(): Promise<void> {
      attached to that body, and this is what composes `parent x local` for them.
 
      Registered here rather than next to the mesh systems because it is an ECS
-     relation and not a renderer: it subscribes to the parent's `Transform`, which
+     relation and not a renderer: it subscribes to the parent's `Transform64`, which
      is why an attached mesh inherits `InterpolationSystem`'s smoothing instead of
      snapping once per fixed step behind a parent that glides. See `MissileView`.
     */
@@ -458,7 +458,7 @@ async function main(): Promise<void> {
      anything. Measured rather than assumed -- see `test/fixed-step.test.ts` --
      and the camera stays on the fixed step because of it.
     */
-    const interpolation = new InterpolationSystem();
+    const interpolation = new AnnouncingInterpolationSystem();
     await em.addSystem(interpolation);
 
     /*
@@ -764,7 +764,7 @@ async function main(): Promise<void> {
     const lens = new CameraLens(camera);
     lens.apply(graphics.camera.camera);
 
-    const transform = new Transform();
+    const transform = new Transform64();
     const cameraEntity = new Entity();
 
     /*
@@ -969,7 +969,7 @@ async function main(): Promise<void> {
         });
 
     if (flyMode()) {
-        transform.position.set(
+        transform.setTranslation(
             spawn?._origin[0] ?? 0,
             (spawn?._origin[1] ?? 0) + 0.8,
             spawn?._origin[2] ?? 0
@@ -1466,7 +1466,7 @@ async function main(): Promise<void> {
         // Only the clipmap backend needs this; physics sees kinematic bodies.
         player.movers = { movers: movers.clipEntities };
 
-        const moversView = new MoversView(movers, loaded.submodelTransforms, physicsWorld);
+        const moversView = new MoversView(ecd, movers, loaded.submodelMeshes, physicsWorld);
         moversView.update();
 
         /*
@@ -1476,8 +1476,8 @@ async function main(): Promise<void> {
          timeline, which is what `PoseRecorderSystem` is for.
         */
         for (const mover of movers.movers) {
-            for (const entity of loaded.submodelEntities.get(mover.model) ?? []) {
-                ecd.addComponentToEntity(entity, interpolatedPose());
+            for (const mesh of loaded.submodelMeshes.get(mover.model) ?? []) {
+                ecd.addComponentToEntity(mesh.entity, interpolatedPose());
             }
         }
 
@@ -1692,7 +1692,7 @@ async function main(): Promise<void> {
         /*
          The camera, and the one system here that asks the scheduler for a
          position rather than taking the one component-less systems are given.
-         It declares `Transform` for write so that it sorts ahead of
+         It declares `Transform64` for write so that it sorts ahead of
          `CameraSystem3`, which only reads it -- see `ViewSystem` for why the
          camera has to be written at render rate at all, and
          `test/interpolation.test.ts` for the case that holds the order.
@@ -1785,7 +1785,7 @@ async function main(): Promise<void> {
             /*
              And one render entity per missile pool slot, which is what GAP-046
              was about. `MissileView` hangs its model on an entity that already
-             has a `Transform` somebody else moves -- the physics body, in
+             has a `Transform64` somebody else moves -- the physics body, in
              single-player -- and a joined client has no body for a missile,
              because the position is replicated. So these are transforms with
              nothing else on them, and `NetPresentationSystem` writes the
@@ -1794,7 +1794,7 @@ async function main(): Promise<void> {
             const missileEntities: number[] = [];
             for (let i = 0; i < netClient.missiles.length; i++) {
                 const builder = new Entity();
-                builder.add(new Transform()).build(ecd);
+                builder.add(new Transform64()).build(ecd);
                 missileEntities.push(builder.id);
             }
 
@@ -1802,12 +1802,12 @@ async function main(): Promise<void> {
                 place: (index, originQ3) => {
                     const entity = missileEntities[index];
                     if (entity === undefined) return;
-                    const transform = ecd.getComponent(entity, Transform) as
-                        | Transform
+                    const transform = ecd.getComponent(entity, Transform64) as
+                        | Transform64
                         | undefined;
                     if (transform === undefined) return;
                     const [x, y, z] = sceneFromQ3(originQ3);
-                    transform.position.set(x, y, z);
+                    transform.setTranslation(x, y, z);
                 },
                 spawn: (index, weapon, velocityQ3) => {
                     const entity = missileEntities[index];
@@ -2289,7 +2289,7 @@ async function runLightMapBake(
  * Three things arrive with this, and the third is the one the bake exists for.
  *
  * **Occlusion.** `AcousticSimulationSystem` reads every `AcousticBody +
- * Collider + Transform` into a BVH and raycasts it per live voice, so a wall
+ * Collider + Transform64` into a BVH and raycasts it per live voice, so a wall
  * between a rocket and the player muffles it. The bodies are the brush bodies
  * `PhysicsWorld` already builds -- see `Acoustics.ts` -- so this costs one
  * component each rather than a second copy of the level, and a door that closes

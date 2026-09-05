@@ -41,7 +41,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
@@ -76,7 +76,7 @@ const S = 1 / 32;
 /** Corrective type for `traverseEntities`; see `first-person.test.ts`. GAP-001. */
 type Traverse = (
     classes: unknown[],
-    visitor: (light: Light, transform: Transform) => void
+    visitor: (light: Light, transform: Transform64) => void
 ) => void;
 
 function newDataset(): EntityComponentDataset {
@@ -97,12 +97,12 @@ function litPoints(ecd: EntityComponentDataset): LitPoint[] {
     const found: LitPoint[] = [];
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as Traverse;
 
-    traverse([Light, Transform], (light, transform) => {
+    traverse([Light, Transform64], (light, transform) => {
         found.push({
             light,
-            x: transform.position.x,
-            y: transform.position.y,
-            z: transform.position.z,
+            x: transform.translation_x,
+            y: transform.translation_y,
+            z: transform.translation_z,
         });
     });
 
@@ -199,7 +199,15 @@ function stubLibrary() {
 const FORWARD: readonly [number, number, number] = [1, 0, 0];
 
 function pose(eye: readonly [number, number, number]): CameraPose {
-    return { position: { x: eye[0], y: eye[1], z: eye[2] }, rotation: new Quaternion() };
+    return {
+        translation_x: eye[0],
+        translation_y: eye[1],
+        translation_z: eye[2],
+        rotation_x: 0,
+        rotation_y: 0,
+        rotation_z: 0,
+        rotation_w: 1,
+    };
 }
 
 function held(weapon: string, visible = true, firing = false): ViewWeaponState {
@@ -805,11 +813,11 @@ describe('a shooter with no gun on screen still throws a burst', () => {
         const positions: { x: number; y: number; z: number }[] = [];
         const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
             classes: unknown[],
-            visitor: (emitter: unknown, transform: Transform) => void
+            visitor: (emitter: unknown, transform: Transform64) => void
         ) => void;
 
-        traverse([ParticleEmitter, Transform], (_emitter, transform) => {
-            positions.push({ x: transform.position.x, y: transform.position.y, z: transform.position.z });
+        traverse([ParticleEmitter, Transform64], (_emitter, transform) => {
+            positions.push({ x: transform.translation_x, y: transform.translation_y, z: transform.translation_z });
         });
 
         expect(positions.length, 'no burst for a shot with no gun on screen').toBe(1);

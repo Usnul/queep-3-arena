@@ -11785,3 +11785,110 @@ reconciliation can end with", "a dedicated host has no solid movers at all" -- a
 of mine that a later change of mine had invalidated three entries later. Prose that argues for the
 code is load-bearing here and it is also what makes a stale assumption invisible: it reads as a
 decision rather than as a fact that has expired.
+
+### D-206: meep 3.16.0 moves the whole engine onto `Transform64`, and two of the three things a transform used to do for itself are now the writer's job
+
+The upgrade is a component swap on paper and a contract change in practice. `Transform` is
+untouched, still exported and still serializable -- meep's own migration plan is explicit that this
+is an addition rather than a break -- but **every system in the engine now links on `Transform64`
+instead**: physics, the collider observer, all of `graphics3`, the sound systems, the grid mirror,
+first-person, the transform attachment. Nothing in `src/engine` depends on the old component any
+more. So an entity carrying a `Transform` in 3.16.0 is an entity no engine system will ever link,
+and that is not a type error -- it is a world where nothing moves and nothing draws. `tsc` reported
+44 errors on the raw upgrade and 97 tests failed; the type checker saw almost none of the actual
+breakage, because `dependencies = [RigidBody, Transform64]` is a runtime array.
+
+**The port is 29 files and about 230 references, and the mechanical half is genuinely mechanical.**
+`new Transform()` becomes `new Transform64()`, `t.position.set(x, y, z)` becomes
+`t.setTranslation(x, y, z)`, `t.position.x` becomes `t.translation_x`. `Transform64` is a
+`Float64Array` of 23 elements -- a column-major matrix whose translation column *is* the
+translation, then a quaternion, then a scale -- so the sub-objects are gone and the components are
+accessors over the buffer. Switching the type first and letting `tsc` find the stale accessors took
+136 errors to 34; the remaining 34 were the interesting ones.
+
+**The first contract change: the matrix is not maintained for you.** A translation write lands in
+the matrix because the translation is a column of it. A rotation or scale write does not, until
+`updateMatrix()`. Anything that reads the matrix therefore reads the *previous* orientation --
+including `TransformAttachmentSystem`, which composes `parent x local` through both matrices, and
+`camera_sync_from_transform`, which copies the whole buffer onto Shade's camera. This is the failure
+that has no symptom pointing at it: the translation is right, so the object is in the right place,
+wearing the orientation and the size it had a frame ago. `test/missile-view.test.ts` caught it as a
+missile mesh drawn at 1.0 scale where 1/32 was set, and the fixture was doing exactly what
+`MissileView` had been doing.
+
+**The second: a transform no longer announces itself, so the writer does.** `Transform`'s position,
+rotation and scale were live `Vector3`/`Quaternion` objects carrying signals, and the renderer hung
+off them. `Transform64` is one buffer and one prototype -- the entire point of the type -- so the
+announcement moved to the dataset as `EventType.ComponentChanged`, sent by whoever did the writing
+(`t64_announce_change`). Every consumer that used to wake on `position.onChanged` now waits on that:
+`ShadedGeometrySystem`, `MeshSystem`, `LightSystem`, `ParticleEmitterSystem`, the attachment system,
+the grid mirror. `PhysicsSystem` announces its own awake bodies, which covers the missiles and the
+character bodies for free. What it does not cover is everything this port writes itself, and that is
+`MoversView` (a door), `ItemsView` and `ViewWeapon` (every drawn piece, every frame), `Characters`
+(a bot's model) and `PhysicsWorld.setOffset` (a mover's collision body, where the listener is the
+broadphase rather than the renderer). Audio needed nothing: `AudioEmitterSystem` holds
+`transform.translation`, which is a live view over the buffer.
+
+**`MoversView`'s docblock had to be rewritten rather than corrected, and the reason is worth
+keeping.** It explained at length why the early-out on an unchanged origin had to go, and rested
+that on `Vector3.set` comparing before it assigns and only dispatching `onChanged` on a real
+difference -- "the engine's own check written a second time". None of that mechanism exists now.
+The conclusion survives and the argument for it does not, which is the D-205 failure mode again:
+prose that argues for the code is load-bearing, and it expires silently.
+
+**Two things the engine reads by index while its own types say otherwise, both filed.** meep's
+`shape_cast`, `overlap_shape` and `KinematicMover` moved to reading a pose as `rotation[0]` /
+`position[1]`, and their JSDoc and generated `.d.ts` still declare `{x, y, z, w}` (GAP-049). A plain
+object literal -- which is what this port passed for `NO_ROTATION` in four files -- type-checks,
+indexes to `undefined`, and turns the sweep into NaN, so the query returns *no hit* rather than
+failing. `test/surface-metadata.test.ts` reported it honestly as "no sweep landed, so this measured
+nothing". `Vector3` and `Quaternion` would answer both conventions, being `Float64Array` subclasses
+that alias `v[0]` onto `v.x` -- except that both shadow `length` with the magnitude method, so
+neither satisfies the `ArrayLike<number>` the *updated* signatures ask for. `Float64Array` it is,
+with the reasoning written at each declaration.
+
+**And the one that is a real regression: the interpolation write-back tells nobody** (GAP-050).
+`TransformPoseSerializationAdapter.deserialize` is what `InterpolationSystem` runs once per frame per
+interpolated entity, and it calls `setTranslation` and `setRotation` and stops -- no `updateMatrix`,
+no announcement -- while `InterpolationSystem`'s own docblock still promises that "because it writes
+the live component, all Transform-linked machinery (culling, particles, trails, attachments)
+renders" at the blended pose. Under `Transform64` it does not: the blend lands in the buffer and
+never reaches the screen, so every interpolated thing in this port falls back to being drawn at the
+fixed step. That is the judder D-081 and D-200 were about, arriving silently through a dependency
+bump.
+
+`AnnouncingInterpolationSystem` is the workaround and it is the two calls the write-back owes,
+applied to the set `InterpolationSystem` already maintains. **A subclass rather than a second
+system, because ordering is the entire problem**: meep schedules by declared component access rather
+than registration order -- which is the thing `ViewSystem`'s docblock spends thirty lines on, and
+which `test/interpolation.test.ts` pins in four cases -- and a separate announcer would have to run
+strictly after the blend every frame with no way to declare that. Overriding `update` puts it after
+`super.update` by construction. It deletes when meep's write-back announces for itself.
+
+**Measured, and the fixture caught the workaround being wrong first.** The two new cases in
+`test/interpolation.test.ts` failed against a first version that iterated `__entities` as a `Set`
+when it is a `Map` -- the loop ran over `[key, value]` pairs, found no component, and did nothing at
+all, which is indistinguishable from the bug it was written for. The matrix case is deliberately
+read off `rotation` rather than translation: a translation-only blend leaves a correct matrix
+whether or not anything calls `updateMatrix`, so a fixture that moves without turning would pass on
+the broken version.
+
+**`MEEP_PATCHES` is now empty, which is that mechanism working.** Its own rule is to delete an entry
+once `broken_in` no longer names a version the project builds against. All three named 3.5.0/3.6.0
+against a `^3.16.0` peer, and all three match zero sites -- 3.16.0's `brick4_bake_basic` carries the
+`bake_pass_outputs` handle this used to add. The transform is kept: it has earned its place twice
+in eleven releases, and REPORT.md holds the write-ups.
+
+**`loadMap` returns one map where it returned two.** `submodelTransforms` and `submodelEntities` were
+parallel and documented as being "in the same order"; the announcement needs both halves at the same
+call site, so they are one map of `{transform, entity}` now. `PhysicsWorld.addStaticHull` returns
+the same pair for the same reason -- a transform on its own is no longer enough to move a body with.
+
+**What is verified and what is not.** `npm run typecheck` is clean and the suite is 1,149 passing,
+identical to the pre-upgrade baseline; the three files that fail are `cm-trace.diff`, `pmove.diff`
+and `physics-divergence`, all of which need `oracle/build` and `.refs/`, and all of which failed the
+same way before the upgrade. The browser got as far as loading all 2,800 modules with no failed
+request, which is the module graph confirmed under the new deep import paths, and no further: the
+preview pane exposes no `navigator.gpu` at all, so the renderer never started and nothing here has
+been seen drawn. The interpolation regression above is exactly the kind of thing a passing headless
+suite does not catch, which is why it has a fixture of its own.

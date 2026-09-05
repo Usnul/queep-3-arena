@@ -63,7 +63,7 @@
  * sky.** See {@link WORLD_MARGIN}.
  */
 
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { ParticipatingMedia } from '@woosh/meep-engine/src/engine/graphics3/ParticipatingMedia.js';
 import { VolumetricsParticleSpec }
     from '@woosh/meep-engine/src/shade/renderer/volumetrics/ParticipatingMediaVolume.js';
@@ -492,7 +492,7 @@ export function mediumFor(preset: AtmospherePreset): ParticipatingMedia {
  *
  * **The transform is the box.** Shade's `ParticipatingMediaVolume` is a unit
  * cube centred on the origin posed by a transform, and `ParticipatingMediaSystem3`
- * copies the entity's `Transform` onto it verbatim -- so position is the box's
+ * copies the entity's `Transform64` onto it verbatim -- so position is the box's
  * centre and scale is its full extent, with no half-extent anywhere in the
  * chain. Rotation is left identity; the bounds this is built from are
  * axis-aligned and there is nothing to align to.
@@ -514,9 +514,11 @@ export function attachWorldAtmosphere(
         ecd.registerComponentType(ParticipatingMedia);
     }
 
-    const transform = new Transform();
-    transform.position.set(box.centre[0], box.centre[1], box.centre[2]);
-    transform.scale.set(box.size[0], box.size[1], box.size[2]);
+    const transform = new Transform64();
+    transform.setTranslation(box.centre[0], box.centre[1], box.centre[2]);
+    transform.setScale(box.size[0], box.size[1], box.size[2]);
+    // A scale write lands outside the matrix, and the volume is read through one.
+    transform.updateMatrix();
 
     const medium = mediumFor(preset);
 

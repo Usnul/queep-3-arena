@@ -40,7 +40,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
 import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js';
@@ -96,11 +96,11 @@ function detonate(radiusQ3: number, weapon?: string): Detonation {
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as Traverse;
 
     const lights: Light[] = [];
-    traverse([Light, Transform], (light: never) => lights.push(light as Light));
+    traverse([Light, Transform64], (light: never) => lights.push(light as Light));
     expect(lights.length, 'exactly one flash per detonation').toBe(1);
 
     const emitters: ParticleEmitter[] = [];
-    traverse([ParticleEmitter, Transform], (e: never) => emitters.push(e as ParticleEmitter));
+    traverse([ParticleEmitter, Transform64], (e: never) => emitters.push(e as ParticleEmitter));
 
     /*
      The fireball is the additive one; the other is smoke, which stays grey for

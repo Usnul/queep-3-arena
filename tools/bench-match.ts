@@ -306,7 +306,14 @@ async function decompose(mapName: string): Promise<void> {
     const MAXS = [15, 15, 32];
     const WS = 1 / 32;
     const e = SURFACE_CLIP_EPSILON;
-    const NO_ROT = { x: 0, y: 0, z: 0, w: 1 };
+    /*
+     Four numbers, not `{x, y, z, w}`. meep 3.16.0's `shape_cast` and
+     `overlap_shape` read a rotation as `rotation[0..3]` while their `.d.ts` still
+     declares the object form (GAP-049), so a literal here compiles, indexes to
+     `undefined`, and times a query that NaNs out and finds nothing -- a benchmark
+     reporting how fast the engine does not collide.
+    */
+    const NO_ROT = new Float64Array([0, 0, 0, 1]);
 
     const box = BoxShape3D.from(
         ((MAXS[0]! - MINS[0]!) * 0.5 + e) * WS,

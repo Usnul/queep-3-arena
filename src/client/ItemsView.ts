@@ -35,12 +35,13 @@
  * the cost of a pickup is one `Mesh`, three signal bindings and a scene insert,
  * twice per respawn.
  *
- * The entity itself stays, so the `Transform` and its position survive the
+ * The entity itself stays, so the `Transform64` and its position survive the
  * hidden interval and the item reappears where it was rather than at the origin.
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
@@ -60,16 +61,34 @@ const SPIN_PERIOD_FAST_SECONDS = 1.024;
 const scratchPosition = new Vector3();
 const scratchRotation = new Quaternion();
 
+/*
+ Where `placeOnTag` puts its answer before it is copied into the transform.
+
+ `placeOnTag` writes a `Vector3` and a `Quaternion` -- vector maths on meep's own
+ types, shared with the view weapon and the missile view. A `Transform64` is
+ neither, so the composed pose lands here first and is read out in four scalars.
+*/
+const scratchTagPosition = new Vector3();
+const scratchTagRotation = new Quaternion();
+
 interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
     addComponentToEntity(entity: number, component: unknown): void;
     removeComponentFromEntity(entity: number, type: unknown): void;
+    /**
+     * Where a `Transform64` write is announced.
+     *
+     * meep 3.16.0's transform carries no signals, so a move is invisible to
+     * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
+     * `EventType.ComponentChanged`. See `t64_announce_change`.
+     */
+    sendEvent(entity: number, name: string, payload: unknown): void;
 }
 
 interface DrawnItem {
     readonly item: ItemInstance;
-    readonly transforms: Transform[];
+    readonly transforms: Transform64[];
     readonly geometries: ShadedGeometry[];
     /** Parallel to `geometries`; the entity each one is linked to and off. */
     readonly entities: number[];
@@ -142,7 +161,7 @@ export class ItemsView {
      */
     build(items: readonly ItemInstance[]): void {
         for (const item of items) {
-            const transforms: Transform[] = [];
+            const transforms: Transform64[] = [];
             const geometries: ShadedGeometry[] = [];
             const entities: number[] = [];
             const attachments: (TagAttachment | null)[] = [];
@@ -179,8 +198,8 @@ export class ItemsView {
                     */
                     geometry.setFlag(ShadedGeometryFlags.DeferredBoundsUpdate);
 
-                    const transform = new Transform();
-                    transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+                    const transform = new Transform64();
+                    transform.setScale(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
 
                     const builder = new Entity().add(transform).add(geometry);
                     builder.build(this.ecd);
@@ -271,18 +290,44 @@ export class ItemsView {
                 const attachment = drawn.attachments[i]!;
 
                 if (attachment === null) {
-                    transform.position.set(x, y, z);
-                    transform.rotation.copy(scratchRotation);
-                    continue;
+                    transform.setTranslation(x, y, z);
+                    transform.setRotation(
+                        scratchRotation.x,
+                        scratchRotation.y,
+                        scratchRotation.z,
+                        scratchRotation.w
+                    );
+                } else {
+                    placeOnTag(
+                        scratchPosition,
+                        scratchRotation,
+                        attachment,
+                        scratchTagPosition,
+                        scratchTagRotation
+                    );
+
+                    transform.setTranslation(
+                        scratchTagPosition.x,
+                        scratchTagPosition.y,
+                        scratchTagPosition.z
+                    );
+                    transform.setRotation(
+                        scratchTagRotation.x,
+                        scratchTagRotation.y,
+                        scratchTagRotation.z,
+                        scratchTagRotation.w
+                    );
                 }
 
-                placeOnTag(
-                    scratchPosition,
-                    scratchRotation,
-                    attachment,
-                    transform.position,
-                    transform.rotation
-                );
+                /*
+                 The rotation just written is not in the matrix, and since meep
+                 3.16.0 nothing hears about the write either: `ShadedGeometrySystem`
+                 wakes on `EventType.ComponentChanged` where it used to wake on
+                 `position.onChanged`. One `updateMatrix` and one announcement per
+                 piece, after the last write to it.
+                */
+                transform.updateMatrix();
+                t64_announce_change(this.ecd, drawn.entities[i]!, transform);
             }
         }
     }

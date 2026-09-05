@@ -107,8 +107,10 @@ const FALLBACK_SOURCE_RADIUS = 0.25;
  * Millimetre buckets. Two distinct light fixtures are never this close.
  *
  * Bucketed rather than compared exactly because nothing promises the position
- * survives `Transform` and `Transform64` bit for bit -- today it does, and a
- * test that only passes while that holds is a test that will one day stop
+ * survives the round trip through a `Transform64` bit for bit -- today it does,
+ * and more plainly than it used to, the ECS component and the renderer's own type
+ * being one f64 buffer since meep 3.16.0. A test that only passes while that
+ * holds is still a test that will one day stop
  * meaning anything. The residual risk is a value astride a bucket boundary,
  * which cannot happen while the round trip is exact and which surfaces as an
  * `unmatched` count rather than as a wrong radius if it ever does.

@@ -35,7 +35,8 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_look_rotation } from '@woosh/meep-engine/src/engine/ecs/transform/t64_look_rotation.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 import { Decal } from '@woosh/meep-engine/src/engine/graphics/ecs/decal/v2/Decal.js';
@@ -824,7 +825,7 @@ export class Effects {
         this.ecd = ecd;
         this.shadows = shadows;
 
-        if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
         if (!ecd.isComponentTypeRegistered(Light)) ecd.registerComponentType(Light);
         if (!ecd.isComponentTypeRegistered(Decal)) ecd.registerComponentType(Decal);
         if (!ecd.isComponentTypeRegistered(Trail3D)) ecd.registerComponentType(Trail3D);
@@ -1017,8 +1018,8 @@ export class Effects {
         */
         light.castShadow.set(this.shadows.casts('effect'));
 
-        const lightTransform = new Transform();
-        lightTransform.position.set(x, y, z);
+        const lightTransform = new Transform64();
+        lightTransform.setTranslation(x, y, z);
 
         const lightEntity = new Entity();
         lightEntity.add(lightTransform).add(light).build(this.ecd);
@@ -1366,8 +1367,8 @@ export class Effects {
         z: number,
         seconds: number
     ): void {
-        const transform = new Transform();
-        transform.position.set(x, y, z);
+        const transform = new Transform64();
+        transform.setTranslation(x, y, z);
 
         const entity = new Entity();
         entity.add(transform).add(trail).build(this.ecd);
@@ -1421,7 +1422,7 @@ export class Effects {
     /**
      * Project a decal onto whatever is at `originQ3`.
      *
-     * A decal's `Transform` *is* its projection volume: the box is the unit cube
+     * A decal's `Transform64` *is* its projection volume: the box is the unit cube
      * the rotation orients and the scale sizes, and every opaque surface inside
      * it receives the texture. So the mark is a box straddling the surface
      * rather than a quad laid on it -- a zero-thickness box projects onto
@@ -1480,13 +1481,17 @@ export class Effects {
         */
         const [ux, uy, uz] = perpendicular(nx, ny, nz, rollRadians);
 
-        const transform = new Transform();
+        const transform = new Transform64();
         // Centred on the surface, so the box has equal depth on both sides of it
         // and catches geometry either way -- a thin wall face, or a floor whose
         // trace endpoint sits a hair inside it.
-        transform.position.set(x, y, z);
-        transform.scale.set(size, size, size);
-        transform.rotation._lookRotation(-nx, -ny, -nz, ux, uy, uz);
+        transform.setTranslation(x, y, z);
+        transform.setScale(size, size, size);
+        t64_look_rotation(transform, -nx, -ny, -nz, ux, uy, uz);
+
+        // Rotation and scale both land outside the matrix. One call for the group,
+        // before the entity is built, so what `ComponentAdded` carries is finished.
+        transform.updateMatrix();
 
         const entity = new Entity();
         entity.add(transform).add(decal).build(this.ecd);
@@ -1579,8 +1584,8 @@ export class Effects {
         const light = new Light();
         applyMuzzleFlash(light, weapon, this.shadows.casts('effect'));
 
-        const transform = new Transform();
-        transform.position.set(x, y, z);
+        const transform = new Transform64();
+        transform.setTranslation(x, y, z);
 
         const entity = new Entity();
         entity.add(transform).add(light).build(this.ecd);
@@ -1726,8 +1731,8 @@ export class Effects {
         const emitter = new ParticleEmitter();
         emitter.fromJSON(json);
 
-        const transform = new Transform();
-        transform.position.set(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
+        const transform = new Transform64();
+        transform.setTranslation(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
 
         const entity = new Entity();
         entity.add(transform).add(emitter).build(this.ecd);

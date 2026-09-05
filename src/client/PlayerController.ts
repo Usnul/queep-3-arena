@@ -17,7 +17,7 @@
  * - The **presentation** runs in metres and meep axes (Y up).
  *
  * So this class owns exactly one conversion, in one direction, once per frame:
- * `ps.origin` (Q3) -> camera `Transform.position` (meep). Nothing else in the
+ * `ps.origin` (Q3) -> camera `Transform64` translation (meep). Nothing else in the
  * client needs to know either convention. See DECISIONS.md D-011.
  *
  * Input comes from meep's own devices -- `engine.devices.keyboard` and
@@ -30,6 +30,8 @@
  * is already the pointer-lock movement, so the look code reads it directly
  * rather than reaching into the event.
  */
+
+import { Quaternion } from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 
 import { ClipMap } from '../q3/cm/ClipMap.ts';
 import { angleVectors, vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
@@ -73,18 +75,36 @@ export type { PhysicsTraceBackend };
 const WORLD_SCALE = 1 / 32;
 
 /**
- * The part of a meep `Transform` this writes. Exported because the systems in
+ * The part of a meep `Transform64` this writes. Exported because the systems in
  * `app/systems.ts` hold one to hand back in, and a second hand-written copy of
  * the shape would be a second thing that can stop matching.
+ *
+ * Three scalar writes rather than two sub-objects, because meep 3.16.0's
+ * transform has no sub-objects: it is one `Float64Array` and the components are
+ * accessors over it. `updateMatrix` is in the shape because it is not optional --
+ * a rotation write leaves the matrix describing the previous orientation until
+ * it is called, and the camera sync copies the matrix.
  */
 export interface TransformLike {
-    position: { set(x: number, y: number, z: number): void };
-    rotation: RotationLike;
+    setTranslation(x: number, y: number, z: number): void;
+    setRotation(x: number, y: number, z: number, w: number): void;
+    updateMatrix(): void;
 }
 
 interface RotationLike {
     _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown;
 }
+
+/**
+ * Where {@link orientToQ3Angles}'s answer lands before it is copied into a
+ * transform.
+ *
+ * A `Transform64` has no `_lookRotation` of its own -- meep's `t64_look_rotation`
+ * routes through a scratch `Quaternion` for exactly the same reason this does:
+ * the interesting part is the parallel-axis case, and there is no reason for a
+ * second copy of it.
+ */
+const scratchCameraRotation = new Quaternion();
 
 /**
  * Point a meep rotation along Q3 view angles.
@@ -1113,7 +1133,7 @@ export class PlayerController {
         const y = previous.eyeQ3[1]! + (latest.eyeQ3[1]! - previous.eyeQ3[1]!) * a;
         const z = previous.eyeQ3[2]! + (latest.eyeQ3[2]! - previous.eyeQ3[2]!) * a;
 
-        t.position.set(x * WORLD_SCALE, z * WORLD_SCALE, -y * WORLD_SCALE);
+        t.setTranslation(x * WORLD_SCALE, z * WORLD_SCALE, -y * WORLD_SCALE);
 
         /*
          `ps.viewangles` is in degrees, Q3 convention: pitch positive is *down*.
@@ -1157,7 +1177,22 @@ export class PlayerController {
                 view[2]! + previous.roll + (latest.roll - previous.roll) * a;
         }
 
-        orientToQ3Angles(scratchAngles, t.rotation);
+        orientToQ3Angles(scratchAngles, scratchCameraRotation);
+
+        t.setRotation(
+            scratchCameraRotation.x,
+            scratchCameraRotation.y,
+            scratchCameraRotation.z,
+            scratchCameraRotation.w
+        );
+
+        /*
+         The rotation is not in the matrix until this is called, and
+         `camera_sync_from_transform` copies the matrix wholesale. Without it the
+         camera turns one frame late -- and only the *rotation* does, which reads
+         as the world sliding rather than as a lag.
+        */
+        t.updateMatrix();
     }
 
     /**

@@ -21,16 +21,23 @@
  * `clipToEntities`, which is `SV_ClipMoveToEntities` reduced to translation.
  */
 
-import type { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
+
+import type { PlacedMesh } from './map/loadMap.ts';
 
 import type { Mover, MoverSystem } from '../game/Movers.ts';
 import type { MoverBodies, PhysicsWorld } from './PhysicsWorld.ts';
 
 const WORLD_SCALE = 1 / 32;
 
+/** The part of a meep dataset this needs: somewhere to announce a mover's move. */
+interface EcsDataset {
+    sendEvent(entity: number, name: string, payload: unknown): void;
+}
+
 interface Bound {
     readonly mover: Mover;
-    readonly transforms: readonly Transform[];
+    readonly meshes: readonly PlacedMesh[];
     readonly bodies: MoverBodies | null;
 }
 
@@ -40,18 +47,23 @@ export class MoversView {
     /** Movers whose submodel had no drawn geometry -- triggers, and nothing else. */
     readonly invisible: number[] = [];
 
+    private readonly ecd: EcsDataset;
+
     constructor(
+        ecd: EcsDataset,
         system: MoverSystem,
-        submodelTransforms: ReadonlyMap<number, readonly Transform[]>,
+        submodelMeshes: ReadonlyMap<number, readonly PlacedMesh[]>,
         physics: PhysicsWorld | null
     ) {
+        this.ecd = ecd;
+
         for (const mover of system.movers) {
-            const transforms = submodelTransforms.get(mover.model) ?? [];
-            if (transforms.length === 0) this.invisible.push(mover.model);
+            const meshes = submodelMeshes.get(mover.model) ?? [];
+            if (meshes.length === 0) this.invisible.push(mover.model);
 
             this.bound.push({
                 mover,
-                transforms,
+                meshes,
                 bodies: physics === null ? null : physics.addMover(mover.model),
             });
         }
@@ -69,10 +81,11 @@ export class MoversView {
      * four steps of a stopped mover and the drawn position had walked a quarter
      * of a unit away from the simulation's.
      *
-     * It costs nothing to drop. `Vector3.set` compares before it assigns and
-     * only dispatches `onChanged` when a component actually differs, so the
-     * skip was the engine's own check written a second time -- with the added
-     * effect of hiding a correction the engine would have made.
+     * It costs nothing to drop, and since meep 3.16.0 there would be nothing
+     * left to drop it in favour of. A `Transform64` has no `onChanged` for the
+     * skip to have been shadowing: the write is unconditional, and so is the
+     * announcement that the renderer and the interpolator both key off. The
+     * engine's own redundant-write check went with the signals.
      */
     update(): void {
         for (const bound of this.bound) {
@@ -83,7 +96,13 @@ export class MoversView {
             const my = z * WORLD_SCALE;
             const mz = -y * WORLD_SCALE;
 
-            for (const transform of bound.transforms) transform.position.set(mx, my, mz);
+            for (const mesh of bound.meshes) {
+                mesh.transform.setTranslation(mx, my, mz);
+
+                // Translation only, so the matrix needs no help. `ShadedGeometrySystem`
+                // does: a door that moves without announcing is drawn where it was.
+                t64_announce_change(this.ecd, mesh.entity, mesh.transform);
+            }
 
             bound.bodies?.setOffset(x, y, z);
         }

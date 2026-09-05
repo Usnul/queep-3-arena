@@ -50,7 +50,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 
 import { NetRig, IDLE } from './net/rig.ts';
 import { holdAt, standIn, standingSpots } from './net/triggers.ts';
@@ -930,7 +930,7 @@ describe('the effects a joined client has drawn', () => {
                     classes: unknown[],
                     visitor: (component: never) => void
                 ) => void
-            )([Transform], () => {
+            )([Transform64], () => {
                 n += 1;
             });
             return n;

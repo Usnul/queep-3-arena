@@ -24,7 +24,7 @@
  *
  * Missiles are here too, through a second pool. `MissileView.spawn` hangs its
  * model on an entity that already exists in the *render* dataset and already
- * has a `Transform` -- in single-player that is the physics body the missile
+ * has a `Transform64` -- in single-player that is the physics body the missile
  * flies as -- and a joined client has no such body, because the position is
  * replicated and `NetClient`'s pool lives in its own `EntityManager`. So the
  * application keeps one render entity per pool slot and this writes the

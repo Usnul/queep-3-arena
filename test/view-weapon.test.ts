@@ -30,7 +30,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
@@ -43,7 +43,7 @@ type Traverse = (classes: unknown[], visitor: (component: never) => void) => voi
 
 function newDataset(): EntityComponentDataset {
     const ecd = new EntityComponentDataset();
-    ecd.setComponentTypeMap([Transform, ShadedGeometry]);
+    ecd.setComponentTypeMap([Transform64, ShadedGeometry]);
     return ecd;
 }
 
@@ -113,7 +113,15 @@ function stubLibrary() {
 }
 
 function pose(eye: [number, number, number]): CameraPose {
-    return { position: { x: eye[0], y: eye[1], z: eye[2] }, rotation: new Quaternion() };
+    return {
+        translation_x: eye[0],
+        translation_y: eye[1],
+        translation_z: eye[2],
+        rotation_x: 0,
+        rotation_y: 0,
+        rotation_z: 0,
+        rotation_w: 1,
+    };
 }
 
 function held(weapon: string, visible = true, firing = false): ViewWeaponState {
@@ -126,11 +134,11 @@ function meshPositions(ecd: EntityComponentDataset): { x: number; y: number; z: 
 
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
         classes: unknown[],
-        visitor: (geometry: ShadedGeometry, transform: Transform) => void
+        visitor: (geometry: ShadedGeometry, transform: Transform64) => void
     ) => void;
 
-    traverse([ShadedGeometry, Transform], (_geometry, transform) => {
-        out.push({ x: transform.position.x, y: transform.position.y, z: transform.position.z });
+    traverse([ShadedGeometry, Transform64], (_geometry, transform) => {
+        out.push({ x: transform.translation_x, y: transform.translation_y, z: transform.translation_z });
     });
 
     return out;
@@ -198,15 +206,15 @@ describe('the weapon you switch away from leaves the world', () => {
         ): void => {
             /*
              Meshes only. `Entity.build` routes through this method too, so the
-             `Transform` that carries the pose arrives by the same door -- and it
+             `Transform64` that carries the pose arrives by the same door -- and it
              arrives first, with nothing to read it off yet.
             */
             if (component instanceof ShadedGeometry) {
-                const transform = ecd.getComponent(entity, Transform) as Transform;
+                const transform = ecd.getComponent(entity, Transform64) as Transform64;
                 addedAt.push({
-                    x: transform.position.x,
-                    y: transform.position.y,
-                    z: transform.position.z,
+                    x: transform.translation_x,
+                    y: transform.translation_y,
+                    z: transform.translation_z,
                 });
             }
 
@@ -390,13 +398,28 @@ describe('a weapon that is two models is drawn as two models', () => {
 
         const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
             classes: unknown[],
-            visitor: (geometry: ShadedGeometry, transform: Transform) => void
+            visitor: (geometry: ShadedGeometry, transform: Transform64) => void
         ) => void;
 
-        traverse([ShadedGeometry, Transform], (_geometry, transform) => {
+        traverse([ShadedGeometry, Transform64], (_geometry, transform) => {
+            /*
+             Copies, not the transform's own views: `Transform64.translation` and
+             `.rotation` are live windows onto its buffer, and every piece here is
+             written from the same scratch on the next frame. Snapshotting is the
+             whole point of this list.
+            */
             out.push({
-                position: transform.position.clone(),
-                rotation: transform.rotation.clone(),
+                position: new Vector3(
+                    transform.translation_x,
+                    transform.translation_y,
+                    transform.translation_z
+                ),
+                rotation: new Quaternion().set(
+                    transform.rotation_x,
+                    transform.rotation_y,
+                    transform.rotation_z,
+                    transform.rotation_w
+                ),
             });
         });
 

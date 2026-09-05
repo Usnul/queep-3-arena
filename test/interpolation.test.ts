@@ -14,7 +14,7 @@
  * hold one pose for as many frames as the display fits into 16.7 ms and then
  * jump to the next. meep's answer is `InterpolationSystem`: producers record an
  * authoritative pose per step into an `InterpolationLog`, and the system blends
- * the last two at the sub-step alpha into the live `Transform` every rendered
+ * the last two at the sub-step alpha into the live `Transform64` every rendered
  * frame.
  *
  * `PhysicsSystem` is already a producer. Nothing else is, and an
@@ -37,14 +37,21 @@ import { EntityManager } from '@woosh/meep-engine/src/engine/ecs/EntityManager.j
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 import { System } from '@woosh/meep-engine/src/engine/ecs/System.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { CameraSystem } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem.js';
 import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
 
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
 import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderObserverSystem.js';
 
-import { PoseRecorderSystem, ViewSystem, interpolatedPose } from '../src/app/systems.ts';
+import { EventType } from '@woosh/meep-engine/src/engine/ecs/EventType.js';
+
+import {
+    AnnouncingInterpolationSystem,
+    PoseRecorderSystem,
+    ViewSystem,
+    interpolatedPose,
+} from '../src/app/systems.ts';
 import { Missiles } from '../src/client/Missiles.ts';
 import { vec3 } from '../src/q3/math.ts';
 
@@ -84,7 +91,7 @@ async function started(em: EntityManager): Promise<void> {
 
 /**
  * A door, reduced to what makes one hard to render: an authoritative position
- * that only exists in the simulation, and a `Transform` written from it once per
+ * that only exists in the simulation, and a `Transform64` written from it once per
  * fixed step.
  *
  * Writing *from* the simulation rather than adding to the transform is the point
@@ -96,22 +103,22 @@ class DoorSystem extends System<never> {
     /** Q3-side truth. Advances one unit per step. */
     step = 0;
 
-    constructor(private readonly transform: Transform) {
+    constructor(private readonly transform: Transform64) {
         super();
     }
 
     override fixedUpdate = (): void => {
         this.step += 1;
-        this.transform.position.set(this.step, 0, 0);
+        this.transform.setTranslation(this.step, 0, 0);
     };
 }
 
 async function rig(): Promise<{
     em: EntityManager;
     door: DoorSystem;
-    transform: Transform;
+    transform: Transform64;
     /** A second entity with a transform and no `Interpolated`, as a control. */
-    untouched: Transform;
+    untouched: Transform64;
 }> {
     const em = new EntityManager();
     const dataset = new EntityComponentDataset();
@@ -120,7 +127,7 @@ async function rig(): Promise<{
     const interpolation = new InterpolationSystem();
     await em.addSystem(interpolation);
 
-    const transform = new Transform();
+    const transform = new Transform64();
     const door = new DoorSystem(transform);
     await em.addSystem(door);
 
@@ -132,8 +139,8 @@ async function rig(): Promise<{
 
     new Entity().add(transform).add(interpolatedPose()).build(dataset);
 
-    const untouched = new Transform();
-    untouched.position.set(500, 0, 0);
+    const untouched = new Transform64();
+    untouched.setTranslation(500, 0, 0);
     new Entity().add(untouched).build(dataset);
 
     return { em, door, transform, untouched };
@@ -162,18 +169,18 @@ describe('the application interpolation timeline', () => {
          2, and the difference is the quarter of a step the display is ahead of
          the simulation.
         */
-        expect(transform.position.x).toBeCloseTo(1.25, 4);
+        expect(transform.translation_x).toBeCloseTo(1.25, 4);
 
         em.update(step / 4);
-        expect(transform.position.x).toBeCloseTo(1.5, 4);
+        expect(transform.translation_x).toBeCloseTo(1.5, 4);
 
         em.update(step / 4);
-        expect(transform.position.x).toBeCloseTo(1.75, 4);
+        expect(transform.translation_x).toBeCloseTo(1.75, 4);
 
         // The frame that completes the step lands exactly on the new pose.
         em.update(step / 4);
         expect(door.step).toBe(3);
-        expect(transform.position.x).toBeCloseTo(2, 4);
+        expect(transform.translation_x).toBeCloseTo(2, 4);
     });
 
     it('leaves a transform with no Interpolated component alone', async () => {
@@ -182,7 +189,7 @@ describe('the application interpolation timeline', () => {
         const step = em.fixedUpdateStepSize;
         for (let i = 0; i < 8; i++) em.update(step / 3);
 
-        expect(untouched.position.x).toBe(500);
+        expect(untouched.translation_x).toBe(500);
     });
 
     it('does not drift while the simulation holds still', async () => {
@@ -194,7 +201,7 @@ describe('the application interpolation timeline', () => {
         // A door that has arrived: still written every step, at the same pose.
         const restingAt = door.step;
         door.fixedUpdate = (): void => {
-            transform.position.set(restingAt, 0, 0);
+            transform.setTranslation(restingAt, 0, 0);
         };
 
         for (let i = 0; i < 12; i++) em.update(step / 3);
@@ -204,7 +211,7 @@ describe('the application interpolation timeline', () => {
          rest sits still. It only works because the producer keeps writing --
          see the case below for what happens when it does not.
         */
-        expect(transform.position.x).toBeCloseTo(restingAt, 6);
+        expect(transform.translation_x).toBeCloseTo(restingAt, 6);
     });
 
     it('drifts if a producer stops rewriting its pose, which is why MoversView always does', async () => {
@@ -231,7 +238,7 @@ describe('the application interpolation timeline', () => {
          that a future restore pass makes this case fail loudly rather than
          silently passing for a new reason.
         */
-        expect(transform.position.x).toBeLessThan(arrivedAt - 0.2);
+        expect(transform.translation_x).toBeLessThan(arrivedAt - 0.2);
     });
 });
 
@@ -248,7 +255,7 @@ describe('the application interpolation timeline', () => {
 async function missileRig(): Promise<{
     em: EntityManager;
     /** Fire on the next fixed step, and hand back the missile's transform. */
-    launch: () => Transform;
+    launch: () => Transform64;
 }> {
     const em = new EntityManager();
     const dataset = new EntityComponentDataset();
@@ -292,9 +299,9 @@ async function missileRig(): Promise<{
 
     return {
         em,
-        launch(): Transform {
+        launch(): Transform64 {
             const id = next++;
-            let transform: Transform | null = null;
+            let transform: Transform64 | null = null;
 
             pending = (): void => {
                 missiles.launch({
@@ -308,7 +315,7 @@ async function missileRig(): Promise<{
 
                 const entity = missiles.entityOf(id);
                 dataset.addComponentToEntity(entity, interpolatedPose());
-                transform = dataset.getComponent(entity, Transform) as Transform;
+                transform = dataset.getComponent(entity, Transform64) as Transform64;
             };
 
             em.update(em.fixedUpdateStepSize);
@@ -339,7 +346,7 @@ describe('a missile, from the step it is born on', () => {
         const xs: number[] = [];
         for (let i = 0; i < 12; i++) {
             em.update(step / 4);
-            xs.push(transform.position.x);
+            xs.push(transform.translation_x);
         }
 
         /*
@@ -386,7 +393,7 @@ describe('a missile, from the step it is born on', () => {
         for (let i = 0; i < 6; i++) {
             for (let f = 0; f < 7; f++) em.update(step / 8);
             em.update(step / 8);
-            onStep.push(transform.position.x);
+            onStep.push(transform.translation_x);
         }
 
         const advances = onStep.slice(1).map((x, i) => x - onStep[i]!);
@@ -403,7 +410,7 @@ describe('the execution order phase 9 relies on', () => {
 
         const interpolation = new InterpolationSystem();
         await em.addSystem(interpolation);
-        await em.addSystem(new DoorSystem(new Transform()));
+        await em.addSystem(new DoorSystem(new Transform64()));
 
         const poses = new PoseRecorderSystem();
         poses.attachTo(interpolation);
@@ -430,7 +437,7 @@ describe('the execution order phase 9 relies on', () => {
         /*
          Registered *after* the camera system on purpose. Registration order is
          what decides a tie, and this must not be one: `ViewSystem` declares
-         `Transform` for write where `CameraSystem` declares it for read, and
+         `Transform64` for write where `CameraSystem` declares it for read, and
          `updateExecutionOrder` scores a writer at twice a reader. If that ever
          stops being true the camera goes back to being a frame late, which is
          the first half of D-081 and is invisible except as judder.
@@ -503,7 +510,7 @@ describe('the execution order phase 9 relies on', () => {
         /*
          Registered the other way round on purpose: the answer is the scheduler's,
          not the registration order's. `CameraSystem` references `Camera` and
-         `Transform` where `InterpolationSystem` references only `Interpolated`,
+         `Transform64` where `InterpolationSystem` references only `Interpolated`,
          and the score is a sum over referenced components -- so the camera is
          copied onto Shade's camera before anything has been blended into it.
          An `Interpolated` camera entity would therefore be a frame late rather
@@ -513,3 +520,122 @@ describe('the execution order phase 9 relies on', () => {
         expect(positionOf(order, CameraSystem)).toBeLessThan(positionOf(order, InterpolationSystem));
     });
 });
+
+/*
+ * What meep 3.16.0 stopped doing for itself.
+ *
+ * The blend writes the live `Transform64` and announces nothing, so every
+ * consumer that used to wake on `position.onChanged` -- the drawn placement, the
+ * attachment composition, the lights -- sleeps through it and keeps drawing the
+ * last pose it was told about, which is the fixed step's. It also leaves the
+ * matrix carrying the previous frame's rotation, which is what
+ * `TransformAttachmentSystem` composes through. `AnnouncingInterpolationSystem`
+ * is the two calls the write-back owes; these are what say so.
+ */
+describe('the blended pose reaches the things that draw it', () => {
+    it('announces the write, so a placement listener wakes on it', async () => {
+        const { em, dataset, entity } = await announcingRig();
+
+        const woken: unknown[] = [];
+
+        // meep types the listener `() => any` and then calls it with the payload;
+        // the cast is what lets the parameter be named.
+        dataset.addEntityEventListener(
+            entity,
+            EventType.ComponentChanged,
+            ((event: unknown) => {
+                woken.push(event);
+            }) as () => void
+        );
+
+        const step = em.fixedUpdateStepSize;
+
+        // Two whole steps first, so the log has the two ticks a blend needs, then
+        // a frame that lands between them. Only the last one is being measured.
+        em.update(step);
+        em.update(step);
+        woken.length = 0;
+        em.update(step / 4);
+
+        expect(woken.length, 'nothing was told the blended pose changed').toBeGreaterThan(0);
+        expect(
+            (woken[0] as { klass: unknown }).klass,
+            'the announcement has to name the component that moved'
+        ).toBe(Transform64);
+    });
+
+    it('refreshes the matrix, which is what an attachment composes through', async () => {
+        const { em, transform } = await announcingRig();
+
+        const step = em.fixedUpdateStepSize;
+
+        em.update(step);
+        em.update(step);
+        em.update(step / 4);
+
+        /*
+         The translation is the matrix's own column, so it is never the half that
+         goes stale -- comparing it would pass with no `updateMatrix` at all.
+         Rotation is the half that lags, so that is what this reads: element 0 of
+         a column-major affine matrix is `1 - 2(y^2 + z^2)` for a unit rotation,
+         and a quarter turn about Y puts it at 0 where the identity leaves it 1.
+        */
+        const { rotation_x: x, rotation_y: y, rotation_z: z } = transform;
+
+        expect(transform.matrix[0], 'the matrix still describes the previous rotation')
+            .toBeCloseTo(1 - 2 * (y * y + z * z), 9);
+        expect(transform.matrix[5]).toBeCloseTo(1 - 2 * (x * x + z * z), 9);
+    });
+});
+
+/**
+ * A door that turns as well as moves, so the matrix half of the contract is
+ * actually exercised: a translation-only blend leaves a correct matrix whether or
+ * not anything calls `updateMatrix`.
+ */
+class TurningDoorSystem extends System<never> {
+    step = 0;
+
+    constructor(private readonly transform: Transform64) {
+        super();
+    }
+
+    override fixedUpdate = (): void => {
+        this.step += 1;
+
+        // A quarter turn about Y per step, as `(0, sin(a/2), 0, cos(a/2))`.
+        const half = (this.step * Math.PI) / 4;
+
+        this.transform.setTranslation(this.step, 0, 0);
+        this.transform.setRotation(0, Math.sin(half), 0, Math.cos(half));
+        this.transform.updateMatrix();
+    };
+}
+
+async function announcingRig(): Promise<{
+    em: EntityManager;
+    dataset: EntityComponentDataset;
+    transform: Transform64;
+    entity: number;
+}> {
+    const em = new EntityManager();
+    const dataset = new EntityComponentDataset();
+    em.attachDataset(dataset);
+
+    const interpolation = new AnnouncingInterpolationSystem();
+    await em.addSystem(interpolation);
+
+    const transform = new Transform64();
+    await em.addSystem(new TurningDoorSystem(transform));
+
+    const poses = new PoseRecorderSystem();
+    poses.attachTo(interpolation);
+    await em.addSystem(poses);
+
+    await started(em);
+
+    const builder = new Entity().add(transform).add(interpolatedPose());
+    builder.build(dataset);
+
+    return { em, dataset, transform, entity: builder.id };
+}

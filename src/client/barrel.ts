@@ -230,7 +230,7 @@ const scratchRoll = new Quaternion();
 /**
  * `CG_PositionRotatedEntityOnTag`, for a parent whose pose is already world.
  *
- * The C composes two `refEntity_t` axes; here the parent's pose is a `Transform`
+ * The C composes two `refEntity_t` axes; here the parent's pose is a `Transform64`
  * that the caller has just written, so the same two lines are a rotated offset
  * and a quaternion product. The offset is scaled on the way out because the
  * transform's own `scale` does not reach a sibling entity -- every drawn piece

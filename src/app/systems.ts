@@ -46,7 +46,7 @@
  *
  * **...which is exactly why {@link ViewSystem} does declare some.** The camera
  * pose has to be written *before* `CameraSystem3` copies it, and the only lever
- * on that is the score. It declares `Camera` and `Transform` for write,
+ * on that is the score. It declares `Camera` and `Transform64` for write,
  * `CameraSystem3` declares both for read, and a writer outranks a reader --
  * which needs *both* to be writes for a reason that is entirely in the
  * scoring's arithmetic and is written out at the declaration. That is the one
@@ -55,7 +55,7 @@
  */
 
 import { System } from '@woosh/meep-engine/src/engine/ecs/System.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { Camera } from '@woosh/meep-engine/src/engine/graphics/ecs/camera/Camera.js';
 import { ResourceAccessKind } from '@woosh/meep-engine/src/core/model/ResourceAccessKind.js';
 import { ResourceAccessSpecification } from '@woosh/meep-engine/src/core/model/ResourceAccessSpecification.js';
@@ -64,7 +64,8 @@ import {
     Interpolated,
 } from '@woosh/meep-engine/src/engine/interpolation/Interpolated.js';
 import { InterpolationLog } from '@woosh/meep-engine/src/engine/interpolation/InterpolationLog.js';
-import type { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
+import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 
 import type { Arena } from '../client/Arena.ts';
 import type { AudioBank, BodyState } from '../client/Audio.ts';
@@ -218,26 +219,26 @@ export function bodyStateOf(player: PlayerController): BodyState {
  * That is what was reported as "projectiles move with jerks", and the projectile
  * was the messenger.
  *
- * The ordering one: `CameraSystem3` copies the camera entity's `Transform` onto
+ * The ordering one: `CameraSystem3` copies the camera entity's `Transform64` onto
  * Shade's camera in its own `update`, so a pose written after it is a frame late
  * (D-081's first half). It has to be written *before* it, and meep decides that
  * by declared component access rather than by registration order.
  * `updateExecutionOrder` scores each referenced component by the incoming edges
  * on the component dependency graph, times four for Create, two for Write, one
- * for Read -- so a system that **writes** `Transform` sorts above one that only
+ * for Read -- so a system that **writes** `Transform64` sorts above one that only
  * reads it, which `CameraSystem3` does. Measured rather than assumed:
  * `test/interpolation.test.ts` pins the resulting order, and the declaration
  * here is honest rather than tactical, because writing the camera entity's
  * transform is exactly what this does.
  *
- * `dependencies` stays empty on purpose. Declaring `[Camera, Transform]` would
+ * `dependencies` stays empty on purpose. Declaring `[Camera, Transform64]` would
  * make the engine link every camera entity through `link`, and the one this
  * drives is handed over at construction; `components_used` is the half of the
  * declaration that carries the access, which is the half the scheduler reads.
  */
 export class ViewSystem extends System<never> {
     /**
-     * Both for write, and both are written: the camera entity's `Transform` is
+     * Both for write, and both are written: the camera entity's `Transform64` is
      * the pose, and `Camera.fov` is `cg_fov` through `CameraLens`.
      *
      * Declaring the second one matters beyond honesty, and it is worth saying
@@ -259,7 +260,7 @@ export class ViewSystem extends System<never> {
             ResourceAccessKind.Read | ResourceAccessKind.Write
         ),
         ResourceAccessSpecification.from(
-            Transform,
+            Transform64,
             ResourceAccessKind.Read | ResourceAccessKind.Write
         ),
     ];
@@ -662,6 +663,75 @@ export class FlySystem extends System<never> {
 }
 
 export { APP_INTERPOLATION_SOURCE, interpolatedBody, interpolatedPose } from '../client/interpolation.ts';
+
+/**
+ * `InterpolationSystem`, with the two calls its write-back owes a `Transform64`.
+ *
+ * **meep 3.16.0 blends into the live component and then tells nobody.**
+ * `TransformPoseSerializationAdapter.deserialize` -- the write-back
+ * `InterpolationSystem.update` runs once per rendered frame per interpolated
+ * entity -- calls `setTranslation` and `setRotation` and stops there. Under the
+ * old `Transform` that was enough: the sub-objects carried signals, and
+ * `InterpolationSystem`'s own docblock still promises that "because it writes the
+ * live component, all Transform-linked machinery (culling, particles, trails,
+ * attachments) renders" at the blended pose. Under `Transform64` neither half of
+ * that holds:
+ *
+ *  - the rotation does not reach the matrix without `updateMatrix()`, and
+ *    `TransformAttachmentSystem` composes `parent x local` through matrices; and
+ *  - nothing hears the write at all, because `ShadedGeometrySystem`,
+ *    `MeshSystem`, `LightSystem` and the attachment system all place on
+ *    `EventType.ComponentChanged` now rather than on a poll.
+ *
+ * So the blend lands in the component and never reaches the screen. What is drawn
+ * is whatever pose was current at the last *announced* write, which is the fixed
+ * step -- every interpolated thing in the port back to stepping at the simulation
+ * rate, which is the judder D-081 and D-200 were about. Reported as GAP-050.
+ *
+ * **A subclass rather than a second system, because ordering is the whole
+ * problem.** meep orders systems by declared component access, not registration
+ * (see {@link ViewSystem}'s note on what that cost to work out), and a separate
+ * announcer would have to be scheduled strictly after the blend for every frame
+ * with no way to say so. Overriding `update` puts it after `super.update` by
+ * construction and takes the scheduler out of it entirely.
+ *
+ * Delete this class and register `InterpolationSystem` directly once meep's
+ * write-back announces for itself.
+ */
+export class AnnouncingInterpolationSystem extends InterpolationSystem {
+    override update(deltaSeconds: number): void {
+        super.update(deltaSeconds);
+
+        const em = this.entityManager;
+        if (em === null || em === undefined) return;
+
+        const ecd = em.dataset;
+        if (ecd === null || ecd === undefined) return;
+
+        /*
+         The set `InterpolationSystem` maintains in its own `link`/`unlink`: every
+         entity carrying `Interpolated`, which is exactly the set it just wrote.
+         Announcing per entity rather than per interpoland is the coarse-by-design
+         trade `EventType.ComponentChanged` documents -- an entity interpolating
+         something other than its pose wakes a listener that then finds nothing
+         moved, which is redundant work rather than wrong work.
+        */
+        const entities = (this as unknown as { __entities: Map<number, unknown> }).__entities;
+
+        for (const entity of entities.keys()) {
+            const transform = ecd.getComponent(entity, Transform64) as Transform64 | null;
+            if (transform === null || transform === undefined) continue;
+
+            // The blend writes rotation as well as translation, so the matrix is
+            // stale until this. The translation is the matrix's own column and
+            // needs no help.
+            transform.updateMatrix();
+
+            t64_announce_change(ecd, entity, transform);
+        }
+    }
+}
+
 
 /**
  * The interpolation source for poses this application writes itself.

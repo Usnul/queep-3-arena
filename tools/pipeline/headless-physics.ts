@@ -47,7 +47,8 @@ import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js'
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
 import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderObserverSystem.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 
 import { ClipMap, MASK_PLAYERSOLID } from '../../src/q3/cm/ClipMap.ts';
 import { hullShape } from '../../src/client/hullShape.ts';
@@ -66,7 +67,7 @@ import type { TraceResult } from '../../src/q3/cm/trace.ts';
  * The generated declaration types the parameter as `System<any>`, whose `link`
  * takes `(component, entity)`. Every real engine system declares a `link` with
  * one parameter per dependency, so `PhysicsSystem` -- which links
- * `(RigidBody, Transform, entity)` -- is not assignable to the type of the
+ * `(RigidBody, Transform64, entity)` -- is not assignable to the type of the
  * method that registers it. Neither is any other system with more than one
  * dependency. The runtime is fine; this is the same class of declaration bug as
  * GAP-013, and `PhysicsWorld.create` takes the same narrow escape.
@@ -104,6 +105,18 @@ export interface HeadlessMoverBodies {
     readonly count: number;
     /** Offset from the submodel's authored position, in Q3 units and Q3 axes. */
     setOffset(q3x: number, q3y: number, q3z: number): void;
+}
+
+/**
+ * One built brush body: the transform that places it, and the entity carrying it.
+ *
+ * `PhysicsWorld`'s `PlacedHull` counterpart, and for the same reason -- meep
+ * 3.16.0's `Transform64` has no change signal, so moving a body is announced
+ * against the entity it belongs to and a transform alone no longer says enough.
+ */
+interface PlacedHull {
+    readonly transform: Transform64;
+    readonly entity: number;
 }
 
 /** Scene metres per Q3 unit; must match `PhysicsWorld`'s. */
@@ -173,7 +186,7 @@ export class HeadlessPhysics {
 
         await registry.addSystem(system);
         /*
-         Both, in this order. `PhysicsSystem` links `(RigidBody, Transform)`;
+         Both, in this order. `PhysicsSystem` links `(RigidBody, Transform64)`;
          `ColliderObserverSystem` is what turns a `Collider` component into an
          actual shape on that body. Register only the first and every body is
          real, present in the broadphase and completely intangible.
@@ -267,7 +280,7 @@ export class HeadlessPhysics {
         queries: PhysicsTrace,
         hull: BrushHull,
         kind: number = BodyKind.Static
-    ): Transform | null {
+    ): PlacedHull | null {
         const placed = hullShape(hull);
         if (placed === null) return null;
 
@@ -293,8 +306,8 @@ export class HeadlessPhysics {
         collider.friction = 0;
         collider.restitution = 0;
 
-        const transform = new Transform();
-        transform.position.set(placed.x, placed.y, placed.z);
+        const transform = new Transform64();
+        transform.setTranslation(placed.x, placed.y, placed.z);
 
         const builder = new Entity();
         builder
@@ -308,7 +321,7 @@ export class HeadlessPhysics {
         // `link` stamps the packed body id onto the component as it goes in.
         queries.register(builder.id, (body as unknown as { _bodyId: number })._bodyId, hull);
 
-        return transform;
+        return { transform, entity: builder.id };
     }
 
     /**
@@ -358,39 +371,60 @@ export class HeadlessPhysics {
             submodel.numSurfaces
         );
 
-        const transforms: Transform[] = [];
+        const movers: PlacedHull[] = [];
         const hulls: BrushHull[] = [];
 
         for (const hull of [...set.hulls, ...patches.hulls]) {
-            const t = HeadlessPhysics.addHull(
+            const placed = HeadlessPhysics.addHull(
                 this.ecd,
                 this.queries,
                 hull,
                 BodyKind.KinematicVelocity
             );
-            if (t === null) continue;
-            transforms.push(t);
+            if (placed === null) continue;
+            movers.push(placed);
             hulls.push(hull);
         }
 
-        if (transforms.length === 0) return null;
+        if (movers.length === 0) return null;
 
         // Where each body sits with the mover at rest, so an offset costs no
         // re-derivation of the centroid.
-        const rest = transforms.map((t) => [t.position.x, t.position.y, t.position.z] as const);
+        const rest = movers.map(
+            (m) =>
+                [
+                    m.transform.translation_x,
+                    m.transform.translation_y,
+                    m.transform.translation_z,
+                ] as const
+        );
         const restPlanes = hulls.map((h) => Float32Array.from(h.planes));
+        const ecd = this.ecd;
 
         return {
             model,
-            count: transforms.length,
+            count: movers.length,
             setOffset(q3x: number, q3y: number, q3z: number): void {
                 const mx = q3x * WORLD_SCALE;
                 const my = q3z * WORLD_SCALE;
                 const mz = -q3y * WORLD_SCALE;
 
-                for (let i = 0; i < transforms.length; i++) {
+                for (let i = 0; i < movers.length; i++) {
                     const at = rest[i]!;
-                    transforms[i]!.position.set(at[0] + mx, at[1] + my, at[2] + mz);
+                    const mover = movers[i]!;
+
+                    mover.transform.setTranslation(at[0] + mx, at[1] + my, at[2] + mz);
+
+                    /*
+                     The browser announces this and so must the harness, for the
+                     reason this file exists: a harness that moves its bodies
+                     slightly differently from the browser reports healthy numbers
+                     for code the browser is not running. Since meep 3.16.0 a
+                     `Transform64` write is invisible until it is announced, and the
+                     listener here is the query broadphase rather than a renderer.
+                    */
+                    t64_announce_change(ecd, mover.entity, mover.transform);
+
                     // The half-spaces travel too; see `movePlanes`.
                     movePlanes(hulls[i]!.planes, restPlanes[i]!, q3x, q3y, q3z);
                 }

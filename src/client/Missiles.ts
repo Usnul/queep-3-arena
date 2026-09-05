@@ -20,7 +20,7 @@
  * forty-eight of intersection, all of it a worse version of what a physics
  * engine is.
  *
- * A missile is now an entity: `Transform`, `RigidBody`, `Collider`,
+ * A missile is now an entity: `Transform64`, `RigidBody`, `Collider`,
  * `Interpolated`. The engine integrates it, sweeps it, and says what it hit.
  *
  *   Q3                          meep
@@ -77,7 +77,7 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
 import { RigidBodyFlags } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBodyFlags.js';
 import { ColliderFlags } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderFlags.js';
@@ -126,7 +126,7 @@ interface MissilePhysics {
 interface Flight {
     readonly projectile: Projectile;
     readonly entity: number;
-    readonly transform: Transform;
+    readonly transform: Transform64;
     /** Set the moment a contact is reported, so a pair cannot detonate twice. */
     spent: boolean;
 }
@@ -183,7 +183,7 @@ export class Missiles implements MissileWorld {
             return this.allows(entityA, entityB) && this.allows(entityB, entityA);
         });
 
-        if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
         if (!ecd.isComponentTypeRegistered(RigidBody)) ecd.registerComponentType(RigidBody);
         if (!ecd.isComponentTypeRegistered(Collider)) ecd.registerComponentType(Collider);
     }
@@ -198,8 +198,8 @@ export class Missiles implements MissileWorld {
     }
 
     launch(projectile: Projectile): void {
-        const transform = new Transform();
-        transform.position.set(
+        const transform = new Transform64();
+        transform.setTranslation(
             projectile.origin[0]! * WORLD_SCALE,
             projectile.origin[2]! * WORLD_SCALE,
             -projectile.origin[1]! * WORLD_SCALE
@@ -328,11 +328,11 @@ export class Missiles implements MissileWorld {
      */
     sync(): void {
         for (const flight of this.flights.values()) {
-            const p = flight.transform.position;
+            const t = flight.transform;
 
-            flight.projectile.origin[0] = p.x / WORLD_SCALE;
-            flight.projectile.origin[1] = -p.z / WORLD_SCALE;
-            flight.projectile.origin[2] = p.y / WORLD_SCALE;
+            flight.projectile.origin[0] = t.translation_x / WORLD_SCALE;
+            flight.projectile.origin[1] = -t.translation_z / WORLD_SCALE;
+            flight.projectile.origin[2] = t.translation_y / WORLD_SCALE;
         }
     }
 
@@ -411,11 +411,15 @@ export class Missiles implements MissileWorld {
         normal: ArrayLike<number> | null,
         outward: number
     ): void {
-        const at = flight.transform.position;
+        const at = flight.transform;
 
         const impact: MissileImpact = {
             projectile: flight.projectile,
-            atQ3: vec3(at.x / WORLD_SCALE, -at.z / WORLD_SCALE, at.y / WORLD_SCALE),
+            atQ3: vec3(
+                at.translation_x / WORLD_SCALE,
+                -at.translation_z / WORLD_SCALE,
+                at.translation_y / WORLD_SCALE
+            ),
             /*
              A surface normal is what a scorch mark is oriented by, and a player
              is not a surface -- Q3 draws no mark on a direct hit either. Nor is

@@ -61,7 +61,7 @@
  * and looked like a decal there.
  *
  * Both components go straight onto the missile's own entity, which already has
- * the `Transform` each of them needs. So a plasma bolt still costs *no extra
+ * the `Transform64` each of them needs. So a plasma bolt still costs *no extra
  * entity* -- it is two components on a body that exists either way, where a
  * rocket is three entities and three attachments -- and it still leaves with
  * that body, which is why `despawn` has nothing to do for it.
@@ -97,7 +97,7 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometryFlags.js';
@@ -259,6 +259,9 @@ interface EcsDataset {
 
 const scratchRoll = new Quaternion();
 
+/** The composed local rotation, before it is read into the attachment's transform. */
+const scratchLocal = new Quaternion();
+
 /**
  * `RotateAroundDirection(ent.axis, cg.time / 4)`, in degrees per second.
  *
@@ -383,7 +386,7 @@ export class MissileView implements MissileSink {
         this.library = library;
         this.shadows = shadows;
 
-        if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
         if (!ecd.isComponentTypeRegistered(ShadedGeometry)) {
             ecd.registerComponentType(ShadedGeometry);
         }
@@ -483,11 +486,12 @@ export class MissileView implements MissileSink {
              because nothing currently spins a missile. Composed as `parent x
              local`, this is right whether or not that stays true.
             */
-            attachment.transform.rotation.copy(aim);
-            attachment.transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+            attachment.transform.setRotation(aim.x, aim.y, aim.z, aim.w);
+            attachment.transform.setScale(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+            attachment.transform.updateMatrix();
 
             const builder = new Entity();
-            builder.add(new Transform()).add(geometry).add(attachment).build(this.ecd as never);
+            builder.add(new Transform64()).add(geometry).add(attachment).build(this.ecd as never);
 
             entities.push(builder.id);
             attachments.push(attachment);
@@ -521,7 +525,21 @@ export class MissileView implements MissileSink {
 
         for (const drawn of this.drawn.values()) {
             for (const attachment of drawn.attachments) {
-                attachment.transform.rotation.multiplyQuaternions(drawn.aim, scratchRoll);
+                scratchLocal.multiplyQuaternions(drawn.aim, scratchRoll);
+
+                attachment.transform.setRotation(
+                    scratchLocal.x,
+                    scratchLocal.y,
+                    scratchLocal.z,
+                    scratchLocal.w
+                );
+
+                /*
+                 `TransformAttachmentSystem` composes `parent x local` through the
+                 two matrices, so a rotation that has not reached this one composes
+                 as the previous frame's roll.
+                */
+                attachment.transform.updateMatrix();
             }
         }
     }
@@ -550,7 +568,7 @@ export class MissileView implements MissileSink {
      * small emissive sphere with a point light in the middle of it.
      *
      * Both go straight onto the missile's own entity, which already carries the
-     * `Transform` that `ShadedGeometrySystem3` and `LightSystem3` each want --
+     * `Transform64` that `ShadedGeometrySystem3` and `LightSystem3` each want --
      * so a plasma bolt costs two components on a body that exists anyway, where
      * a rocket costs three entities and three attachments. Neither needs taking
      * away: they leave with the body, which is why `despawn` has nothing to do

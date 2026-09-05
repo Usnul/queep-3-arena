@@ -19,7 +19,7 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { BoxGeometry } from '@woosh/meep-engine/src/shade/renderer/geometry/BoxGeometry.js';
 import { StandardShadeMaterial } from '@woosh/meep-engine/src/shade/renderer/material/StandardShadeMaterial.js';
@@ -206,7 +206,7 @@ export class Arena implements WeaponEvents {
         const mins = vec3(-15, -15, -24);
         const maxs = vec3(15, 15, 32);
 
-        const transform = new Transform();
+        const transform = new Transform64();
         this.placeTarget(transform, originQ3, mins, maxs);
 
         const builder = new Entity();
@@ -235,7 +235,7 @@ export class Arena implements WeaponEvents {
     }
 
     private placeTarget(
-        transform: { position: { set(x: number, y: number, z: number): void }; scale: { set(x: number, y: number, z: number): void } },
+        transform: Transform64,
         originQ3: ArrayLike<number>,
         mins: Vec3,
         maxs: Vec3
@@ -249,12 +249,18 @@ export class Arena implements WeaponEvents {
         ];
 
         const [x, y, z] = toMeep(centreQ3);
-        transform.position.set(x, y, z);
-        transform.scale.set(
+        transform.setTranslation(x, y, z);
+        transform.setScale(
             (maxs[0]! - mins[0]!) * WORLD_SCALE,
             (maxs[2]! - mins[2]!) * WORLD_SCALE,
             (maxs[1]! - mins[1]!) * WORLD_SCALE
         );
+
+        // The scale is not in the matrix until this is called; the translation
+        // already is. Both targets are placed before they are built, so the
+        // `ComponentAdded` that follows carries the finished pose and there is
+        // nothing to announce.
+        transform.updateMatrix();
     }
 
     /* ------------------------------------------------------------------ *
@@ -284,7 +290,7 @@ export class Arena implements WeaponEvents {
             target.health = target.maxHealth;
 
             const builder = new Entity();
-            const transform = new Transform();
+            const transform = new Transform64();
             this.placeTarget(transform, target.origin, target.mins, target.maxs);
             builder
                 .add(transform)

@@ -33,7 +33,8 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
 import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
@@ -60,8 +61,20 @@ interface EcsDataset {
     addComponentToEntity(entity: number, component: unknown): void;
 }
 
-/** Identity rotation; every level body is axis-aligned in world space. */
-const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
+/**
+ * Identity rotation, for the queries that take one and never turn it.
+ *
+ * Four numbers rather than the `{x, y, z, w}` literal this was until meep 3.16.0,
+ * where `shape_cast`, `overlap_shape` and `KinematicMover` all moved to reading a
+ * pose *by index*. Their JSDoc and their generated `.d.ts` still say `{x, y, z, w}`,
+ * so a literal type-checks, indexes to `undefined`, and the sweep quietly stops
+ * landing -- which is why this is spelled out rather than left to the types.
+ *
+ * Not a `Quaternion`, which would otherwise be the obvious choice and does alias
+ * `q[0]` onto `q.x`: it shadows `length` with the magnitude method, so it does not
+ * satisfy the `ArrayLike<number>` those signatures ask for.
+ */
+const NO_ROTATION = new Float64Array([0, 0, 0, 1]);
 
 /**
  * Corrective type for assigning a concrete shape to `Collider.shape`.
@@ -112,7 +125,7 @@ export interface PhysicsWorldStats {
  * Move a mover's hulls with it, planes included.
  *
  * **The planes are the half of this that was missing and the half Q3's rules are
- * defined over.** A body's `Transform` is what the broadphase and the
+ * defined over.** A body's `Transform64` is what the broadphase and the
  * narrowphase follow, and moving it is enough for `shape_cast` to find the door
  * where it now is. It is not enough for anything that then asks *which face*:
  * `PhysicsTrace` keeps each body's `BrushHull` and applies `CM_TraceThroughBrush`
@@ -141,6 +154,19 @@ export function movePlanes(
         const nz = rest[p + 2]!;
         planes[p + 3] = rest[p + 3]! + nx * q3x + ny * q3y + nz * q3z;
     }
+}
+
+/**
+ * One built brush body: the transform that places it, and the entity carrying it.
+ *
+ * The entity id is here because of meep 3.16.0. A `Transform64` has no change
+ * signal, so moving one is announced through the dataset against the entity it
+ * belongs to (`t64_announce_change`), and a transform on its own no longer says
+ * enough to move a body with.
+ */
+interface PlacedHull {
+    readonly transform: Transform64;
+    readonly entity: number;
 }
 
 /** Handle for one brush entity's collision, returned by `PhysicsWorld.addMover`. */
@@ -182,7 +208,7 @@ export class PhysicsWorld {
     private cm: ClipMap | null = null;
     /**
      * Public because `KinematicMover` resolves an overlapping body back to its
-     * `Transform` and `Collider` through the dataset, so anything driving the
+     * `Transform64` and `Collider` through the dataset, so anything driving the
      * mover needs both halves of the world. See `MoverHost`.
      */
     ecd: EcsDataset | null = null;
@@ -233,7 +259,7 @@ export class PhysicsWorld {
 
         await em.addSystem(world.system);
         /*
-         Both, in this order. `PhysicsSystem` links `(RigidBody, Transform)`;
+         Both, in this order. `PhysicsSystem` links `(RigidBody, Transform64)`;
          `ColliderObserverSystem` is what turns a `Collider` component into an
          actual shape on that body. Register only the first and every body is
          real, present in the broadphase and completely intangible.
@@ -282,7 +308,7 @@ export class PhysicsWorld {
     private build(ecd: EcsDataset, cm: ClipMap): void {
         this.queries = new PhysicsTrace(this.system, cm);
 
-        if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
         if (!ecd.isComponentTypeRegistered(RigidBody)) ecd.registerComponentType(RigidBody);
         if (!ecd.isComponentTypeRegistered(Collider)) ecd.registerComponentType(Collider);
 
@@ -374,34 +400,56 @@ export class PhysicsWorld {
         );
         if (set.hulls.length === 0 && patches.hulls.length === 0) return null;
 
-        const transforms: Transform[] = [];
+        const movers: PlacedHull[] = [];
         const hulls: BrushHull[] = [];
 
         for (const hull of [...set.hulls, ...patches.hulls]) {
-            const transform = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
-            if (transform === null) continue;
-            transforms.push(transform);
+            const placed = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
+            if (placed === null) continue;
+            movers.push(placed);
             hulls.push(hull);
         }
 
-        if (transforms.length === 0) return null;
+        if (movers.length === 0) return null;
 
         // Where each body sits with the mover at rest, so an offset can be
         // applied without re-deriving the centroid every frame.
-        const rest = transforms.map((t) => [t.position.x, t.position.y, t.position.z] as const);
+        const rest = movers.map(
+            (m) =>
+                [
+                    m.transform.translation_x,
+                    m.transform.translation_y,
+                    m.transform.translation_z,
+                ] as const
+        );
         const restPlanes = hulls.map((h) => Float32Array.from(h.planes));
 
         return {
             model,
-            count: transforms.length,
+            count: movers.length,
             setOffset(q3x: number, q3y: number, q3z: number): void {
                 const mx = q3x * WORLD_SCALE;
                 const my = q3z * WORLD_SCALE;
                 const mz = -q3y * WORLD_SCALE;
 
-                for (let i = 0; i < transforms.length; i++) {
+                for (let i = 0; i < movers.length; i++) {
                     const at = rest[i]!;
-                    transforms[i]!.position.set(at[0] + mx, at[1] + my, at[2] + mz);
+                    const mover = movers[i]!;
+
+                    mover.transform.setTranslation(at[0] + mx, at[1] + my, at[2] + mz);
+
+                    /*
+                     A `Transform64` carries no signals -- that is the point of it
+                     (meep 3.16.0) -- so a write is invisible until the writer says
+                     so, and the broadphase proxy this body sits in is what has to
+                     hear it. A door that moves without announcing is a door the
+                     query tree still thinks is shut.
+
+                     Translation only, so no `updateMatrix` is owed: the translation
+                     *is* the matrix's own column.
+                    */
+                    t64_announce_change(ecd, mover.entity, mover.transform);
+
                     movePlanes(hulls[i]!.planes, restPlanes[i]!, q3x, q3y, q3z);
                 }
             },
@@ -422,7 +470,7 @@ export class PhysicsWorld {
         ecd: EcsDataset,
         hull: BrushHull,
         kind: number = BodyKind.Static
-    ): Transform | null {
+    ): PlacedHull | null {
         const placed = hullShape(hull);
 
         // Degenerate hulls exist in shipped maps; one should not abort a load.
@@ -449,8 +497,8 @@ export class PhysicsWorld {
         collider.friction = 0;
         collider.restitution = 0;
 
-        const transform = new Transform();
-        transform.position.set(placed.x, placed.y, placed.z);
+        const transform = new Transform64();
+        transform.setTranslation(placed.x, placed.y, placed.z);
 
         const builder = new Entity();
         builder
@@ -469,7 +517,7 @@ export class PhysicsWorld {
         /*
          And the same body is what sound is occluded by, if it is the kind of
          brush that blocks any. `AcousticSimulationSystem` links the triple
-         `AcousticBody + Collider + Transform`, so this is not a second copy of
+         `AcousticBody + Collider + Transform64`, so this is not a second copy of
          the level -- it is one more component on the body that already exists,
          and it costs nothing at all when the acoustic systems are not
          registered. A mover gets one too: the system follows a transform, so a
@@ -498,7 +546,7 @@ export class PhysicsWorld {
             hull
         );
 
-        return transform;
+        return { transform, entity: builder.id };
     }
 
 

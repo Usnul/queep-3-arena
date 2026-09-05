@@ -96,10 +96,11 @@ class Devices implements InputDevices {
     };
 }
 
-/** `Transform`, reduced to the two things `writeCamera` writes. */
+/** `Transform64`, reduced to the three things `writeCamera` calls. */
 const sink: TransformLike = {
-    position: { set: () => {} },
-    rotation: { _lookRotation: () => null },
+    setTranslation: () => {},
+    setRotation: () => {},
+    updateMatrix: () => {},
 };
 
 let collision: { physics: HeadlessPhysics; spawn: number[] } | null = null;

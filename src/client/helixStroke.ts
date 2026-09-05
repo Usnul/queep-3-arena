@@ -96,7 +96,7 @@ export interface HelixStroke {
 }
 
 /**
- * Build the trail. The caller owns the entity, the `Transform` and the expiry.
+ * Build the trail. The caller owns the entity, the `Transform64` and the expiry.
  *
  * Knot count is `round(length / knotSpacing) + 1`, at least two, and what bounds
  * it is whatever bounds the axis. The railgun's is the 8192-unit trace in

@@ -51,7 +51,7 @@ import { describe, expect, it } from 'vitest';
 import { EntityManager } from '@woosh/meep-engine/src/engine/ecs/EntityManager.js';
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
 import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
@@ -118,8 +118,8 @@ function place(
     y: number,
     z: number
 ): number {
-    const transform = new Transform();
-    transform.position.set(x, y, z);
+    const transform = new Transform64();
+    transform.setTranslation(x, y, z);
 
     const rigidBody = new RigidBody();
     rigidBody.kind = kind;
@@ -315,8 +315,8 @@ describe('a missile driven into a convex hull', () => {
 
         place(ecd, BodyKind.Static, playerBoxHull(), 0, 0, 0);
 
-        const transform = new Transform();
-        transform.position.set(-dx * 120 * WORLD_SCALE, 0, -dz * 120 * WORLD_SCALE);
+        const transform = new Transform64();
+        transform.setTranslation(-dx * 120 * WORLD_SCALE, 0, -dz * 120 * WORLD_SCALE);
 
         const rigidBody = new RigidBody();
         rigidBody.kind = BodyKind.Dynamic;
@@ -337,26 +337,26 @@ describe('a missile driven into a convex hull', () => {
         }) as never);
 
         let stoppedAtStep = -1;
-        let lastX = transform.position.x;
-        let lastZ = transform.position.z;
+        let lastX = transform.translation_x;
+        let lastZ = transform.translation_z;
 
         for (let step = 0; step < 30; step++) {
             em.update(em.fixedUpdateStepSize);
 
             const moved = Math.hypot(
-                transform.position.x - lastX,
-                transform.position.z - lastZ
+                transform.translation_x - lastX,
+                transform.translation_z - lastZ
             ) / WORLD_SCALE;
 
-            lastX = transform.position.x;
-            lastZ = transform.position.z;
+            lastX = transform.translation_x;
+            lastZ = transform.translation_z;
 
             if (stoppedAtStep < 0 && moved < 1) stoppedAtStep = step;
         }
 
         return {
             reported,
-            restedAt: Math.hypot(transform.position.x, transform.position.z) / WORLD_SCALE,
+            restedAt: Math.hypot(transform.translation_x, transform.translation_z) / WORLD_SCALE,
             stoppedAtStep,
         };
     }

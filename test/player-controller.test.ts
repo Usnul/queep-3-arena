@@ -55,6 +55,7 @@ import { type Mover, type Vec3 as MoverVec3 } from '../src/game/Movers.ts';
 import { WorldEffects, type MoverWorld } from '../src/game/WorldEffects.ts';
 import { angleVectors, vec3, type Vec3 } from '../src/q3/math.ts';
 import * as C from '../src/q3/pmove/constants.ts';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 
 const BUILT = join(process.cwd(), 'assets', 'built');
 const WORLD_SCALE = 1 / 32;
@@ -121,42 +122,6 @@ class Devices implements InputDevices {
         for (const key of Object.values(this.keys)) key.is_down = false;
         this.mouseButtonLeft.is_down = false;
     }
-}
-
-/** `Transform`, reduced to the two things `writeCamera` writes. */
-class CameraTransform {
-    readonly position = {
-        x: 0,
-        y: 0,
-        z: 0,
-        set(x: number, y: number, z: number): void {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-        },
-    };
-
-    /** The last `_lookRotation` arguments: forward then up, meep axes. */
-    forward: [number, number, number] = [0, 0, 0];
-
-    /**
-     * ...and the up, which carries the roll.
-     *
-     * `_lookRotation` orthonormalises, so the up it is handed is not exactly the
-     * one a quaternion would hand back -- but the component that matters here is
-     * the sideways tilt, and that survives the orthonormalisation because it is
-     * perpendicular to the forward by construction.
-     */
-    up: [number, number, number] = [0, 1, 0];
-
-    readonly rotation = {
-        owner: this as CameraTransform,
-        _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown {
-            this.owner.forward = [fx, fy, fz];
-            this.owner.up = [ux, uy, uz];
-            return null;
-        },
-    };
 }
 
 /**
@@ -303,7 +268,22 @@ type Solver = 'meep' | 'q3';
  */
 class Rig {
     readonly player: PlayerController;
-    readonly camera = new CameraTransform();
+    /**
+     * The camera the controller writes -- the engine's own component, not a
+     * stand-in.
+     *
+     * This used to be a hand-written recorder that kept the `_lookRotation`
+     * arguments it was handed, because `Transform`'s rotation was a `Quaternion`
+     * and reading a basis back out of one was work. meep 3.16.0's `Transform64`
+     * offers `forward` and `up` directly -- the axes read off the rotation, unit
+     * length -- so the recorder had nothing left to add, and asserting on the pose
+     * the renderer is actually given beats asserting on the arguments that made it.
+     *
+     * The one difference worth knowing: `up` is now the *orthonormalised* up rather
+     * than the one `orientToQ3Angles` passed in. The roll survives that, being
+     * perpendicular to the forward by construction, which is what is measured here.
+     */
+    readonly camera = new Transform64();
     readonly devices = new Devices();
     readonly footsteps = new Footsteps();
 
@@ -497,11 +477,11 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         const rig = new Rig('oa_dm1', solver).settle();
         const ps = rig.player.ps;
 
-        expect(rig.camera.position.x).toBeCloseTo(ps.origin[0]! * WORLD_SCALE, 9);
-        expect(rig.camera.position.y).toBeCloseTo(
+        expect(rig.camera.translation_x).toBeCloseTo(ps.origin[0]! * WORLD_SCALE, 9);
+        expect(rig.camera.translation_y).toBeCloseTo(
             (ps.origin[2]! + ps.viewheight) * WORLD_SCALE, 9
         );
-        expect(rig.camera.position.z).toBeCloseTo(-ps.origin[1]! * WORLD_SCALE, 9);
+        expect(rig.camera.translation_z).toBeCloseTo(-ps.origin[1]! * WORLD_SCALE, 9);
     });
 
     it('turns the camera when the mouse moves', () => {
@@ -579,10 +559,10 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         rig.run(6);
 
         rig.player.writeCamera(rig.camera, 0);
-        const start = [rig.camera.position.x, rig.camera.position.y, rig.camera.position.z];
+        const start = [rig.camera.translation_x, rig.camera.translation_y, rig.camera.translation_z];
 
         rig.player.writeCamera(rig.camera, 1);
-        const end = [rig.camera.position.x, rig.camera.position.y, rig.camera.position.z];
+        const end = [rig.camera.translation_x, rig.camera.translation_y, rig.camera.translation_z];
 
         // Read as a distance rather than as one axis: which way yaw zero points
         // is the map's business, and `oa_dm1`'s first spawn faces a wall.
@@ -593,9 +573,9 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         for (const alpha of [0.25, 0.5, 0.75]) {
             rig.player.writeCamera(rig.camera, alpha);
 
-            expect(rig.camera.position.x).toBeCloseTo(start[0]! + (end[0]! - start[0]!) * alpha, 9);
-            expect(rig.camera.position.y).toBeCloseTo(start[1]! + (end[1]! - start[1]!) * alpha, 9);
-            expect(rig.camera.position.z).toBeCloseTo(start[2]! + (end[2]! - start[2]!) * alpha, 9);
+            expect(rig.camera.translation_x).toBeCloseTo(start[0]! + (end[0]! - start[0]!) * alpha, 9);
+            expect(rig.camera.translation_y).toBeCloseTo(start[1]! + (end[1]! - start[1]!) * alpha, 9);
+            expect(rig.camera.translation_z).toBeCloseTo(start[2]! + (end[2]! - start[2]!) * alpha, 9);
         }
     });
 
@@ -623,7 +603,7 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         rig.activate();
 
         rig.player.writeCamera(rig.camera, 1);
-        const before: [number, number, number] = [...rig.camera.forward];
+        const before: number[] = [...rig.camera.forward];
 
         // One frame's worth of mouse at a middling turn rate -- and no `frame()`.
         rig.look(12, 0);
@@ -647,7 +627,7 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         rig.activate();
 
         rig.player.writeCamera(rig.camera, 0.25);
-        const before: [number, number, number] = [...rig.camera.forward];
+        const before: number[] = [...rig.camera.forward];
 
         rig.player.writeCamera(rig.camera, 0.75);
 
@@ -677,7 +657,7 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         rig.player.writeCamera(rig.camera, 1);
         const ps = rig.player.ps;
 
-        expect(rig.camera.position.y).toBeCloseTo(
+        expect(rig.camera.translation_y).toBeCloseTo(
             (ps.origin[2]! + ps.viewheight) * WORLD_SCALE,
             9
         );
@@ -688,7 +668,7 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         rig.frame();
         rig.player.writeCamera(rig.camera, 1);
 
-        expect(rig.camera.position.y).toBeCloseTo(
+        expect(rig.camera.translation_y).toBeCloseTo(
             (rig.player.ps.origin[2]! + rig.player.ps.viewheight) * WORLD_SCALE,
             6
         );
@@ -784,11 +764,11 @@ describe.each<Solver>(['meep', 'q3'])('PlayerController -> camera [%s]', (solver
         const rig = new Rig('oa_dm1', solver).settle();
         rig.activate();
 
-        const standing = rig.camera.position.y;
+        const standing = rig.camera.translation_y;
 
         rig.devices.hold('ctrl');
         rig.run(30);
-        const crouched = rig.camera.position.y;
+        const crouched = rig.camera.translation_y;
 
         expect(rig.player.ps.viewheight).toBe(C.CROUCH_VIEWHEIGHT);
         expect(standing - crouched).toBeGreaterThan(
@@ -1406,7 +1386,7 @@ describe.each<Solver>(['meep', 'q3'])('the world writes into ps between frames [
          deliberate: the refusal is what makes the preview a faithful stand-in
          for the real function, whatever a future caller does with it.
         */
-        const corpseForward: [number, number, number] = [...rig.camera.forward];
+        const corpseForward: number[] = [...rig.camera.forward];
 
         rig.look(400, 100);
         rig.player.writeCamera(rig.camera, 1);

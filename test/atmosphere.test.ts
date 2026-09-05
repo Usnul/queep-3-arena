@@ -47,7 +47,7 @@ import { join } from 'node:path';
 
 import { EntityComponentDataset }
     from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { ParticipatingMedia }
     from '@woosh/meep-engine/src/engine/graphics3/ParticipatingMedia.js';
 import { MIE_PARTICLES_STANDARD_PRECOMPUTED }
@@ -405,7 +405,7 @@ describe('the world box', () => {
 describe('attaching the atmosphere', () => {
     function attach(bundle: SceneBundle, preset?: AtmospherePreset) {
         const ecd = new EntityComponentDataset();
-        ecd.registerComponentType(Transform);
+        ecd.registerComponentType(Transform64);
 
         const report = preset === undefined
             ? attachWorldAtmosphere(ecd, bundle)
@@ -423,15 +423,15 @@ describe('attaching the atmosphere', () => {
 
         expect(report).not.toBeNull();
 
-        const transform = ecd.getComponent(report!.entity, Transform) as Transform;
+        const transform = ecd.getComponent(report!.entity, Transform64) as Transform64;
 
-        expect(transform.position.x).toBeCloseTo(report!.box.centre[0], 10);
-        expect(transform.position.y).toBeCloseTo(report!.box.centre[1], 10);
-        expect(transform.position.z).toBeCloseTo(report!.box.centre[2], 10);
+        expect(transform.translation_x).toBeCloseTo(report!.box.centre[0], 10);
+        expect(transform.translation_y).toBeCloseTo(report!.box.centre[1], 10);
+        expect(transform.translation_z).toBeCloseTo(report!.box.centre[2], 10);
 
-        expect(transform.scale.x).toBeCloseTo(report!.box.size[0], 10);
-        expect(transform.scale.y).toBeCloseTo(report!.box.size[1], 10);
-        expect(transform.scale.z).toBeCloseTo(report!.box.size[2], 10);
+        expect(transform.scale_x).toBeCloseTo(report!.box.size[0], 10);
+        expect(transform.scale_y).toBeCloseTo(report!.box.size[1], 10);
+        expect(transform.scale_z).toBeCloseTo(report!.box.size[2], 10);
     });
 
     it('picks the preset off the bundle\'s own name', () => {
@@ -471,7 +471,7 @@ describe('attaching the atmosphere', () => {
 
     it('registers the component type, since nothing else in the port uses it', () => {
         const ecd = new EntityComponentDataset();
-        ecd.registerComponentType(Transform);
+        ecd.registerComponentType(Transform64);
 
         expect(ecd.isComponentTypeRegistered(ParticipatingMedia)).toBe(false);
 
@@ -482,7 +482,7 @@ describe('attaching the atmosphere', () => {
 
     it('attaches nothing when the bundle cannot size the box', () => {
         const ecd = new EntityComponentDataset();
-        ecd.registerComponentType(Transform);
+        ecd.registerComponentType(Transform64);
 
         expect(attachWorldAtmosphere(ecd, { name: 'x', worldScale: 1 / 32 } as unknown as SceneBundle))
             .toBeNull();

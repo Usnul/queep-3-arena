@@ -69,13 +69,26 @@ export const STAND_MAXS: Vec3 = vec3(15, 15, 32);
 export const CROUCH_MAXS: Vec3 = vec3(15, 15, 16);
 
 /** Identity: the player box never rotates. */
-const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
+/**
+ * Identity rotation, for the queries that take one and never turn it.
+ *
+ * Four numbers rather than the `{x, y, z, w}` literal this was until meep 3.16.0,
+ * where `shape_cast`, `overlap_shape` and `KinematicMover` all moved to reading a
+ * pose *by index*. Their JSDoc and their generated `.d.ts` still say `{x, y, z, w}`,
+ * so a literal type-checks, indexes to `undefined`, and the sweep quietly stops
+ * landing -- which is why this is spelled out rather than left to the types.
+ *
+ * Not a `Quaternion`, which would otherwise be the obvious choice and does alias
+ * `q[0]` onto `q.x`: it shadows `length` with the magnitude method, so it does not
+ * satisfy the `ArrayLike<number>` those signatures ask for.
+ */
+const NO_ROTATION = new Float64Array([0, 0, 0, 1]);
 
 /**
  * The physics facilities this needs, named rather than imported concretely so
  * the headless harness can supply the same system without an `Engine`.
  *
- * `KinematicMover` reaches for `ecd.getComponent(entity, Transform | Collider)`
+ * `KinematicMover` reaches for `ecd.getComponent(entity, Transform64 | Collider)`
  * inside its recover pass, and for `physicsSystem.entityOf(bodyId)` to get
  * there. Both are satisfied by the real ECS in the browser and by a two-method
  * stub under Node -- see `tools/pipeline/headless-physics.ts`.

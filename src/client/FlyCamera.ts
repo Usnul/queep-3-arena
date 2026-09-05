@@ -16,12 +16,26 @@
  */
 
 import type { InputDevices, PointerMoveHandler } from './PlayerController.ts';
+import { Quaternion } from '@woosh/meep-engine/src/core/geom/Quaternion.js';
+
 import { takePointerLock } from './pointerLock.ts';
 
+/**
+ * The part of a meep `Transform64` this drives. The engine's own type satisfies
+ * it; naming a shape rather than importing the class keeps the debug camera
+ * testable without an ECS behind it.
+ */
 interface TransformLike {
-    position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number };
-    rotation: { _lookRotation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): unknown };
+    readonly translation_x: number;
+    readonly translation_y: number;
+    readonly translation_z: number;
+    setTranslation(x: number, y: number, z: number): void;
+    setRotation(x: number, y: number, z: number, w: number): void;
+    updateMatrix(): void;
 }
+
+/** Scratch for {@link FlyCamera.applyRotation}; see `t64_look_rotation`, which does the same. */
+const scratchRotation = new Quaternion();
 
 /** meep key names, from `input/devices/KeyCodes.js`. */
 const KEY_FORWARD = ['w', 'up_arrow'];
@@ -135,8 +149,13 @@ export class FlyCamera {
         const len = Math.hypot(mx, my, mz);
         if (len > 1e-6) {
             const speed = (this.has(KEY_FAST) ? BASE_SPEED * FAST_MULTIPLIER : BASE_SPEED) * dt / len;
-            const p = this.transform.position;
-            p.set(p.x + mx * speed, p.y + my * speed, p.z + mz * speed);
+            const t = this.transform;
+
+            t.setTranslation(
+                t.translation_x + mx * speed,
+                t.translation_y + my * speed,
+                t.translation_z + mz * speed
+            );
         }
 
         this.applyRotation();
@@ -161,7 +180,7 @@ export class FlyCamera {
     private applyRotation(): void {
         const cp = Math.cos(this.pitch);
 
-        this.transform.rotation._lookRotation(
+        scratchRotation._lookRotation(
             -Math.sin(this.yaw) * cp,
             Math.sin(this.pitch),
             -Math.cos(this.yaw) * cp,
@@ -169,5 +188,16 @@ export class FlyCamera {
             1,
             0
         );
+
+        this.transform.setRotation(
+            scratchRotation.x,
+            scratchRotation.y,
+            scratchRotation.z,
+            scratchRotation.w
+        );
+
+        // A rotation write does not reach the matrix on its own, and the camera
+        // sync copies the matrix.
+        this.transform.updateMatrix();
     }
 }

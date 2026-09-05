@@ -49,8 +49,67 @@ const WORLD_SCALE = 1 / 32;
  */
 const CONTACT_TOLERANCE = 1e-7;
 
-/** Identity rotation; every level body is axis-aligned in world space. */
-const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
+/**
+ * `shape_cast` and `overlap_shape`, retyped to the poses they actually read.
+ *
+ * meep 3.16.0 moved both to reading a pose *by index* -- `rotation[0]`,
+ * `position[1]` -- and updated neither the JSDoc nor the generated `.d.ts`, which
+ * still say `{x, y, z, w}`. So the published types are wrong in the one direction
+ * that hurts: an object literal satisfies them and then indexes to `undefined`,
+ * NaN propagates through the sweep, and the query returns "nothing hit" rather
+ * than failing. Correct arguments, meanwhile, are rejected at compile time -- which
+ * is what these two exist to undo.
+ *
+ * Narrow on purpose: only the pose parameters are restated. When meep's
+ * declarations catch up, both of these collapse to the imports they wrap and the
+ * call sites do not change. Reported as GAP-049.
+ */
+const shape_cast_indexed = shape_cast as unknown as (
+    system: unknown,
+    ray: unknown,
+    shape: unknown,
+    rotation: ArrayLike<number>,
+    result: unknown,
+    filter?: unknown,
+    skip_initial_overlaps?: boolean
+) => boolean;
+
+const overlap_shape_indexed = overlap_shape as unknown as (
+    system: unknown,
+    shape: unknown,
+    position: ArrayLike<number>,
+    rotation: ArrayLike<number>,
+    output: Uint32Array | number[],
+    output_offset: number,
+    filter?: unknown
+) => number;
+
+/**
+ * Identity rotation, for the queries that take one and never turn it.
+ *
+ * Four numbers rather than the `{x, y, z, w}` literal this was until meep 3.16.0,
+ * where `shape_cast`, `overlap_shape` and `KinematicMover` all moved to reading a
+ * pose *by index*. Their JSDoc and their generated `.d.ts` still say `{x, y, z, w}`,
+ * so a literal type-checks, indexes to `undefined`, and the sweep quietly stops
+ * landing -- which is why this is spelled out rather than left to the types.
+ *
+ * Not a `Quaternion`, which would otherwise be the obvious choice and does alias
+ * `q[0]` onto `q.x`: it shadows `length` with the magnitude method, so it does not
+ * satisfy the `ArrayLike<number>` those signatures ask for.
+ */
+const NO_ROTATION = new Float64Array([0, 0, 0, 1]);
+
+/** Where an `overlap_shape` query's centre is assembled; see {@link NO_ROTATION}. */
+const scratchQueryOrigin = new Float64Array(3);
+
+/** Fill {@link scratchQueryOrigin} and hand it back, so a call site stays one expression. */
+function writeOrigin(x: number, y: number, z: number): Float64Array {
+    scratchQueryOrigin[0] = x;
+    scratchQueryOrigin[1] = y;
+    scratchQueryOrigin[2] = z;
+
+    return scratchQueryOrigin;
+}
 
 export class PhysicsTrace {
     private readonly system: unknown;
@@ -323,10 +382,10 @@ export class PhysicsTrace {
         if (primary !== undefined) this.hullScratch[count++] = primary;
 
         if (gatherNeighbours) {
-            const found = overlap_shape(
+            const found = overlap_shape_indexed(
                 this.system,
                 this.inflatedBoxShape(minsQ3, maxsQ3) as unknown as never,
-                { x: sx, y: sy, z: sz },
+                writeOrigin(sx, sy, sz),
                 NO_ROTATION,
                 this.overlaps,
                 0
@@ -503,7 +562,7 @@ export class PhysicsTrace {
             tMax: length,
         };
 
-        if (!shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, false)) {
+        if (!shape_cast_indexed(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, false)) {
             return;
         }
 
@@ -564,10 +623,10 @@ export class PhysicsTrace {
                  the last resort rather than the first.
                 */
                 out.startsolid =
-                    overlap_shape(
+                    overlap_shape_indexed(
                         this.system,
                         this.boxShape(minsQ3, maxsQ3) as unknown as never,
-                        { x: sx, y: sy, z: sz },
+                        writeOrigin(sx, sy, sz),
                         NO_ROTATION,
                         this.overlaps,
                         0
@@ -621,7 +680,7 @@ export class PhysicsTrace {
              whatever is genuinely in the way.
             */
             if (
-                !shape_cast(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, true) ||
+                !shape_cast_indexed(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, true) ||
                 (this.hit.t <= CONTACT_TOLERANCE && this.alreadyRuledOn(this.hit.entity))
             ) {
                 /*

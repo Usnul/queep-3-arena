@@ -162,9 +162,10 @@ describe('sizing the lights a map brought with it', () => {
 
     it('tolerates the float round trip a position makes through two transforms', () => {
         /*
-         The bundle value is copied into a `Transform`, then recomposed into a
-         `Transform64` and read back. Nothing in that path is lossy today, and
-         matching on exact equality would be a test that passes until it is one.
+         The bundle value is copied into a `Transform64` and read back. That is
+         one f64 buffer end to end since meep 3.16.0 -- it was a `Transform` and a
+         `Transform64` before -- so nothing in the path is lossy today, and matching
+         on exact equality would be a test that passes until it is one.
         */
         const light = point(1.2345678, -9.87654321, 0.0000004);
         applyLightVolumes(

@@ -40,7 +40,8 @@ import { join } from 'node:path';
 import { EntityManager } from '@woosh/meep-engine/src/engine/ecs/EntityManager.js';
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
@@ -124,7 +125,7 @@ const MISSILE_MODELS: Readonly<Record<string, string | null>> = {
 */
 function newDataset(): EntityComponentDataset {
     const ecd = new EntityComponentDataset();
-    ecd.setComponentTypeMap([Transform, ShadedGeometry, TransformAttachment, Light, Sprite]);
+    ecd.setComponentTypeMap([Transform64, ShadedGeometry, TransformAttachment, Light, Sprite]);
     return ecd;
 }
 
@@ -243,7 +244,7 @@ describe('a missile model', () => {
         const ecd = newDataset();
         const view = new MissileView(ecd, realLibrary());
 
-        const body = new Entity().add(new Transform());
+        const body = new Entity().add(new Transform64());
         body.build(ecd);
 
         // Straight down Q3 +x, at the rocket's own speed.
@@ -262,9 +263,9 @@ describe('a missile model', () => {
             // Q3 units to metres, and uniform -- the docblock on
             // `TransformAttachment` is explicit that a non-uniform parent scale
             // cannot be composed without shear, and this is the child's own.
-            expect(attachment.transform.scale.x).toBeCloseTo(1 / 32, 9);
-            expect(attachment.transform.scale.y).toBeCloseTo(1 / 32, 9);
-            expect(attachment.transform.scale.z).toBeCloseTo(1 / 32, 9);
+            expect(attachment.transform.scale_x).toBeCloseTo(1 / 32, 9);
+            expect(attachment.transform.scale_y).toBeCloseTo(1 / 32, 9);
+            expect(attachment.transform.scale_z).toBeCloseTo(1 / 32, 9);
         }
 
         /*
@@ -297,7 +298,7 @@ describe('a missile model', () => {
                     ? new MissileView(ecd, realLibrary())
                     : new MissileView(ecd, realLibrary(), shadows as never);
 
-            const body = new Entity().add(new Transform());
+            const body = new Entity().add(new Transform64());
             body.build(ecd);
 
             view.spawn(3, body.id, 'WP_PLASMAGUN', [2000, 0, 0]);
@@ -453,7 +454,7 @@ describe('a missile model', () => {
         const ecd = newDataset();
         const view = new MissileView(ecd, realLibrary());
 
-        const body = new Entity().add(new Transform());
+        const body = new Entity().add(new Transform64());
         body.build(ecd);
 
         // Hitscan. It never reaches `projectileSpawned` in the running game, and
@@ -500,18 +501,30 @@ describe('the engine systems the missile models need', () => {
     it('composes an attached child against its parent, and follows the parent when it moves', async () => {
         const { ecd } = await started();
 
-        const parentTransform = new Transform();
-        parentTransform.position.set(10, 0, 0);
+        const parentTransform = new Transform64();
+        parentTransform.setTranslation(10, 0, 0);
         const parent = new Entity().add(parentTransform);
         parent.build(ecd);
 
         const attachment = new TransformAttachment();
         attachment.parent = parent.id;
         attachment.immediate = true;
-        attachment.transform.position.set(0, 1, 0);
-        attachment.transform.scale.set(1 / 32, 1 / 32, 1 / 32);
+        attachment.transform.setTranslation(0, 1, 0);
+        attachment.transform.setScale(1 / 32, 1 / 32, 1 / 32);
 
-        const childTransform = new Transform();
+        /*
+         `TransformAttachmentSystem` composes through `multiplyTransforms`, which
+         reads both operands' *matrices*, and a `Transform64`'s scale does not reach
+         its matrix until this is called. Without it the composition drops the scale
+         and keeps the translation -- the translation being the matrix's own column
+         -- which is a stale-matrix bug wearing the shape of a partial one.
+
+         `MissileView` owes the same call at the same point; this is the rig
+         building an attachment by hand, so it owes it here too.
+        */
+        attachment.transform.updateMatrix();
+
+        const childTransform = new Transform64();
         const child = new Entity().add(childTransform).add(attachment);
         child.build(ecd);
 
@@ -523,9 +536,9 @@ describe('the engine systems the missile models need', () => {
          zero, so the mesh sits on the body and is 1/32 the size of its own
          vertices.
         */
-        expect(childTransform.position.x, 'the child never composed at all').toBeCloseTo(10, 6);
-        expect(childTransform.position.y).toBeCloseTo(1, 6);
-        expect(childTransform.scale.x, 'the local scale reached the world one').toBeCloseTo(
+        expect(childTransform.translation_x, 'the child never composed at all').toBeCloseTo(10, 6);
+        expect(childTransform.translation_y).toBeCloseTo(1, 6);
+        expect(childTransform.scale_x, 'the local scale reached the world one').toBeCloseTo(
             1 / 32,
             9
         );
@@ -536,27 +549,34 @@ describe('the engine systems the missile models need', () => {
          transform rather than polling it, so a child inherits whatever writes
          that transform -- including `InterpolationSystem`, which rewrites it
          between fixed steps.
-        */
-        parentTransform.position.set(20, 5, 0);
 
-        expect(childTransform.position.x, 'the child did not follow its parent').toBeCloseTo(
+         What it subscribes *to* changed in meep 3.16.0. A `Transform64` has no
+         signals, so the write is announced through the dataset instead, and the
+         writer is the one who announces: `PhysicsSystem` does it for the bodies it
+         steps, and `AnnouncingInterpolationSystem` does it for the blend meep's
+         own write-back forgets (GAP-050). Here the test is the writer.
+        */
+        parentTransform.setTranslation(20, 5, 0);
+        t64_announce_change(ecd, parent.id, parentTransform);
+
+        expect(childTransform.translation_x, 'the child did not follow its parent').toBeCloseTo(
             20,
             6
         );
-        expect(childTransform.position.y).toBeCloseTo(5 + 1, 6);
+        expect(childTransform.translation_y).toBeCloseTo(5 + 1, 6);
     });
 
     it('drops the attachment when the parent is destroyed, which is why despawn exists', async () => {
         const { ecd } = await started();
 
-        const parent = new Entity().add(new Transform());
+        const parent = new Entity().add(new Transform64());
         parent.build(ecd);
 
         const attachment = new TransformAttachment();
         attachment.parent = parent.id;
         attachment.immediate = true;
 
-        const child = new Entity().add(new Transform()).add(attachment);
+        const child = new Entity().add(new Transform64()).add(attachment);
         child.build(ecd);
 
         ecd.removeEntity(parent.id);
@@ -594,7 +614,7 @@ describe('a missile in flight', () => {
         const ecd = newDataset();
         const view = new MissileView(ecd, realLibrary());
 
-        const body = new Entity().add(new Transform());
+        const body = new Entity().add(new Transform64());
         body.build(ecd);
 
         // Q3 +x, which is meep +x.
@@ -603,8 +623,11 @@ describe('a missile in flight', () => {
         const attachment = componentsIn<TransformAttachment>(ecd, TransformAttachment)[0]![1];
 
         const axis = (column: 0 | 1): [number, number, number] => {
-            const r = attachment.transform.rotation;
-            const { x, y, z, w } = r;
+            const t = attachment.transform;
+            const x = t.rotation_x;
+            const y = t.rotation_y;
+            const z = t.rotation_z;
+            const w = t.rotation_w;
             return column === 0
                 ? [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)]
                 : [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];

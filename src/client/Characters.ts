@@ -25,7 +25,8 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
+import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 import { SGMesh } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/aggregate/SGMesh.js';
 import { Animation } from '@woosh/meep-engine/src/engine/ecs/animation/Animation.js';
 import { AnimationClip } from '@woosh/meep-engine/src/engine/ecs/animation/AnimationClip.js';
@@ -62,6 +63,14 @@ export type TorsoAnimation =
 export interface EcsDataset {
     isComponentTypeRegistered(type: unknown): boolean;
     registerComponentType(type: unknown): void;
+    /**
+     * Where a `Transform64` write is announced.
+     *
+     * meep 3.16.0's transform carries no signals, so a move is invisible to
+     * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
+     * `EventType.ComponentChanged`. See `t64_announce_change`.
+     */
+    sendEvent(entity: number, name: string, payload: unknown): void;
 }
 
 /** Q3's own repeat rule: a clip with `loopFrames` runs forever, the rest run once. */
@@ -119,7 +128,7 @@ export function sceneFromQ3(originQ3: ArrayLike<number>): [number, number, numbe
 
 export class Character {
     readonly entity: number;
-    readonly transform: Transform;
+    readonly transform: Transform64;
     readonly name: string;
 
     readonly animation: Animation;
@@ -129,19 +138,29 @@ export class Character {
     private legs: string;
     private torso: string;
 
+    /**
+     * Kept because {@link Character.place} has to announce the move.
+     *
+     * meep 3.16.0's `Transform64` carries no change signal, so the dataset is
+     * where a write is made visible -- see `t64_announce_change`.
+     */
+    private readonly ecd: EcsDataset;
+
     constructor(
         ecd: EcsDataset,
         name: string,
         legs: LegsAnimation = 'LEGS_IDLE',
         torso: TorsoAnimation = 'TORSO_STAND'
     ) {
+        this.ecd = ecd;
         this.name = name;
         this.legs = legs;
         this.torso = torso;
 
-        this.transform = new Transform();
+        this.transform = new Transform64();
         // The glTF is in Q3 units, like every other converted asset (D-011).
-        this.transform.scale.set(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+        this.transform.setScale(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE);
+        this.transform.updateMatrix();
 
         this.animation = Animation.fromJSON({ clips: [clipJson(legs), clipJson(torso)] });
         this.animation.isPlaying = true;
@@ -177,10 +196,23 @@ export class Character {
      */
     place(originQ3: ArrayLike<number>, yawDegrees: number): void {
         const [x, y, z] = sceneFromQ3(originQ3);
-        this.transform.position.set(x, y, z);
+        this.transform.setTranslation(x, y, z);
 
-        const yaw = (yawDegrees * Math.PI) / 180;
-        this.transform.rotation._fromAxisAngle(0, 1, 0, yaw);
+        /*
+         Yaw about world up, which for a quaternion about +Y is two lines rather
+         than an axis-angle call: `(0, sin(a/2), 0, cos(a/2))`.
+        */
+        const half = (yawDegrees * Math.PI) / 360;
+        this.transform.setRotation(0, Math.sin(half), 0, Math.cos(half));
+        this.transform.updateMatrix();
+
+        /*
+         meep 3.16.0: a `Transform64` has no signals, so `MeshSystem` -- which is
+         what draws this character -- only learns the model moved when it is told.
+         Without this a bot is drawn wherever it first appeared, for the whole
+         match.
+        */
+        t64_announce_change(this.ecd, this.entity, this.transform);
     }
 
     setLegs(animation: LegsAnimation): void {

@@ -16,7 +16,7 @@
  * hand-written ray/AABB test over an array, why splash damage was a loop over
  * the same array, and why two players could stand in the same place.
  *
- * A character is an entity now: `Transform`, `RigidBody`, `Collider`. Three
+ * A character is an entity now: `Transform64`, `RigidBody`, `Collider`. Three
  * things follow, and the third is the one that needed thinking about.
  *
  * **The body is solid, not a sensor, and the reason is tunnelling.**
@@ -50,10 +50,12 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
 import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
+import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
+import Quaternion from '@woosh/meep-engine/src/core/geom/Quaternion.js';
 
 import { footedBox, STAND_MAXS, STAND_MINS, type MoverHost } from './MeepMove.ts';
 import { LAYER_CHARACTER, LAYER_MISSILE } from './layers.ts';
@@ -103,7 +105,16 @@ interface PoseWriter {
 }
 
 /** A Q3 player box never rotates, so every pose written here is the same one. */
-const NO_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
+/**
+ * Identity rotation, for the queries that take one and never turn it.
+ *
+ * A `Quaternion` rather than the object literal this was until meep 3.16.0.
+ * `shape_cast` and `overlap_shape` now read a rotation as `rotation[0..3]` while
+ * their `.d.ts` still declares `{x, y, z, w}`, so a literal type-checks and then
+ * indexes to `undefined` -- a sweep that never hits anything. `Quaternion`
+ * extends `Float64Array` and aliases `q[0]` onto `q.x`, so it answers both.
+ */
+const NO_ROTATION = new Quaternion();
 
 export class CharacterBodies {
     private readonly base: MoverHost;
@@ -135,7 +146,7 @@ export class CharacterBodies {
         this.ecd = ecd;
         this.traceIgnores = traceIgnores;
 
-        if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
         if (!ecd.isComponentTypeRegistered(RigidBody)) ecd.registerComponentType(RigidBody);
         if (!ecd.isComponentTypeRegistered(Collider)) ecd.registerComponentType(Collider);
     }
@@ -175,7 +186,7 @@ export class CharacterBodies {
     }
 
     create(clientId: number): CharacterSlot {
-        const transform = new Transform();
+        const transform = new Transform64();
 
         const body = new RigidBody();
         /*
@@ -283,9 +294,11 @@ export class CharacterBodies {
              correction `MeepMove.toMeep` applies. `ps.origin` sits 24 units
              above the feet.
             */
-            SCRATCH_POSE.x = origin[0]! * WORLD_SCALE;
-            SCRATCH_POSE.y = (origin[2]! + STAND_MINS[2]!) * WORLD_SCALE;
-            SCRATCH_POSE.z = -origin[1]! * WORLD_SCALE;
+            SCRATCH_POSE.set(
+                origin[0]! * WORLD_SCALE,
+                (origin[2]! + STAND_MINS[2]!) * WORLD_SCALE,
+                -origin[1]! * WORLD_SCALE
+            );
 
             physics.setPose(entry.body, SCRATCH_POSE, NO_ROTATION);
         }
@@ -306,7 +319,14 @@ export class CharacterBodies {
 }
 
 /** Reused: `setPose` reads it and does not keep it. */
-const SCRATCH_POSE = { x: 0, y: 0, z: 0 };
+/**
+ * Where a body's world position is assembled before `setPose` reads it.
+ *
+ * A `Vector3` for {@link NO_ROTATION}'s reason: meep's pose arguments are read by
+ * index in 3.16.0, and a `Vector3` is a `Float64Array` that also answers to
+ * `.x`/`.y`/`.z`.
+ */
+const SCRATCH_POSE = new Vector3();
 
 /** The standing box, in Q3 units, for callers that need it without the shape. */
 export const CHARACTER_MINS = STAND_MINS;

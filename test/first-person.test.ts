@@ -18,7 +18,7 @@
  *
  * That last one is the reason the assertions here are about *orientation and
  * pixels* rather than about entities existing. A decal entity with a `Decal`, a
- * `Transform` and a loaded texture is indistinguishable from a working decal
+ * `Transform64` and a loaded texture is indistinguishable from a working decal
  * from the CPU side; what separated them was the direction of one axis, and a
  * test that counted entities would have passed throughout.
  *
@@ -34,7 +34,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { Decal } from '@woosh/meep-engine/src/engine/graphics/ecs/decal/v2/Decal.js';
 import Trail3D from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/Trail3D.js';
 import { TUBE_ATTRIBUTE_ADDRESS_AGE } from '@woosh/meep-engine/src/engine/graphics/trail/tube/tube_attributes_spec.js';
@@ -88,7 +88,7 @@ function dirToMeep(q3: readonly number[]): [number, number, number] {
  * zero. Reproduced here rather than gestured at, because the whole class of bug
  * this file guards is "the shader's convention and ours disagree".
  */
-function decalFade(transform: Transform, faceNormalMeep: readonly number[]): number {
+function decalFade(transform: Transform64, faceNormalMeep: readonly number[]): number {
     const m = transform.matrix;
 
     // column-major: column 2 is the local +Z axis in world space
@@ -108,7 +108,7 @@ function decalFade(transform: Transform, faceNormalMeep: readonly number[]): num
  * Where a world point lands in a decal's own box, which the composite tests
  * against +/-0.5 before doing anything else.
  */
-function decalLocal(transform: Transform, worldMeep: readonly number[]): [number, number, number] {
+function decalLocal(transform: Transform64, worldMeep: readonly number[]): [number, number, number] {
     const m = transform.matrix;
 
     const dx = worldMeep[0]! - m[12]!;
@@ -139,7 +139,7 @@ function newDataset(): EntityComponentDataset {
 
 interface DecalRecord {
     readonly decal: Decal;
-    readonly transform: Transform;
+    readonly transform: Transform64;
 }
 
 /**
@@ -152,7 +152,7 @@ interface DecalRecord {
  */
 type Traverse = (
     classes: unknown[],
-    visitor: (decal: Decal, transform: Transform) => void
+    visitor: (decal: Decal, transform: Transform64) => void
 ) => void;
 
 function decalsIn(ecd: EntityComponentDataset): DecalRecord[] {
@@ -160,7 +160,7 @@ function decalsIn(ecd: EntityComponentDataset): DecalRecord[] {
 
     const traverse = ecd.traverseEntities.bind(ecd) as unknown as Traverse;
 
-    traverse([Decal, Transform], (decal, transform) => {
+    traverse([Decal, Transform64], (decal, transform) => {
         found.push({ decal, transform });
     });
 
@@ -233,9 +233,9 @@ describe('an impact mark is a projector aimed into the surface', () => {
         const transform = marksOf(ecd);
 
         // radius 8 for WP_MACHINEGUN, so 16 units across, so half a metre.
-        expect(transform.scale.x).toBeCloseTo(16 * WORLD_SCALE, 6);
-        expect(transform.scale.y).toBeCloseTo(16 * WORLD_SCALE, 6);
-        expect(transform.scale.z).toBeCloseTo(16 * WORLD_SCALE, 6);
+        expect(transform.scale_x).toBeCloseTo(16 * WORLD_SCALE, 6);
+        expect(transform.scale_y).toBeCloseTo(16 * WORLD_SCALE, 6);
+        expect(transform.scale_z).toBeCloseTo(16 * WORLD_SCALE, 6);
     });
 
     it('spins each mark about its own axis, as `CG_ImpactMark` does', () => {
@@ -304,7 +304,7 @@ describe('an impact mark is a projector aimed into the surface', () => {
             const marks = decalsIn(ecd);
             expect(marks.length, `one mark for ${weapon}`).toBe(1);
             expect(marks[0]!.decal.uri, `texture for ${weapon}`).toContain(texture);
-            expect(marks[0]!.transform.scale.x, `radius for ${weapon}`).toBeCloseTo(
+            expect(marks[0]!.transform.scale_x, `radius for ${weapon}`).toBeCloseTo(
                 radiusQ3 * 2 * WORLD_SCALE,
                 6
             );
@@ -429,7 +429,7 @@ describe('an impact mark is a projector aimed into the surface', () => {
     });
 });
 
-function marksOf(ecd: EntityComponentDataset): Transform {
+function marksOf(ecd: EntityComponentDataset): Transform64 {
     const marks = decalsIn(ecd);
     expect(marks.length).toBeGreaterThan(0);
     return marks[marks.length - 1]!.transform;
@@ -965,7 +965,19 @@ describe('the view weapon is placed in the player\'s own frame', () => {
         const rotation = new Quaternion();
         orientToQ3Angles([pitch, yaw, 0], rotation);
 
-        return { position: { x: eye[0], y: eye[1], z: eye[2] }, rotation };
+        /*
+         Spread flat rather than nested, because meep 3.16.0's `Transform64` holds
+         its components as scalars and `CameraPose` follows it -- see `ViewWeapon`.
+        */
+        return {
+            translation_x: eye[0],
+            translation_y: eye[1],
+            translation_z: eye[2],
+            rotation_x: rotation.x,
+            rotation_y: rotation.y,
+            rotation_z: rotation.z,
+            rotation_w: rotation.w,
+        };
     }
 
     /** Q3 `AngleVectors`, for the direction the assertions are taken against. */
@@ -1218,17 +1230,17 @@ describe("the gun and the footfall read one counter", () => {
  */
 describe('a hitscan shot leaves a trail', () => {
     /** Every `Trail3D` in a dataset, with the transform it was built on. */
-    type TrailRecord = { readonly trail: Trail3D; readonly transform: Transform };
+    type TrailRecord = { readonly trail: Trail3D; readonly transform: Transform64 };
 
     function trailsIn(ecd: EntityComponentDataset): TrailRecord[] {
         const found: TrailRecord[] = [];
 
         const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
             classes: unknown[],
-            visitor: (trail: Trail3D, transform: Transform) => void
+            visitor: (trail: Trail3D, transform: Transform64) => void
         ) => void;
 
-        traverse([Trail3D, Transform], (trail, transform) => {
+        traverse([Trail3D, Transform64], (trail, transform) => {
             found.push({ trail, transform });
         });
 
@@ -1519,7 +1531,7 @@ describe('a hitscan shot leaves a trail', () => {
         ).toBeCloseTo(SHOT_Q3 * WORLD_SCALE, 5);
 
         // The entity sits at its own first ring rather than at the barrel.
-        expect(helixIn(ecd).transform.position.x).toBeCloseTo(20 * WORLD_SCALE, 9);
+        expect(helixIn(ecd).transform.translation_x).toBeCloseTo(20 * WORLD_SCALE, 9);
     });
 
     it('draws no spiral on a shot shorter than the twenty units it starts after', () => {

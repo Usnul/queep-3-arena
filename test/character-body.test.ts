@@ -10,7 +10,7 @@
  *
  * ---
  *
- * Phase 9 gives every character an entity with a `Transform`, a `RigidBody` and
+ * Phase 9 gives every character an entity with a `Transform64`, a `RigidBody` and
  * a `Collider`. Three things have to be true at once and none of them is
  * obvious from the code:
  *
@@ -168,16 +168,23 @@ describe('a character body', () => {
          a character's collision around their knees.
         */
         const found = new Uint32Array(16);
-        const at = {
-            x: who.state.origin[0]! * WORLD_SCALE,
-            y: (who.state.origin[2]! - 24) * WORLD_SCALE,
-            z: -who.state.origin[1]! * WORLD_SCALE,
-        };
+
+        /*
+         Arrays, not `{x, y, z}`: meep 3.16.0's `overlap` reads a pose by index.
+         A literal still type-checks against the free function's stale `.d.ts` and
+         then indexes to `undefined`, which is a query that finds nothing rather
+         than a query that fails.
+        */
+        const at = new Float64Array([
+            who.state.origin[0]! * WORLD_SCALE,
+            (who.state.origin[2]! - 24) * WORLD_SCALE,
+            -who.state.origin[1]! * WORLD_SCALE,
+        ]);
 
         const count = physics.system.overlap(
             SphereShape3D.from(4 * WORLD_SCALE) as never,
             at,
-            { x: 0, y: 0, z: 0, w: 1 },
+            new Float64Array([0, 0, 0, 1]),
             found,
             0,
             ((entity: number) => entity === who.slot!.entity) as never

@@ -33,7 +33,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { RigidBody } from '@woosh/meep-engine/src/engine/physics/ecs/RigidBody.js';
 import { Collider } from '@woosh/meep-engine/src/engine/physics/ecs/Collider.js';
 import { BodyKind } from '@woosh/meep-engine/src/engine/physics/ecs/BodyKind.js';
@@ -79,8 +79,8 @@ describe('meep physics, headless', () => {
         const collider = new Collider() as unknown as { shape: unknown };
         collider.shape = SphereShape3D.from(2 * WORLD_SCALE);
 
-        const transform = new Transform();
-        transform.position.set(x, y, z);
+        const transform = new Transform64();
+        transform.setTranslation(x, y, z);
 
         const builder = new Entity();
         builder
@@ -154,8 +154,8 @@ describe('meep physics, headless', () => {
         expect(physics.stats.bodies).toBeGreaterThan(100);
 
         // Entity ids are the dataset's now; body 1 is the first hull built.
-        const transform = physics.ecd.getComponent(1, Transform);
-        expect(transform, 'the first world body has no Transform in the dataset').toBeDefined();
+        const transform = physics.ecd.getComponent(1, Transform64);
+        expect(transform, 'the first world body has no Transform64 in the dataset').toBeDefined();
 
         const collider = physics.ecd.getComponent(1, Collider);
         expect(collider, 'the first world body has no Collider in the dataset').toBeDefined();

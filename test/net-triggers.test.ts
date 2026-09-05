@@ -372,7 +372,7 @@ describe('the brush entities a host can be stopped by', () => {
 
         /*
          And now it is -- **after a step**, which is a property rather than a
-         detail of the fixture. `setOffset` writes the body's `Transform` and the
+         detail of the fixture. `setOffset` writes the body's `Transform64` and the
          broadphase learns about it when the simulation next runs, so a mover's
          collision is where it was one step ago. The browser has exactly the same
          relationship (`MoversView.update` writes, `PhysicsSystem` steps) and so

@@ -17,7 +17,7 @@
  */
 
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 import { ShadedGeometryFlags } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometryFlags.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
@@ -28,20 +28,26 @@ import { meshlet_geometry_build_from_geometry } from '@woosh/meep-engine/src/sha
 import type { SceneBundle } from './SceneBundle.ts';
 import { buildMaterials, buildGeometry } from './bundle.ts';
 
+/** One drawn mesh of a moving submodel: the pose, and the entity carrying it. */
+export interface PlacedMesh {
+    readonly transform: Transform64;
+    readonly entity: number;
+}
+
 export interface LoadedMap {
     readonly bundle: SceneBundle;
     readonly meshEntities: readonly number[];
-    /** BSP model index -> the transforms of its drawn meshes. Model 0 is absent. */
-    readonly submodelTransforms: ReadonlyMap<number, readonly Transform[]>;
     /**
-     * The entities those transforms belong to, in the same order.
+     * BSP model index -> the drawn meshes of that submodel. Model 0 is absent.
      *
-     * A mover's geometry is written from the simulation on the fixed step, so
-     * anything that wants it blended at render rate needs the entity to hang an
-     * `Interpolated` on -- and this loop is the only place that knows which
-     * entity a moving transform came from.
+     * Transform and entity together rather than in two parallel maps, which is
+     * what this was until meep 3.16.0. Both halves now have a caller: the
+     * transform is what a mover's pose is written into, and the entity is what
+     * that write is announced against (`t64_announce_change`) as well as what an
+     * `Interpolated` is hung on. Two maps documented as being "in the same order"
+     * is one more thing that can stop being true.
      */
-    readonly submodelEntities: ReadonlyMap<number, readonly number[]>;
+    readonly submodelMeshes: ReadonlyMap<number, readonly PlacedMesh[]>;
     readonly lightEntities: readonly number[];
     /**
      * The point lights this map put in the world, in `bundle.lights` order.
@@ -88,7 +94,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
     const indices = new Uint32Array(geometryBuffer, bundle.vertexBytes, bundle.indexBytes / 4);
 
     if (!ecd.isComponentTypeRegistered(ShadedGeometry)) ecd.registerComponentType(ShadedGeometry);
-    if (!ecd.isComponentTypeRegistered(Transform)) ecd.registerComponentType(Transform);
+    if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
     if (!ecd.isComponentTypeRegistered(Light)) ecd.registerComponentType(Light);
 
     const materials = await buildMaterials(bundle, baseUrl);
@@ -108,8 +114,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         for (const mesh of submodel.meshes) movingMesh.set(mesh, submodel.model);
     }
 
-    const submodelTransforms = new Map<number, Transform[]>();
-    const submodelEntities = new Map<number, number[]>();
+    const submodelMeshes = new Map<number, PlacedMesh[]>();
 
     for (let i = 0; i < bundle.meshes.length; i++) {
         const mesh = bundle.meshes[i]!;
@@ -127,7 +132,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         const meshlet = meshlet_geometry_build_from_geometry(geometry);
         const shaded = ShadedGeometry.from(meshlet, material);
 
-        const transform = new Transform();
+        const transform = new Transform64();
         const model = movingMesh.get(i);
 
         if (model !== undefined) {
@@ -140,19 +145,15 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
              an idle flush is one length test, so the flag wins on balance.
             */
             shaded.setFlag(ShadedGeometryFlags.DeferredBoundsUpdate);
-
-            const list = submodelTransforms.get(model) ?? [];
-            list.push(transform);
-            submodelTransforms.set(model, list);
         }
 
         const builder = new Entity();
         builder.add(transform).add(shaded).build(ecd);
 
         if (model !== undefined) {
-            const owners = submodelEntities.get(model) ?? [];
-            owners.push(builder.id);
-            submodelEntities.set(model, owners);
+            const list = submodelMeshes.get(model) ?? [];
+            list.push({ transform, entity: builder.id });
+            submodelMeshes.set(model, list);
         }
 
         meshEntities.push(builder.id);
@@ -199,8 +200,8 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         */
         light.castShadow.set(false);
 
-        const transform = new Transform();
-        transform.position.set(l.x, l.y, l.z);
+        const transform = new Transform64();
+        transform.setTranslation(l.x, l.y, l.z);
 
         const builder = new Entity();
         builder.add(transform).add(light).build(ecd);
@@ -227,10 +228,10 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
         */
         sun.castShadow.set(true);
 
-        const transform = new Transform();
+        const transform = new Transform64();
         // A directional light is oriented by its transform; position is only used
         // to keep it inside the world bounds for shadow fitting.
-        transform.position.set(0, 2048, 0);
+        transform.setTranslation(0, 2048, 0);
 
         const builder = new Entity();
         builder.add(transform).add(sun).build(ecd);
@@ -242,8 +243,7 @@ export async function loadMap(ecd: EcsDataset, baseUrl: string): Promise<LoadedM
     return {
         bundle,
         meshEntities,
-        submodelTransforms,
-        submodelEntities,
+        submodelMeshes,
         lightEntities,
         lights,
         sun,

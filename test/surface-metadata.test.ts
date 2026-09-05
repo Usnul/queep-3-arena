@@ -296,7 +296,7 @@ describe('the physics trace, asked what it hit', () => {
 describe("a mover's half-spaces", () => {
     it('travel with it, so a moved door is not resolved against the closed one', () => {
         /*
-         **The `Transform` was moving and the planes were not.** `shape_cast`
+         **The `Transform64` was moving and the planes were not.** `shape_cast`
          follows the body and finds a door where it now is; everything that then
          asks *which face* goes through `PhysicsTrace`, which keeps each body's
          `BrushHull` and applies `CM_TraceThroughBrush` to its `planes`. Those

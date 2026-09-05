@@ -12,7 +12,7 @@
  * ---
  *
  * Every sound in the port is an `AudioEmitter` component on an entity with a
- * `Transform`, played by `AudioEmitterSystem`. One path, whatever the sound is.
+ * `Transform64`, played by `AudioEmitterSystem`. One path, whatever the sound is.
  *
  * Q3's sound API is four calls, and they differ only in what owns the sound and
  * for how long:
@@ -29,7 +29,7 @@
  * only sounds while it is among the nearest in range, and everything else plays
  * directly. So `S_AddLoopSounds`' "rebuild the loop set every frame, nearest
  * wins" is the system's job here rather than this file's, and the entity's
- * `Transform` is `S_UpdateEntityPosition` -- a rocket's fly sound follows the
+ * `Transform64` is `S_UpdateEntityPosition` -- a rocket's fly sound follows the
  * rocket because the position vector the emitter was registered with is the one
  * the rocket writes.
  *
@@ -51,7 +51,7 @@ import { SampleAudioClip } from '@woosh/meep-engine/src/engine/sound/sopra/defin
 import { EventDescription } from '@woosh/meep-engine/src/engine/sound/sopra/definition/EventDescription.js';
 import { buildAttenuationCurve } from '@woosh/meep-engine/src/engine/sound/sopra/util/buildAttenuationCurve.js';
 import { interpolate_irradiance_smith } from '@woosh/meep-engine/src/core/math/physics/irradiance/interpolate_irradiance_smith.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import Entity from '@woosh/meep-engine/src/engine/ecs/Entity.js';
 
 import { falloffFor } from './falloff.ts';
@@ -173,11 +173,11 @@ export interface SoundLoop {
  *
  * The browser will not start an `AudioContext` without a user gesture, so a loop
  * asked for during map load cannot be built when it is asked for. The
- * `Transform` is real from the start -- so `move` is always a plain write, with
+ * `Transform64` is real from the start -- so `move` is always a plain write, with
  * no queue and no null check -- and only the entity waits.
  */
 class Loop implements SoundLoop {
-    readonly transform = new Transform();
+    readonly transform = new Transform64();
 
     private readonly bank: AudioBank;
     private readonly description: EventDescription;
@@ -189,7 +189,7 @@ class Loop implements SoundLoop {
     constructor(bank: AudioBank, description: EventDescription, positionMeep: readonly number[]) {
         this.bank = bank;
         this.description = description;
-        this.transform.position.set(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
+        this.transform.setTranslation(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
     }
 
     /** @internal Called by the bank, once audio is unlocked. */
@@ -199,7 +199,7 @@ class Loop implements SoundLoop {
     }
 
     move(originQ3: ArrayLike<number>): void {
-        this.transform.position.set(
+        this.transform.setTranslation(
             originQ3[0]! * WORLD_SCALE,
             originQ3[2]! * WORLD_SCALE,
             -originQ3[1]! * WORLD_SCALE
@@ -519,8 +519,8 @@ export class AudioBank {
     private playOneShot(description: EventDescription, positionMeep: readonly number[]): void {
         if (!this.unlocked || this.system === null) return;
 
-        const transform = new Transform();
-        transform.position.set(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
+        const transform = new Transform64();
+        transform.setTranslation(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
 
         const entity = this.buildEmitter(description, transform);
         this.oneShots += 1;
@@ -549,8 +549,8 @@ export class AudioBank {
         return loop;
     }
 
-    /** @internal One entity, one `Transform`, one `AudioEmitter`. */
-    buildEmitter(description: EventDescription, transform: Transform): number {
+    /** @internal One entity, one `Transform64`, one `AudioEmitter`. */
+    buildEmitter(description: EventDescription, transform: Transform64): number {
         const emitter = new AudioEmitter();
         emitter.event = description;
 

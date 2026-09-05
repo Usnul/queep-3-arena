@@ -31,7 +31,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
-import { Transform } from '@woosh/meep-engine/src/engine/ecs/transform/Transform.js';
+import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
 
 import { ItemsView } from '../src/client/ItemsView.ts';
@@ -42,7 +42,7 @@ type Traverse = (classes: unknown[], visitor: (geometry: ShadedGeometry) => void
 
 function newDataset(): EntityComponentDataset {
     const ecd = new EntityComponentDataset();
-    ecd.setComponentTypeMap([Transform, ShadedGeometry]);
+    ecd.setComponentTypeMap([Transform64, ShadedGeometry]);
     return ecd;
 }
 
@@ -55,12 +55,12 @@ function meshCount(ecd: EntityComponentDataset): number {
     return n;
 }
 
-function transformsIn(ecd: EntityComponentDataset): Transform[] {
-    const out: Transform[] = [];
+function transformsIn(ecd: EntityComponentDataset): Transform64[] {
+    const out: Transform64[] = [];
     (ecd.traverseEntities as unknown as Traverse & { length: number })(
-        [Transform],
+        [Transform64],
         (t) => {
-            out.push(t as unknown as Transform);
+            out.push(t as unknown as Transform64);
         }
     );
     return out;
@@ -123,13 +123,13 @@ describe('a collected pickup leaves the scene', () => {
         view.build([item]);
         view.update(1);
 
-        const before = transformsIn(ecd).map((t) => `${t.position.x},${t.position.z}`);
+        const before = transformsIn(ecd).map((t) => `${t.translation_x},${t.translation_z}`);
 
         item.present = false;
         view.update(2);
 
         expect(
-            transformsIn(ecd).map((t) => `${t.position.x},${t.position.z}`),
+            transformsIn(ecd).map((t) => `${t.translation_x},${t.translation_z}`),
             'the item comes back where it was, not at the origin'
         ).toEqual(before);
     });
@@ -166,13 +166,13 @@ describe('a pickup that is there spins and bobs', () => {
         const transform = transformsIn(ecd)[0]!;
 
         view.update(0);
-        const start = transform.rotation.y;
+        const start = transform.rotation_y;
 
         view.update(2.048);
-        expect(transform.rotation.y, 'back where it started after one period').toBeCloseTo(start, 5);
+        expect(transform.rotation_y, 'back where it started after one period').toBeCloseTo(start, 5);
 
         view.update(1.024);
-        expect(transform.rotation.y, 'and half a turn away at half of one').not.toBeCloseTo(start, 3);
+        expect(transform.rotation_y, 'and half a turn away at half of one').not.toBeCloseTo(start, 3);
     });
 
     it('turns twice as fast for health, as Q3 does', () => {
@@ -185,10 +185,10 @@ describe('a pickup that is there spins and bobs', () => {
         const transform = transformsIn(ecd)[0]!;
 
         view.update(0);
-        const start = transform.rotation.y;
+        const start = transform.rotation_y;
 
         view.update(1.024);
-        expect(transform.rotation.y).toBeCloseTo(start, 5);
+        expect(transform.rotation_y).toBeCloseTo(start, 5);
     });
 
     it('bobs, and two pickups do not bob in unison', () => {
@@ -210,10 +210,10 @@ describe('a pickup that is there spins and bobs', () => {
         const tb = all[perItem]!;
 
         view.update(0);
-        const first = ta.position.y;
+        const first = ta.translation_y;
 
         view.update(0.5);
-        expect(ta.position.y, 'the height moves').not.toBeCloseTo(first, 5);
+        expect(ta.translation_y, 'the height moves').not.toBeCloseTo(first, 5);
 
         /*
          `scale = 0.005 + cent->currentState.number * 0.00001`: the per-entity
@@ -221,6 +221,6 @@ describe('a pickup that is there spins and bobs', () => {
          enough that only a long interval separates them.
         */
         view.update(30);
-        expect(ta.position.y, 'and the two are out of phase').not.toBeCloseTo(tb.position.y, 5);
+        expect(ta.translation_y, 'and the two are out of phase').not.toBeCloseTo(tb.translation_y, 5);
     });
 });
