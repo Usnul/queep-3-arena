@@ -32,7 +32,7 @@ const WORLD_SCALE = 1 / 32;
 
 /** The part of a meep dataset this needs: somewhere to announce a mover's move. */
 interface EcsDataset {
-    sendEvent(entity: number, name: string, payload: unknown): void;
+    sendEvent(entity: number, name: string): void;
 }
 
 interface Bound {
@@ -101,7 +101,7 @@ export class MoversView {
 
                 // Translation only, so the matrix needs no help. `ShadedGeometrySystem`
                 // does: a door that moves without announcing is drawn where it was.
-                t64_announce_change(this.ecd, mesh.entity, mesh.transform);
+                t64_announce_change(this.ecd, mesh.entity);
             }
 
             bound.bodies?.setOffset(x, y, z);

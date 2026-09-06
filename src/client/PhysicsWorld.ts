@@ -448,7 +448,7 @@ export class PhysicsWorld {
                      Translation only, so no `updateMatrix` is owed: the translation
                      *is* the matrix's own column.
                     */
-                    t64_announce_change(ecd, mover.entity, mover.transform);
+                    t64_announce_change(ecd, mover.entity);
 
                     movePlanes(hulls[i]!.planes, restPlanes[i]!, q3x, q3y, q3z);
                 }

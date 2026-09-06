@@ -557,7 +557,7 @@ describe('the engine systems the missile models need', () => {
          own write-back forgets (GAP-050). Here the test is the writer.
         */
         parentTransform.setTranslation(20, 5, 0);
-        t64_announce_change(ecd, parent.id, parentTransform);
+        t64_announce_change(ecd, parent.id);
 
         expect(childTransform.translation_x, 'the child did not follow its parent').toBeCloseTo(
             20,

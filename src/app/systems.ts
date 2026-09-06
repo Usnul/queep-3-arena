@@ -681,7 +681,7 @@ export { APP_INTERPOLATION_SOURCE, interpolatedBody, interpolatedPose } from '..
  *    `TransformAttachmentSystem` composes `parent x local` through matrices; and
  *  - nothing hears the write at all, because `ShadedGeometrySystem`,
  *    `MeshSystem`, `LightSystem` and the attachment system all place on
- *    `EventType.ComponentChanged` now rather than on a poll.
+ *    `TRANSFORM64_EVENT_CHANGE` now rather than on a poll.
  *
  * So the blend lands in the component and never reaches the screen. What is drawn
  * is whatever pose was current at the last *announced* write, which is the fixed
@@ -712,7 +712,7 @@ export class AnnouncingInterpolationSystem extends InterpolationSystem {
          The set `InterpolationSystem` maintains in its own `link`/`unlink`: every
          entity carrying `Interpolated`, which is exactly the set it just wrote.
          Announcing per entity rather than per interpoland is the coarse-by-design
-         trade `EventType.ComponentChanged` documents -- an entity interpolating
+         trade `TRANSFORM64_EVENT_CHANGE` documents -- an entity interpolating
          something other than its pose wakes a listener that then finds nothing
          moved, which is redundant work rather than wrong work.
         */
@@ -727,7 +727,7 @@ export class AnnouncingInterpolationSystem extends InterpolationSystem {
             // needs no help.
             transform.updateMatrix();
 
-            t64_announce_change(ecd, entity, transform);
+            t64_announce_change(ecd, entity);
         }
     }
 }

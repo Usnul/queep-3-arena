@@ -103,9 +103,12 @@ interface EcsDataset {
      *
      * meep 3.16.0's transform carries no signals, so a move is invisible to
      * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
-     * `EventType.ComponentChanged`. See `t64_announce_change`.
+     * `TRANSFORM64_EVENT_CHANGE`. See `t64_announce_change`.
+     *
+     * No payload: meep 3.17.0 put the identity of what moved in the event name,
+     * where 3.16.0 had carried it alongside as `{ klass, instance }`.
      */
-    sendEvent(entity: number, name: string, payload: unknown): void;
+    sendEvent(entity: number, name: string): void;
 }
 
 /**
@@ -785,7 +788,7 @@ export class ViewWeapon implements ViewWeaponSink {
                 // The rotation owes the matrix a refresh, and `ShadedGeometrySystem`
                 // owes nothing until it is told. See meep 3.16.0's `Transform64`.
                 transform.updateMatrix();
-                t64_announce_change(this.ecd, wanted.entities[i]!, transform);
+                t64_announce_change(this.ecd, wanted.entities[i]!);
             }
 
             /*
@@ -1005,7 +1008,7 @@ export class ViewWeapon implements ViewWeaponSink {
         // Translation only, so the matrix is already right; the light still has to
         // be told, and only once it has an entity to be told about.
         if (this.flashEntity >= 0) {
-            t64_announce_change(this.ecd, this.flashEntity, this.flashTransform);
+            t64_announce_change(this.ecd, this.flashEntity);
         }
 
         if (this.lit) return;

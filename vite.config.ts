@@ -137,7 +137,7 @@ interface EnginePatch {
  * dependency (broken in 3.5.0 and 3.6.0). Both are fixed upstream -- 3.16.0's own
  * `brick4_bake_basic` carries the `bake_pass_outputs` handle this used to add --
  * and the rule above is to delete an entry once `broken_in` no longer names a
- * version the project builds against, which `^3.16.0` no longer does. REPORT.md's
+ * version the project builds against, which `^3.17.0` no longer does. REPORT.md's
  * engine-bug section keeps the write-ups; this table keeps only live patches.
  */
 const MEEP_PATCHES: readonly EnginePatch[] = [];

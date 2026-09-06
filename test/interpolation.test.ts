@@ -44,7 +44,7 @@ import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation
 import { PhysicsSystem } from '@woosh/meep-engine/src/engine/physics/ecs/PhysicsSystem.js';
 import { ColliderObserverSystem } from '@woosh/meep-engine/src/engine/physics/ecs/ColliderObserverSystem.js';
 
-import { EventType } from '@woosh/meep-engine/src/engine/ecs/EventType.js';
+import { TRANSFORM64_EVENT_CHANGE } from '@woosh/meep-engine/src/engine/ecs/transform/TRANSFORM64_EVENT_CHANGE.js';
 
 import {
     AnnouncingInterpolationSystem,
@@ -522,7 +522,7 @@ describe('the execution order phase 9 relies on', () => {
 });
 
 /*
- * What meep 3.16.0 stopped doing for itself.
+ * What meep stopped doing for itself in 3.16.0, and still does not do at 3.17.0.
  *
  * The blend writes the live `Transform64` and announces nothing, so every
  * consumer that used to wake on `position.onChanged` -- the drawn placement, the
@@ -536,17 +536,19 @@ describe('the blended pose reaches the things that draw it', () => {
     it('announces the write, so a placement listener wakes on it', async () => {
         const { em, dataset, entity } = await announcingRig();
 
-        const woken: unknown[] = [];
+        let woken = 0;
 
-        // meep types the listener `() => any` and then calls it with the payload;
-        // the cast is what lets the parameter be named.
-        dataset.addEntityEventListener(
-            entity,
-            EventType.ComponentChanged,
-            ((event: unknown) => {
-                woken.push(event);
-            }) as () => void
-        );
+        /*
+         Nothing is handed to the listener. Since meep 3.17.0 the event name is the
+         whole message: a listener is registered against one entity and one name, so
+         by the time it runs it already knows whose transform moved and which
+         instance that is. That the wake arrives here at all is therefore what says
+         the announcement went out on the transform's own channel -- an announcement
+         under any other name, or against any other entity, would not reach this.
+        */
+        dataset.addEntityEventListener(entity, TRANSFORM64_EVENT_CHANGE, () => {
+            woken++;
+        });
 
         const step = em.fixedUpdateStepSize;
 
@@ -554,14 +556,10 @@ describe('the blended pose reaches the things that draw it', () => {
         // a frame that lands between them. Only the last one is being measured.
         em.update(step);
         em.update(step);
-        woken.length = 0;
+        woken = 0;
         em.update(step / 4);
 
-        expect(woken.length, 'nothing was told the blended pose changed').toBeGreaterThan(0);
-        expect(
-            (woken[0] as { klass: unknown }).klass,
-            'the announcement has to name the component that moved'
-        ).toBe(Transform64);
+        expect(woken, 'nothing was told the blended pose changed').toBeGreaterThan(0);
     });
 
     it('refreshes the matrix, which is what an attachment composes through', async () => {

@@ -68,9 +68,12 @@ export interface EcsDataset {
      *
      * meep 3.16.0's transform carries no signals, so a move is invisible to
      * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
-     * `EventType.ComponentChanged`. See `t64_announce_change`.
+     * `TRANSFORM64_EVENT_CHANGE`. See `t64_announce_change`.
+     *
+     * No payload: meep 3.17.0 put the identity of what moved in the event name,
+     * where 3.16.0 had carried it alongside as `{ klass, instance }`.
      */
-    sendEvent(entity: number, name: string, payload: unknown): void;
+    sendEvent(entity: number, name: string): void;
 }
 
 /** Q3's own repeat rule: a clip with `loopFrames` runs forever, the rest run once. */
@@ -212,7 +215,7 @@ export class Character {
          Without this a bot is drawn wherever it first appeared, for the whole
          match.
         */
-        t64_announce_change(this.ecd, this.entity, this.transform);
+        t64_announce_change(this.ecd, this.entity);
     }
 
     setLegs(animation: LegsAnimation): void {

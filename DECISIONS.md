@@ -11893,3 +11893,89 @@ or export error in the console -- so the deep `@woosh/meep-engine/src/...` paths
 got no further: the preview pane exposes no `navigator.gpu` at all, so the renderer never started
 and **nothing here has been seen drawn.** The interpolation regression above is exactly the kind of thing a passing headless
 suite does not catch, which is why it has a fixture of its own.
+
+
+### D-207: meep 3.17.0 gives the transform's change announcement its own channel, and the payload goes away with it
+
+3.16.0 announced a `Transform64` write as `EventType.ComponentChanged` carrying
+`{ klass, instance }`, and every listener opened by discarding the dispatches meant for somebody
+else -- `if (event.klass === Transform64)`. 3.17.0 deletes `EventType.ComponentChanged` outright and
+moves the identity into the event name: `TRANSFORM64_EVENT_CHANGE` (`"@transform64/change"`) for the
+transform, and `TRANSFORM_ATTACHMENT_EVENT_CHANGE` (`"@transform_attachment/change"`) for an
+attachment's local offset, which 3.16.0 had folded onto the same channel under a second `klass`.
+**Nothing is sent with either.** A listener is registered against one entity and one name, so by the
+time it runs it already knows whose transform moved and which instance that is -- it was handed the
+instance when it linked -- and the filter at the top of every listener was handing back what the
+listener already held. `ShadedGeometrySystem`, `MeshSystem`, `LightSystem`, `ParticleEmitterSystem`,
+`SpriteSystemPE`, `SoundListenerSystem`, `Transform2GridPositionSystem`, `AcousticSimulationSystem`
+and `TransformAttachmentSystem` each drop the filter and register the placement function directly.
+
+**The port's whole exposure is the arity of one call.** Every transform write in this port is
+already announced through `t64_announce_change`, which D-206 made the single seam for exactly this
+reason, and its third parameter is gone: `t64_announce_change(ecd, entity, transform)` becomes
+`t64_announce_change(ecd, entity)`. Nine call sites -- `AnnouncingInterpolationSystem`,
+`Character.setYaw`, `ItemsView`, `MoversView`, `PhysicsWorld`, `ViewWeapon` twice,
+`test/missile-view.test.ts` and `tools/pipeline/headless-physics.ts` -- and one listener, the
+interpolation fixture, which registered on `EventType.ComponentChanged` and now registers on
+`TRANSFORM64_EVENT_CHANGE`. No transform write in the port went unannounced before and none does
+now; the seam is why this upgrade is ten lines rather than D-206's fifty files.
+
+**`tsc` caught all ten, which is not the same as `tsc` being able to.** Arity is structural and
+survives `skipLibCheck`, so the nine call sites reported as *Expected 2 arguments, but got 3* and
+the removed `EventType.ComponentChanged` as a missing property. What the type checker cannot see is
+a listener registered on a string: had this port subscribed to the old channel anywhere rather than
+only publishing to it, the subscription would have compiled, run, and never fired. The sweep for
+that was done by hand across `addEntityEventListener`, `removeEntityEventListener` and `sendEvent`
+-- the port's other listeners are `PhysicsEvents.ContactBegin` and its own `net_mutate_component`,
+neither of which moved.
+
+**Nothing else in the release reaches the port, and that was measured rather than assumed.** Of the
+183 `@woosh/meep-engine/src/...` paths this port imports, exactly four files differ between 3.16.0
+and 3.17.0 -- `EventType.js`, `t64_announce_change.js`, `TransformAttachmentSystem.js` and
+`PhysicsSystem.js` -- and none was removed or renamed. Across the whole engine 62 `.js` files
+changed, of which 40 are `shade/renderer/particles` and `core/model/node-graph`, neither of which
+this port imports. Of the remaining 22, every listener is the channel rename with its filter
+deleted, four are the same `t64_announce_change` arity in engine code, and the only substantive
+outliers are `CSRGraph`'s float hash agreeing with its own `equals` about `-0`, `OffsetAllocator`
+exporting `Allocation`, and `Renderer.js` moving the particle pass to
+`particles.execute({ mode: ParticleRenderMode.AVBOIT })`. That last one is a real change on a code
+path with no headless coverage and no GPU here to run it.
+
+**Both open engine gaps are still open, and this was checked rather than inferred from the release
+notes.** `shape_cast.js`, `overlap_shape.js` and `KinematicMover.js` (GAP-049) and
+`InterpolationSystem.js`, `pose_interpoland.js` and `TransformPoseSerializationAdapter` (GAP-050)
+are byte-identical across the two releases. `AnnouncingInterpolationSystem` stays, and so does the
+comment above it that says to delete it once meep's write-back announces for itself.
+
+**One thing found while reading, deliberately not changed.** `MissileView.update` writes a
+rocket's spin into the *attachment's* local transform and its docblock says
+`TransformAttachmentSystem` "subscribes to the attachment's transform as well as the parent's, so
+this is picked up without anything having to be told." The subscription is real, but nothing in the
+port has ever sent the event behind it -- under 3.16.0 it was `{ klass: TransformAttachment }` and
+under 3.17.0 it is `TRANSFORM_ATTACHMENT_EVENT_CHANGE`, and the port sends neither. The roll is
+drawn anyway because the missile is `TR_LINEAR` and always moving, so `PhysicsSystem` announces the
+*parent* every step and the composition reruns. That is unchanged by this release and correct for
+every missile the port fires; it would go wrong only for an attached model whose parent holds still.
+Left alone here because announcing it would add a second recomposition per missile per frame for no
+visible difference, and this upgrade's job was to keep behaviour identical.
+
+**Verified.** `npm run check` is clean end to end -- typecheck, the five generated-artefact
+`--check` gates, and 1,188 tests in 59 files, identical to the pre-upgrade baseline taken on 3.16.0
+before anything was touched. Two claims were tested rather than asserted: removing the announcement
+from `AnnouncingInterpolationSystem` fails the interpolation fixture, and sending it on the old
+`componentChanged` channel fails it the same way, so the fixture pins the channel and not merely
+"some event". The stronger one is `test/missile-view.test.ts`, which registers a real meep
+`TransformAttachmentSystem`: announcing on the old channel there leaves the child at 10 where it
+should be at 20, so **the port's announcement is confirmed to reach an actual engine listener
+through the new channel**, not just a listener the test registered itself. The browser loaded the
+app with no failed request among the 250 the resource buffer retained and no import or export error
+in the console, and `TRANSFORM64_EVENT_CHANGE.js` is in that list, so the new deep path resolves
+through vite as well as through `tsc`. It got no further than `requestAdapter`: the preview pane
+still provides no GPU, so **nothing here has been seen drawn.**
+
+**The interpolation fixture lost an assertion and did not lose its teeth.** It used to check that
+the announcement's payload named `Transform64`; there is no payload to check now, because the name
+is the whole message. What replaced it is the registration itself -- the listener asks for
+`TRANSFORM64_EVENT_CHANGE` on one entity, so an announcement under any other name or against any
+other entity does not reach it -- and both mutations above confirm that is a real constraint rather
+than a weakened one.

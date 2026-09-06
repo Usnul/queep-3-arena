@@ -423,7 +423,7 @@ export class HeadlessPhysics {
                      `Transform64` write is invisible until it is announced, and the
                      listener here is the query broadphase rather than a renderer.
                     */
-                    t64_announce_change(ecd, mover.entity, mover.transform);
+                    t64_announce_change(ecd, mover.entity);
 
                     // The half-spaces travel too; see `movePlanes`.
                     movePlanes(hulls[i]!.planes, restPlanes[i]!, q3x, q3y, q3z);

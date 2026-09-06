@@ -81,9 +81,12 @@ interface EcsDataset {
      *
      * meep 3.16.0's transform carries no signals, so a move is invisible to
      * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
-     * `EventType.ComponentChanged`. See `t64_announce_change`.
+     * `TRANSFORM64_EVENT_CHANGE`. See `t64_announce_change`.
+     *
+     * No payload: meep 3.17.0 put the identity of what moved in the event name,
+     * where 3.16.0 had carried it alongside as `{ klass, instance }`.
      */
-    sendEvent(entity: number, name: string, payload: unknown): void;
+    sendEvent(entity: number, name: string): void;
 }
 
 interface DrawnItem {
@@ -322,12 +325,12 @@ export class ItemsView {
                 /*
                  The rotation just written is not in the matrix, and since meep
                  3.16.0 nothing hears about the write either: `ShadedGeometrySystem`
-                 wakes on `EventType.ComponentChanged` where it used to wake on
+                 wakes on `TRANSFORM64_EVENT_CHANGE` where it used to wake on
                  `position.onChanged`. One `updateMatrix` and one announcement per
                  piece, after the last write to it.
                 */
                 transform.updateMatrix();
-                t64_announce_change(this.ecd, drawn.entities[i]!, transform);
+                t64_announce_change(this.ecd, drawn.entities[i]!);
             }
         }
     }
