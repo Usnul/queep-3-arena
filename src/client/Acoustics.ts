@@ -159,10 +159,10 @@ export const PROBE_MAX_RT60 = 3;
  * `configureAcoustics` in `src/app/main.ts`.
  *
  * One instance, shared by every brush in the level. Nothing writes to an
- * `AcousticMaterial` after it is attached -- `OcclusionSolver` reads its bands
- * at a ray hit and `AcousticBody.fromJSON` replaces the object rather than
- * mutating it -- and a map is thousands of brushes, so a copy each would be
- * thousands of identical objects to no end.
+ * `AcousticMaterial` after it is attached -- `acoustic_occlusion_solve` reads
+ * its bands at a ray hit and `AcousticBody.fromJSON` replaces the object
+ * rather than mutating it -- and a map is thousands of brushes, so a copy each
+ * would be thousands of identical objects to no end.
  */
 export const Q3_SURFACE: AcousticMaterial = AcousticMaterial.from({
     absorption: [0.06, 0.1, 0.16],

@@ -88,13 +88,13 @@ const LOOP_MAX_INSTANCES = LOOP_BUDGET + 8;
 /**
  * How big a sound is, in scene metres, for the acoustic occlusion test.
  *
- * Not cosmetic, and zero is not the neutral choice. `OcclusionSolver` shoots
- * its rays at points spread over a sphere this size and calls the blocked
- * fraction the occlusion, so a radius of zero sends every ray to the same point
- * and occlusion becomes **boolean** -- measured, not assumed: a source in the
- * open reads exactly 0 and one behind a wall exactly 1, with nothing in
- * between. A player walking past a doorway would hear the sound switch rather
- * than pass behind an edge.
+ * Not cosmetic, and zero is not the neutral choice. `acoustic_occlusion_solve`
+ * shoots its rays at points spread over a sphere this size and calls the
+ * blocked fraction the occlusion, so a radius of zero sends every ray to the
+ * same point and occlusion becomes **boolean** -- measured, not assumed: a
+ * source in the open reads exactly 0 and one behind a wall exactly 1, with
+ * nothing in between. A player walking past a doorway would hear the sound
+ * switch rather than pass behind an edge.
  *
  * A third of a metre is about a Q3 player's shoulder, and it is the smallest
  * radius that still spreads the ray set enough to ramp: an edge crosses it in
