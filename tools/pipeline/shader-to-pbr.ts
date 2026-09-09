@@ -381,11 +381,9 @@ const IOR_WATER = 1.333;
  * premultiplies -- `color * coverage` -- so coverage scales everything the
  * surface shows, its emissive included. At transmission 1 a dielectric's
  * coverage *is* its Fresnel term, which is F0 = 0.04 looking straight at it.
- * That is correct physics and it is invisible here, because the 4% is 4% of a
- * reflection this renderer does not compute: every map with a baked light volume
- * runs in Brick4, and D-109 records that SSR there is not merely off but cannot
- * be switched on. What is left is the ambient probe, which in a Q3 interior is
- * dim.
+ * With screen-space reflections off, that 4% has only the dim ambient probe in
+ * a Q3 interior to show. SSR can now be enabled under Brick4 (meep 3.19.0), but
+ * it remains off by default, and these panes must stay visible without it.
  *
  * Shipping transmission 1 made `am_thornish`'s windows disappear outright. So
  * each entry names a transmission that leaves coverage a floor while still
@@ -394,13 +392,13 @@ const IOR_WATER = 1.333;
  * background head-on and 68% edge-on: something you can see, walk into, and
  * watch brighten as you turn past it.
  *
- * # The additive pass stays, because it is the only reflection there is
+ * # The additive pass stays, so visibility does not depend on SSR
  *
  * An earlier version of this dropped the emissive, arguing that a `blendfunc
  * add` of an environment map is a reflection and the renderer now computes
- * reflections for real. The second half is false on these maps, for the reason
- * just given, and dropping it left the pane with no colour to show through the
- * coverage it had left. Q3's pane *added* light and this port has to as well.
+ * reflections for real. That assumed SSR was available and enabled, and
+ * dropping it left the pane with no colour to show through the coverage it had
+ * left. Q3's pane *added* light and this port has to as well.
  * What transmission buys is not the removal of that addition but its modulation:
  * a flat film before, and now a sheet that is faint head-on and bright at a
  * glancing angle, which is the behaviour that reads as glass.
@@ -411,7 +409,7 @@ const IOR_WATER = 1.333;
  * `roughness` *is* the number the renderer uses rather than a multiplier over a
  * sampled one. {@link DEFAULT_ROUGHNESS} is 0.85, chosen for concrete and
  * painted metal, and on a window it is frosting. It is also what decides how
- * broadly the room's lights smear across the pane, and with no SSR that direct
+ * broadly the room's lights smear across the pane, and with SSR off that direct
  * highlight is most of what sells the surface: at 0.05 it is a pinpoint nobody
  * ever stands in line with. Each entry states its own, in the 0.15-0.2 band
  * rather than at mirror smoothness.
@@ -940,8 +938,8 @@ export function shaderToPbr(entry: ShaderScriptEntry): PbrMaterial {
 
     /*
      A transmissive surface keeps its additive pass. D-079's restatement is left
-     alone here on purpose -- see the note on {@link TRANSMISSIVE}: with no SSR
-     under Brick4 that pass is the only reflection the pane gets, and taking it
+     alone here on purpose -- see the note on {@link TRANSMISSIVE}: with SSR off
+     that pass is the only reflection the pane gets, and taking it
      away leaves nothing behind the coverage. It is the transmission that fixes
      the flat-film look, by putting that brightness under a Fresnel curve.
     */

@@ -2177,13 +2177,8 @@ function firstGesture(element: HTMLElement, action: () => void): void {
  *    that the bake produced something rather than nothing;
  *  - the renderer is put into Brick4 mode, for the same reason.
  *
- * That third one moves an invariant the graphics page settled at startup, and is
- * the only thing in this application that does. Screen-space reflections are not
- * compatible with Brick4 -- the renderer skips the SSR pass there, and the flag
- * being set costs it the fused indirect path on top -- so the page refuses to
- * write that flag while the mode is Brick4, having asked once, at `applyAll`.
- * This is minutes later and nothing asks again, so the flip clears the flag
- * itself. See `reflectionsReachable` in `ui/graphics.ts`.
+ * Switching to Brick4 preserves the player's screen-space reflections setting:
+ * meep 3.19.0 supports both together.
  *
  * A failure is reported and nothing else: the level was playable before the
  * bake started and is no worse for it having failed, and throwing out of an
@@ -2253,13 +2248,6 @@ async function runLightMapBake(
         }
 
         graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
-
-        /*
-         And the setting Brick4 has just invalidated -- see this function's
-         docblock. The menu's row greys itself out on the next open, which calls
-         `syncAll`; this is the half of it the renderer has to be told.
-        */
-        graphics.renderer.feature_ssr_enabled = false;
 
         console.log(
             `[queep] baked ${mapName}: ${bake.probes.toLocaleString()} probes ` +

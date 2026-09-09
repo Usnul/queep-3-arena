@@ -1919,7 +1919,7 @@ describe('a pane of glass is a transparent interface and not a transparent image
     /*
      Coverage is `mix(surface_alpha, F_scalar, transmission)` and the OIT resolve
      premultiplies by it, so transmission 1 hands the whole pane to a Fresnel
-     term worth 0.04 head-on. With no SSR under Brick4 (D-109) there is nothing
+     term worth 0.04 head-on. With SSR off (the graphics default) there is nothing
      for that 4% to show, and shipping it made these windows vanish. The floor is
      what stops that, and it is the property worth pinning rather than the
      particular value: `surface_alpha` is 0.196 for this material, so anything

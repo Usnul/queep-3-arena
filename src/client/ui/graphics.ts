@@ -47,27 +47,20 @@
  * should move is worse than no row (D-127); the flag it wrote is the renderer's
  * own `false`, so nothing here has to hold it down.
  *
- * **What is out of reach is the quality behind every one of those switches**,
- * and that is what keeps GAP-024 open rather than closed. It is out of reach
- * twice over. The `GTAO` and `SSR` objects live in `Renderer.#postprocess`, a
- * private field with no getter, so they cannot be reached with the renderer
- * already in hand. And their quality is a call argument rather than a property
- * in any case: `SSR.graph_pass` takes a `mip`, "higher mip = lower resolution
- * trace", and `graph_postprocess_bloom` takes an `intensity` and a `mips`, and
- * `Renderer` calls all three of them without. The shadow resolution is a third
- * shape of the same thing: `DEFAULT_SHADOWMAP_LOCAL_RESOLUTION` is a
- * module-private constant, as is the atlas size beside it.
+ * Quality presets are still absent (GAP-024). `GTAO` lives in the private
+ * `Renderer.#postprocess`; SSR's trace resolution is a `graph_pass` argument,
+ * and bloom intensity and mip count are call arguments too. The renderer picks
+ * them. Shadow resolution and atlas size are module-private constants.
  *
- * **`MotionBlur` is the exception, and it is worth keeping the finding even
- * though the row that found it is gone.** It is a newer subsystem than either,
- * and it was built the other way round: the renderer owns one, hands it out
+ * **Some effect tuning is public.** The renderer owns `MotionBlur`, hands it out
  * through `get motion_blur()`, and the getter's docblock is an instruction --
  * "Configure it via `renderer.motion_blur.*` (currently `strength`); toggle the
  * effect with `feature_motion_blur_enabled`". `dof` has the same shape. So for
  * the effects the engine added most recently the flag and the tuning are
- * deliberately separated and both are public, which is exactly the shape
- * GAP-024 asks for and the most hopeful thing in that entry. See D-109 for the
- * row that demonstrated it and D-127 for why this port does not ship it.
+ * deliberately separated and both are public. Meep 3.19.0 also exposes `ssr`,
+ * with reprojection and spatial-denoising controls; this page keeps its single
+ * reflections toggle. See D-109 for the motion-blur row that demonstrated the
+ * pattern and D-127 for why this port does not ship it.
  *
  * This page therefore has the effects and not their presets, which is why those
  * rows are toggles rather than a Low / Medium / High -- that would be three
@@ -118,8 +111,6 @@
  * pair anyway.
  */
 
-import { ShadeIndirectLightingMode } from '@woosh/meep-engine/src/shade/renderer/ShadeIndirectLightingMode.js';
-
 import { SHADOW_MODE_DEFAULT, type ShadowMode } from '../Shadows.ts';
 import type { Setting, SettingsPage } from './Settings.ts';
 import type { View } from './meep.ts';
@@ -127,9 +118,8 @@ import type { View } from './meep.ts';
 /**
  * The renderer's own feature switches, reached through 3.6.0's getter.
  *
- * Three booleans and one number, and the number is read rather than written: the
- * indirect-lighting mode is `main.ts`'s to set, once, from whether the map has a
- * bake (D-107). It is declared here because the reflections row has to ask.
+ * Three booleans. Since meep 3.19.0, screen-space reflections work with Brick4
+ * as well as IBL, so the page does not need to read the indirect-lighting mode.
  *
  * `feature_motion_blur_enabled` is deliberately absent, and its absence is the
  * whole of how motion blur stays off: the field initializer in `Renderer` is
@@ -146,8 +136,6 @@ export interface RendererFeatures {
     feature_ssao_enabled: boolean;
     feature_ssr_enabled: boolean;
     feature_bloom_enabled: boolean;
-    /** Read, never written. See `reflectionsReachable`. */
-    readonly indirect_lighting_mode: number;
 }
 
 /**
@@ -260,31 +248,6 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
         if (renderer !== null) write(renderer);
     };
 
-    /**
-     * Whether a screen-space reflection would be drawn if one were asked for.
-     *
-     * Which is: not in Brick4. `Renderer` runs the SSR pass under
-     * `feature_ssr_enabled && mode !== Brick4`, with a comment calling the
-     * exclusion "a known limitation" -- Brick4 has its own specular, out of the
-     * volumetric lightmap, and SSR would be replacing it rather than adding to
-     * it. This port is in Brick4 on every map that has a bake (D-107), so that
-     * is the common case and not the corner.
-     *
-     * The flag is worse than inert there, which is why the row below refuses to
-     * write it rather than merely greying out. `use_fused_indirect` is
-     * `fused_indirect && mode === Brick4 && !feature_ssr_enabled`, so setting it
-     * costs the fused Brick4 path -- an extra pair of rgba16float targets and a
-     * separate resolve, for the reflections it does not then draw.
-     */
-    const reflectionsReachable = (): boolean => {
-        const renderer = graphics.renderer;
-
-        return (
-            renderer !== null &&
-            renderer.indirect_lighting_mode !== ShadeIndirectLightingMode.Brick4
-        );
-    };
-
     const settings: Setting[] = [
         /*
          Which lights cast, rather than a shadow *quality*, because which lights
@@ -354,22 +317,12 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
             section: 'Lighting',
             label: 'Screen-space reflections',
             note: 'Traced against what is already on screen, so it reflects only what is.',
-            /*
-             Off, which is the engine's default and is also the only defensible
-             one here: the port is in Brick4 on any map with a bake, and the row
-             cannot be written there at all. Defaulting it on would mean a
-             setting that reads as on and is refused on most of the maps.
-            */
+            // Keep the engine's off default; reflections add a screen-space trace.
             initial: false,
-            enabled: reflectionsReachable,
+            enabled: () => graphics.renderer !== null,
             apply: (v) => {
                 feature((renderer) => {
-                    // Never true in Brick4 -- see `reflectionsReachable` for what
-                    // that would cost. `enabled` greys the row out and this is
-                    // what makes the refusal real: a value out of storage, or a
-                    // `?gi=ibl` session's `true` arriving on a baked map, both
-                    // reach `apply` without going past the control.
-                    renderer.feature_ssr_enabled = v && reflectionsReachable();
+                    renderer.feature_ssr_enabled = v;
                 });
             },
         },
@@ -480,11 +433,7 @@ export function graphicsPage(hosts: GraphicsPageHosts): SettingsPage {
         title: 'Graphics',
         settings,
         note:
-            'The effects above are switches and not presets. Their quality -- shadow ' +
-            'resolution, bloom strength, the resolution the reflections are traced at -- is ' +
-            'either private to the renderer or an argument it hardcodes, rather than merely ' +
-            'behind the getter 3.6.0 put a warning on (GAP-024). Anti-aliasing is missing for ' +
-            'the same reason, and supersampling for a different one: the one property that ' +
-            'reaches it throws on any scale that is not a whole number (BUG-11).',
+            'Effects can be toggled individually. Disable adaptive resolution to choose a ' +
+            'fixed render scale.',
     };
 }

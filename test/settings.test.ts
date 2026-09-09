@@ -961,37 +961,57 @@ describe('the graphics page', () => {
         expect(h.graphics.renderer.feature_ssao_enabled).toBe(true);
     });
 
-    /*
-     The trap, and the reason the reflections row guards its own `apply` instead
-     of trusting `enabled` to have greyed the control out. `enabled` is a
-     question the *screen* asks; a value arriving out of storage does not go past
-     a control at all, and `applyAll` runs before anything is drawn.
-
-     What the stale flag would cost is not nothing, which is why it is refused
-     rather than merely useless: `use_fused_indirect` is
-     `fused_indirect && mode === Brick4 && !feature_ssr_enabled`, so a true here
-     buys the split indirect path and draws no reflection with it.
-    */
-    it('refuses to enable reflections in Brick4, from the screen or from storage', () => {
+    it('toggles reflections in Brick4 without changing the lighting mode', () => {
         const h = hosts();
         h.graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
 
         const settings = new Settings([pageFor(h)]);
 
-        expect(settings.definition('reflections').enabled?.()).toBe(false);
-
-        /*
-         `set` still returns true -- the value moved, is held and will be saved,
-         which is what a greyed-out row does everywhere else on this page. What
-         must not move is the renderer.
-        */
-        expect(settings.set('reflections', true)).toBe(true);
-        expect(settings.get('reflections')).toBe(true);
+        settings.applyAll();
+        expect(settings.definition('reflections').enabled?.()).toBe(true);
         expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
 
-        // And the same value arriving the other way, which is the case the
-        // control cannot cover: a session on an IBL map saved `true`.
+        expect(settings.set('reflections', true)).toBe(true);
+        expect(settings.get('reflections')).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(true);
+
         settings.applyAll();
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(true);
+
+        expect(settings.set('reflections', false)).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
+        expect(h.graphics.renderer.indirect_lighting_mode).toBe(ShadeIndirectLightingMode.Brick4);
+    });
+
+    it('restores an IBL session\'s saved reflections on a Brick4 map', async () => {
+        const storage = memoryStorage();
+        const first = new Settings([pageFor(hosts())]);
+        await first.attach(storage, 'test');
+        first.set('reflections', true);
+
+        const h = hosts();
+        h.graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
+        const restored = new Settings([pageFor(h)]);
+        await restored.attach(storage, 'test');
+        restored.applyAll();
+
+        expect(restored.definition('reflections').enabled?.()).toBe(true);
+        expect(restored.get('reflections')).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(true);
+        expect(h.graphics.renderer.indirect_lighting_mode).toBe(ShadeIndirectLightingMode.Brick4);
+    });
+
+    it('keeps reflections available when a live map switches from IBL to Brick4', () => {
+        const h = hosts();
+        const settings = new Settings([pageFor(h)]);
+        settings.set('reflections', true);
+
+        h.graphics.renderer.indirect_lighting_mode = ShadeIndirectLightingMode.Brick4;
+        settings.applyAll();
+
+        expect(settings.definition('reflections').enabled?.()).toBe(true);
+        expect(h.graphics.renderer.feature_ssr_enabled).toBe(true);
+        expect(settings.set('reflections', false)).toBe(true);
         expect(h.graphics.renderer.feature_ssr_enabled).toBe(false);
     });
 
