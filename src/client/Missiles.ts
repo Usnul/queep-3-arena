@@ -225,11 +225,11 @@ export class Missiles implements MissileWorld {
         body.mask = MISSILE_MASK;
         // Not optional at these speeds -- see the header.
         body.flags = RigidBodyFlags.CCD;
-        body.linearVelocity.set(
+        body.linearVelocity.set([
             projectile.velocity[0]! * WORLD_SCALE,
             projectile.velocity[2]! * WORLD_SCALE,
             -projectile.velocity[1]! * WORLD_SCALE
-        );
+        ]);
 
         const collider = new Collider() as unknown as {
             shape: unknown;

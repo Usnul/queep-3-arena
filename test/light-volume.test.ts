@@ -28,6 +28,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { PointLight } from '@woosh/meep-engine/src/shade/renderer/light/model/PointLight.js';
+import { DirectionalLight } from '@woosh/meep-engine/src/shade/renderer/light/model/DirectionalLight.js';
 
 import {
     applyLightVolumes,
@@ -46,20 +48,19 @@ function bundleLight(
     return { x, y, z, lumens: 1000, radius: 12, sourceRadius };
 }
 
-function point(x: number, y: number, z: number): ShadeLightLike {
-    return {
-        radius: 0,
-        isPointLight: true,
-        transform_global: { translation_x: x, translation_y: y, translation_z: z },
-    };
+// Use the engine's lights: a stand-in would miss a renamed pose field.
+function point(x: number, y: number, z: number): PointLight {
+    const light = new PointLight();
+    light.radius = 0;
+    light.transform.setTranslation(x, y, z);
+    return light;
 }
 
-function directional(): ShadeLightLike {
-    return {
-        radius: 0,
-        isDirectionalLight: true,
-        transform_global: { translation_x: 0, translation_y: 2048, translation_z: 0 },
-    };
+function directional(): DirectionalLight {
+    const light = new DirectionalLight();
+    light.radius = 0;
+    light.transform.setTranslation(0, 2048, 0);
+    return light;
 }
 
 function collection(elements: ShadeLightLike[]): LightCollectionLike {

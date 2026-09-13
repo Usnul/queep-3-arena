@@ -59,22 +59,8 @@ export type TorsoAnimation =
     | 'TORSO_RAISE'
     | 'TORSO_DROP';
 
-/** The part of a meep dataset a `Character` needs. Exported for `app/roster.ts`. */
-export interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-    /**
-     * Where a `Transform64` write is announced.
-     *
-     * meep 3.16.0's transform carries no signals, so a move is invisible to
-     * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
-     * `TRANSFORM64_EVENT_CHANGE`. See `t64_announce_change`.
-     *
-     * No payload: meep 3.17.0 put the identity of what moved in the event name,
-     * where 3.16.0 had carried it alongside as `{ klass, instance }`.
-     */
-    sendEvent(entity: number, name: string): void;
-}
+/** Entity builders require the full dataset contract in Meep 3.25. */
+export type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /** Q3's own repeat rule: a clip with `loopFrames` runs forever, the rest run once. */
 const LOOPING = new Set<string>([

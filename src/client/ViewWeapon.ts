@@ -93,23 +93,7 @@ const TAG_FLASH = 'tag_flash';
 
 const DEG_TO_RAD = Math.PI / 180;
 
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-    addComponentToEntity(entity: number, component: unknown): void;
-    removeComponentFromEntity(entity: number, type: unknown): void;
-    /**
-     * Where a `Transform64` write is announced.
-     *
-     * meep 3.16.0's transform carries no signals, so a move is invisible to
-     * `ShadedGeometrySystem`, `MeshSystem` and `LightSystem` until it is sent as
-     * `TRANSFORM64_EVENT_CHANGE`. See `t64_announce_change`.
-     *
-     * No payload: meep 3.17.0 put the identity of what moved in the event name,
-     * where 3.16.0 had carried it alongside as `{ klass, instance }`.
-     */
-    sendEvent(entity: number, name: string): void;
-}
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /**
  * What `Arena` needs of this class, so it can hand the gun what came out of it.

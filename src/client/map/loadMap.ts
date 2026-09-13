@@ -63,11 +63,8 @@ export interface LoadedMap {
     readonly timings: Readonly<Record<string, number>>;
 }
 
-/** Anything with the ECS surface `loadMap` needs; meep types this as `any`. */
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-}
+/** Entity builders require the full dataset contract in Meep 3.25. */
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /**
  * Load a converted map into the given ECS dataset.

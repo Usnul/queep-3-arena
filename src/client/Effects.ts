@@ -130,12 +130,7 @@ function coneAxis(dirMeep: ArrayLike<number>): { x: number; y: number; z: number
     return { x, y, z };
 }
 
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-    removeEntity(entity: number): void;
-    entityExists(entity: number): boolean;
-}
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /** One scheduled removal. */
 interface Expiry {

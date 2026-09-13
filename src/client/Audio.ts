@@ -130,11 +130,8 @@ interface Manifest {
     readonly stats: Readonly<Record<string, number>>;
 }
 
-/** The part of `EntityComponentDataset` this file uses. */
-interface EcsDataset {
-    removeEntity(entity: number): void;
-    entityExists(entity: number): boolean;
-}
+/** Entity builders require the full dataset contract in Meep 3.25. */
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /** The part of `AudioEmitterSystem` this file uses. */
 interface EmitterSystem {

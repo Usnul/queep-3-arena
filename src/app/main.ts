@@ -334,11 +334,24 @@ function bakeRequested(): boolean {
 async function main(): Promise<void> {
     const engine = await EngineHarness.bootstrap();
 
-    const em = engine.entityManager;
+    // Meep 3.25 declares the base hooks for one component, although its own
+    // systems link tuples. Widen only the hook arity at the registration boundary.
+    type TupleSystem = Omit<import('@woosh/meep-engine/src/engine/ecs/System.js').System<unknown>, 'link' | 'unlink'> & {
+        link(...components: never[]): void;
+        unlink(...components: never[]): void;
+    };
+    const em = engine.entityManager as typeof engine.entityManager & {
+        addSystem(system: TupleSystem): Promise<unknown>;
+    };
     const ecd = em.dataset;
     const graphics = engine.graphics;
 
     if (graphics === null) throw new Error('engine started without graphics');
+
+    // GraphicsEngine constructs a PerspectiveCamera here. ShadeCameraAdapter's
+    // 3.25 declaration incorrectly names the ECS Camera component instead.
+    const renderCamera = graphics.camera.camera as unknown as
+        import('@woosh/meep-engine/src/shade/renderer/camera/PerspectiveCamera.js').PerspectiveCamera;
 
     // `EngineHarness.shadeScene` is the only way to reach the scene the harness's
     // own systems draw into -- the graphics facade does not hand one back, and a
@@ -762,7 +775,7 @@ async function main(): Promise<void> {
      the renderer knows that. See `lens.ts`.
     */
     const lens = new CameraLens(camera);
-    lens.apply(graphics.camera.camera);
+    lens.apply(renderCamera);
 
     const transform = new Transform64();
     const cameraEntity = new Entity();
@@ -985,7 +998,7 @@ async function main(): Promise<void> {
                 hud,
                 map: mapName,
                 lens,
-                surface: graphics.camera.camera,
+                surface: renderCamera,
             })
         );
 
@@ -1702,7 +1715,7 @@ async function main(): Promise<void> {
                 player,
                 cameraTransform: transform,
                 lens,
-                surface: graphics.camera.camera,
+                surface: renderCamera,
                 /*
                  The session's fraction on a joined client and the engine's own
                  in single-player, which is what `null` selects. The two branches
@@ -2071,7 +2084,7 @@ async function main(): Promise<void> {
         await em.addSystem(
             new PresentationSystem({
                 viewWeapon,
-                renderCamera: () => graphics.camera.camera.transform,
+                renderCamera: () => renderCamera.transform,
                 player,
                 audio,
                 hud,

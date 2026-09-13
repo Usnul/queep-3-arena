@@ -262,7 +262,7 @@ describe('the weapon you switch away from leaves the world', () => {
             if (component instanceof ShadedGeometry) churn += 1;
             add(entity, component);
         };
-        patched.removeComponentFromEntity = (entity: number, klass: unknown): void => {
+        patched.removeComponentFromEntity = (entity: number, klass: Parameters<typeof remove>[1]): void => {
             if (klass === ShadedGeometry) churn += 1;
             remove(entity, klass);
         };

@@ -315,12 +315,8 @@ export async function loadProbeField(baseUrl: string): Promise<AcousticProbeFiel
     return decodeProbeField(bytes);
 }
 
-/** The part of `EntityComponentDataset` this file uses. */
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-    addComponentToEntity(entity: number, component: unknown): void;
-}
+/** Entity builders require the full dataset contract in Meep 3.25. */
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /**
  * Hang the field on an entity, which is how `AcousticProbeFieldSystem` finds

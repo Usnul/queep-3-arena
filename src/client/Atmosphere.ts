@@ -332,11 +332,8 @@ export const WORLD_MARGIN = 100;
  */
 export const FADE_DISTANCE = 4;
 
-/** The part of `EntityComponentDataset` this file uses. */
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-}
+/** Entity builders require the full dataset contract in Meep 3.25. */
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /** An axis-aligned box in meep metres, as the volume's transform wants it. */
 export interface WorldBox {
@@ -477,7 +474,11 @@ export function mediumFor(preset: AtmospherePreset): ParticipatingMedia {
      which for fog droplets against continental haze is a factor of 250 wrong,
      silently, in the direction of a solid wall.
     */
-    medium.particle_spec = VolumetricsParticleSpec.fromMeep(particle);
+    medium.particle_spec = VolumetricsParticleSpec.fromMeep({
+        ...particle,
+        cross_section_extinction: [...particle.cross_section_extinction],
+        cross_section_scattering: [...particle.cross_section_scattering],
+    });
 
     medium.target_extinction = preset.extinction;
     medium.fade_distance = FADE_DISTANCE;

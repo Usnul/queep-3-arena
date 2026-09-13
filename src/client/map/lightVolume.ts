@@ -44,7 +44,7 @@ export interface ShadeLightLike {
     radius: number;
     readonly isPointLight?: boolean;
     readonly isDirectionalLight?: boolean;
-    readonly transform_global: {
+    readonly transform: {
         readonly translation_x: number;
         readonly translation_y: number;
         readonly translation_z: number;
@@ -177,7 +177,7 @@ export function applyLightVolumes(
 
         if (light.isPointLight !== true) continue;
 
-        const t = light.transform_global;
+        const t = light.transform;
         const queue = wanted.get(key(t.translation_x, t.translation_y, t.translation_z));
         const radius = queue?.shift();
 

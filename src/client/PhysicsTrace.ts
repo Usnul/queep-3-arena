@@ -631,9 +631,9 @@ export class PhysicsTrace {
                         this.overlaps,
                         0
                     ) > 0;
-                out.planeNormal[0] = this.hit.normal.x;
-                out.planeNormal[1] = -this.hit.normal.z;
-                out.planeNormal[2] = this.hit.normal.y;
+                out.planeNormal[0] = this.hit.normal[0];
+                out.planeNormal[1] = -this.hit.normal[2];
+                out.planeNormal[2] = this.hit.normal[1];
                 return;
             }
 
@@ -728,9 +728,9 @@ export class PhysicsTrace {
         // -1 is "no brush of ours covers that body"; 1 is "Q3 says nothing
         // blocks". Both mean there is no Q3 plane to report.
         if (q3 < 0 || q3 >= 1) {
-            out.planeNormal[0] = this.hit.normal.x;
-            out.planeNormal[1] = -this.hit.normal.z;
-            out.planeNormal[2] = this.hit.normal.y;
+            out.planeNormal[0] = this.hit.normal[0];
+            out.planeNormal[1] = -this.hit.normal[2];
+            out.planeNormal[2] = this.hit.normal[1];
             out.planeDist =
                 out.planeNormal[0] * out.endpos[0] +
                 out.planeNormal[1] * out.endpos[1] +

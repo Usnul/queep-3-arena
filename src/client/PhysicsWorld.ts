@@ -55,11 +55,7 @@ import { layerForContents } from './layers.ts';
 const WORLD_SCALE = 1 / 32;
 const INV_WORLD_SCALE = 32;
 
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-    addComponentToEntity(entity: number, component: unknown): void;
-}
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /**
  * Identity rotation, for the queries that take one and never turn it.

@@ -63,14 +63,7 @@ function toMeep(q3: ArrayLike<number>): [number, number, number] {
     return [q3[0]! * WORLD_SCALE, q3[2]! * WORLD_SCALE, -q3[1]! * WORLD_SCALE];
 }
 
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-    removeEntity(entity: number): void;
-    entityExists(entity: number): boolean;
-    getComponent(entity: number, type: unknown): unknown;
-    addComponentToEntity(entity: number, component: unknown): void;
-}
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /** A shootable box. Q3's `func_train`-with-health, minus the train. */
 export interface Target extends Damageable {

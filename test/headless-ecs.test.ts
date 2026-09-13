@@ -74,7 +74,7 @@ describe('meep physics, headless', () => {
         body.kind = BodyKind.Dynamic;
         body.mass = 1;
         // Straight down at Q3's rocket speed, so this does not wait on gravity.
-        body.linearVelocity.set(0, -900 * WORLD_SCALE, 0);
+        body.linearVelocity.set([0, -900 * WORLD_SCALE, 0]);
 
         const collider = new Collider() as unknown as { shape: unknown };
         collider.shape = SphereShape3D.from(2 * WORLD_SCALE);

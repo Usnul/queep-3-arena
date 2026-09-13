@@ -140,11 +140,8 @@ export const LIGHTMAP_CELL_SIZE = 0.5;
  */
 export const LIGHTMAP_MEMORY_BUDGET = 10 * 1024 * 1024;
 
-/** The part of `EntityComponentDataset` this file uses. */
-interface EcsDataset {
-    isComponentTypeRegistered(type: unknown): boolean;
-    registerComponentType(type: unknown): void;
-}
+/** Entity builders require the full dataset contract in Meep 3.25. */
+type EcsDataset = import('@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js').EntityComponentDataset;
 
 /**
  * Load a map's baked volumetric lightmap, or null if it has none.
@@ -255,7 +252,7 @@ export interface LightMapBake {
 interface BakeHost {
     readonly renderer: {
         readonly graphics: unknown;
-        readonly scenes: { obtain(scene: unknown): unknown };
+        readonly scenes: { obtain(scene: unknown): import('@woosh/meep-engine/src/shade/renderer/scene/GPUSceneContext.js').GPUSceneContext };
     };
 }
 
@@ -287,18 +284,17 @@ export async function bakeVolumetricLightMap(
 ): Promise<LightMapBake> {
     const t0 = performance.now();
 
+    const renderer = graphics.renderer;
+    const sceneContext = renderer.scenes.obtain(scene);
+
     const bvh = new StaticSceneBVH();
-    bvh.build(scene);
+    bvh.build(sceneContext);
 
     const tree = brick4_generate_tree_from_scene({
-        scene,
         bvh,
         cell_size: cellSize,
         max_memory_usage_bytes: LIGHTMAP_MEMORY_BUDGET,
     });
-
-    const renderer = graphics.renderer;
-    const sceneContext = renderer.scenes.obtain(scene);
 
     const probeData = await brick4_bake_basic({
         brick4: tree,

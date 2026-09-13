@@ -105,7 +105,7 @@ async function bareWorld(): Promise<{ em: EntityManager; ecd: EntityComponentDat
     });
 
     // Nothing here should fall; the gap under test is the only variable.
-    system.setGravity({ x: 0, y: 0, z: 0 } as never);
+    system.setGravity([0, 0, 0]);
 
     return { em, ecd };
 }
@@ -323,7 +323,7 @@ describe('a missile driven into a convex hull', () => {
         rigidBody.mass = 1;
         rigidBody.gravityScale = 0;
         rigidBody.flags = RigidBodyFlags.CCD;
-        rigidBody.linearVelocity.set(dx * 900 * WORLD_SCALE, 0, dz * 900 * WORLD_SCALE);
+        rigidBody.linearVelocity.set([dx * 900 * WORLD_SCALE, 0, dz * 900 * WORLD_SCALE]);
 
         const collider = new Collider() as unknown as { shape: unknown };
         collider.shape = SphereShape3D.from(RADIUS);
