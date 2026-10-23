@@ -47,7 +47,7 @@ import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 import { ShadedGeometry } from '@woosh/meep-engine/src/engine/graphics/ecs/mesh-v2/ShadedGeometry.js';
-import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
+import { ParticleEffect } from '@woosh/meep-engine/src/engine/graphics/ecs/particles/ParticleEffect.js';
 
 import {
     handOffset,
@@ -58,7 +58,7 @@ import {
 } from '../src/client/ViewWeapon.ts';
 import { ModelLibrary } from '../src/client/map/loadModels.ts';
 import type { ModelBundle } from '../src/client/map/SceneBundle.ts';
-import { Effects } from '../src/client/Effects.ts';
+import { Effects, type AuthoredParticleEffect } from '../src/client/Effects.ts';
 import { Arena } from '../src/client/Arena.ts';
 import { Shadows } from '../src/client/Shadows.ts';
 import {
@@ -816,7 +816,7 @@ describe('a shooter with no gun on screen still throws a burst', () => {
             visitor: (emitter: unknown, transform: Transform64) => void
         ) => void;
 
-        traverse([ParticleEmitter, Transform64], (_emitter, transform) => {
+        traverse([ParticleEffect, Transform64], (_emitter, transform) => {
             positions.push({ x: transform.translation_x, y: transform.translation_y, z: transform.translation_z });
         });
 
@@ -849,7 +849,7 @@ describe('a shooter with no gun on screen still throws a burst', () => {
             classes: unknown[],
             visitor: (emitter: unknown) => void
         ) => void;
-        traverse([ParticleEmitter], () => {
+        traverse([ParticleEffect], () => {
             emitters += 1;
         });
 
@@ -907,7 +907,7 @@ describe('only the weapons Q3 has a flash model for throw a burst', () => {
             classes: unknown[],
             visitor: (emitter: unknown) => void
         ) => void;
-        traverse([ParticleEmitter], () => {
+        traverse([ParticleEffect], () => {
             emitters += 1;
         });
 
@@ -953,31 +953,19 @@ interface Cone {
     sampleRandomDirection(random: () => number, result: Vector3): void;
 }
 
-/** The one field of an emitter's layer this file reads. See `cones`. */
-interface EmitterLayers {
-    readonly layers: {
-        get(index: number): { readonly particleVelocityDirection: Cone };
-    };
-}
-
 describe('a muzzle pointed exactly along an axis', () => {
     /**
-     * Layer 0's cone, as the emitter component actually holds it.
-     *
-     * Through a cast, because `layers` carries an `@private` that TypeScript
-     * reads off the JSDoc -- meaning "the emitter owns its layers", not "nobody
-     * may look". The alternative is asserting on the JSON that went in, which
-     * would pin the argument rather than what `ConicRay` will divide by.
+     * The burst's cone axis, as the `ParticleEffect` component holds it.
      */
     function cones(ecd: EntityComponentDataset): { x: number; y: number; z: number }[] {
         const found: { x: number; y: number; z: number }[] = [];
         const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
             classes: unknown[],
-            visitor: (emitter: EmitterLayers) => void
+            visitor: (emitter: AuthoredParticleEffect) => void
         ) => void;
 
-        traverse([ParticleEmitter], (emitter) => {
-            const d = emitter.layers.get(0).particleVelocityDirection.direction;
+        traverse([ParticleEffect], (emitter) => {
+            const d = emitter.cone!.direction;
             found.push({ x: d.x, y: d.y, z: d.z });
         });
 
@@ -989,11 +977,11 @@ describe('a muzzle pointed exactly along an axis', () => {
         const found: Cone[] = [];
         const traverse = ecd.traverseEntities.bind(ecd) as unknown as (
             classes: unknown[],
-            visitor: (emitter: EmitterLayers) => void
+            visitor: (emitter: AuthoredParticleEffect) => void
         ) => void;
 
-        traverse([ParticleEmitter], (emitter) => {
-            found.push(emitter.layers.get(0).particleVelocityDirection);
+        traverse([ParticleEffect], (emitter) => {
+            found.push(emitter.cone!);
         });
 
         expect(found.length, 'exactly one burst per shot').toBe(1);

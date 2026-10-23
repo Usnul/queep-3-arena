@@ -185,8 +185,10 @@ export class NetPlayerStateInterpolation extends BinaryInterpolationAdapter {
         source: BinaryBuffer,
         firstOffset: number,
         secondOffset: number,
-        t: number
+        blend: Float64Array,
+        blendOffset: number
     ): void {
+        const t = blend[blendOffset]!;
         source.position = firstOffset;
         source.position += 2; // connected, alive: taken from B
         const ax = source.readFloat32();
@@ -400,8 +402,10 @@ export class NetMissileInterpolation extends BinaryInterpolationAdapter {
         source: BinaryBuffer,
         firstOffset: number,
         secondOffset: number,
-        t: number
+        blend: Float64Array,
+        blendOffset: number
     ): void {
+        const t = blend[blendOffset]!;
         source.position = firstOffset + 4;
         const ax = source.readFloat32();
         const ay = source.readFloat32();
@@ -486,8 +490,10 @@ export class NetMoverInterpolation extends BinaryInterpolationAdapter {
         source: BinaryBuffer,
         firstOffset: number,
         secondOffset: number,
-        t: number
+        blend: Float64Array,
+        blendOffset: number
     ): void {
+        const t = blend[blendOffset]!;
         source.position = firstOffset + 3;
         const ax = source.readFloat32();
         const ay = source.readFloat32();

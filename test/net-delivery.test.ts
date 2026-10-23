@@ -486,12 +486,53 @@ describe("the records a replay puts back, and the ones it gives up on", () => {
 
         rig.step(TICK_HZ * 30);
 
-        const replayed = rig.clients.map((c) => c.net.replayedArrived);
+        const inOrderReplayed = rig.clients.map((c) => c.net.replayedArrived);
+        const reconciles = rig.clients.map((c) => c.net.reconcileCount);
         const abandoned = rig.clients.map((c) => c.net.reconcileAbandoned);
+
+        /*
+         In meep 3.15.0–3.25.0, `#handle_auth_state` rewound to `server_frame - 1`,
+         which undid `server_frame` (where the host's `ACTION_STREAM(server_frame)`
+         records had just been logged in the same tick's packet) and then
+         re-executed `server_frame`'s arrived records (`#harvest_arrived(server_frame)`).
+
+         In meep 3.53.0, `#handle_auth_state` rewinds to `server_frame` (the END
+         of `server_frame`) and logs the correction there, so `server_frame` is
+         never undone when `AUTH_STATE(S)` arrives alongside `ACTION_STREAM(S)`.
+         To exercise `#harvest(f)` + `#execute_harvested()` across `[server_frame + 1,
+         current_frame]`, step with `AUTH_STATE` tagged one frame behind
+         `ACTION_STREAM` (`sim_frame - 1`) so the rewind crosses frame `S`.
+        */
+        for (let i = 0; i < rig.clients.length; i++) {
+            expect(reconciles[i], `client ${i} performed no reconciliations`).toBeGreaterThan(0);
+            expect(
+                inOrderReplayed[i],
+                `client ${i} undid server_frame on in-order AUTH_STATE`
+            ).toBe(0);
+        }
+
+        const hostPeer = rig.host.session.peer as unknown as {
+            send_auth_state(
+                peerId: number,
+                simFrame: number,
+                networkId: number,
+                writer: (buf: unknown) => void
+            ): void;
+        };
+        const origSendAuth = hostPeer.send_auth_state.bind(hostPeer);
+        hostPeer.send_auth_state = (peerId, simFrame, networkId, writer) => {
+            origSendAuth(peerId, Math.max(0, simFrame - 1), networkId, writer);
+        };
+
+        rig.step(TICK_HZ * 2);
+        hostPeer.send_auth_state = origSendAuth;
+
+        const replayed = rig.clients.map((c) => c.net.replayedArrived);
 
         // eslint-disable-next-line no-console
         console.log(
-            `[net-delivery] 30 s, 2 clients + 4 bots: arrived records replayed ` +
+            `[net-delivery] 30 s, 2 clients + 4 bots: in-order replayed ` +
+                `${inOrderReplayed.join(' and ')}, 1-frame-lagged AUTH_STATE replayed ` +
                 `${replayed.join(' and ')}; reconciliations abandoned ` +
                 `${abandoned.join(' and ')}`
         );

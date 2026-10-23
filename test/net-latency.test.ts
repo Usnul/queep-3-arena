@@ -561,8 +561,69 @@ describe('the netcode over a link that behaves like UDP', () => {
             const sizes: number[] = [];
             const original = hostSide.send.bind(hostSide);
             hostSide.send = (bytes: Uint8Array, length: number): number => {
-                // 9-byte Channel header, then the packet type; 0 is ACTION_STREAM.
-                if (length > 10 && bytes[9] === 0) sizes.push(length - 10);
+                // Walk the Connection datagram's header, optional ACK block, and frames;
+                // each FRAME_MESSAGE (0x01) with message type 0 is an ACTION_STREAM.
+                if (length >= 3) {
+                    const flags = bytes[0]!;
+                    const cursor = { position: (flags & 0x02) !== 0 ? 5 : 3 };
+                    const readVarint = (): number => {
+                        const p = cursor.position;
+                        if (p >= length) return -1;
+                        const first = bytes[p]!;
+                        const kind = first >>> 6;
+                        if (kind === 0) {
+                            cursor.position = p + 1;
+                            return first;
+                        }
+                        if (kind === 1) {
+                            if (p + 2 > length) return -1;
+                            cursor.position = p + 2;
+                            return ((first & 0x3f) << 8) | bytes[p + 1]!;
+                        }
+                        if (kind === 2) {
+                            if (p + 4 > length) return -1;
+                            cursor.position = p + 4;
+                            return (
+                                (first & 0x3f) * 16777216 +
+                                (bytes[p + 1]! << 16) +
+                                (bytes[p + 2]! << 8) +
+                                bytes[p + 3]!
+                            );
+                        }
+                        cursor.position = p + 8;
+                        return 0;
+                    };
+                    if ((flags & 0x01) !== 0) {
+                        readVarint();
+                        readVarint();
+                        const more = readVarint();
+                        readVarint();
+                        for (let i = 0; i < more; i++) {
+                            readVarint();
+                            readVarint();
+                        }
+                    }
+                    while (cursor.position < length) {
+                        const frameType = bytes[cursor.position++]!;
+                        if (frameType === 0x01) {
+                            const msgLen = readVarint();
+                            if (msgLen < 0 || cursor.position + msgLen > length) break;
+                            if (msgLen > 1 && bytes[cursor.position] === 0) {
+                                sizes.push(msgLen - 1);
+                            }
+                            cursor.position += msgLen;
+                        } else if (frameType === 0x02) {
+                            // PING
+                        } else if ((frameType & ~0x03) === 0x10) {
+                            readVarint();
+                            const streamLen = readVarint();
+                            if (streamLen < 0 || cursor.position + streamLen > length) break;
+                            cursor.position += streamLen;
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 return original(bytes, length);
             };
 

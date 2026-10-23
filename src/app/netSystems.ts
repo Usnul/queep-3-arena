@@ -399,7 +399,7 @@ export class NetRenderSystem extends System<never> {
     }
 
     override update = (): void => {
-        this.client.session.tick(0);
+        this.client.entityManager.update(0);
     };
 }
 

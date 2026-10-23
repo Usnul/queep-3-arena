@@ -54,14 +54,23 @@ export interface SessionOptions {
     /** Host-side: how long a dropped peer's state is retained. */
     server_resume_grace_ms?: number;
     reconnect?: { enabled: boolean };
+    /** Client-side reconciliation mode. Defaults to `'replay'` for this port's action-driven motor. */
+    reconcile?: 'correct' | 'replay';
+    /** Host-side late-input policy. Defaults to `'rollback'` for this port's action-driven motor. */
+    late_input?: 'apply' | 'rollback';
 }
 
 /**
  * Build a session. The only thing this adds to `new NetworkSession(...)` is
- * that `frame_capacity` survives the typechecker.
+ * that `frame_capacity`, `reconcile`, and `late_input` survive the typechecker,
+ * and `reconcile: 'replay'` / `late_input: 'rollback'` are defaulted because
+ * this port runs player movement inside its input action rather than a
+ * fixed-step system.
  */
 export function createSession(options: SessionOptions): NetworkSession {
-    return new NetworkSession(
-        options as unknown as ConstructorParameters<typeof NetworkSession>[0]
-    );
+    return new NetworkSession({
+        reconcile: 'replay',
+        late_input: 'rollback',
+        ...options,
+    } as unknown as ConstructorParameters<typeof NetworkSession>[0]);
 }

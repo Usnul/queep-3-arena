@@ -16,10 +16,11 @@ import { ShadedGeometrySystem3 } from '@woosh/meep-engine/src/engine/graphics3/S
 import { LightSystem3 } from '@woosh/meep-engine/src/engine/graphics3/LightSystem3.js';
 import { CameraSystem3 } from '@woosh/meep-engine/src/engine/graphics3/CameraSystem3.js';
 import { DecalSystem3 } from '@woosh/meep-engine/src/engine/graphics3/DecalSystem3.js';
-import { ParticleEmitterSystem3 } from '@woosh/meep-engine/src/engine/graphics3/ParticleEmitterSystem3.js';
+import { GPUParticleEmitterSystem } from '@woosh/meep-engine/src/engine/graphics3/GPUParticleEmitterSystem.js';
 import { Trail3DSystem3 } from '@woosh/meep-engine/src/engine/graphics3/Trail3DSystem3.js';
 import { TransformAttachmentSystem } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachmentSystem.js';
 import { MeshSystem3 } from '@woosh/meep-engine/src/engine/graphics3/MeshSystem3.js';
+import { MeshSkinSystem } from '@woosh/meep-engine/src/engine/graphics3/MeshSkinSystem.js';
 import { AnimationSystem3 } from '@woosh/meep-engine/src/engine/graphics3/AnimationSystem3.js';
 import { GLTFSceneBundleAssetLoader } from '@woosh/meep-engine/src/engine/asset/loaders/GLTFSceneBundleAssetLoader.js';
 import { GameAssetType } from '@woosh/meep-engine/src/engine/asset/GameAssetType.js';
@@ -86,6 +87,7 @@ import { GPUProfileLevel, gpu_profile_level_name }
     from '@woosh/meep-engine/src/shade/device/timing/profile/GPUProfileLevel.js';
 import { downloadAsFile } from '@woosh/meep-engine/src/core/binary/downloadAsFile.js';
 import { barrelOffset, ViewWeapon } from '../client/ViewWeapon.ts';
+import { Effects } from '../client/Effects.ts';
 import { MissileView } from '../client/MissileView.ts';
 import { Arena, LOCAL_CLIENT } from '../client/Arena.ts';
 import { WORLD_OWNER } from '../net/actions.ts';
@@ -343,6 +345,7 @@ async function main(): Promise<void> {
     const em = engine.entityManager as typeof engine.entityManager & {
         addSystem(system: TupleSystem): Promise<unknown>;
     };
+    em.fixedUpdateStepSize = 0.016666666666;
     const ecd = em.dataset;
     const graphics = engine.graphics;
 
@@ -378,7 +381,9 @@ async function main(): Promise<void> {
     await em.addSystem(new ParticipatingMediaSystem3(graphics, scene));
     await em.addSystem(new CameraSystem3(graphics));
     await em.addSystem(new DecalSystem3(graphics, engine.assetManager));
-    await em.addSystem(new ParticleEmitterSystem3(graphics, engine.assetManager));
+    const gpuParticles = new GPUParticleEmitterSystem(graphics, scene, engine.assetManager);
+    await em.addSystem(gpuParticles);
+    Effects.pinAtlasTextures(ecd);
 
     /*
      `SpriteSystemPE` **used to be registered here** and deliberately is not.
@@ -455,7 +460,8 @@ async function main(): Promise<void> {
         load_model_scene_bundle(engine.assetManager, url)
     );
     await em.addSystem(meshes);
-    await em.addSystem(new AnimationSystem3(graphics, meshes));
+    await em.addSystem(new MeshSkinSystem(graphics, scene));
+    await em.addSystem(new AnimationSystem3(graphics, scene));
 
     /*
      Render-rate blending of a fixed-step simulation, which is the other half of
@@ -1010,15 +1016,6 @@ async function main(): Promise<void> {
         const physicsWorld = await PhysicsWorld.create(em, ecd, clipMap);
 
         {
-            /*
-             The engine's own producer. With this set, `PhysicsSystem` restores
-             every `Interpolated` body's authoritative pose at the top of each
-             step and records the post-step pose after it, so nothing an
-             application writes is needed to make a body render smoothly -- see
-             `PoseRecorderSystem` for the poses physics does not own.
-            */
-            physicsWorld.system.interpolationLog = interpolation.log;
-
             console.log(
                 `[queep] physics: ${physicsWorld.stats.brushes} brushes` +
                 (physicsWorld.stats.patches > 0
@@ -1336,6 +1333,7 @@ async function main(): Promise<void> {
             bodies === null ? null : new DamageQueries(physicsWorld.system, bodies);
 
         const arena = new Arena(ecd, clipMap, missiles, shadows, damageQueries);
+        arena.effects.particles = gpuParticles;
         arena.audio = audio;
 
         // `CG_DamageFeedback`. The arena is what sees a shot land on the local

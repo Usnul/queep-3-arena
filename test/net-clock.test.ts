@@ -141,14 +141,14 @@ describe('frameMsec', () => {
     });
 });
 
-describe('NetworkSession.tick, driven by the session period', () => {
+describe('NetworkSession, driven by the entity manager at the session period', () => {
     it('advances exactly one frame per call, from the first call', async () => {
-        const { session } = await hostSession();
+        const { em, session } = await hostSession();
 
         expect(session.current_frame).toBe(-1);
 
         for (let call = 0; call < 240; call++) {
-            session.tick(SESSION_TICK_SECONDS);
+            em.update(SESSION_TICK_SECONDS);
             expect(session.current_frame).toBe(call);
         }
 
@@ -162,46 +162,33 @@ describe('NetworkSession.tick, driven by the session period', () => {
     });
 });
 
-describe("NetworkSession.tick, driven by the engine's fixed step", () => {
-    it("skips the first step, because the engine's step is short of the period", async () => {
+describe("NetworkSession, configuring the engine's fixed step", () => {
+    it("sets the entity manager's fixed step to the session period so the first step is not skipped", async () => {
         const { em, session } = await hostSession();
 
         /*
-         The trap, stated as the numbers rather than as the conclusion. If the
-         engine ever makes its default exactly 1/60 this assertion is what says
-         so, and the workaround below can go.
+         Meep 3.53's `NetworkSession.startup` sets `entityManager.fixedUpdateStepSize`
+         to `1 / tick_rate_hz`, so driving `em.update(em.fixedUpdateStepSize)` steps
+         from the very first call.
         */
-        expect(em.fixedUpdateStepSize).toBe(0.016666666666);
-        expect(em.fixedUpdateStepSize * 1000).toBeLessThan(session.tick_period_ms);
+        expect(em.fixedUpdateStepSize).toBe(SESSION_TICK_SECONDS);
 
-        session.tick(em.fixedUpdateStepSize);
-        expect(session.current_frame).toBe(-1);
+        em.update(em.fixedUpdateStepSize);
+        expect(session.current_frame).toBe(0);
 
         session.stop();
     });
 
-    it('advances at its own rate rather than its callers', async () => {
+    it('advances one frame per fixed step over a long run', async () => {
         const { em, session } = await hostSession();
 
         const CALLS = 600;
         for (let call = 0; call < CALLS; call++) {
-            session.tick(em.fixedUpdateStepSize);
+            em.update(em.fixedUpdateStepSize);
         }
 
-        /*
-         Stated as the arithmetic rather than as a number, because the number
-         is a function of two rates and this test used to hard-code the answer
-         for one pairing of them. The session steps while its accumulator holds
-         a period, so the frames it has run are the whole periods in the time it
-         was handed -- and `current_frame` counts from -1, hence the minus one.
-
-         The engine's step being *short* of 1/60 (see above) is what makes this
-         a floor rather than an equality: at 60 Hz it costs the first step and
-         never another, and at 30 it costs nothing visible because two short
-         steps still clear one long period after the third.
-        */
         const totalMs = CALLS * em.fixedUpdateStepSize * 1000;
-        const expected = Math.floor(totalMs / session.tick_period_ms) - 1;
+        const expected = Math.round(totalMs / session.tick_period_ms) - 1;
 
         expect(session.current_frame).toBe(expected);
 

@@ -214,7 +214,7 @@ describe('the application interpolation timeline', () => {
         expect(transform.translation_x).toBeCloseTo(restingAt, 6);
     });
 
-    it('drifts if a producer stops rewriting its pose, which is why MoversView always does', async () => {
+    it('is restored at the start of each fixed step even if a producer stops rewriting its pose', async () => {
         const { em, door, transform } = await rig();
 
         const step = em.fixedUpdateStepSize;
@@ -229,16 +229,12 @@ describe('the application interpolation timeline', () => {
         for (let i = 0; i < 12; i++) em.update(step / 3);
 
         /*
-         The recorder snapshots whatever is in the transform, and between steps
-         that is the *blended* value rather than the authoritative one -- so the
-         blend feeds itself and the pose walks backwards. This is the failure
-         `PhysicsSystem.__interp_restore` exists to prevent for its own bodies,
-         and the reason `MoversView.update` no longer skips a mover whose origin
-         has not changed. Asserted as a real number rather than "not equal", so
-         that a future restore pass makes this case fail loudly rather than
-         silently passing for a new reason.
+         Meep 3.53's `InterpolationSystem.openFixedStep` calls `settle()` ->
+         `restore()`, which restores the pre-blend pose before `fixedUpdate`
+         runs, so therecorder snapshots the authoritative pose rather than the
+         blended one.
         */
-        expect(transform.translation_x).toBeLessThan(arrivedAt - 0.2);
+        expect(transform.translation_x).toBeCloseTo(arrivedAt, 6);
     });
 });
 
@@ -292,8 +288,6 @@ async function missileRig(): Promise<{
     await registry.addSystem(poses);
 
     await started(em);
-
-    physics.interpolationLog = interpolation.log;
 
     let next = 1;
 
@@ -493,14 +487,14 @@ describe('the execution order phase 9 relies on', () => {
         expect(alphas[2]).toBeCloseTo(0.5, 6);
     });
 
-    it('schedules CameraSystem ahead of InterpolationSystem, which is why the camera is not blended', async () => {
+    it('schedules InterpolationSystem ahead of CameraSystem, because InterpolationSystem declares Transform64 for read/write', async () => {
         const em = new EntityManager();
         em.attachDataset(new EntityComponentDataset());
 
-        await em.addSystem(new InterpolationSystem());
         await em.addSystem(
             new CameraSystem({ isGraphicsEngine: true, camera: { camera: {} } } as never) as never
         );
+        await em.addSystem(new InterpolationSystem());
 
         await started(em);
         em.update(em.fixedUpdateStepSize);
@@ -508,16 +502,11 @@ describe('the execution order phase 9 relies on', () => {
         const order = executionOrder(em);
 
         /*
-         Registered the other way round on purpose: the answer is the scheduler's,
-         not the registration order's. `CameraSystem` references `Camera` and
-         `Transform64` where `InterpolationSystem` references only `Interpolated`,
-         and the score is a sum over referenced components -- so the camera is
-         copied onto Shade's camera before anything has been blended into it.
-         An `Interpolated` camera entity would therefore be a frame late rather
-         than smooth, which is why `PlayerSystem` writes the camera pose on the
-         fixed step and leaves it there.
+         In Meep 3.53, `InterpolationSystem` declares `[Interpolated, Transform64]`
+         with `Read | Write` access on `Transform64`, outscoring `CameraSystem`'s
+         read-only `[Camera, Transform64]`.
         */
-        expect(positionOf(order, CameraSystem)).toBeLessThan(positionOf(order, InterpolationSystem));
+        expect(positionOf(order, InterpolationSystem)).toBeLessThan(positionOf(order, CameraSystem));
     });
 });
 

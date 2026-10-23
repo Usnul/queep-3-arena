@@ -141,6 +141,7 @@ async function rig(solver: 'meep' | 'q3' = 'meep'): Promise<{
     const { physics, spawn } = await world();
 
     const em = new EntityManager();
+    em.fixedUpdateStepSize = 0.016666666666;
     em.attachDataset(new EntityComponentDataset());
 
     const player = new PlayerController(

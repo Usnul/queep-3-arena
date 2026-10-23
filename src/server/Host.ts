@@ -58,7 +58,8 @@ import {
     type TeleportDestination,
 } from '../game/Movers.ts';
 import { WorldEffects, type EffectTarget } from '../game/WorldEffects.ts';
-import { snapshotter_emit } from '@woosh/meep-engine/src/engine/network/sim/Snapshotter.js';
+import { BinaryBuffer } from '@woosh/meep-engine/src/core/binary/BinaryBuffer.js';
+import { snapshotter_write_entity } from '@woosh/meep-engine/src/engine/network/sim/Snapshotter.js';
 import { boxTrace, createTrace } from '../q3/cm/trace.ts';
 import { vec3, type Vec3, type Vec3Like } from '../q3/math.ts';
 import {
@@ -831,7 +832,7 @@ export class Host {
      * Returns null when the match is full, which is the capacity check in its
      * entirety: a number compared against a length.
      */
-    private addPlayer(id: number): Player | null {
+    private addPlayer(id: number, peerId = -1): Player | null {
         if (this.players.length >= this.capacity) return null;
         if (this.playerById(id) !== undefined) return null;
 
@@ -854,7 +855,7 @@ export class Host {
             state: new NetPlayerState(),
             inventory: new NetInventory(),
             info: new NetPlayerInfo(),
-            peerId: -1,
+            peerId,
             bot: null,
             connected: false,
             alive: false,
@@ -876,7 +877,9 @@ export class Host {
         */
         body.track(() => record.slot.ps.origin);
 
-        world.addComponentToEntity(entity, new NetworkIdentity());
+        const identity = new NetworkIdentity();
+        identity.owner_peer_id = peerId;
+        world.addComponentToEntity(entity, identity);
         world.addComponentToEntity(entity, record.state);
         world.addComponentToEntity(entity, record.inventory);
         world.addComponentToEntity(entity, record.info);
@@ -1040,6 +1043,19 @@ export class Host {
     }
 
     /**
+     * Record a host-originated event action into the open frame as
+     * `SENDER_RECORDED` rather than `SENDER_DERIVED`, so a rollback replay of
+     * the frame carries the record forward via `#record_carried` instead of
+     * dropping it when `onLocalSim` is gated by `simulatedThrough`.
+     */
+    private recordEvent(action: unknown): void {
+        const executor = (
+            this.session.peer as unknown as { executor: { record(a: unknown): void } }
+        ).executor;
+        executor.record(action);
+    }
+
+    /**
      * Turn the frame's queued `WeaponEvents` into event actions.
      *
      * **Inside `onLocalSim`, because that is the only place the action log is
@@ -1051,9 +1067,10 @@ export class Host {
      *
      * Dispatching from inside a handler that a rollback re-runs would be the
      * obvious hazard, and the newest-frame gate above is what removes it: this
-     * runs exactly once per frame that actually happened. The actions
-     * themselves declare no affected components, so the rewind engine never
-     * touches them and the replicator sends each one until it is acked.
+     * runs once for the world step and drains any shot raised by a late
+     * `UserCmdAction` in its replayed frame. The actions themselves declare no
+     * affected components, so the rewind engine never touches them and the
+     * replicator sends each one until it is acked.
      */
     private dispatchEvents(): void {
         const events = this.events;
@@ -1066,7 +1083,7 @@ export class Host {
             action.origin.set(pending.origin);
             action.aux.set(pending.aux);
             action.radius = pending.radius;
-            this.session.send(action as never);
+            this.recordEvent(action);
             events.dispatched.push({ kind: pending.kind, owner: pending.owner });
         }
         events.pending.length = 0;
@@ -1076,7 +1093,7 @@ export class Host {
             action.attacker = hit.attacker;
             action.victim = hit.victim;
             action.damage = hit.damage;
-            this.session.send(action as never);
+            this.recordEvent(action);
         }
         events.hits.length = 0;
 
@@ -1084,7 +1101,7 @@ export class Host {
             const action = new this.actions.PickupEvent();
             action.slot = pickup.slot;
             action.item = pickup.item;
-            this.session.send(action as never);
+            this.recordEvent(action);
         }
         events.pickups.length = 0;
     }
@@ -1684,19 +1701,17 @@ export class Host {
 
     /**
      * Put a peer in a slot. **Before INITIAL_SYNC, which is the host tick after
-     * `session.connect`** -- `NetworkSession.#on_identity_attached` decides
-     * ownership at attach time and the slot's identity is long since attached,
-     * so this writes `owner_peer_id` directly and the engine's own default never
-     * applies.
+     * `session.connect`** -- `NetworkSession.#on_identity_attached` caches
+     * `owner_peer_id` into `#owned_by` at attach time, so `addPlayer` sets it on
+     * the `NetworkIdentity` before attaching it to the entity.
      */
     admit(peerId: number, name: string, character: number): Player {
         const id = this.lowestFreeSlot();
         if (id < 0) throw new Error('Host.admit: the match is full');
 
-        const record = this.addPlayer(id);
+        const record = this.addPlayer(id, peerId);
         if (record === null) throw new Error('Host.admit: the match is full');
 
-        record.peerId = peerId;
         record.connected = true;
         record.info.playerId = id;
         record.info.name = name;
@@ -1704,17 +1719,6 @@ export class Host {
         record.info.isBot = 0;
         record.info.kills = 0;
         record.info.deaths = 0;
-
-        /*
-         Ownership before INITIAL_SYNC, which is the host tick after `connect`.
-         The joining client has to receive a world in which its own entity is
-         already its own, or `NetworkSession` files it under remote entities and
-         interpolates the thing this client is supposed to be predicting.
-        */
-        const identity = this.world.getComponent(record.entity, NetworkIdentity) as
-            | NetworkIdentity
-            | undefined;
-        if (identity !== undefined) identity.owner_peer_id = peerId;
 
         this.spawnSlot(record, id % this.spawns.length);
         this.storeSlot(record);
@@ -1759,7 +1763,7 @@ export class Host {
             const action = new this.actions.PlayerLeft();
             action.networkId = gone.networkId;
             action.playerId = gone.playerId;
-            this.session.send(action as never);
+            this.recordEvent(action);
         }
         this.departures.length = 0;
 
@@ -1802,11 +1806,13 @@ export class Host {
         const peer = this.session.peer as unknown as {
             slot_table: unknown;
             component_registry: unknown;
-            send_initial_sync(
+            send_sync_page(
                 peerId: number,
                 token: Uint8Array,
                 frame: number,
-                write: (buffer: unknown) => void
+                flags: number,
+                bytes: Uint8Array,
+                length: number
             ): void;
         };
 
@@ -1815,6 +1821,19 @@ export class Host {
         live.push(this.matchEntity);
         for (const missile of this.missilePool) live.push(missile.entity);
         for (const item of this.itemEntities) live.push(item.entity);
+
+        const buffer = this.resyncBuffer;
+        buffer.position = 0;
+        buffer.writeUint32(live.length);
+        for (const e of live) {
+            snapshotter_write_entity(
+                buffer,
+                this.world,
+                peer.slot_table as never,
+                peer.component_registry as never,
+                e
+            );
+        }
 
         for (const peerId of this.resyncOwed) {
             let token = this.resyncTokens.get(peerId);
@@ -1826,19 +1845,16 @@ export class Host {
                 this.resyncTokens.set(peerId, token);
             }
 
-            peer.send_initial_sync(peerId, token, frame, (buffer) => {
-                snapshotter_emit({
-                    buffer,
-                    world: this.world,
-                    slot_table: peer.slot_table,
-                    component_registry: peer.component_registry,
-                    entity_iter: (cb: (e: number) => void) => {
-                        for (const e of live) cb(e);
-                    },
-                });
-            });
+            peer.send_sync_page(peerId, token, frame, 0, buffer.raw_bytes, buffer.position);
         }
     }
+
+    /** Scratch buffer for mid-match population sync pages. See {@link pushSnapshot}. */
+    private readonly resyncBuffer = (() => {
+        const b = new BinaryBuffer();
+        b.setCapacity(16384);
+        return b;
+    })();
 
     /** One stable fabricated token per peer. See {@link pushSnapshot}. */
     private readonly resyncTokens = new Map<number, Uint8Array>();
@@ -1852,7 +1868,8 @@ export class Host {
      */
     step(): void {
         this.physics.step(SOLVER_DT);
-        this.session.tick(SESSION_TICK_SECONDS);
+        this.entityManager.update(SESSION_TICK_SECONDS);
+        (this.session as unknown as { normalize_if_dirty(): void }).normalize_if_dirty();
         this.wallFrame += 1;
     }
 

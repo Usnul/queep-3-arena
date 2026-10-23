@@ -481,13 +481,66 @@ export class NetClient {
      * added first (`Signal` dispatches in subscription order).
      */
     private wireSyncGate(): void {
-        const peer = this.session.peer;
+        const peer = this.session.peer as unknown as {
+            slot_table: { entity_for(networkId: number): number };
+            component_registry: {
+                class_of(typeId: number): (new () => unknown) | undefined;
+                adapter_for_id(
+                    typeId: number
+                ): { deserialize(buf: BinaryBuffer, target: unknown): void } | undefined;
+            };
+            onInitialSync: {
+                add(
+                    fn: (
+                        peerId: number,
+                        token: Uint8Array,
+                        frame: number,
+                        flags: number,
+                        buf: BinaryBuffer,
+                        payloadEnd: number
+                    ) => void
+                ): void;
+            };
+        } | null;
         if (peer === null) return;
-        (peer as unknown as { onInitialSync: { add(fn: () => void): void } }).onInitialSync.add(
-            () => {
-                this.synced = true;
+        peer.onInitialSync.add((_peerId, _token, _frame, _flags, buf, payloadEnd) => {
+            this.synced = true;
+
+            /*
+             Mid-match population sync (`Host.pushSnapshot`).
+             In meep 3.53.0 `NetworkSession`'s own `onInitialSync` listener ignores
+             sync pages after the initial join (`#binding_answer === BindingAnswer.Synced`,
+             `flags === 0`), leaving `buf.position` at the start of the entity stream
+             without resetting the session token or re-seeking the frame clock. Adopt
+             any newly introduced entities here so `watchForPlayers` discovers them.
+            */
+            if (buf !== undefined && payloadEnd !== undefined && buf.position < payloadEnd) {
+                const entityCount = buf.readUint32();
+                for (let i = 0; i < entityCount; i++) {
+                    const networkId = buf.readUintVar();
+                    const componentCount = buf.readUint8();
+                    let localEntityId = peer.slot_table.entity_for(networkId);
+                    const isNew = localEntityId < 0;
+                    if (isNew) {
+                        localEntityId = this.world.createEntity();
+                    }
+
+                    for (let j = 0; j < componentCount; j++) {
+                        const typeId = buf.readUint8();
+                        const payloadLen = buf.readUint32();
+                        const ComponentClass = peer.component_registry.class_of(typeId);
+                        const adapter = peer.component_registry.adapter_for_id(typeId);
+                        if (!isNew || ComponentClass === undefined || adapter === undefined) {
+                            buf.position += payloadLen;
+                            continue;
+                        }
+                        const component = new ComponentClass();
+                        adapter.deserialize(buf, component);
+                        this.world.addComponentToEntity(localEntityId, component);
+                    }
+                }
             }
-        );
+        });
     }
 
     /**
@@ -1080,7 +1133,7 @@ export class NetClient {
         this.replaying = false;
 
         this.physicsStep();
-        this.session.tick(SESSION_TICK_SECONDS);
+        this.entityManager.update(SESSION_TICK_SECONDS);
 
         /*
          And back to canonical, because `tick()` ends with the render pass and

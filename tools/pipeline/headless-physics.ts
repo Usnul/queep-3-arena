@@ -178,6 +178,7 @@ export class HeadlessPhysics {
      */
     static async create(cm: ClipMap): Promise<HeadlessPhysics> {
         const entityManager = new EntityManager();
+        entityManager.fixedUpdateStepSize = 0.016666666666;
         const ecd = new EntityComponentDataset();
         entityManager.attachDataset(ecd);
 
@@ -374,7 +375,8 @@ export class HeadlessPhysics {
         const movers: PlacedHull[] = [];
         const hulls: BrushHull[] = [];
 
-        for (const hull of [...set.hulls, ...patches.hulls]) {
+        for (const raw of [...set.hulls, ...patches.hulls]) {
+            const hull: BrushHull = raw.brush >= 0 ? { ...raw, brush: -1 } : raw;
             const placed = HeadlessPhysics.addHull(
                 this.ecd,
                 this.queries,

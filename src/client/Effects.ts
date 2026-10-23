@@ -40,8 +40,15 @@ import { t64_look_rotation } from '@woosh/meep-engine/src/engine/ecs/transform/t
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
 import { Decal } from '@woosh/meep-engine/src/engine/graphics/ecs/decal/v2/Decal.js';
-import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
-import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js';
+import { ParticleEffect } from '@woosh/meep-engine/src/engine/graphics/ecs/particles/ParticleEffect.js';
+import { NodeGraph } from '@woosh/meep-engine/src/core/model/node-graph/NodeGraph.js';
+import { ParticleLayout } from '@woosh/meep-engine/src/shade/renderer/particles/layout/ParticleLayout.js';
+import { create_particle_effect } from '@woosh/meep-engine/src/shade/renderer/particles/runtime/create_particle_effect.js';
+import { particle_node, particle_wire } from '@woosh/meep-engine/src/shade/renderer/particles/graph/particle_graph_authoring.js';
+import { VM_BUILTIN } from '@woosh/meep-engine/src/shade/renderer/particles/isa/ParticleVMISA.js';
+import { EMITTER_BLEND } from '@woosh/meep-engine/src/shade/renderer/particles/data/PARTICLE_EMITTER_STRUCT.js';
+import { execute_particle_vm } from '@woosh/meep-engine/src/shade/renderer/particles/vm/ParticleVMReference.js';
+import { PARTICLE_RECORD_WORD_COUNT } from '@woosh/meep-engine/src/shade/renderer/particles/ParticleConstants.js';
 import Trail3D from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/Trail3D.js';
 import { make_gradient_stroke } from '@woosh/meep-engine/src/engine/graphics/ecs/trail3d/make_gradient_stroke.js';
 import Vector3 from '@woosh/meep-engine/src/core/geom/Vector3.js';
@@ -151,36 +158,369 @@ interface LiveDecal {
 }
 
 /**
- * `BlendingType` from meep. Additive for fire and sparks, normal for smoke.
- * Re-declared rather than imported because the enum lives three directories
- * deeper than anything else this module touches.
+ * `EMITTER_BLEND` from meep. Additive for fire and sparks, alpha for smoke.
  */
-const BLEND_NORMAL = 0;
-const BLEND_ADDITIVE = 1;
+const BLEND_NORMAL = EMITTER_BLEND.ALPHA;
+const BLEND_ADDITIVE = EMITTER_BLEND.ADDITIVE;
 
-const EMISSION_SPHERE = 0;
-const EMISSION_POINT = 3;
-const FROM_VOLUME = 1;
+const PARTICLE_ATLAS_URLS = [
+    '/assets/built/fx/flare.png',
+    '/assets/built/fx/smoke.png',
+    '/assets/built/fx/tracer.png',
+] as const;
 
-/**
- * A parameter track: scale and colour sampled across a particle's life.
- *
- * `positions` are normalised life points and `data` is `itemSize` values at
- * each. This is the shape `ParameterLookupTable.fromJSON` wants.
- *
- * The names come from `ParticleParameters` rather than being written out,
- * because the constants' *keys* are `Scale` and `Color` while their *values* are
- * `'scale'` and `'color'`. Writing the capitalised form throws
- * `Failed to add track with name 'Scale', no parameter exists with that name` --
- * a genuinely good error message, and one you only see at emitter-construction
- * time rather than at compile time.
- */
-function track(name: string, itemSize: number, positions: number[], data: number[]) {
-    return { name, track: { itemSize, data, positions } };
+const PARTICLE_LAYOUT = new ParticleLayout([
+    { name: 'position', components: 3 },
+    { name: 'velocity', components: 3 },
+    { name: 'age', components: 1 },
+    { name: 'lifetime', components: 1 },
+    { name: 'size', components: 1 },
+    { name: 'base_size', components: 1 },
+    { name: 'color', components: 4, type: 'color' },
+]);
+
+const VELOCITY_WORD_OFFSET = PARTICLE_LAYOUT.offsetOf('velocity');
+
+/** A cone axis and the sampler that rotates onto it via the compiled VM program. */
+export interface ParticleConeSampler {
+    readonly direction: { readonly x: number; readonly y: number; readonly z: number };
+    readonly angle: number;
+    sampleRandomDirection(random: () => number, result: Vector3): void;
 }
 
-const SCALE = ParticleParameters.Scale;
-const COLOR = ParticleParameters.Color;
+/** `ParticleEffect` carrying the authored ramp and cone metadata tests inspect. */
+export interface AuthoredParticleEffect extends ParticleEffect {
+    readonly colorStops: { readonly position: number; readonly color: readonly number[] }[];
+    readonly cone?: ParticleConeSampler;
+}
+
+interface ParticleBurstSpec {
+    readonly blendingMode: number;
+    readonly receiveLight: boolean;
+    readonly imageURL: string;
+    readonly burstCount: number;
+    readonly particleLife: { readonly min: number; readonly max: number };
+    readonly particleSize: { readonly min: number; readonly max: number };
+    readonly particleSpeed: { readonly min: number; readonly max: number };
+    readonly sphereRadius?: number;
+    readonly cone?: {
+        readonly direction: { readonly x: number; readonly y: number; readonly z: number };
+        readonly angle: number;
+    };
+    readonly core?: {
+        readonly particleLife: { readonly min: number; readonly max: number };
+        readonly particleSize: { readonly min: number; readonly max: number };
+        readonly particleSpeed: { readonly min: number; readonly max: number };
+        readonly coneAngle: number;
+    };
+    readonly scalePositions: readonly number[];
+    readonly scaleValues: readonly number[];
+    readonly colorPositions: readonly number[];
+    readonly colorData: readonly number[];
+}
+
+function linearCurve(positions: readonly number[], values: readonly number[]) {
+    const n = positions.length;
+    const keys = positions.map((time, i) => {
+        const value = values[i]!;
+        const prevSlope =
+            i > 0
+                ? (value - values[i - 1]!) / Math.max(1e-6, time - positions[i - 1]!)
+                : (values[1]! - value) / Math.max(1e-6, positions[1]! - time);
+        const nextSlope =
+            i + 1 < n
+                ? (values[i + 1]! - value) / Math.max(1e-6, positions[i + 1]! - time)
+                : prevSlope;
+        return {
+            time,
+            value,
+            inTangent: prevSlope,
+            outTangent: nextSlope,
+        };
+    });
+    return { keys };
+}
+
+function buildColorStops(positions: readonly number[], data: readonly number[]) {
+    return positions.map((position, i) => ({
+        position,
+        color: [data[i * 4]!, data[i * 4 + 1]!, data[i * 4 + 2]!, data[i * 4 + 3]!],
+    }));
+}
+
+function buildParticleEffect(spec: ParticleBurstSpec): AuthoredParticleEffect {
+    const init = new NodeGraph();
+
+    const setAge = particle_node(init, 'setAttribute', { name: 'age' });
+    particle_wire(init, setAge, 'value', [0]);
+
+    let isCore: number | null = null;
+    if (spec.core !== undefined) {
+        const spawnFrac = particle_node(init, 'builtin', { id: VM_BUILTIN.SPAWN_FRACTION });
+        isCore = particle_node(init, 'compare', { op: 'lt' });
+        particle_wire(init, isCore, 'a', spawnFrac);
+        particle_wire(init, isCore, 'b', [0.1]);
+    }
+
+    const randRange = (
+        min: number,
+        max: number,
+        coreRange?: { readonly min: number; readonly max: number }
+    ): number => {
+        const r = particle_node(init, 'random', { components: 1 });
+        const sparkMix = particle_node(init, 'mix');
+        particle_wire(init, sparkMix, 'a', [min]);
+        particle_wire(init, sparkMix, 'b', [max]);
+        particle_wire(init, sparkMix, 't', r);
+        if (isCore === null || coreRange === undefined) return sparkMix;
+        const coreMix = particle_node(init, 'mix');
+        particle_wire(init, coreMix, 'a', [coreRange.min]);
+        particle_wire(init, coreMix, 'b', [coreRange.max]);
+        particle_wire(init, coreMix, 't', r);
+        const sel = particle_node(init, 'select');
+        particle_wire(init, sel, 'a', sparkMix);
+        particle_wire(init, sel, 'b', coreMix);
+        particle_wire(init, sel, 'condition', isCore);
+        return sel;
+    };
+
+    const lifetime = randRange(
+        spec.particleLife.min,
+        spec.particleLife.max,
+        spec.core?.particleLife
+    );
+    const setLifetime = particle_node(init, 'setAttribute', { name: 'lifetime' });
+    particle_wire(init, setLifetime, 'value', lifetime);
+
+    const baseSize = randRange(
+        spec.particleSize.min,
+        spec.particleSize.max,
+        spec.core?.particleSize
+    );
+    const setBaseSize = particle_node(init, 'setAttribute', { name: 'base_size' });
+    particle_wire(init, setBaseSize, 'value', baseSize);
+
+    const initSize = particle_node(init, 'mul');
+    particle_wire(init, initSize, 'a', baseSize);
+    particle_wire(init, initSize, 'b', [spec.scaleValues[0]!]);
+    const setSize = particle_node(init, 'setAttribute', { name: 'size' });
+    particle_wire(init, setSize, 'value', initSize);
+
+    const colorStops = buildColorStops(spec.colorPositions, spec.colorData);
+    const setColor = particle_node(init, 'setAttribute', { name: 'color' });
+    particle_wire(init, setColor, 'value', [...colorStops[0]!.color]);
+
+    const emitterPos = particle_node(init, 'builtin', { id: VM_BUILTIN.EMITTER_POSITION });
+    let posSource = emitterPos;
+    if (spec.sphereRadius !== undefined && spec.sphereRadius > 0) {
+        const uvw = particle_node(init, 'random', { components: 3 });
+        const spherePt = particle_node(init, 'sampleSphereVolume');
+        particle_wire(init, spherePt, 'uvw', uvw);
+        const offset = particle_node(init, 'scale');
+        particle_wire(init, offset, 'v', spherePt);
+        particle_wire(init, offset, 's', [spec.sphereRadius]);
+        const posAdd = particle_node(init, 'add');
+        particle_wire(init, posAdd, 'a', emitterPos);
+        particle_wire(init, posAdd, 'b', offset);
+        posSource = posAdd;
+    }
+    const setPos = particle_node(init, 'setAttribute', { name: 'position' });
+    particle_wire(init, setPos, 'value', posSource);
+
+    const speed = randRange(
+        spec.particleSpeed.min,
+        spec.particleSpeed.max,
+        spec.core?.particleSpeed
+    );
+    let dirNode: number;
+    if (spec.cone !== undefined) {
+        const d = spec.cone.direction;
+        const [tx, ty, tz] = perpendicular(d.x, d.y, d.z, 0);
+        const bx = d.y * tz - d.z * ty;
+        const by = d.z * tx - d.x * tz;
+        const bz = d.x * ty - d.y * tx;
+
+        const sparkMinCos = Math.cos(Math.max(0, spec.cone.angle - 1e-4));
+        let minCosSource: number | number[] = [sparkMinCos];
+        if (isCore !== null && spec.core !== undefined) {
+            const coreMinCos = Math.cos(Math.max(0, spec.core.coneAngle - 1e-4));
+            const selCos = particle_node(init, 'select');
+            particle_wire(init, selCos, 'a', [sparkMinCos]);
+            particle_wire(init, selCos, 'b', [coreMinCos]);
+            particle_wire(init, selCos, 'condition', isCore);
+            minCosSource = selCos;
+        }
+
+        const u = particle_node(init, 'random', { components: 1 });
+        const v = particle_node(init, 'random', { components: 1 });
+
+        const cosTheta = particle_node(init, 'mix');
+        particle_wire(init, cosTheta, 'a', minCosSource);
+        particle_wire(init, cosTheta, 'b', [1]);
+        particle_wire(init, cosTheta, 't', u);
+
+        const cos2 = particle_node(init, 'mul');
+        particle_wire(init, cos2, 'a', cosTheta);
+        particle_wire(init, cos2, 'b', cosTheta);
+
+        const oneMinusCos2 = particle_node(init, 'sub');
+        particle_wire(init, oneMinusCos2, 'a', [1]);
+        particle_wire(init, oneMinusCos2, 'b', cos2);
+
+        const clampedSin2 = particle_node(init, 'max');
+        particle_wire(init, clampedSin2, 'a', oneMinusCos2);
+        particle_wire(init, clampedSin2, 'b', [0]);
+
+        const sinTheta = particle_node(init, 'sqrt');
+        particle_wire(init, sinTheta, 'x', clampedSin2);
+
+        const phi = particle_node(init, 'mul');
+        particle_wire(init, phi, 'a', v);
+        particle_wire(init, phi, 'b', [TAU]);
+
+        const cosPhi = particle_node(init, 'cos');
+        particle_wire(init, cosPhi, 'x', phi);
+        const sinPhi = particle_node(init, 'sin');
+        particle_wire(init, sinPhi, 'x', phi);
+
+        const lx = particle_node(init, 'mul');
+        particle_wire(init, lx, 'a', sinTheta);
+        particle_wire(init, lx, 'b', cosPhi);
+
+        const ly = particle_node(init, 'mul');
+        particle_wire(init, ly, 'a', sinTheta);
+        particle_wire(init, ly, 'b', sinPhi);
+
+        const tTerm = particle_node(init, 'scale');
+        particle_wire(init, tTerm, 'v', [tx, ty, tz]);
+        particle_wire(init, tTerm, 's', lx);
+
+        const bTerm = particle_node(init, 'scale');
+        particle_wire(init, bTerm, 'v', [bx, by, bz]);
+        particle_wire(init, bTerm, 's', ly);
+
+        const dTerm = particle_node(init, 'scale');
+        particle_wire(init, dTerm, 'v', [d.x, d.y, d.z]);
+        particle_wire(init, dTerm, 's', cosTheta);
+
+        const tb = particle_node(init, 'add');
+        particle_wire(init, tb, 'a', tTerm);
+        particle_wire(init, tb, 'b', bTerm);
+
+        dirNode = particle_node(init, 'add');
+        particle_wire(init, dirNode, 'a', tb);
+        particle_wire(init, dirNode, 'b', dTerm);
+    } else {
+        const uv = particle_node(init, 'random', { components: 2 });
+        dirNode = particle_node(init, 'sampleSphereSurface');
+        particle_wire(init, dirNode, 'uv', uv);
+    }
+
+    const vel = particle_node(init, 'scale');
+    particle_wire(init, vel, 'v', dirNode);
+    particle_wire(init, vel, 's', speed);
+    const setVel = particle_node(init, 'setAttribute', { name: 'velocity' });
+    particle_wire(init, setVel, 'value', vel);
+
+    const update = new NodeGraph();
+
+    const dt = particle_node(update, 'builtin', { id: VM_BUILTIN.DELTA_TIME });
+    const prevAge = particle_node(update, 'attribute', { name: 'age' });
+    const age = particle_node(update, 'add');
+    particle_wire(update, age, 'a', prevAge);
+    particle_wire(update, age, 'b', dt);
+
+    const updateAge = particle_node(update, 'setAttribute', { name: 'age' });
+    particle_wire(update, updateAge, 'value', age);
+
+    const lifeAttr = particle_node(update, 'attribute', { name: 'lifetime' });
+    const dead = particle_node(update, 'compare', { op: 'ge' });
+    particle_wire(update, dead, 'a', age);
+    particle_wire(update, dead, 'b', lifeAttr);
+
+    const killNode = particle_node(update, 'kill');
+    particle_wire(update, killNode, 'condition', dead);
+
+    const posAttr = particle_node(update, 'attribute', { name: 'position' });
+    const velAttr = particle_node(update, 'attribute', { name: 'velocity' });
+    const stepPos = particle_node(update, 'scale');
+    particle_wire(update, stepPos, 'v', velAttr);
+    particle_wire(update, stepPos, 's', dt);
+    const nextPos = particle_node(update, 'add');
+    particle_wire(update, nextPos, 'a', posAttr);
+    particle_wire(update, nextPos, 'b', stepPos);
+    const updatePos = particle_node(update, 'setAttribute', { name: 'position' });
+    particle_wire(update, updatePos, 'value', nextPos);
+
+    const rawT = particle_node(update, 'div');
+    particle_wire(update, rawT, 'a', age);
+    particle_wire(update, rawT, 'b', lifeAttr);
+    const t = particle_node(update, 'saturate');
+    particle_wire(update, t, 'x', rawT);
+
+    const baseSizeAttr = particle_node(update, 'attribute', { name: 'base_size' });
+    const scaleFactor = particle_node(update, 'curveLiteral', {
+        curve: linearCurve(spec.scalePositions, spec.scaleValues),
+    });
+    particle_wire(update, scaleFactor, 't', t);
+    const nextSize = particle_node(update, 'mul');
+    particle_wire(update, nextSize, 'a', baseSizeAttr);
+    particle_wire(update, nextSize, 'b', scaleFactor);
+    const updateSize = particle_node(update, 'setAttribute', { name: 'size' });
+    particle_wire(update, updateSize, 'value', nextSize);
+
+    const nextColor = particle_node(update, 'gradientRGBA', { stops: colorStops });
+    particle_wire(update, nextColor, 't', t);
+    const updateColor = particle_node(update, 'setAttribute', { name: 'color' });
+    particle_wire(update, updateColor, 'value', nextColor);
+
+    const compiled = create_particle_effect({ layout: PARTICLE_LAYOUT, init, update });
+    const effect = ParticleEffect.from({
+        ...compiled,
+        texture: spec.imageURL,
+        spawn_rate: 0,
+        flags: {
+            blend: spec.blendingMode,
+            lighting: spec.receiveLight,
+            soft_depth: spec.receiveLight,
+        },
+        render: {
+            position: 'position',
+            size: 'size',
+            color: 'color',
+        },
+    }) as AuthoredParticleEffect;
+
+    const coneAngle = spec.core !== undefined ? spec.core.coneAngle : spec.cone?.angle;
+    const coneSampler: ParticleConeSampler | undefined =
+        spec.cone === undefined || coneAngle === undefined
+            ? undefined
+            : {
+                  direction: spec.cone.direction,
+                  angle: coneAngle,
+                  sampleRandomDirection(random: () => number, result: Vector3): void {
+                      const record = new Uint32Array(PARTICLE_RECORD_WORD_COUNT);
+                      execute_particle_vm({
+                          words: compiled.program.init,
+                          constants: compiled.program.constants,
+                          register_count: compiled.program.register_count,
+                          record,
+                          rng_state: Math.floor(random() * 0x100000000) >>> 0,
+                      });
+                      const f32 = new Float32Array(record.buffer);
+                      const vx = f32[VELOCITY_WORD_OFFSET]!;
+                      const vy = f32[VELOCITY_WORD_OFFSET + 1]!;
+                      const vz = f32[VELOCITY_WORD_OFFSET + 2]!;
+                      const vLen = Math.hypot(vx, vy, vz);
+                      result.set(vx / vLen, vy / vLen, vz / vLen);
+                  },
+              };
+
+    return Object.assign(effect, {
+        colorStops,
+        ...(coneSampler === undefined ? {} : { cone: coneSampler }),
+    });
+}
 
 /** One row of `CG_MissileHitWall`'s mark table. */
 interface ImpactMark {
@@ -816,6 +1156,9 @@ export class Effects {
      */
     private readonly shadows: ShadowPolicy;
 
+    /** Optional GPU particle system handle for issuing one-shot bursts. */
+    particles: { burst(entity: number, count: number): void } | null = null;
+
     constructor(ecd: EcsDataset, shadows: ShadowPolicy = NO_SHADOWS) {
         this.ecd = ecd;
         this.shadows = shadows;
@@ -824,8 +1167,33 @@ export class Effects {
         if (!ecd.isComponentTypeRegistered(Light)) ecd.registerComponentType(Light);
         if (!ecd.isComponentTypeRegistered(Decal)) ecd.registerComponentType(Decal);
         if (!ecd.isComponentTypeRegistered(Trail3D)) ecd.registerComponentType(Trail3D);
-        if (!ecd.isComponentTypeRegistered(ParticleEmitter)) {
-            ecd.registerComponentType(ParticleEmitter);
+        if (!ecd.isComponentTypeRegistered(ParticleEffect)) {
+            ecd.registerComponentType(ParticleEffect);
+        }
+    }
+
+    /**
+     * Pin the three FX sprite textures in `GPUParticleEmitterSystem`'s atlas.
+     *
+     * Every particle effect in this port is a short-lived one-shot burst that
+     * removes its entity when its particles expire. `GPUParticleEmitterSystem`
+     * reference-counts each texture URL across linked `ParticleEffect` entities
+     * and unpacks a patch when its count drops to zero, while keeping `layout:
+     * null, program: null` entries as texture-only references that allocate no
+     * emitter and no scene row. Pinning the three URLs once at startup loads the
+     * images ahead of the first shot and keeps their atlas patches resident
+     * between shots.
+     */
+    static pinAtlasTextures(ecd: EcsDataset): void {
+        if (!ecd.isComponentTypeRegistered(Transform64)) ecd.registerComponentType(Transform64);
+        if (!ecd.isComponentTypeRegistered(ParticleEffect)) {
+            ecd.registerComponentType(ParticleEffect);
+        }
+        for (const texture of PARTICLE_ATLAS_URLS) {
+            new Entity()
+                .add(new Transform64())
+                .add(ParticleEffect.from({ texture }))
+                .build(ecd);
         }
     }
 
@@ -1034,26 +1402,16 @@ export class Effects {
             {
                 blendingMode: BLEND_ADDITIVE,
                 receiveLight: false,
-                depthSort: false,
-                layers: [
-                    {
-                        imageURL: '/assets/built/fx/flare.png',
-                        particleLife: { min: 0.18, max: 0.35 },
-                        particleSize: { min: radius * 0.9, max: radius * 1.6 },
-                        particleRotation: { min: 0, max: Math.PI * 2 },
-                        particleRotationSpeed: { min: -2, max: 2 },
-                        emissionShape: EMISSION_SPHERE,
-                        emissionFrom: FROM_VOLUME,
-                        emissionRate: 0,
-                        emissionImmediate: 14,
-                        scale: { x: radius * 0.3, y: radius * 0.3, z: radius * 0.3 },
-                        particleSpeed: { min: radius * 1.5, max: radius * 4 },
-                        parameterTracks: [
-                            track(SCALE, 1, [0, 0.25, 1], [0.35, 1.0, 0.15]),
-                            track(COLOR, 4, [...FIREBALL_TIMES], fireballTrack(weapon)),
-                        ],
-                    },
-                ],
+                imageURL: '/assets/built/fx/flare.png',
+                burstCount: 14,
+                particleLife: { min: 0.18, max: 0.35 },
+                particleSize: { min: radius * 0.9, max: radius * 1.6 },
+                sphereRadius: radius * 0.3,
+                particleSpeed: { min: radius * 1.5, max: radius * 4 },
+                scalePositions: [0, 0.25, 1],
+                scaleValues: [0.35, 1.0, 0.15],
+                colorPositions: [...FIREBALL_TIMES],
+                colorData: fireballTrack(weapon),
             },
             1.2
         );
@@ -1064,31 +1422,16 @@ export class Effects {
             {
                 blendingMode: BLEND_NORMAL,
                 receiveLight: true,
-                depthSort: true,
-                layers: [
-                    {
-                        imageURL: '/assets/built/fx/smoke.png',
-                        particleLife: { min: 0.9, max: 1.8 },
-                        particleSize: { min: radius * 0.8, max: radius * 1.8 },
-                        particleRotation: { min: 0, max: Math.PI * 2 },
-                        particleRotationSpeed: { min: -0.6, max: 0.6 },
-                        emissionShape: EMISSION_SPHERE,
-                        emissionFrom: FROM_VOLUME,
-                        emissionRate: 0,
-                        emissionImmediate: 18,
-                        scale: { x: radius * 0.4, y: radius * 0.4, z: radius * 0.4 },
-                        particleSpeed: { min: radius * 0.4, max: radius * 1.6 },
-                        parameterTracks: [
-                            track(SCALE, 1, [0, 1], [0.6, 1.9]),
-                            track(
-                                COLOR,
-                                4,
-                                [0, 0.15, 1],
-                                [0.5, 0.45, 0.42, 0.0, 0.32, 0.30, 0.28, 0.55, 0.2, 0.2, 0.2, 0]
-                            ),
-                        ],
-                    },
-                ],
+                imageURL: '/assets/built/fx/smoke.png',
+                burstCount: 18,
+                particleLife: { min: 0.9, max: 1.8 },
+                particleSize: { min: radius * 0.8, max: radius * 1.8 },
+                sphereRadius: radius * 0.4,
+                particleSpeed: { min: radius * 0.4, max: radius * 1.6 },
+                scalePositions: [0, 1],
+                scaleValues: [0.6, 1.9],
+                colorPositions: [0, 0.15, 1],
+                colorData: [0.5, 0.45, 0.42, 0.0, 0.32, 0.30, 0.28, 0.55, 0.2, 0.2, 0.2, 0],
             },
             2.5
         );
@@ -1382,29 +1725,19 @@ export class Effects {
             {
                 blendingMode: BLEND_ADDITIVE,
                 receiveLight: false,
-                depthSort: false,
-                layers: [
-                    {
-                        imageURL: '/assets/built/fx/tracer.png',
-                        particleLife: { min: 0.08, max: 0.22 },
-                        particleSize: { min: 0.02, max: 0.06 },
-                        particleRotation: { min: 0, max: Math.PI * 2 },
-                        particleRotationSpeed: { min: 0, max: 0 },
-                        emissionShape: EMISSION_POINT,
-                        emissionFrom: FROM_VOLUME,
-                        emissionRate: 0,
-                        emissionImmediate: 6,
-                        particleSpeed: { min: 1.5, max: 5 },
-                        particleVelocityDirection: {
-                            direction: coneAxis(dirToMeep(normalQ3)),
-                            angle: 1.1,
-                        },
-                        parameterTracks: [
-                            track(SCALE, 1, [0, 1], [1, 0.2]),
-                            track(COLOR, 4, [0, 1], [1, 0.85, 0.5, 1, 1, 0.4, 0.1, 0]),
-                        ],
-                    },
-                ],
+                imageURL: '/assets/built/fx/tracer.png',
+                burstCount: 6,
+                particleLife: { min: 0.08, max: 0.22 },
+                particleSize: { min: 0.02, max: 0.06 },
+                particleSpeed: { min: 1.5, max: 5 },
+                cone: {
+                    direction: coneAxis(dirToMeep(normalQ3)),
+                    angle: 1.1,
+                },
+                scalePositions: [0, 1],
+                scaleValues: [1, 0.2],
+                colorPositions: [0, 1],
+                colorData: [1, 0.85, 0.5, 1, 1, 0.4, 0.1, 0],
             },
             0.5
         );
@@ -1521,30 +1854,15 @@ export class Effects {
             {
                 blendingMode: BLEND_NORMAL,
                 receiveLight: true,
-                depthSort: true,
-                layers: [
-                    {
-                        imageURL: '/assets/built/fx/smoke.png',
-                        particleLife: { min: 0.5, max: 1.1 },
-                        particleSize: { min: 0.25, max: 0.5 },
-                        particleRotation: { min: 0, max: Math.PI * 2 },
-                        particleRotationSpeed: { min: -0.8, max: 0.8 },
-                        emissionShape: EMISSION_POINT,
-                        emissionFrom: FROM_VOLUME,
-                        emissionRate: 0,
-                        emissionImmediate: 1,
-                        particleSpeed: { min: 0.1, max: 0.4 },
-                        parameterTracks: [
-                            track(SCALE, 1, [0, 1], [0.4, 1.6]),
-                            track(
-                                COLOR,
-                                4,
-                                [0, 0.1, 1],
-                                [0.7, 0.66, 0.6, 0, 0.5, 0.48, 0.46, 0.5, 0.3, 0.3, 0.3, 0]
-                            ),
-                        ],
-                    },
-                ],
+                imageURL: '/assets/built/fx/smoke.png',
+                burstCount: 1,
+                particleLife: { min: 0.5, max: 1.1 },
+                particleSize: { min: 0.25, max: 0.5 },
+                particleSpeed: { min: 0.1, max: 0.4 },
+                scalePositions: [0, 1],
+                scaleValues: [0.4, 1.6],
+                colorPositions: [0, 0.1, 1],
+                colorData: [0.7, 0.66, 0.6, 0, 0.5, 0.48, 0.46, 0.5, 0.3, 0.3, 0.3, 0],
             },
             1.4
         );
@@ -1642,67 +1960,22 @@ export class Effects {
             {
                 blendingMode: BLEND_ADDITIVE,
                 receiveLight: false,
-                depthSort: false,
-                layers: [
-                    /*
-                     The core. One particle, at the muzzle, that flares and dies
-                     -- Q3's flash model is a single billboard and this is the
-                     nearest honest thing. `emissionRate: 0` with an immediate
-                     count is the one-shot idiom the rest of this file uses.
-                    */
-                    {
-                        imageURL: '/assets/built/fx/flare.png',
-                        particleLife: { min: 0.03, max: 0.045 },
-                        particleSize: { min: 0.14, max: 0.2 },
-                        particleRotation: { min: 0, max: TAU },
-                        particleRotationSpeed: { min: 0, max: 0 },
-                        emissionShape: EMISSION_POINT,
-                        emissionFrom: FROM_VOLUME,
-                        emissionRate: 0,
-                        emissionImmediate: 1,
-                        particleSpeed: { min: 0.2, max: 0.6 },
-                        particleVelocityDirection: { direction, angle: 0.2 },
-                        parameterTracks: [
-                            // Opens fast and shuts faster, which is what a flash
-                            // reads as; a symmetric curve reads as a bubble.
-                            track(SCALE, 1, [0, 0.25, 1], [0.55, 1, 0.15]),
-                            track(
-                                COLOR,
-                                4,
-                                [0, 1],
-                                [1, 1, 1, 1, r, g, b, 0]
-                            ),
-                        ],
-                    },
-                    /*
-                     And the sparks. A narrow cone down the barrel rather than a
-                     puff, because a muzzle throws burning grains forwards --
-                     `bulletImpact` uses the same layer shape pointed along a
-                     surface normal instead.
-                    */
-                    {
-                        imageURL: '/assets/built/fx/tracer.png',
-                        particleLife: { min: 0.04, max: 0.09 },
-                        particleSize: { min: 0.015, max: 0.04 },
-                        particleRotation: { min: 0, max: TAU },
-                        particleRotationSpeed: { min: 0, max: 0 },
-                        emissionShape: EMISSION_POINT,
-                        emissionFrom: FROM_VOLUME,
-                        emissionRate: 0,
-                        emissionImmediate: 5,
-                        particleSpeed: { min: 2.5, max: 7 },
-                        particleVelocityDirection: { direction, angle: 0.35 },
-                        parameterTracks: [
-                            track(SCALE, 1, [0, 1], [1, 0.15]),
-                            track(
-                                COLOR,
-                                4,
-                                [0, 1],
-                                [1, 1, 1, 1, r, g, b, 0]
-                            ),
-                        ],
-                    },
-                ],
+                imageURL: '/assets/built/fx/flare.png',
+                burstCount: 6,
+                particleLife: { min: 0.04, max: 0.09 },
+                particleSize: { min: 0.015, max: 0.04 },
+                particleSpeed: { min: 2.5, max: 7 },
+                cone: { direction, angle: 0.35 },
+                core: {
+                    particleLife: { min: 0.03, max: 0.045 },
+                    particleSize: { min: 0.14, max: 0.2 },
+                    particleSpeed: { min: 0.2, max: 0.6 },
+                    coneAngle: 0.2,
+                },
+                scalePositions: [0, 0.25, 1],
+                scaleValues: [0.55, 1, 0.15],
+                colorPositions: [0, 1],
+                colorData: [1, 1, 1, 1, r, g, b, 0],
             },
             /*
              Long enough for the longest particle plus a frame, and no longer.
@@ -1720,18 +1993,19 @@ export class Effects {
     /** Build a one-shot emitter entity and schedule its removal. */
     private emitter(
         positionMeep: readonly number[],
-        json: Record<string, unknown>,
+        spec: ParticleBurstSpec,
         lifetimeSeconds: number
     ): number {
-        const emitter = new ParticleEmitter();
-        emitter.fromJSON(json);
+        const emitter = buildParticleEffect(spec);
 
         const transform = new Transform64();
         transform.setTranslation(positionMeep[0]!, positionMeep[1]!, positionMeep[2]!);
+        transform.updateMatrix();
 
         const entity = new Entity();
         entity.add(transform).add(emitter).build(this.ecd);
 
+        this.particles?.burst(entity.id, spec.burstCount);
         this.expire(entity.id, lifetimeSeconds);
 
         return entity.id;

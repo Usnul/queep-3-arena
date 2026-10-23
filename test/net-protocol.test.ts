@@ -345,7 +345,16 @@ describe('component sizes', () => {
 /** Lay two snapshots into one buffer and blend them, as `InterpolationLog` does. */
 function blend<T>(
     adapter: { serialize(b: BinaryBuffer, v: T): void; deserialize(b: BinaryBuffer, v: T): void },
-    interp: { interpolate(o: BinaryBuffer, s: BinaryBuffer, a: number, b: number, t: number): void },
+    interp: {
+        interpolate(
+            o: BinaryBuffer,
+            s: BinaryBuffer,
+            a: number,
+            b: number,
+            blend: Float64Array,
+            blendOffset: number
+        ): void;
+    },
     a: T,
     b: T,
     t: number,
@@ -358,7 +367,8 @@ function blend<T>(
     adapter.serialize(source, b);
 
     const blended = buffer();
-    interp.interpolate(blended, source, offsetA, offsetB, t);
+    const blendFactors = new Float64Array([t]);
+    interp.interpolate(blended, source, offsetA, offsetB, blendFactors, 0);
     blended.position = 0;
     adapter.deserialize(blended, out);
     return out;

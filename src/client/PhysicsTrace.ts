@@ -166,6 +166,7 @@ export class PhysicsTrace {
      */
     private readonly notIgnored = (entity: number): boolean => {
         if (this.ignored.has(entity)) return false;
+        if (this.alreadyRuledOn(entity)) return false;
 
         const hull = this.hullByEntity.get(entity);
         /*
@@ -376,10 +377,17 @@ export class PhysicsTrace {
         sz: number,
         gatherNeighbours: boolean
     ): number {
-        let count = 0;
+        let count = this.hullCount;
 
         const primary = this.hullByEntity.get(primaryEntity);
-        if (primary !== undefined) this.hullScratch[count++] = primary;
+        if (
+            primary !== undefined &&
+            !this.alreadyRuledOn(primaryEntity) &&
+            count < this.hullScratch.length
+        ) {
+            this.hullScratch[count++] = primary;
+            this.hullCount = count;
+        }
 
         if (gatherNeighbours) {
             const found = overlap_shape_indexed(
@@ -395,7 +403,14 @@ export class PhysicsTrace {
                 const hull = this.hullByBody.get(this.overlaps[i]!);
                 if (hull === undefined) continue;
                 if (count >= this.hullScratch.length) break;
-                this.hullScratch[count++] = hull;
+                let seen = false;
+                for (let j = 0; j < count; j++) {
+                    if (this.hullScratch[j] === hull) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) this.hullScratch[count++] = hull;
             }
         }
 
@@ -451,6 +466,7 @@ export class PhysicsTrace {
     ): void {
         // What this sweep is allowed to stop on. See `notIgnored`.
         this.mask = contentMask;
+        this.hullCount = 0;
 
         // Recentre, exactly as `CM_Trace` does.
         const ox = (minsQ3[0]! + maxsQ3[0]!) * 0.5;
@@ -707,6 +723,37 @@ export class PhysicsTrace {
             fraction = Math.min(1, Math.max(0, this.hit.t / length));
         }
 
+        /*
+         The plane comes from the brush the sweep actually enters. Falling back
+         to `shape_cast`'s own normal -- the minimum-penetration axis -- is
+         GAP-012's wrong answer, so it is only used when no brush blocks at all,
+         which means the two disagree about whether there is a contact.
+        */
+        let q3 = this.contactPlane(
+            this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, false
+        );
+
+        while (q3 >= 1 && this.alreadyRuledOn(this.hit.entity)) {
+            if (!shape_cast_indexed(this.system, ray, shape, NO_ROTATION, this.hit, this.notIgnored, true)) {
+                out.fraction = 1;
+                out.endpos[0] = endQ3[0]!;
+                out.endpos[1] = endQ3[1]!;
+                out.endpos[2] = endQ3[2]!;
+                out.planeNormal[0] = 0;
+                out.planeNormal[1] = 0;
+                out.planeNormal[2] = 0;
+                out.planeDist = 0;
+                out.surfaceFlags = 0;
+                out.contents = 0;
+                out.entityNum = 1023;
+                return;
+            }
+            fraction = this.hit.t <= CONTACT_TOLERANCE ? 0 : Math.min(1, Math.max(0, this.hit.t / length));
+            q3 = this.contactPlane(
+                this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, false
+            );
+        }
+
         out.fraction = fraction;
         out.contents = 1;
         out.entityNum = 1022;
@@ -715,18 +762,8 @@ export class PhysicsTrace {
             out.endpos[i] = startQ3[i]! + fraction * (endQ3[i]! - startQ3[i]!);
         }
 
-        /*
-         The plane comes from the brush the sweep actually enters. Falling back
-         to `shape_cast`'s own normal -- the minimum-penetration axis -- is
-         GAP-012's wrong answer, so it is only used when no brush blocks at all,
-         which means the two disagree about whether there is a contact.
-        */
-        const q3 = this.contactPlane(
-            this.hit.entity, out, startQ3, endQ3, minsQ3, maxsQ3, sx, sy, sz, false
-        );
-
         // -1 is "no brush of ours covers that body"; 1 is "Q3 says nothing
-        // blocks". Both mean there is no Q3 plane to report.
+        // blocks" (only reachable if hullScratch is exhausted).
         if (q3 < 0 || q3 >= 1) {
             out.planeNormal[0] = this.hit.normal[0];
             out.planeNormal[1] = -this.hit.normal[2];

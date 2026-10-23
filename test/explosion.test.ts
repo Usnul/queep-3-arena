@@ -42,10 +42,9 @@ import { describe, expect, it } from 'vitest';
 import { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
 import { Transform64 } from '@woosh/meep-engine/src/engine/ecs/transform/Transform64.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
-import { ParticleEmitter } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleEmitter.js';
-import { ParticleParameters } from '@woosh/meep-engine/src/engine/graphics/particles/particular/engine/emitter/ParticleParameters.js';
+import { ParticleEffect } from '@woosh/meep-engine/src/engine/graphics/ecs/particles/ParticleEffect.js';
 
-import { Effects } from '../src/client/Effects.ts';
+import { Effects, type AuthoredParticleEffect } from '../src/client/Effects.ts';
 import { Shadows } from '../src/client/Shadows.ts';
 import measured from '../src/client/explosionColors.generated.json' with { type: 'json' };
 import balance from '../src/game/balance.generated.json' with { type: 'json' };
@@ -99,8 +98,8 @@ function detonate(radiusQ3: number, weapon?: string): Detonation {
     traverse([Light, Transform64], (light: never) => lights.push(light as Light));
     expect(lights.length, 'exactly one flash per detonation').toBe(1);
 
-    const emitters: ParticleEmitter[] = [];
-    traverse([ParticleEmitter, Transform64], (e: never) => emitters.push(e as ParticleEmitter));
+    const emitters: AuthoredParticleEffect[] = [];
+    traverse([ParticleEffect, Transform64], (e: never) => emitters.push(e as AuthoredParticleEffect));
 
     /*
      The fireball is the additive one; the other is smoke, which stays grey for
@@ -108,28 +107,17 @@ function detonate(radiusQ3: number, weapon?: string): Detonation {
     */
     expect(emitters.length, 'a fireball and its smoke').toBe(2);
 
-    const layer = (emitters[0] as unknown as { layers: { get(i: number): unknown } }).layers.get(0);
-    const tracks = (
-        layer as {
-            parameterTracks: {
-                getTrackByName(name: string): { track: { toJSON(): unknown } } | undefined;
-            };
-        }
-    ).parameterTracks;
+    const stops = emitters[0]!.colorStops;
+    expect(stops, 'the fireball has no colour track').toBeDefined();
 
-    const color = tracks.getTrackByName(ParticleParameters.Color);
-    expect(color, 'the fireball has no colour track').toBeDefined();
-
-    const json = color!.track.toJSON() as { data: number[]; positions: number[] };
-
-    const ramp: number[][] = [];
-    for (let i = 0; i < json.data.length; i += 4) ramp.push(json.data.slice(i, i + 4));
+    const ramp: number[][] = stops.map((s) => [...s.color]);
+    const times: number[] = stops.map((s) => s.position);
 
     return {
         candela: lights[0]!.intensity.getValue(),
         reach: lights[0]!.distance.getValue(),
         ramp,
-        times: [...json.positions],
+        times,
     };
 }
 

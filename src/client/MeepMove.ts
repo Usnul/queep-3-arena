@@ -415,7 +415,7 @@ export class MeepMove {
            Q3 number would be exactly the body-not-spirit mistake this module
            exists to stop making.
         */
-        this.mover = new KinematicMover(host.system as never, host.ecd as never, {
+        this.mover = new KinematicMover(host.system as never, {
             stepHeight: C.STEPSIZE * WORLD_SCALE,
             minWalkNormal: C.MIN_WALK_NORMAL,
             maxSlideIterations: 4,
@@ -598,7 +598,7 @@ export class MeepMove {
             shape as never,
             this.meepVelocity,
             dt,
-            (this.filter ?? undefined) as never
+            (this.filter ?? (() => true)) as never
         );
 
         this.fromMeep(this.meepPosition, state.origin);

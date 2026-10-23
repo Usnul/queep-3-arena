@@ -250,7 +250,7 @@
       "meep": "Replicator + AUTH_STATE, through NetworkSession",
       "note": "Q3's client pulls a snapshot per server frame and interpolates between the last two. meep pushes instead: `Replicator` sends every replicated component that changed, `AUTH_STATE` carries the owned entity's authoritative bytes once a tick, and `InterpolationLog` behind `AdaptiveRenderDelay` is what the render pass samples -- so there is no snapshot object to ask for and no `snap.ps` to read. The port's equivalent of `snap.entities` is the replicated pool (`NetPlayerState`, `NetMissile`, `NetItem`), which is a fixed set of slots rather than a per-frame list, and the difference is deliberate: a pool needs no spawn/despawn messages and no entity-number recycling.",
       "evidence": [
-        "src/net/registerProtocol.ts::s.replicate(NetPlayerState",
+        "src/net/registerProtocol.ts::s.replicate_interpolated",
         "src/client/net/NetClient.ts::wireReconciliation",
         "src/app/netSystems.ts::NetRenderSystem"
       ]

@@ -49,7 +49,7 @@ import { TransformAttachment } from '@woosh/meep-engine/src/engine/ecs/transform
 import { TransformAttachmentSystem } from '@woosh/meep-engine/src/engine/ecs/transform-attachment/TransformAttachmentSystem.js';
 import { Light } from '@woosh/meep-engine/src/engine/graphics/ecs/light/Light.js';
 import { LightType } from '@woosh/meep-engine/src/engine/graphics/ecs/light/LightType.js';
-import { Sprite } from '@woosh/meep-engine/src/engine/graphics/ecs/sprite/Sprite.js';
+import { ParticleEffect } from '@woosh/meep-engine/src/engine/graphics/ecs/particles/ParticleEffect.js';
 
 import { MissileView, orientAlong } from '../src/client/MissileView.ts';
 import { muzzleFlashLight } from '../src/client/muzzleFlash.ts';
@@ -125,7 +125,7 @@ const MISSILE_MODELS: Readonly<Record<string, string | null>> = {
 */
 function newDataset(): EntityComponentDataset {
     const ecd = new EntityComponentDataset();
-    ecd.setComponentTypeMap([Transform64, ShadedGeometry, TransformAttachment, Light, Sprite]);
+    ecd.setComponentTypeMap([Transform64, ShadedGeometry, TransformAttachment, Light, ParticleEffect]);
     return ecd;
 }
 
@@ -334,7 +334,7 @@ describe('a missile model', () => {
         it('is not a sprite, and nothing in this port builds one', () => {
             const { ecd } = bolt();
 
-            expect(componentsIn(ecd, Sprite).length, 'the sprite route is back').toBe(0);
+            expect(componentsIn(ecd, ParticleEffect).length, 'the sprite route is back').toBe(0);
         });
 
         it('glows without being lit, at the brightest fitting in the map', () => {
@@ -463,7 +463,7 @@ describe('a missile model', () => {
 
         expect(componentsIn(ecd, ShadedGeometry).length).toBe(0);
         expect(componentsIn(ecd, Light).length, 'a hitscan shot lit the room').toBe(0);
-        expect(componentsIn(ecd, Sprite).length).toBe(0);
+        expect(componentsIn(ecd, ParticleEffect).length).toBe(0);
         expect(view.unmodelled, 'a weapon with no missile is not a missing model').toEqual([]);
     });
 });

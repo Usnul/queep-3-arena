@@ -58,19 +58,21 @@ import { FORWARDMOVE, UPMOVE } from '../src/q3/pmove/types.ts';
 import { MAX_CLIENTS, TICK_HZ } from '../src/net/protocol.ts';
 import * as C from '../src/q3/pmove/constants.ts';
 
-/** `Channel`'s header, before the packet type byte. */
-const CHANNEL_HEADER_BYTES = 9;
+/** `Connection`'s minimum packet header (1-byte flags + 2-byte packet number) + 3-byte message frame header. */
+const CONNECTION_MIN_OVERHEAD_BYTES = 6;
 
-/** meep's target MTU, and the channel payload left inside it. */
+/** meep's target MTU, and the unreliable message payload left inside it. */
 const MTU_BYTES = 1200;
-const MAX_CHANNEL_PAYLOAD_BYTES = MTU_BYTES - CHANNEL_HEADER_BYTES;
+const MAX_CHANNEL_PAYLOAD_BYTES = MTU_BYTES - 8;
 
 const TYPE_NAMES: Record<number, string> = {
     0: 'ACTION_STREAM',
     3: 'AUTH_STATE',
-    4: 'FRAGMENT',
+    4: 'FRAMES_STREAM',
     7: 'TIME_DILATION',
     8: 'INITIAL_SYNC',
+    12: 'FRAME_MARKER',
+    16: 'ACK',
 };
 
 function angleToShort(degrees: number): number {
@@ -142,8 +144,83 @@ async function census(
                 if (counting) {
                     into.bytes += length;
                     into.packets += 1;
-                    const type = length > CHANNEL_HEADER_BYTES ? b[CHANNEL_HEADER_BYTES]! : -1;
-                    into.byType.set(type, (into.byType.get(type) ?? 0) + length);
+                    if (length >= 3) {
+                        const flags = b[0]!;
+                        const cursor = { position: (flags & 0x02) !== 0 ? 5 : 3 };
+                        const readVarint = (): number => {
+                            const p = cursor.position;
+                            if (p >= length) return -1;
+                            const first = b[p]!;
+                            const kind = first >>> 6;
+                            if (kind === 0) {
+                                cursor.position = p + 1;
+                                return first;
+                            }
+                            if (kind === 1) {
+                                if (p + 2 > length) return -1;
+                                cursor.position = p + 2;
+                                return ((first & 0x3f) << 8) | b[p + 1]!;
+                            }
+                            if (kind === 2) {
+                                if (p + 4 > length) return -1;
+                                cursor.position = p + 4;
+                                return (
+                                    (first & 0x3f) * 16777216 +
+                                    (b[p + 1]! << 16) +
+                                    (b[p + 2]! << 8) +
+                                    b[p + 3]!
+                                );
+                            }
+                            cursor.position = p + 8;
+                            return 0;
+                        };
+                        if ((flags & 0x01) !== 0) {
+                            readVarint();
+                            readVarint();
+                            const more = readVarint();
+                            readVarint();
+                            for (let i = 0; i < more; i++) {
+                                readVarint();
+                                readVarint();
+                            }
+                        }
+                        const headerBytes = cursor.position;
+                        if (cursor.position >= length) {
+                            // Pure ACK datagram with no frames.
+                            into.byType.set(16, (into.byType.get(16) ?? 0) + headerBytes);
+                        } else {
+                            let firstFrame = true;
+                            while (cursor.position < length) {
+                                const frameStart = cursor.position;
+                                const frameType = b[cursor.position++]!;
+                                const overhead = firstFrame ? headerBytes : 0;
+                                firstFrame = false;
+                                if (frameType === 0x01) {
+                                    const msgLen = readVarint();
+                                    if (msgLen < 0 || cursor.position + msgLen > length) break;
+                                    const msgType = msgLen > 0 ? b[cursor.position]! : -1;
+                                    cursor.position += msgLen;
+                                    const span = cursor.position - frameStart + overhead;
+                                    into.byType.set(msgType, (into.byType.get(msgType) ?? 0) + span);
+                                } else if (frameType === 0x02) {
+                                    into.byType.set(16, (into.byType.get(16) ?? 0) + 1 + overhead);
+                                } else if ((frameType & ~0x03) === 0x10) {
+                                    const lane = frameType & 0x03;
+                                    readVarint();
+                                    const streamLen = readVarint();
+                                    if (streamLen < 0 || cursor.position + streamLen > length) break;
+                                    cursor.position += streamLen;
+                                    const span = cursor.position - frameStart + overhead;
+                                    // Lane 1 (Lane.FRAMES) is the segmented action-stream frame path
+                                    // that replaced Channel's FRAGMENT (4).
+                                    const key = lane === 1 ? 4 : 8;
+                                    into.byType.set(key, (into.byType.get(key) ?? 0) + span);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
                 return original(b, length);
             };
@@ -251,23 +328,33 @@ describe('what a full match costs on the wire', () => {
         );
 
         /*
-         **The re-send window is the other multiplier and it is the big one.**
-         The same match on an 80 ms link costs several times the loopback, and
-         the factor is the round trip in frames: `flush_outbound` packs
-         `[last_acked + 1, current]` every tick, so a frame is on the wire once
-         per frame of round trip. Bounded loosely -- the point is that it is a
-         multiple and not a margin.
+         **In meep 3.53.0 (`MESSAGE_TRANSPORT.md` §3.6), oversized frames go on
+         `Lane.FRAMES` once**, so the re-send window no longer multiplies them on
+         downstream (`129.1 KB/s` at 80 ms / 2% loss vs `125.5 KB/s` on loopback,
+         `1.03x`), while upstream -- where one `UserCmdAction` fits a single
+         unreliable datagram -- still re-sends `[last_acked + 1, current]` every
+         tick across the round trip (`5.4 KB/s` vs `1.4 KB/s`, `3.9x`).
         */
-        const multiplier =
+        const downMultiplier =
             perClient(real.down, real.clients, real.seconds) /
             perClient(full.down, full.clients, full.seconds);
+        const upMultiplier =
+            perClient(real.up, real.clients, real.seconds) /
+            perClient(full.up, full.clients, full.seconds);
 
         // eslint-disable-next-line no-console
         console.log(
-            `[net-bandwidth] 80 ms costs ${multiplier.toFixed(1)}x the loopback, which is the ` +
-                'round trip in frames: every frame is re-sent until it is acked'
+            `[net-bandwidth] 80 ms vs loopback: down ${downMultiplier.toFixed(2)}x ` +
+                `(Lane.FRAMES sends >MTU frames once), up ${upMultiplier.toFixed(1)}x ` +
+                '(unreliable ACTION_STREAM re-send window)'
         );
 
-        expect(multiplier, 'the re-send window stopped costing anything').toBeGreaterThan(2);
+        expect(
+            downMultiplier,
+            'Lane.FRAMES should send oversized frames once rather than re-sending the whole RTT window'
+        ).toBeLessThan(1.25);
+        expect(upMultiplier, 'the upstream re-send window stopped costing anything').toBeGreaterThan(
+            2
+        );
     }, 900_000);
 });

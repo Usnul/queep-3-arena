@@ -32,6 +32,8 @@
 
 import type { NetworkSession } from '@woosh/meep-engine/src/engine/network/NetworkSession.js';
 import type { EntityComponentDataset } from '@woosh/meep-engine/src/engine/ecs/EntityComponentDataset.js';
+import { Interpoland } from '@woosh/meep-engine/src/engine/interpolation/Interpoland.js';
+import { HOST_VALUE_CORRECTION } from '@woosh/meep-engine/src/engine/network/correction/Correction.js';
 
 import {
     NetInventoryAdapter,
@@ -65,7 +67,12 @@ import { makeActions, type ActionContext, type ProtocolActions } from './actions
  * expressions are assignable to only through it.
  */
 interface SessionLike {
-    replicate(componentClass: Function, interpolator?: unknown): void;
+    replicate_interpolated(
+        componentClass: Function,
+        interpoland: unknown,
+        correction: unknown
+    ): void;
+    replicate_discrete(componentClass: Function, correction: unknown): void;
     defineAction(actionClass: Function): void;
     binary_registry: { registerAdapter(adapter: unknown, typeName: string): void };
 }
@@ -101,13 +108,21 @@ export function registerProtocol(
      Adapters first: `start()` verifies that every replicated class has one and
      throws by name if it does not, which is a good error and a late one.
     */
-    s.binary_registry.registerAdapter(new NetPlayerStateAdapter(), NetPlayerState.typeName);
-    s.binary_registry.registerAdapter(new NetInventoryAdapter(), NetInventory.typeName);
-    s.binary_registry.registerAdapter(new NetPlayerInfoAdapter(), NetPlayerInfo.typeName);
-    s.binary_registry.registerAdapter(new NetMissileAdapter(), NetMissile.typeName);
-    s.binary_registry.registerAdapter(new NetItemAdapter(), NetItem.typeName);
-    s.binary_registry.registerAdapter(new NetMoverAdapter(), NetMover.typeName);
-    s.binary_registry.registerAdapter(new NetMatchAdapter(), NetMatch.typeName);
+    const playerStateAdapter = new NetPlayerStateAdapter();
+    const inventoryAdapter = new NetInventoryAdapter();
+    const playerInfoAdapter = new NetPlayerInfoAdapter();
+    const missileAdapter = new NetMissileAdapter();
+    const itemAdapter = new NetItemAdapter();
+    const moverAdapter = new NetMoverAdapter();
+    const matchAdapter = new NetMatchAdapter();
+
+    s.binary_registry.registerAdapter(playerStateAdapter, NetPlayerState.typeName);
+    s.binary_registry.registerAdapter(inventoryAdapter, NetInventory.typeName);
+    s.binary_registry.registerAdapter(playerInfoAdapter, NetPlayerInfo.typeName);
+    s.binary_registry.registerAdapter(missileAdapter, NetMissile.typeName);
+    s.binary_registry.registerAdapter(itemAdapter, NetItem.typeName);
+    s.binary_registry.registerAdapter(moverAdapter, NetMover.typeName);
+    s.binary_registry.registerAdapter(matchAdapter, NetMatch.typeName);
 
     /*
      Wire order. `NetworkIdentity` is auto-replicated and takes type id 0; these
@@ -118,13 +133,25 @@ export function registerProtocol(
      is wrong for eight frames), for a name, for an item's presence and for the
      match clock, and would be wrong for anything drawn in a position.
     */
-    s.replicate(NetPlayerState, new NetPlayerStateInterpolation());
-    s.replicate(NetInventory);
-    s.replicate(NetPlayerInfo);
-    s.replicate(NetMissile, new NetMissileInterpolation());
-    s.replicate(NetItem);
-    s.replicate(NetMover, new NetMoverInterpolation());
-    s.replicate(NetMatch);
+    s.replicate_interpolated(
+        NetPlayerState,
+        new Interpoland(1, NetPlayerState, playerStateAdapter, new NetPlayerStateInterpolation()),
+        HOST_VALUE_CORRECTION
+    );
+    s.replicate_discrete(NetInventory, HOST_VALUE_CORRECTION);
+    s.replicate_discrete(NetPlayerInfo, HOST_VALUE_CORRECTION);
+    s.replicate_interpolated(
+        NetMissile,
+        new Interpoland(4, NetMissile, missileAdapter, new NetMissileInterpolation()),
+        HOST_VALUE_CORRECTION
+    );
+    s.replicate_discrete(NetItem, HOST_VALUE_CORRECTION);
+    s.replicate_interpolated(
+        NetMover,
+        new Interpoland(6, NetMover, moverAdapter, new NetMoverInterpolation()),
+        HOST_VALUE_CORRECTION
+    );
+    s.replicate_discrete(NetMatch, HOST_VALUE_CORRECTION);
 
     const actions = makeActions(ctx, { state: NetPlayerState, inventory: NetInventory });
     for (const actionClass of actions.all) {

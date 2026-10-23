@@ -65,7 +65,6 @@ import {
 } from '@woosh/meep-engine/src/engine/interpolation/Interpolated.js';
 import { InterpolationLog } from '@woosh/meep-engine/src/engine/interpolation/InterpolationLog.js';
 import { InterpolationSystem } from '@woosh/meep-engine/src/engine/interpolation/InterpolationSystem.js';
-import { t64_announce_change } from '@woosh/meep-engine/src/engine/ecs/transform/t64_announce_change.js';
 
 import type { Arena } from '../client/Arena.ts';
 import type { AudioBank, BodyState } from '../client/Audio.ts';
@@ -665,72 +664,16 @@ export class FlySystem extends System<never> {
 export { APP_INTERPOLATION_SOURCE, interpolatedBody, interpolatedPose } from '../client/interpolation.ts';
 
 /**
- * `InterpolationSystem`, with the two calls its write-back owes a `Transform64`.
+ * `InterpolationSystem` alias retained for call-site compatibility.
  *
- * **meep 3.16.0 blends into the live component and then tells nobody.**
- * `TransformPoseSerializationAdapter.deserialize` -- the write-back
- * `InterpolationSystem.update` runs once per rendered frame per interpolated
- * entity -- calls `setTranslation` and `setRotation` and stops there. Under the
- * old `Transform` that was enough: the sub-objects carried signals, and
- * `InterpolationSystem`'s own docblock still promises that "because it writes the
- * live component, all Transform-linked machinery (culling, particles, trails,
- * attachments) renders" at the blended pose. Under `Transform64` neither half of
- * that holds:
- *
- *  - the rotation does not reach the matrix without `updateMatrix()`, and
- *    `TransformAttachmentSystem` composes `parent x local` through matrices; and
- *  - nothing hears the write at all, because `ShadedGeometrySystem`,
- *    `MeshSystem`, `LightSystem` and the attachment system all place on
- *    `TRANSFORM64_EVENT_CHANGE` now rather than on a poll.
- *
- * So the blend lands in the component and never reaches the screen. What is drawn
- * is whatever pose was current at the last *announced* write, which is the fixed
- * step -- every interpolated thing in the port back to stepping at the simulation
- * rate, which is the judder D-081 and D-200 were about. Reported as GAP-050.
- *
- * **A subclass rather than a second system, because ordering is the whole
- * problem.** meep orders systems by declared component access, not registration
- * (see {@link ViewSystem}'s note on what that cost to work out), and a separate
- * announcer would have to be scheduled strictly after the blend for every frame
- * with no way to say so. Overriding `update` puts it after `super.update` by
- * construction and takes the scheduler out of it entirely.
- *
- * Delete this class and register `InterpolationSystem` directly once meep's
- * write-back announces for itself.
+ * Prior to meep 3.53.0, `TransformPoseSerializationAdapter.deserialize` did not
+ * call `updateMatrix()` and `InterpolationSystem.update` did not announce
+ * `TRANSFORM64_EVENT_CHANGE` (GAP-050), so this subclass walked `__entities` to
+ * do both. Meep's `TransformPoseSerializationAdapter` and `POSE_INTERPOLAND` now
+ * refresh the matrix and announce `t64_announce_change` directly during the
+ * write-back.
  */
-export class AnnouncingInterpolationSystem extends InterpolationSystem {
-    override update(deltaSeconds: number): void {
-        super.update(deltaSeconds);
-
-        const em = this.entityManager;
-        if (em === null || em === undefined) return;
-
-        const ecd = em.dataset;
-        if (ecd === null || ecd === undefined) return;
-
-        /*
-         The set `InterpolationSystem` maintains in its own `link`/`unlink`: every
-         entity carrying `Interpolated`, which is exactly the set it just wrote.
-         Announcing per entity rather than per interpoland is the coarse-by-design
-         trade `TRANSFORM64_EVENT_CHANGE` documents -- an entity interpolating
-         something other than its pose wakes a listener that then finds nothing
-         moved, which is redundant work rather than wrong work.
-        */
-        const entities = (this as unknown as { __entities: Map<number, unknown> }).__entities;
-
-        for (const entity of entities.keys()) {
-            const transform = ecd.getComponent(entity, Transform64) as Transform64 | null;
-            if (transform === null || transform === undefined) continue;
-
-            // The blend writes rotation as well as translation, so the matrix is
-            // stale until this. The translation is the matrix's own column and
-            // needs no help.
-            transform.updateMatrix();
-
-            t64_announce_change(ecd, entity);
-        }
-    }
-}
+export class AnnouncingInterpolationSystem extends InterpolationSystem {}
 
 
 /**

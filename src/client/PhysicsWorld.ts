@@ -399,7 +399,8 @@ export class PhysicsWorld {
         const movers: PlacedHull[] = [];
         const hulls: BrushHull[] = [];
 
-        for (const hull of [...set.hulls, ...patches.hulls]) {
+        for (const raw of [...set.hulls, ...patches.hulls]) {
+            const hull: BrushHull = raw.brush >= 0 ? { ...raw, brush: -1 } : raw;
             const placed = this.addStaticHull(ecd, hull, BodyKind.KinematicVelocity);
             if (placed === null) continue;
             movers.push(placed);

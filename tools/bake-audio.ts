@@ -125,7 +125,12 @@ function bakeMap(name: string): BakeReport | null {
     */
     const random = seededRandom(PROBE_SEED) as () => number;
 
-    const field = bakeProbeField(scene.index, PROBE_SPACING, PROBE_RAYS, random);
+    const field = bakeProbeField({
+        index: scene.index,
+        minSpacing: PROBE_SPACING,
+        rayCount: PROBE_RAYS,
+        random,
+    });
 
     const milliseconds = performance.now() - t0;
 
